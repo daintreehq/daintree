@@ -508,18 +508,15 @@ describe("ProjectStateManager.enqueueProjectStateUpdate coalescing", () => {
   });
 
   it("lets a batch queued across a completed deletion recreate the state", async () => {
-    // Gate the FOLLOWERS rather than the parked update, so the deletion is
-    // provably finished — file unlinked, cache invalidated — before the next
-    // batch takes its read. Without that the unlink races the read and the test
-    // can pass while observing the pre-deletion file.
-    let releaseFollowers!: () => void;
-    const followerGate = new Promise<void>((resolve) => (releaseFollowers = resolve));
+    // The batch takes its read when the RUNNER picks it up, before any of its
+    // updaters run — so gating inside an updater is too late to order this
+    // against the delete. Hold the first batch instead: the followers cannot
+    // start, and therefore cannot read, until it is released.
     const { release, parked } = openQueue({ persist: false });
 
     const seen: Array<ProjectState | null> = [];
     const followers = [
-      manager.enqueueProjectStateUpdate(projectId, async (existing) => {
-        await followerGate;
+      manager.enqueueProjectStateUpdate(projectId, (existing) => {
         seen.push(existing);
         return makeState({ projectId, sidebarWidth: 777 });
       }),
@@ -529,10 +526,11 @@ describe("ProjectStateManager.enqueueProjectStateUpdate coalescing", () => {
       })),
     ];
 
+    // Fully awaited while the queue is still parked, so the unlink and the
+    // cache invalidation are both finished before the next batch can begin.
+    await manager.clearProjectState(projectId);
     release();
     await parked;
-    await manager.clearProjectState(projectId);
-    releaseFollowers();
     await Promise.all(followers);
 
     // The batch read AFTER the delete, so it started from nothing.

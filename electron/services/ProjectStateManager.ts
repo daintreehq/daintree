@@ -210,6 +210,12 @@ export class ProjectStateManager {
    *     if the batch's save fails. An updater that returns null because the
    *     state ALREADY satisfies it is making a claim about durability it cannot
    *     see, and should return the state instead so it shares the save's fate.
+   *   - An updater must hand over the value it returns rather than keep hold of
+   *     it. The queue may carry that object until the batch's save, so mutating
+   *     it after returning changes what gets written. This was always racy —
+   *     the old path serialized the returned object a microtask later — but the
+   *     window is now the rest of the batch. Return a fresh value, or the
+   *     object you were given; every caller here does one of those.
    */
   enqueueProjectStateUpdate(projectId: string, updater: ProjectStateUpdater): Promise<void> {
     let resolve!: () => void;
@@ -263,6 +269,14 @@ export class ProjectStateManager {
         try {
           await this.runBatch(projectId, batch);
         } catch (error) {
+          // Reaching here means `runBatch` has a hole. Entries it already
+          // settled ignore this (a promise settles once); the rest get the
+          // failure rather than hanging. Logged because an exception swallowed
+          // to keep the runner alive is otherwise invisible.
+          console.error(
+            `[ProjectStateManager] Batch failed outside its own handling for project ${projectId}:`,
+            error
+          );
           for (const entry of batch) entry.reject(error);
         }
         const pending = this.writeQueues.get(projectId);

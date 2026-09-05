@@ -843,7 +843,7 @@ async function runStateBurstScenario(burstSize: number): Promise<ScenarioSample>
       // scaled itself down is a measurement failure rather than a better number.
       updatesRequested: owed,
       updatesEnqueued: enqueued,
-      updatesSettled: fulfilled,
+      updatesFulfilled: fulfilled,
       fixturePanelCount: onDiskTimed.terminals?.length ?? 0,
 
       // The headline: how many durable writes a burst of `burstSize` costs.
@@ -969,7 +969,7 @@ export const persistenceScenarios: PerfScenario[] = [
     workloadFloors: {
       updatesRequested: 5 * STATE_BURST_REPEATS,
       updatesEnqueued: 2 * 5 * STATE_BURST_REPEATS,
-      updatesSettled: 2 * 5 * STATE_BURST_REPEATS,
+      updatesFulfilled: 2 * 5 * STATE_BURST_REPEATS,
       fixturePanelCount: STATE_PANELS,
     },
     run: () => runStateBurstScenario(5),
@@ -992,7 +992,7 @@ export const persistenceScenarios: PerfScenario[] = [
     workloadFloors: {
       updatesRequested: 20 * STATE_BURST_REPEATS,
       updatesEnqueued: 2 * 20 * STATE_BURST_REPEATS,
-      updatesSettled: 2 * 20 * STATE_BURST_REPEATS,
+      updatesFulfilled: 2 * 20 * STATE_BURST_REPEATS,
       fixturePanelCount: STATE_PANELS,
     },
     run: () => runStateBurstScenario(20),

@@ -300,8 +300,11 @@ describe("bystander probe", () => {
     // And a real cadence still separates it from an implementation that
     // returns a constant zero.
     expect(reading.p95StallMs).toBeGreaterThan(0);
-    expect(reading.p95DelayMs).toBeLessThanOrEqual(reading.p95StallMs);
-    expect(reading.p95DelayMs).toBeGreaterThanOrEqual(0);
+    // Strictly between the two bounds, which is what separates a real excess
+    // calculation from the two ways of getting it wrong: hardcoding zero, and
+    // reporting the same figure as the raw gap percentile.
+    expect(reading.p95DelayMs).toBeGreaterThan(0);
+    expect(reading.p95DelayMs).toBeLessThan(reading.p95StallMs);
   });
 
   it("analyses once, so a second stop() returns the same reading it already computed", () => {
