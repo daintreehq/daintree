@@ -82,6 +82,7 @@ github-stats-cache.json
 coverage/
 .nyc_output/
 test-results/
+test-results-mechanism/
 playwright-report/
 blob-report/
 daintree-e2e-artifacts/

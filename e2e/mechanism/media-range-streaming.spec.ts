@@ -120,9 +120,16 @@ async function installRecorder(): Promise<void> {
   });
 }
 
-/** Everything recorded for one case, identified by its token. */
+/**
+ * Everything recorded for one case, identified by its token.
+ *
+ * The first parameter of an `electronApp.evaluate` callback is always the
+ * electron module — the caller's argument arrives SECOND. Reading the token out
+ * of the first slot filtered every record against the stringified module and
+ * silently reported zero requests for a load that had really happened.
+ */
 async function requestsFor(token: string): Promise<MediaRequestRecord[]> {
-  return ctx.app.evaluate((t) => {
+  return ctx.app.evaluate((_electron, t) => {
     const g = globalThis as unknown as { __mediaRequests?: MediaRequestRecord[] };
     return (g.__mediaRequests ?? []).filter((r) => r.url.includes(`t=${t}`));
   }, token);
