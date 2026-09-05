@@ -116,7 +116,7 @@ Roughly in dependency order rather than by size — per-file line counts are del
 | `waitUntilIdle.ts` | The `terminal.waitUntilIdle` / `terminal.waitUntilIdleBatch` handshakes — bounded long-polls until an agent FSM leaves `working` (interactive sessions capped at 60s). Runs in main, not via renderer dispatch. |
 | `projectCheck.ts` | Main-process short-circuit for `project.runCheck` — validates the runner against the project's detected set, spawns it, and projects the capped, secret-scrubbed result. |
 | `skills.ts` | Main-process short-circuit for `skills.search` / `skills.load` against the skill registry. |
-| `abusePolicy.ts` | Per-session sliding-window denial counter (401 + tier-mismatch). Trips → revoke session. |
+| `abusePolicy.ts` | Per-session sliding-window tier-denial counter after authentication. Trips → revoke session. |
 | `sessionDedup.ts` | Idempotency keys + canonical args hashing for the creation-tool dedup cache. |
 | `resourceOwnership.ts` | Which session created which terminal/worktree, written only from trusted post-dispatch results. Backs `terminal.closeOwned` / `worktree.deleteOwned`. See [Resource ownership](#resource-ownership-11909). |
 
@@ -157,7 +157,7 @@ Every request passes `isAuthorized(authHeader, apiKeyBearerHash, helpTokenValida
 3. **Per-pane token.** `mcpPaneConfigService.isValidPaneToken(token)` — tokens minted for a specific terminal pane. `getTierForToken` maps the pane token to `workbench`/`action`/`system`, so a pane gets exactly the surface its config grants, never `external`.
 4. **Help-session token.** A `helpTokenValidator` (injected by `HelpSessionService`) validates tokens minted for the in-app assistant and returns its `HelpAssistantTier`. Help bearers are also **pinned** to the WebContents that minted them (`helpSessionWebContentsResolver`) and to the `ActionContext` captured at provision time (`helpSessionActionContextResolver`), so every tool call dispatches against the worktree/terminal the user had focused when they launched the assistant — not whatever is focused when the model's call lands.
 
-A failed `isAuthorized` returns `401` with `WWW-Authenticate: Bearer realm="Daintree MCP"`, records `auth401` in the audit log, and feeds the session into the abuse policy.
+A failed `isAuthorized` returns `401` with `WWW-Authenticate: Bearer realm="Daintree MCP"`, records the global authentication-failure count, and does not attribute the rejection to a claimed session id. An unauthenticated caller has not established ownership and must not be able to revoke another session. Duplicate security headers are rejected with `400` before authorization or session resolution.
 
 **Network trust boundary.** Before auth, `handleRequest` rejects any request whose `Host` is not `127.0.0.1:<port>`/`localhost:<port>` (`403`), and rejects a mismatched `Origin` (`403`). The SSE and Streamable transports additionally enable `enableDnsRebindingProtection` with explicit allowlists. The server binds `127.0.0.1` only.
 
@@ -245,7 +245,7 @@ The **idle reaper** is awake-time corrected (`SystemSleepService.getAwakeTimeSin
 Every session records an explicit `origin` — `"help" | "assistant-pane" | "external"` — separate from how it routes. Before #11789, "is this one of Daintree's own surfaces" was inferred from presence in `sessionWebContentsMap`, which was safe only while external sessions were never pinned. They can be now, so the two questions are answered by different fields:
 
 - **Routing** reads `sessionWorkspaceMap` first, then `sessionWebContentsMap`, then falls back to focus order.
-- **Authorization** (`issueGrant`, `setSessionTier`), **notifications** (the five `wc.send` closures in `buildSessionServerDeps`, plus the 401-abuse revoke) and **inventory** (`listExternalActiveClients`) read `origin` via `SessionStore.isRendererOwnedOrigin`.
+- **Authorization** (`issueGrant`, `setSessionTier`), **notifications** (the five `wc.send` closures in `buildSessionServerDeps`) and **inventory** (`listExternalActiveClients`) read `origin` via `SessionStore.isRendererOwnedOrigin`.
 
 `getOrigin` defaults to `"external"` — the least-privileged answer — so a session whose handshake never recorded one, or one already half torn down, can never be mistaken for an assistant surface. `clearSessionBinding` drops route, context, origin and workspace together; every teardown path calls it rather than deleting maps individually.
 
@@ -611,7 +611,7 @@ The in-app fleet broadcast is supervised past submission (#10930): `fleetRunStor
 
 ## Guard rails and observability
 
-- **`abusePolicy.ts`** — per-session sliding-window counter shared by `401`s and tier-mismatches (`abusePolicyMaxDenials` within `abusePolicyWindowMs`). Tripping revokes the session and notifies the pinned renderer (`MCP_SESSION_REVOKED`). The counter map is dropped on every per-session cleanup hook so it can't grow unbounded across session churn, and wiped wholesale on stop/restart.
+- **`abusePolicy.ts`** — per-session sliding-window counter for authenticated tier-mismatches (`abusePolicyMaxDenials` within `abusePolicyWindowMs`). Tripping revokes the session and notifies the pinned renderer (`MCP_SESSION_REVOKED`). The counter map is dropped on every per-session cleanup hook so it can't grow unbounded across session churn, and wiped wholesale on stop/restart.
 - **`auditLog.ts`** (`AuditService`) — ring buffer of `McpLogRecord`s persisted to the `mcpServer` store key, debounced (`AUDIT_FLUSH_DEBOUNCE_MS`). Every gate outcome above is recorded. Derives anomaly signals: first-seen `(tool, tier)` combos, latency drift, failure clusters, p95 z-score. Grant lifecycle events and `tier.decayed` are appended here too.
 - **`turnOutcomeLog.ts`** (`TurnOutcomeService`) — classifies each help-session assistant _turn_ into a `TurnOutcomeClass` (`answered`, `hedged`, `refused`, `docs-empty`, `tier-rejected`, `mcp-not-ready`, `agent-stuck`, `tool-error`, `reasoning-loop`, `hibernate-resume-stale`, `unknown`) by correlating `agent:state-changed` FSM transitions and recent agent output with the audit records for that session. Wired via long-lived `persistentListeners` that deliberately survive `HttpLifecycle.stop()`/restart.
 - **`readinessProbe.ts`** — `probeMcpServer` / `probeMcpSseServer` POST a real MCP `initialize` and require HTTP 200 + a `mcp-session-id` header, then DELETE the probe session so it doesn't linger. Used by `HelpSessionService` before writing `.mcp.json` and launching the assistant — `isRunning` only proves the socket is bound, not that the handler answers. The probe self-cleans on success.
