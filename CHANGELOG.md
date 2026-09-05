@@ -1548,7 +1548,7 @@ The plugin manager grows up. Per-plugin configuration, capabilities, and permiss
 
 ## [0.15.0] - 2026-05-30
 
-Daintree gains a plugin platform. The `.dntr` archive format, an atomic install/uninstall pipeline, a `daintree-plugin` CLI, the `@daintreehq/plugin-sdk`, a compound-capability lattice, and an MCP supervisor together let third-party plugins contribute commands, menus, keybindings, settings forms, and experimental views — all disclosed through manifest-declared capabilities. Voice input matured with client-side VAD, push-to-talk, and dictation target locking; dev preview now persists sessions across relaunch and surfaces a cross-worktree dashboard; and notifications gained a persistent inbox with OS Do-Not-Disturb awareness.
+Daintree gains a plugin platform. The `.dntr` archive format, an atomic install/uninstall pipeline, a `daintree-plugin` CLI, the `@daintreehq/plugin-sdk`, a compound-capability lattice, and an MCP supervisor together let third-party plugins contribute commands, menus, keybindings, settings forms, and experimental views — with manifest-declared capabilities informing host-side policy. Voice input matured with client-side VAD, push-to-talk, and dictation target locking; dev preview now persists sessions across relaunch and surfaces a cross-worktree dashboard; and notifications gained a persistent inbox with OS Do-Not-Disturb awareness.
 
 ### Features
 
