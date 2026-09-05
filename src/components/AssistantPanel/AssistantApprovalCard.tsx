@@ -271,117 +271,119 @@ export function AssistantApprovalCard({
         "focus:outline-2 focus:outline-offset-1 focus:outline-[var(--assistant-focus)]"
       )}
     >
-      <div className="flex items-start gap-2">
+      {/* The shield marks the HEADING, and stops there.
+
+          It used to sit in a column beside the whole card body, so every line under it —
+          the summary, the consequence, the arguments, the confirm field, the buttons —
+          began 38px inboard of the transcript's own axis, and the destination branch
+          wrapped before the reader reached the sentence saying what would happen to it.
+          A rail this narrow cannot spend a permanent icon column on a card that already
+          has a warning-coloured left rail saying the same thing. */}
+      <p className="assistant-mark-row mb-2 flex items-center assistant-text-sm text-[var(--assistant-warning)]">
         <ShieldAlert
           aria-hidden="true"
-          className="mt-0.5 size-4 shrink-0 text-[var(--assistant-warning-graphic)]"
+          className="size-3.5 shrink-0 text-[var(--assistant-warning-graphic)]"
         />
-        <div className="min-w-0 flex-1">
-          <p className="mb-2 assistant-text-sm text-[var(--assistant-warning)]">
-            Approval required
-          </p>
-          <p className="assistant-text-base font-medium text-[var(--assistant-fg)]">
-            {approval.summary}
-          </p>
+        Approval required
+      </p>
+      <p className="assistant-text-base font-medium text-[var(--assistant-fg)]">
+        {approval.summary}
+      </p>
 
-          {/* The consequence in the engine's own words — what actually happens. */}
-          {approval.consequence && (
-            <p className="mt-1 assistant-text-base text-[var(--assistant-fg-secondary)]">
-              {approval.consequence}
-            </p>
-          )}
+      {/* The consequence in the engine's own words — what actually happens. */}
+      {approval.consequence && (
+        <p className="mt-1 assistant-text-base text-[var(--assistant-fg-secondary)]">
+          {approval.consequence}
+        </p>
+      )}
 
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span className="assistant-text-sm text-[var(--assistant-fg-secondary)]">
-              {approval.toolId}
-            </span>
-            {approval.riskClass && (
-              // Bordered and labelled. Unlabelled and borderless, this read as part of
-              // the tool id — "git.push git" — which is worse than omitting it.
-              <span
-                className={cn(
-                  "rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-1.5 py-px",
-                  "assistant-text-sm text-[var(--assistant-fg-secondary)]"
-                )}
-              >
-                risk: <span className="text-[var(--assistant-fg)]">{approval.riskClass}</span>
-              </span>
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+        <span className="assistant-text-sm text-[var(--assistant-fg-secondary)]">
+          {approval.toolId}
+        </span>
+        {approval.riskClass && (
+          // Bordered and labelled. Unlabelled and borderless, this read as part of
+          // the tool id — "git.push git" — which is worse than omitting it.
+          <span
+            className={cn(
+              "rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-1.5 py-px",
+              "assistant-text-sm text-[var(--assistant-fg-secondary)]"
             )}
-          </div>
+          >
+            risk: <span className="text-[var(--assistant-fg)]">{approval.riskClass}</span>
+          </span>
+        )}
+      </div>
 
-          {approval.argsSummary && (
-            <pre
-              tabIndex={0}
-              aria-label="Action arguments"
+      {approval.argsSummary && (
+        <pre
+          tabIndex={0}
+          aria-label="Action arguments"
+          className={cn(
+            "mt-2 max-h-40 overflow-y-auto rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-2 py-2",
+            // WRAP rather than scroll sideways. A summary that clips mid-token
+            // ("…,\"forc") hides the part of the argument someone is being asked
+            // to approve, and gives no cue that anything is hidden.
+            "whitespace-pre-wrap break-all",
+            "assistant-text-sm text-[var(--assistant-fg-secondary)]",
+            "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
+          )}
+        >
+          {approval.argsSummary}
+        </pre>
+      )}
+
+      {approval.needsTypedConfirm ? (
+        <div className="mt-2.5">
+          <label
+            htmlFor={`confirm-${approval.approvalId}`}
+            className="block assistant-text-base text-[var(--assistant-fg-secondary)]"
+          >
+            {/* Names the act rather than repeating generic irreversibility
+                    boilerplate — the specific consequence is already stated above. */}
+            This can&rsquo;t be undone. Type{" "}
+            <span className="text-[var(--assistant-fg)]">{CONFIRM_PHRASE}</span> to continue.
+          </label>
+          <div className="mt-1.5 flex flex-wrap justify-end gap-2">
+            <input
+              id={`confirm-${approval.approvalId}`}
+              ref={inputRef}
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && phraseMatches) {
+                  decideOnce("approved");
+                }
+              }}
+              autoComplete="off"
+              spellCheck={false}
               className={cn(
-                "mt-2 max-h-40 overflow-y-auto rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-2 py-2",
-                // WRAP rather than scroll sideways. A summary that clips mid-token
-                // ("…,\"forc") hides the part of the argument someone is being asked
-                // to approve, and gives no cue that anything is hidden.
-                "whitespace-pre-wrap break-all",
-                "assistant-text-sm text-[var(--assistant-fg-secondary)]",
+                "min-h-7 w-full min-w-0 rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)]",
+                "px-2 py-1 assistant-text-base text-[var(--assistant-fg)]",
+                "placeholder:text-[var(--assistant-fg-dim)]",
                 "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
               )}
-            >
-              {approval.argsSummary}
-            </pre>
-          )}
-
-          {approval.needsTypedConfirm ? (
-            <div className="mt-2.5">
-              <label
-                htmlFor={`confirm-${approval.approvalId}`}
-                className="block assistant-text-base text-[var(--assistant-fg-secondary)]"
-              >
-                {/* Names the act rather than repeating generic irreversibility
-                    boilerplate — the specific consequence is already stated above. */}
-                This can&rsquo;t be undone. Type{" "}
-                <span className="text-[var(--assistant-fg)]">{CONFIRM_PHRASE}</span> to continue.
-              </label>
-              <div className="mt-1.5 flex flex-wrap justify-end gap-2">
-                <input
-                  id={`confirm-${approval.approvalId}`}
-                  ref={inputRef}
-                  value={typed}
-                  onChange={(e) => setTyped(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && phraseMatches) {
-                      decideOnce("approved");
-                    }
-                  }}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={cn(
-                    "min-h-7 w-full min-w-0 rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)]",
-                    "px-2 py-1 assistant-text-base text-[var(--assistant-fg)]",
-                    "placeholder:text-[var(--assistant-fg-dim)]",
-                    "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
-                  )}
-                  placeholder={CONFIRM_PHRASE}
-                />
-                {/* Safe action left, destructive primary right — the same order every
+              placeholder={CONFIRM_PHRASE}
+            />
+            {/* Safe action left, destructive primary right — the same order every
                     confirm dialog in the app uses, so muscle memory does not betray
                     someone on the one surface where it matters most. */}
-                <button
-                  type="button"
-                  className={APPROVAL_GHOST}
-                  onClick={() => decideOnce("rejected")}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className={APPROVAL_DANGER}
-                  disabled={!phraseMatches}
-                  onClick={() => decideOnce("approved")}
-                >
-                  {approve}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              {/* DECLINE is the visual default, as it was in the cockpit, where it was
+            <button type="button" className={APPROVAL_GHOST} onClick={() => decideOnce("rejected")}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={APPROVAL_DANGER}
+              disabled={!phraseMatches}
+              onClick={() => decideOnce("approved")}
+            >
+              {approve}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          {/* DECLINE is the visual default, as it was in the cockpit, where it was
                   drawn in inverse video (render_approval.go:12 — "visually defaulting to
                   DECLINE"). This card had it the other way round: approve carried the
                   weighted button and decline was a ghost labelled "Cancel". That inverts
@@ -391,66 +393,60 @@ export function AssistantApprovalCard({
 
                   "Decline", not "Cancel": cancel reads as dismissing the dialog, when
                   what it actually does is answer the model. */}
-              <button
-                type="button"
-                className={APPROVAL_WEIGHTED}
-                onClick={() => decideOnce("rejected")}
-              >
-                Decline
-              </button>
-              <button
-                type="button"
-                className={APPROVAL_OUTLINE}
-                onClick={() => decideOnce("approved")}
-              >
-                {approve}
-              </button>
-              {/* Standing approvals, on the engine's verdict alone. A bounded grant
+          <button
+            type="button"
+            className={APPROVAL_WEIGHTED}
+            onClick={() => decideOnce("rejected")}
+          >
+            Decline
+          </button>
+          <button type="button" className={APPROVAL_OUTLINE} onClick={() => decideOnce("approved")}>
+            {approve}
+          </button>
+          {/* Standing approvals, on the engine's verdict alone. A bounded grant
                   sits before the unbounded one so the smaller commitment is the easier
                   reach, and both stay ghost: they widen authority beyond this one call,
                   so neither should ever be the easiest button on the card. */}
-              {approval.rememberable && onGrant && (
-                <>
-                  <button
-                    type="button"
-                    className={APPROVAL_GHOST}
-                    title={`Allow ${approval.toolId} up to ${BOUNDED_GRANT_USES} times`}
-                    onClick={() => grantOnce(BOUNDED_GRANT_USES)}
-                  >
-                    Allow {BOUNDED_GRANT_USES}×
-                  </button>
-                  <button
-                    type="button"
-                    className={APPROVAL_GHOST}
-                    title={`Allow ${approval.toolId} for the rest of this session`}
-                    onClick={() => grantOnce(Number.POSITIVE_INFINITY)}
-                  >
-                    Allow this session
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-
-          {!approval.needsTypedConfirm && (
-            // The cockpit printed these beside the buttons; a key that exists and is
-            // never mentioned is a key nobody presses. Decline leads, matching both the
-            // button order and the fail-closed default.
-            <p className="mt-1.5 assistant-text-sm text-[var(--assistant-fg-secondary)]">
-              <span className="text-[var(--assistant-fg)]">N</span> decline ·{" "}
-              <span className="text-[var(--assistant-fg)]">Y</span> {approve.toLowerCase()}
-              {approval.rememberable && onGrant && (
-                <>
-                  {" · "}
-                  <span className="text-[var(--assistant-fg)]">A</span> allow {BOUNDED_GRANT_USES}×
-                  · <span className="text-[var(--assistant-fg)]">F</span> this session
-                </>
-              )}{" "}
-              · <span className="text-[var(--assistant-fg)]">Esc</span> decline
-            </p>
+          {approval.rememberable && onGrant && (
+            <>
+              <button
+                type="button"
+                className={APPROVAL_GHOST}
+                title={`Allow ${approval.toolId} up to ${BOUNDED_GRANT_USES} times`}
+                onClick={() => grantOnce(BOUNDED_GRANT_USES)}
+              >
+                Allow {BOUNDED_GRANT_USES}×
+              </button>
+              <button
+                type="button"
+                className={APPROVAL_GHOST}
+                title={`Allow ${approval.toolId} for the rest of this session`}
+                onClick={() => grantOnce(Number.POSITIVE_INFINITY)}
+              >
+                Allow this session
+              </button>
+            </>
           )}
         </div>
-      </div>
+      )}
+
+      {!approval.needsTypedConfirm && (
+        // The cockpit printed these beside the buttons; a key that exists and is
+        // never mentioned is a key nobody presses. Decline leads, matching both the
+        // button order and the fail-closed default.
+        <p className="mt-1.5 assistant-text-sm text-[var(--assistant-fg-secondary)]">
+          <span className="text-[var(--assistant-fg)]">N</span> decline ·{" "}
+          <span className="text-[var(--assistant-fg)]">Y</span> {approve.toLowerCase()}
+          {approval.rememberable && onGrant && (
+            <>
+              {" · "}
+              <span className="text-[var(--assistant-fg)]">A</span> allow {BOUNDED_GRANT_USES}× ·{" "}
+              <span className="text-[var(--assistant-fg)]">F</span> this session
+            </>
+          )}{" "}
+          · <span className="text-[var(--assistant-fg)]">Esc</span> decline
+        </p>
+      )}
     </div>
   );
 }
