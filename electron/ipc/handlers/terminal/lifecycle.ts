@@ -36,6 +36,7 @@ import {
   supportsExactSessionCapture,
 } from "../../../../shared/types/agentSettings.js";
 import {
+  declaresActiveAssistantTier,
   getAssistantWiredAgentIds,
   getEffectiveAgentConfig,
 } from "../../../../shared/config/agentRegistry.js";
@@ -433,6 +434,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const isAssistantAgent =
       typeof launchAgentId === "string" && getAssistantWiredAgentIds().includes(launchAgentId);
     const isHelpLaunch = helpTier !== false && isAssistantAgent && safeCommand.length > 0;
+    // The rejection below keys off this rather than `isAssistantAgent`, which
+    // now also requires an implemented `mcpInjection` mode: an agent excluded
+    // on that new ground would otherwise sail past the throw and fall through
+    // to the ordinary launch path with a help bearer still in its env (#12262).
+    // Deliberately the pre-#12262 admission set and no wider — a deprecated-tier
+    // agent could never provision a help session, so a user who carries their
+    // own DAINTREE_MCP_TOKEN in a preset or project env must still be able to
+    // launch it, exactly as before.
+    const couldProvisionHelpSession =
+      typeof launchAgentId === "string" && declaresActiveAssistantTier(launchAgentId);
 
     // If a help-session token was supplied but is invalid (revoked between
     // provision and spawn — typically because a sibling provision displaced
@@ -441,7 +452,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // renderer must always provision a fresh session before spawning the
     // assistant; falling through would resurrect the orphan-backend failure
     // mode (#7509) by spawning an unmanaged Claude in the assistant slot.
-    if (!isHelpLaunch && helpToken && isAssistantAgent && safeCommand.length > 0) {
+    if (!isHelpLaunch && helpToken && couldProvisionHelpSession && safeCommand.length > 0) {
       throw new Error(
         "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
       );
@@ -621,7 +632,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // spawn (e.g. a stale resume against a session a sibling provision
       // already displaced) — refuse to launch as a help session rather
       // than silently degrading to a non-help Claude.
-      if (!helpSessionService.markTerminalForToken(helpToken, id)) {
+      if (!helpSessionService.markTerminalForToken(helpToken, id, launchAgentId)) {
         throw new Error(
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
         );

@@ -472,6 +472,15 @@ export interface AgentContinuity {
  * assistant overlay. Each field captures a distinct wiring concern; the older
  * `supportsAssistant: boolean` collapsed all of them into one bit and
  * couldn't represent partial wiring.
+ *
+ * Three fields gate behaviour at runtime: `tier` and `mcpInjection` decide
+ * admission (`getAssistantWiredAgentIds`), and `permissionBypass` decides
+ * whether the help-session launch path appends the agent's dangerous flag. The
+ * remaining three — `settingsOverlay`, `trustDialog`, `versionProbe` — are
+ * descriptive: nothing dispatches on them, and they are pinned against the
+ * wiring the code really performs by the assistant-support tests rather than
+ * consulted at runtime. Keep that distinction when adding a field; a
+ * declaration nobody reads and nothing checks silently rots (#12262).
  */
 export interface AssistantSupports {
   /**
@@ -483,12 +492,21 @@ export interface AssistantSupports {
    * - `"env-only"`: connection details are passed purely through PTY env vars
    *   the agent reads itself (`DAINTREE_MCP_URL`, `DAINTREE_MCP_TOKEN`, …) —
    *   no config file written, no CLI flags (e.g. Daintree Assistant).
+   *
+   * Read by `hasAssistantMcpImplementation` as an admission precondition, not
+   * as a strategy selector: Claude and Copilot both declare `"project-config"`
+   * yet write different files, so the mode alone cannot choose an
+   * implementation. Declaring a mode Daintree implements for no such agent is
+   * refused at provision instead of silently launching unwired.
    */
   mcpInjection: "project-config" | "cli-flags" | "env-only";
   /**
    * Whether the agent reads a session-dir settings overlay that bakes in
    * permissions / project-MCP trust (e.g. Claude's `.claude/settings.json`
    * with `enableAllProjectMcpServers: true`).
+   *
+   * Descriptive: the overlay is written from the agent's own branch in
+   * `HelpSessionService`, not gated on this field.
    */
   settingsOverlay: boolean;
   /**
@@ -503,10 +521,15 @@ export interface AssistantSupports {
    * Whether the agent's workspace-trust dialog is fully handled by the
    * session-dir overlay (so the user is never re-prompted inside the agent
    * after Daintree has launched it).
+   *
+   * Descriptive: a property of what that overlay contains, not a switch.
    */
   trustDialog: boolean;
   /**
    * Whether version-probe data is wired up for this agent's CLI.
+   *
+   * Descriptive: `AgentVersionService` probes off the agent's own `version`
+   * block, so this mirrors that block rather than enabling anything.
    */
   versionProbe: boolean;
   /**
@@ -936,6 +959,75 @@ export function getAgentModelConfig(
 }
 
 /**
+ * The MCP injection mode Daintree has actually written host-side wiring for,
+ * per agent id. `claude` and `copilot` each get a config writer in
+ * `HelpSessionService` plus a launch-arg getter that `lifecycle.ts` appends;
+ * `codex` gets `-c` args built at provision time. Any other id can only be
+ * wired through the env contract described in `supportsImplementedMcpInjection`.
+ *
+ * An id listed here must declare the mode its branch implements — a `claude`
+ * claiming `"env-only"` would be admitted on the open contract while its
+ * literal-id branches went on writing project config, which is exactly the
+ * drift this table exists to catch. Add an entry in the same commit as its
+ * branch (#12262).
+ */
+const NATIVE_MCP_IMPLEMENTATIONS: Readonly<Record<string, AssistantSupports["mcpInjection"]>> = {
+  claude: "project-config",
+  copilot: "project-config",
+  codex: "cli-flags",
+  "daintree-assistant": "env-only",
+};
+
+function supportsImplementedMcpInjection(
+  agentId: string,
+  supports: AgentConfig["supports"]
+): boolean {
+  if (!supports) return false;
+  // Own-property check: a user-defined id is free-form, so a plain `[]` lookup
+  // would inherit `constructor` and friends off Object.prototype.
+  const native = Object.prototype.hasOwnProperty.call(NATIVE_MCP_IMPLEMENTATIONS, agentId)
+    ? NATIVE_MCP_IMPLEMENTATIONS[agentId]
+    : undefined;
+  if (native !== undefined) return supports.mcpInjection === native;
+  // `env-only` is the one open mode: every help launch already carries
+  // `DAINTREE_MCP_URL` and `DAINTREE_MCP_TOKEN` in its spawn env (see
+  // `HelpSessionProvisioner.buildHelpEnv`), so an agent that reads them is
+  // wired with no host-side code at all. `project-config` and `cli-flags` both
+  // need a writer or an arg-builder that exists for no id but the three above.
+  return supports.mcpInjection === "env-only";
+}
+
+/**
+ * Whether Daintree can deliver the MCP wiring an agent's `supports.mcpInjection`
+ * asks for. This is the one place that field is load-bearing.
+ *
+ * Without it an agent could clear the tier gate, provision a session directory,
+ * a bearer and a probed MCP port, then match none of the literal-id branches in
+ * `HelpSessionService` and `lifecycle.ts` and launch with no wiring whatsoever
+ * while `provisionSession` still handed the caller an `mcpUrl` (#12262).
+ */
+export function hasAssistantMcpImplementation(agentId: string): boolean {
+  return supportsImplementedMcpInjection(agentId, getEffectiveAgentConfig(agentId)?.supports);
+}
+
+/**
+ * Whether the agent declares assistant wiring at a tier that is still active —
+ * the admission set as it stood before `mcpInjection` became a precondition.
+ *
+ * `lifecycle.ts` needs this rather than `getAssistantWiredAgentIds` for its
+ * help-token rejection: an agent newly excluded for an unimplemented injection
+ * mode must still be refused rather than falling through to the ordinary launch
+ * path, but a `deprecated`-tier agent was never admitted in the first place and
+ * must keep launching normally even if the user happens to carry a
+ * `DAINTREE_MCP_TOKEN` in their own environment.
+ */
+export function declaresActiveAssistantTier(agentId: string): boolean {
+  const supports = getEffectiveAgentConfig(agentId)?.supports;
+  if (!supports) return false;
+  return supports.tier === "stable" || supports.tier === "experimental";
+}
+
+/**
  * IDs of agents (built-in and user-defined) whose assistant wiring is at the
  * `"stable"` tier. Used by the HelpPanel agent picker to filter the visible
  * options and by the `helpPanelStore` rehydration guard to drop stale
@@ -948,26 +1040,17 @@ export function getAgentModelConfig(
  * Excludes agents marked `supports: false` (structurally ineligible),
  * `supports: undefined` (not yet wired), `tier: "experimental"`, and
  * `tier: "deprecated"`.
+ *
+ * Derived from `getAssistantWiredAgentIds` rather than re-deriving eligibility,
+ * so the picker can never offer an agent the provision gate will refuse — the
+ * ordering is identical because both walk built-ins before user-defined ones.
  */
 export function getAssistantSupportedAgentIds(): string[] {
   const effective = getEffectiveRegistry();
-  const supported = new Set<string>();
-  // Built-in first (preserves existing order and tests)
-  for (const id of BUILT_IN_AGENT_IDS) {
+  return getAssistantWiredAgentIds().filter((id) => {
     const supports = effective[id]?.supports;
-    if (supports !== false && supports?.tier === "stable") {
-      supported.add(id);
-    }
-  }
-  // Then user-defined agents not already covered
-  for (const id of Object.keys(effective)) {
-    if (supported.has(id)) continue;
-    const supports = effective[id]?.supports;
-    if (supports !== false && supports?.tier === "stable") {
-      supported.add(id);
-    }
-  }
-  return [...supported];
+    return supports !== false && supports?.tier === "stable";
+  });
 }
 
 /**
@@ -985,22 +1068,29 @@ export function getAssistantSupportedAgentIds(): string[] {
  * excludes `supports: false` (structurally ineligible), `supports: undefined`
  * (not yet wired), and `tier: "deprecated"` (retired from the overlay). Any
  * future tier addition is excluded by default until explicitly allow-listed.
+ *
+ * Tier alone is not enough: it admitted any agent that merely claimed a wiring
+ * shape, so a user-defined `"stable"` entry declaring `"project-config"` used
+ * to provision a full session and then launch with nothing written for it. The
+ * declared `mcpInjection` mode must also be one Daintree implements for that
+ * agent (#12262).
  */
 export function getAssistantWiredAgentIds(): string[] {
   const effective = getEffectiveRegistry();
   const wired = new Set<string>();
-  const isWired = (supports: AgentConfig["supports"]): boolean =>
+  const isWired = (id: string, supports: AgentConfig["supports"]): boolean =>
     supports !== false &&
     supports !== undefined &&
-    (supports.tier === "stable" || supports.tier === "experimental");
+    (supports.tier === "stable" || supports.tier === "experimental") &&
+    supportsImplementedMcpInjection(id, supports);
   for (const id of BUILT_IN_AGENT_IDS) {
-    if (isWired(effective[id]?.supports)) {
+    if (isWired(id, effective[id]?.supports)) {
       wired.add(id);
     }
   }
   for (const id of Object.keys(effective)) {
     if (wired.has(id)) continue;
-    if (isWired(effective[id]?.supports)) {
+    if (isWired(id, effective[id]?.supports)) {
       wired.add(id);
     }
   }

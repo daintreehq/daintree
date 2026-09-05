@@ -135,50 +135,6 @@ vi.mock("../../../utils.js", () => ({
   },
 }));
 
-vi.mock("../../../../shared/config/agentRegistry.js", () => ({
-  isRegisteredAgent: vi.fn(() => false),
-  getAssistantWiredAgentIds: vi.fn(() => ["claude", "codex", "copilot"]),
-  getEffectiveAgentConfig: vi.fn((id: string) => {
-    if (id === "claude") {
-      return {
-        supports: {
-          mcpInjection: "project-config",
-          settingsOverlay: true,
-          permissionBypass: true,
-          trustDialog: true,
-          versionProbe: true,
-          tier: "stable",
-        },
-      };
-    }
-    if (id === "codex") {
-      return {
-        supports: {
-          mcpInjection: "cli-flags",
-          settingsOverlay: false,
-          permissionBypass: true,
-          trustDialog: false,
-          versionProbe: true,
-          tier: "stable",
-        },
-      };
-    }
-    if (id === "copilot") {
-      return {
-        supports: {
-          mcpInjection: "project-config",
-          settingsOverlay: false,
-          permissionBypass: false,
-          trustDialog: false,
-          versionProbe: true,
-          tier: "experimental",
-        },
-      };
-    }
-    return undefined;
-  }),
-}));
-
 const {
   mockValidateToken,
   mockIsRunning,
@@ -217,7 +173,7 @@ const mockGetClaudeLaunchArgs = vi.hoisted(() =>
 );
 
 const mockMarkTerminalForToken = vi.hoisted(() =>
-  vi.fn<(token: string, terminalId: string) => boolean>(() => true)
+  vi.fn<(token: string, terminalId: string, expectedAgentId?: string) => boolean>(() => true)
 );
 
 const mockUnbindTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => void>());
@@ -241,8 +197,8 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
     getDebugLogging: (token: string) => mockGetDebugLogging(token),
-    markTerminalForToken: (token: string, terminalId: string) =>
-      mockMarkTerminalForToken(token, terminalId),
+    markTerminalForToken: (token: string, terminalId: string, expectedAgentId?: string) =>
+      mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
     isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
   },
@@ -295,6 +251,7 @@ import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
 } from "../../../../../shared/config/pluginAgentRegistry.js";
+import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
@@ -1656,6 +1613,117 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
+  it("refuses a help token on a stable agent excluded for its injection mode (#12262)", async () => {
+    // The token is VALID here — the refusal is about the agent, not the bearer.
+    // This agent clears the tier gate but declares a mode Daintree implements
+    // for no third party, so narrowing `getAssistantWiredAgentIds` drops it and
+    // `isAssistantAgent` goes false. The rejection used to hang off that same
+    // flag, which would have let this spawn land on the ordinary launch path
+    // with a live help bearer in its env and no MCP wiring of any kind.
+    setUserRegistry({
+      "byo-agent": {
+        id: "byo-agent",
+        name: "BYO Agent",
+        command: "byo",
+        color: "#FF8800",
+        iconId: "custom",
+        supportsContextInjection: true,
+        supports: {
+          mcpInjection: "cli-flags",
+          settingsOverlay: false,
+          permissionBypass: false,
+          trustDialog: false,
+          versionProbe: true,
+          tier: "stable",
+        },
+      },
+    });
+    mockValidateToken.mockReturnValue("action");
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    try {
+      await expect(
+        handler(
+          {} as Electron.IpcMainInvokeEvent,
+          {
+            cols: 80,
+            rows: 24,
+            cwd: tmpDir,
+            command: "byo",
+            launchAgentId: "byo-agent",
+            env: { DAINTREE_MCP_TOKEN: "live-help-token" },
+          } as unknown as Parameters<typeof handler>[1]
+        )
+      ).rejects.toThrow(/Daintree Assistant session token is invalid/);
+    } finally {
+      setUserRegistry({});
+    }
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+  });
+
+  it("still launches a deprecated-tier agent carrying a user's own DAINTREE_MCP_TOKEN (#12262)", async () => {
+    // Gemini could never provision a help session, so it must keep launching
+    // even when the user has that variable in a preset or project env. Keying
+    // the rejection off "declares any supports" instead of the pre-#12262
+    // admission set would have broken this ordinary launch.
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "gemini",
+        launchAgentId: "gemini",
+        env: { DAINTREE_MCP_TOKEN: "users-own-external-key" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalled();
+  });
+
+  it("leaves a plain shell carrying a stray DAINTREE_MCP_TOKEN alone (#12262)", async () => {
+    // A terminal with no launch agent declares no `supports` at all, so it is
+    // outside the rejection either way.
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "bash",
+        env: { DAINTREE_MCP_TOKEN: "inherited-from-profile" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalled();
+  });
+
   it("starts MCP on demand before injecting config for restored Claude agent spawns", async () => {
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(false);
@@ -2054,7 +2122,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       } as unknown as Parameters<typeof handler>[1]
     );
 
-    expect(mockMarkTerminalForToken).toHaveBeenCalledWith("help-token", id);
+    // The third argument is the cross-agent token-reuse guard for env-only
+    // agents, which have no launch-arg getter to supply one (#12262).
+    expect(mockMarkTerminalForToken).toHaveBeenCalledWith("help-token", id, "claude");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 

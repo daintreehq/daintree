@@ -195,7 +195,7 @@ describe("help.launchAgent", () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
-    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability(),
       isInitialized: true,
@@ -205,7 +205,35 @@ describe("help.launchAgent", () => {
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "gemini", cwd: "/mock/help", location: "overlay" }),
+      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
+      { source: "user" }
+    );
+  });
+
+  it("skips a preferred default the assistant gate would refuse (#12262)", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    // Gemini is installed and launchable from the toolbar, but its supports
+    // block sits at `tier: "deprecated"`, so `provisionSession` refuses it.
+    // The implicit default has to skip it rather than resolve into that
+    // refusal — this suite mocks provisioning, so nothing else would notice.
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "gemini" }),
+      { source: "user" }
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -214,9 +242,9 @@ describe("help.launchAgent", () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
-    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
     mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability({ gemini: "missing" }),
+      availability: allAvailability({ codex: "missing" }),
       isInitialized: true,
     });
 

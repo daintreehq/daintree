@@ -21,6 +21,7 @@ import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
+import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("help.shortcuts", () => ({
@@ -163,8 +164,19 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       } else {
         const { defaultAgent } = useAgentPreferencesStore.getState();
         const { availability, isInitialized } = useCliAvailabilityStore.getState();
+        // Constrain the implicit default to agents the assistant gate will
+        // actually admit — `getDefaultAgentId` otherwise answers with general
+        // launch eligibility and can name one `provisionSession` refuses (a
+        // deprecated tier, or an unimplemented injection mode). An explicit
+        // `args.agentId` still goes straight to that gate, so an experimental
+        // agent stays launchable by name.
         const resolved = isInitialized
-          ? getDefaultAgentId(defaultAgent, undefined, availability)
+          ? getDefaultAgentId(
+              defaultAgent,
+              undefined,
+              availability,
+              new Set(getAssistantSupportedAgentIds())
+            )
           : null;
         agentId = resolved ?? "claude";
       }

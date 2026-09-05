@@ -5,6 +5,11 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import type { McpRuntimeSnapshot } from "../../../shared/types/ipc/mcpServer.js";
 import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
+import {
+  setUserRegistry,
+  type AgentConfig,
+  type AssistantSupports,
+} from "../../../shared/config/agentRegistry.js";
 
 const {
   mockUserDataDir,
@@ -2749,6 +2754,96 @@ describe("HelpSessionService", () => {
       await expect(
         service.provisionSession({ ...provisionInput(), agentId: "not-an-agent" })
       ).rejects.toThrow(/not assistant-supported/);
+    });
+  });
+
+  describe("unimplemented mcpInjection modes (#12262)", () => {
+    const baseSupports: AssistantSupports = {
+      mcpInjection: "env-only",
+      settingsOverlay: false,
+      permissionBypass: false,
+      trustDialog: false,
+      versionProbe: true,
+      tier: "stable",
+    };
+
+    function userAgent(supports: AssistantSupports): AgentConfig {
+      return {
+        id: "byo-agent",
+        name: "BYO Agent",
+        command: "byo",
+        color: "#FF8800",
+        iconId: "custom",
+        supportsContextInjection: true,
+        supports,
+      };
+    }
+
+    afterEach(() => {
+      setUserRegistry({});
+    });
+
+    it.each(["project-config", "cli-flags"] as const)(
+      "refuses a user-defined agent declaring %s before any side effect",
+      async (mcpInjection) => {
+        setUserRegistry({ "byo-agent": userAgent({ ...baseSupports, mcpInjection }) });
+        const before = await fs.readdir(userData, { recursive: true });
+
+        const rejection = service
+          .provisionSession({ ...provisionInput(), agentId: "byo-agent" })
+          .catch((err: unknown) => err);
+        const err = (await rejection) as Error & { code?: string };
+
+        // A plain Error carrying the same message would satisfy a message-only
+        // assertion, so pin the typed refusal the renderer decodes.
+        expect(err).toBeInstanceOf(Error);
+        expect(err.name).toBe("HelpSessionError");
+        expect(err.code).toBe("UNSUPPORTED_ASSISTANT_AGENT");
+        expect(err.message).toMatch(
+          new RegExp(`not assistant-supported.*no "${mcpInjection}" MCP wiring`)
+        );
+        // Refused at the gate, so nothing was written, minted or probed: before
+        // the fix this agent got a session dir, a bearer and a live probe, then
+        // matched no wiring branch and launched with nothing.
+        expect(await fs.readdir(userData, { recursive: true })).toEqual(before);
+        expect(mockProbeMcpServer).not.toHaveBeenCalled();
+        expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
+      }
+    );
+
+    it("admits a user-defined agent declaring env-only and gives it no provider wiring", async () => {
+      setUserRegistry({ "byo-agent": userAgent(baseSupports) });
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "byo-agent",
+      });
+      if (!result) throw new Error("expected result");
+      // Streamable HTTP at /mcp, the non-Claude route — the token and this URL
+      // are the entire contract an env-only agent gets.
+      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/mcp");
+      expect(service.validateToken(result.token)).not.toBe(false);
+      // No provider-specific files or flags: every literal-id getter reports
+      // the cross-agent mismatch rather than handing over another agent's args.
+      expect(service.getClaudeLaunchArgs(result.token)).toBeNull();
+      expect(service.getCodexLaunchArgs(result.token)).toBeNull();
+      expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
+      const shared = await readSharedMcp(result.sessionPath);
+      expect(shared.mcpServers.daintree).toBeUndefined();
+    });
+
+    it("markTerminalForToken refuses a token minted for a different agent", async () => {
+      setUserRegistry({ "byo-agent": userAgent(baseSupports) });
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "byo-agent",
+      });
+      if (!result) throw new Error("expected result");
+      // Claude/Codex/Copilot get this check from their launch-arg getters;
+      // env-only agents have none, so the binding itself has to enforce it.
+      expect(service.markTerminalForToken(result.token, "term-1", "some-other-agent")).toBe(false);
+      expect(service.markTerminalForToken(result.token, "term-1", "byo-agent")).toBe(true);
+      // Omitting the expected agent keeps the pre-existing call shape working.
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
     });
   });
 
