@@ -567,15 +567,13 @@ describe("PluginDevWorkerMainBridge", () => {
     await expect(badPromise).rejects.toThrow("nope");
   });
 
-  it("reports every activation outcome, including post-reload, via onActivationResult", async () => {
+  it("reports every activation outcome, not just the first, via onActivationResult", async () => {
     const onActivationResult = vi.fn();
     const { workerHost, bridge } = makeBridge({ onActivationResult });
     bridge.waitForActivation().catch(() => {});
 
-    // Initial activation succeeds.
+    // Initial activation succeeds; a later one (crash respawn) fails.
     workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
-    // Reload, then the reloaded generation fails to activate.
-    workerHost.emit("reloading");
     workerHost.emit("worker-message", { type: "activate-error", error: "broke on reload" });
 
     expect(onActivationResult).toHaveBeenNthCalledWith(1, { ok: true });
@@ -874,7 +872,7 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(onTerminalFailure).toHaveBeenCalledTimes(1);
     });
 
-    it("ignores a required registration that rejects after a reload", async () => {
+    it("ignores a required registration that rejects after the generation was retired", async () => {
       const onActivationResult = vi.fn();
       const { host, workerHost, bridge } = makeBridge({ onActivationResult });
       const stale = deferred();
@@ -882,8 +880,8 @@ describe("PluginDevWorkerMainBridge", () => {
       bridge.waitForActivation().catch(() => {});
 
       workerHost.emit("worker-message", ACTION_NOTIFY);
-      workerHost.emit("reloading");
-      // The replacement boots, re-proposes the same contribution, activates.
+      workerHost.emit("exit", 139, false);
+      // The respawn boots, re-proposes the same contribution, activates.
       workerHost.emit("ready");
       workerHost.emit("worker-message", ACTION_NOTIFY);
       workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
@@ -928,20 +926,19 @@ describe("PluginDevWorkerMainBridge", () => {
       const { workerHost, bridge } = makeBridge({ onActivationResult });
       bridge.waitForActivation().catch(() => {});
 
-      // A reload lands while activate() is still awaiting a host call: worker
-      // disposal rejects that call, so the OUTGOING child posts activate-error
-      // after `reloading` already bumped the generation. It describes a worker
-      // that no longer exists and must not bind the one now booting.
-      workerHost.emit("reloading");
+      // The worker dies while activate() is still awaiting a host call, and the
+      // activate-error it had already posted arrives behind the exit that
+      // bumped the generation. It describes a worker that no longer exists and
+      // must not bind the one now booting.
+      workerHost.emit("exit", 139, false);
       workerHost.emit("worker-message", { type: "activate-error", error: "torn down mid-await" });
-      workerHost.emit("exit", 0, true);
       // What the outgoing child died of still reaches provenance...
       expect(onActivationResult).toHaveBeenCalledWith(
         expect.objectContaining({ ok: false, error: "torn down mid-await" })
       );
       onActivationResult.mockClear();
 
-      // ...but it must not veto the replacement, whose success clears it again.
+      // ...but it must not veto the respawn, whose success clears it again.
       workerHost.emit("ready");
       workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
       await flush();
@@ -958,7 +955,7 @@ describe("PluginDevWorkerMainBridge", () => {
       // Same gap, a keyed host-notify this time: the straggler's rejection is
       // still reported to the worker, but it is not the booting generation's
       // contribution and cannot fail its activation.
-      workerHost.emit("reloading");
+      workerHost.emit("exit", 139, false);
       host.registerAction.mockRejectedValueOnce(new Error("not declared"));
       workerHost.emit("worker-message", ACTION_NOTIFY);
       await flush();
@@ -988,9 +985,9 @@ describe("PluginDevWorkerMainBridge", () => {
       await flush();
       expect(onActivationResult).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
 
-      // The author fixes the manifest and saves — the reloaded generation starts
+      // The worker crashes and the host respawns it — the new generation starts
       // from a clean verdict.
-      workerHost.emit("reloading");
+      workerHost.emit("exit", 139, false);
       workerHost.emit("ready");
       workerHost.emit("worker-message", ACTION_NOTIFY);
       workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
@@ -1065,14 +1062,14 @@ describe("PluginDevWorkerMainBridge", () => {
       method: "registerFileDecorationProvider",
       params: { descriptor: { id: "acme.demo.deco" } },
     });
-    // Let the async registration record its disposer before reload tears it down
-    // (the register message and the reload event are distinct tasks in prod).
+    // Let the async registration record its disposer before the generation is
+    // retired (the register message and the exit are distinct tasks in prod).
     await flush();
-    workerHost.emit("reloading");
+    workerHost.emit("exit", 1, false);
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("clears prior registrations and fails pending invokes on reload", async () => {
+  it("clears prior registrations and fails pending invokes when a generation is retired", async () => {
     const { host, workerHost, bridge, clear } = makeBridge();
     bridge.waitForActivation().catch(() => {});
     // Register an action and start an invocation that never gets a reply.
@@ -1094,9 +1091,9 @@ describe("PluginDevWorkerMainBridge", () => {
     const pending = wrapper({});
     pending.catch(() => {});
 
-    workerHost.emit("reloading");
+    workerHost.emit("exit", 1, false);
     expect(clear).toHaveBeenCalled();
-    await expect(pending).rejects.toThrow(/reloaded/);
+    await expect(pending).rejects.toThrow(/crashed/);
   });
 
   it("fails pending invokes when the worker crashes (#12216)", async () => {
@@ -1203,30 +1200,22 @@ describe("PluginDevWorkerMainBridge", () => {
       return () => seenSignal;
     };
 
-    it("forwards a signal that the reload boundary aborts", async () => {
+    it("forwards a signal that the generation boundary aborts", async () => {
       const { host, workerHost, bridge } = makeBridge();
       bridge.waitForActivation().catch(() => {});
       const signal = await openPrompt(host, workerHost);
       expect(signal()).toBeDefined();
       expect(signal()?.aborted).toBe(false);
 
-      workerHost.emit("reloading");
-
-      expect(signal()?.aborted).toBe(true);
-    });
-
-    it("aborts the prompt when the worker crashes instead", async () => {
-      const { host, workerHost, bridge } = makeBridge();
-      bridge.waitForActivation().catch(() => {});
-      const signal = await openPrompt(host, workerHost);
-
+      // A crash is the only boundary this bridge is carried across now — a
+      // rebuild disposes the bridge outright instead (#12277).
       workerHost.emit("exit", 139, false);
 
       expect(signal()?.aborted).toBe(true);
     });
   });
 
-  it("still cancels prompts when registration cleanup throws on reload (#12279)", async () => {
+  it("still cancels prompts when registration cleanup throws at the boundary (#12279)", async () => {
     const clear = vi.fn(() => {
       throw new Error("registration cleanup exploded");
     });
@@ -1247,7 +1236,7 @@ describe("PluginDevWorkerMainBridge", () => {
 
     // A throwing teardown step must not strand a dialog on the user's screen,
     // nor skip the rest of the cascade (#9322).
-    expect(() => workerHost.emit("reloading")).not.toThrow();
+    expect(() => workerHost.emit("exit", 139, false)).not.toThrow();
     expect(seenSignal?.aborted).toBe(true);
     expect(clear).toHaveBeenCalled();
   });
@@ -1317,9 +1306,9 @@ describe("PluginDevWorkerMainBridge", () => {
     await flush();
     clear.mockClear();
 
-    // A reload already emitted `reloading` and retired the generation before
-    // this lands, so the exit itself must not tear registrations down a second
-    // time — that would drop what the incoming generation just registered.
+    // An expected exit is a deliberate stop, and the bridge is disposed before
+    // the host that owns the worker — so a straggler admitted in the gap must
+    // not tear registrations down on its way past.
     workerHost.emit("exit", 0, true);
 
     expect(disposeProvider).not.toHaveBeenCalled();
@@ -1340,8 +1329,8 @@ describe("PluginDevWorkerMainBridge", () => {
       kind: "active-worktree",
     });
     await flush();
-    // A reload bumps the generation and tears the old subscription down.
-    workerHost.emit("reloading");
+    // Retiring the generation tears the old subscription down.
+    workerHost.emit("exit", 1, false);
     workerHost.sent.length = 0;
     // A late event from the now-dead subscription must NOT reach the new worker
     // (its proxy resets subscriptionIds and could collide on "s1").
@@ -1588,11 +1577,11 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(handle.kill).toHaveBeenCalled();
     });
 
-    it("kills spawned processes on reload", async () => {
+    it("kills spawned processes when a generation is retired", async () => {
       const { host, workerHost, bridge } = makeBridge();
       bridge.waitForActivation().catch(() => {});
       const handle = await spawn(workerHost, host);
-      workerHost.emit("reloading");
+      workerHost.emit("exit", 1, false);
       expect(handle.kill).toHaveBeenCalled();
     });
   });

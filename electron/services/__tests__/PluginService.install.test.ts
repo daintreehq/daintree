@@ -895,6 +895,205 @@ describe("loadDevPlugin — trust gates (#10518)", () => {
   });
 });
 
+describe("dev sessions — full-artifact reconcile (#12277)", () => {
+  const DEV_ID = "acme.dev-session";
+
+  /** A dev plugin exactly as `daintree-plugin dev` leaves it: marker + built dist. */
+  async function writeDevPlugin(version = "1.0.0"): Promise<string> {
+    const dir = path.join(pluginsRoot, DEV_ID);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: DEV_ID, version, main: "dist/index.js" })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "module.exports = {};");
+    await fs.writeFile(path.join(dir, ".dev-marker"), "");
+    return dir;
+  }
+
+  /** Reach the private reconcile the artifact watcher drives. */
+  function reload(service: PluginService): Promise<boolean> {
+    return (
+      service as unknown as { reloadDevPlugin(id: string): Promise<boolean> }
+    ).reloadDevPlugin(DEV_ID);
+  }
+
+  function devStatus(service: PluginService) {
+    return service.listPluginDevStatuses().find((s) => s.pluginId === DEV_ID);
+  }
+
+  it("opens a session on load and reports the live view generation", async () => {
+    await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+
+    const status = devStatus(service);
+    expect(status).toBeDefined();
+    // The generation is the load-bearing field — whether the native watcher has
+    // finished arming by now is a race this assertion has no business on.
+    expect(typeof status?.viewGeneration).toBe("number");
+    expect(status?.reloadCount).toBe(0);
+
+    service.dispose();
+  });
+
+  it("mints a fresh view generation on every rebuild — the drift this issue is about", async () => {
+    await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+    const before = devStatus(service)?.viewGeneration;
+
+    await writeDevPlugin("1.0.1");
+    expect(await reload(service)).toBe(true);
+
+    const after = devStatus(service);
+    expect(after?.viewGeneration).toBeGreaterThan(before as number);
+    expect(after?.reloadCount).toBe(1);
+    // The manifest was re-read, not carried over from the previous load.
+    expect(service.listPlugins().find((p) => p.manifest.name === DEV_ID)?.manifest.version).toBe(
+      "1.0.1"
+    );
+
+    service.dispose();
+  });
+
+  it("keeps the running plugin when plugin.json is mid-save, and says why", async () => {
+    const dir = await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+    const before = devStatus(service)?.viewGeneration;
+
+    await fs.writeFile(path.join(dir, "plugin.json"), '{ "name": "acme.dev-sess');
+    expect(await reload(service)).toBe(false);
+
+    // Still loaded, still on the generation it was serving.
+    expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(true);
+    const status = devStatus(service);
+    expect(status?.viewGeneration).toBe(before);
+    expect(status?.reloadCount).toBe(0);
+    expect(status?.detail).toBeTruthy();
+
+    service.dispose();
+  });
+
+  it("refuses to reconcile a plugin the user disabled while the session ran", async () => {
+    await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+    (
+      service as unknown as { records: { setEnabled(id: string, enabled: boolean): void } }
+    ).records.setEnabled(DEV_ID, false);
+
+    expect(await reload(service)).toBe(false);
+
+    // An unload-then-load would have quietly brought a disabled plugin back.
+    expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(true);
+    expect(devStatus(service)?.reloadCount).toBe(0);
+
+    service.dispose();
+  });
+
+  it("carries the author's log buffer across a rebuild", async () => {
+    // An ordinary unload clears the ring buffer; a rebuild must not, or the
+    // Logs tab is empty every time the author saves to fix what it was showing.
+    await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+    (service as unknown as { logBuffers: Map<string, unknown[]> }).logBuffers.set(DEV_ID, [
+      { ts: 1, level: "error", message: "the error the author is fixing" },
+    ]);
+
+    await writeDevPlugin("1.0.2");
+    expect(await reload(service)).toBe(true);
+
+    const buffer = (service as unknown as { logBuffers: Map<string, unknown[]> }).logBuffers.get(
+      DEV_ID
+    );
+    expect(buffer).toEqual([{ ts: 1, level: "error", message: "the error the author is fixing" }]);
+
+    service.dispose();
+  });
+
+  it("keeps the running plugin when the manifest stops matching the schema", async () => {
+    // Syntactically fine, so a JSON.parse-only preflight would have unloaded
+    // the working plugin and then failed to load it back.
+    const dir = await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify({ name: DEV_ID }));
+    expect(await reload(service)).toBe(false);
+
+    expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(true);
+    expect(devStatus(service)?.detail).toContain("not a valid manifest");
+
+    service.dispose();
+  });
+
+  it("refuses a rebuild that renames the plugin instead of losing track of it", async () => {
+    // `loadPlugin` keys a global plugin by `manifest.name`, so adopting a
+    // renamed manifest would register a different id while the session, the
+    // unload and the status all still name the old one.
+    const dir = await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: "acme.renamed", version: "2.0.0", main: "dist/index.js" })
+    );
+    expect(await reload(service)).toBe(false);
+
+    expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(true);
+    expect(service.listPlugins().some((p) => p.manifest.name === "acme.renamed")).toBe(false);
+    expect(devStatus(service)?.detail).toContain("restart daintree-plugin dev");
+
+    service.dispose();
+  });
+
+  it("leaves no watcher behind when a stop races a reconcile", async () => {
+    // The reconcile re-enters `loadPlugin`, which re-arms the session — so a
+    // stop that landed mid-reconcile must sweep that replacement too, or a
+    // native subscription survives with no session owning it.
+    await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+
+    await writeDevPlugin("1.0.3");
+    const reloading = reload(service);
+    const stopping = service.stopDevSession(DEV_ID);
+    await Promise.all([reloading, stopping]);
+
+    const watcher = (
+      service as unknown as {
+        devArtifactWatcherRegistry: { stateOf(id: string): unknown } | null;
+      }
+    ).devArtifactWatcherRegistry;
+    expect(watcher?.stateOf(DEV_ID) ?? null).toBeNull();
+    expect(devStatus(service)).toBeUndefined();
+    expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(false);
+
+    service.dispose();
+  });
+
+  it("stopDevSession unloads the plugin and ends the session", async () => {
+    await writeDevPlugin();
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.loadDevPlugin(DEV_ID);
+
+    await service.stopDevSession(DEV_ID);
+
+    expect(devStatus(service)).toBeUndefined();
+    expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(false);
+
+    // A rebuild that lands after the stop must not resurrect it.
+    await reload(service);
+    expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(false);
+
+    service.dispose();
+  });
+});
+
 describe("installPlugin — blocklist interaction (#10891)", () => {
   it("installs a fixed version over a plugin that was blocklisted at startup", async () => {
     // A blocked v1 is on disk at launch: reserves its name + records a blocked row.

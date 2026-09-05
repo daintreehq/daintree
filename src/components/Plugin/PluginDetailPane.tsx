@@ -17,6 +17,7 @@ import {
 } from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { usePluginDevStatus, usePluginDevStatusStore } from "@/store/pluginDevStatusStore";
 import { systemClient } from "@/clients/systemClient";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -256,6 +257,9 @@ export function PluginDetailPane({
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
+  const initDevStatus = usePluginDevStatusStore((s) => s.init);
+  useEffect(() => initDevStatus(), [initDevStatus]);
+  const devStatus = usePluginDevStatus(plugin.instanceId);
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
@@ -342,13 +346,36 @@ export function PluginDetailPane({
               {plugin.blocklisted !== true && plugin.disabled === true && (
                 <span className={BADGE_CLASS}>Disabled</span>
               )}
-              {plugin.devMode && <span className={BADGE_CLASS}>Dev</span>}
+              {plugin.devMode && (
+                // The live generation, not just "Dev": it is the one fact that
+                // says whether the running backend and the mounted view came
+                // out of the same build (#12277).
+                <span className={BADGE_CLASS}>
+                  {devStatus?.viewGeneration != null
+                    ? `Dev · gen ${devStatus.viewGeneration}`
+                    : "Dev"}
+                </span>
+              )}
               {restartRequired && (
                 <span className={`${BADGE_CLASS} text-text-secondary`}>Restart required</span>
               )}
             </div>
             {plugin.manifest.tagline && (
               <p className="text-sm text-text-secondary mt-1">{plugin.manifest.tagline}</p>
+            )}
+            {devStatus?.watcher === "degraded" && (
+              // Hot reload being dead looks exactly like "my rebuild changed
+              // nothing", so it has to say so somewhere the author will look.
+              <div
+                className="flex items-start gap-1 text-2xs text-status-warning mt-1"
+                role="status"
+              >
+                <AlertTriangle className="w-3 h-3 mt-px shrink-0" aria-hidden="true" />
+                <span>
+                  Hot reload stopped watching this plugin. Restart <code>daintree-plugin dev</code>{" "}
+                  to resume.
+                </span>
+              </div>
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
               <div className="text-2xs text-daintree-text/40 mt-1">

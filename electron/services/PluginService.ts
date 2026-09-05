@@ -25,6 +25,7 @@ interface AjvInstance {
 
 import {
   DEPRECATED_CONTRIBUTION_ALIASES,
+  describeManifestIssues,
   getPluginManifestSchema,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../schemas/plugin.js";
@@ -70,6 +71,7 @@ import type {
   PluginSettingsUiValues,
   PluginWorktreeStatus,
   PluginPanelBadge,
+  PluginDevStatus,
   PluginProtocolAuthority,
   ViewContribution,
   PluginHostBinding,
@@ -98,6 +100,7 @@ import {
 } from "./plugin/ProjectPluginController.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
+import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
 import { getPluginCapabilityConsentService } from "./plugin-capability/instances.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
@@ -272,6 +275,36 @@ const COMMAND_HANDLER_EXTENSIONS = [".js", ".mjs"] as const;
  * the file's contents are not read.
  */
 const DEV_MARKER_FILENAME = ".dev-marker";
+
+/**
+ * Why this dev plugin's manifest cannot be adopted right now, or `null` when it
+ * can. Runs BEFORE the reconcile unloads anything, which is the whole point: a
+ * manifest the author is midway through editing — unreadable, malformed, or
+ * schema-invalid — must leave the running plugin alone rather than take it down
+ * and fail to bring it back.
+ *
+ * The identity check matters as much as the schema one. `loadPlugin` keys a
+ * global plugin by `manifest.name`, so a renamed manifest would register a
+ * different id while the session, the unload and the status all still name the
+ * old one — a reload that reports success and leaves the author's plugin gone.
+ */
+async function readDevManifestError(pluginDir: string, pluginId: string): Promise<string | null> {
+  let json: unknown;
+  try {
+    json = JSON.parse(await fs.readFile(path.join(pluginDir, "plugin.json"), "utf-8"));
+  } catch (err) {
+    return formatErrorMessage(err, "plugin.json could not be read");
+  }
+  const schema = getPluginManifestSchema(false);
+  const parsed = schema.safeParse(json);
+  if (!parsed.success) {
+    return `plugin.json is not a valid manifest: ${describeManifestIssues(parsed.error.issues, schema)}`;
+  }
+  if (parsed.data.name !== pluginId) {
+    return `plugin.json now declares "${parsed.data.name}", but this dev session is linked as "${pluginId}" — restart daintree-plugin dev to pick up the new name`;
+  }
+  return null;
+}
 
 const ACTIVATE_TIMEOUT_MS = 5000;
 /**
@@ -936,6 +969,8 @@ export class PluginService {
       isDisposed: () => this.disposed,
       listPluginActions: () => this.listPluginActions(),
       initPromise: this.initPromise,
+      listPluginDevStatuses: () => this.listPluginDevStatuses(),
+      isReplacingPlugin: () => this.devReplaceDepth > 0,
     });
 
     // Ownership is resolved against the live kind registry rather than trusted
@@ -1097,6 +1132,9 @@ export class PluginService {
     // otherwise queue a reload into a service that is going away.
     this.projectPluginWatcherRegistry?.dispose();
     this.projectPluginWatcherRegistry = null;
+    this.devArtifactWatcherRegistry?.dispose();
+    this.devArtifactWatcherRegistry = null;
+    this.devSessions.clear();
     // Forget every project's plugin bookkeeping BEFORE the unload sweep below,
     // so the controller cannot re-load into a service that is going away.
     this.projectPluginController?.dispose();
@@ -1675,6 +1713,11 @@ export class PluginService {
     // separately; closing it needs an explicit name reservation at the check.
     if (isUserInstalled) {
       const isDev = existsSync(path.join(pluginDir, DEV_MARKER_FILENAME));
+      // Armed off the marker, not off `devMode` below: a session whose first
+      // build has not landed has no resolvable `main` and so is not a dev
+      // plugin yet — but it is exactly the case that needs watching, because
+      // the build that makes it one is the next thing to happen (#12277).
+      if (isDev) this.ensureDevSession(manifest.name, pluginDir);
       if (isDev && plugin.resolvedMain) {
         plugin.devMode = true;
         this.records.upsertInstalledRecord(manifest.name, { devMode: true });
@@ -2455,8 +2498,9 @@ export class PluginService {
     // A failed first activation must not be cached as a successful one
     // (#10523): `activatePlugin` adds the id to `activatedPlugins` when this
     // method resolves, which would short-circuit every later re-open. A dev
-    // worker keeps watching so the author can fix the error and save to reload —
-    // its retry path is the watcher, not a re-activation — so leave it alive.
+    // worker is left alive so the author can fix the error and save: its retry
+    // path is `PluginDevArtifactWatcher` reconciling the whole plugin (#12277),
+    // not a re-activation of this worker.
     // A prod worker has no watcher, so the only recovery is a re-open / Settings
     // → Retry that re-runs `activatePlugin`; tear the failed worker down and
     // rethrow so the in-flight entry is dropped and the id is never cached,
@@ -3815,6 +3859,13 @@ export class PluginService {
     if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
       throw new Error(`Invalid dev plugin id "${pluginId}" — expected a scoped "publisher.name"`);
     }
+    // Queued behind any reconcile or stop for this plugin: a CLI restart sends
+    // stop and start back to back, and a start that overtook the stop would be
+    // undone by it.
+    return this.serializeDevSession(pluginId, () => this.doLoadDevPlugin(pluginId));
+  }
+
+  private async doLoadDevPlugin(pluginId: string): Promise<void> {
     if (this.plugins.has(pluginId)) {
       this.unloadPlugin(pluginId);
     }
@@ -3832,6 +3883,246 @@ export class PluginService {
       );
     }
     await this.activatePlugin(pluginId);
+  }
+
+  // ----- `daintree-plugin dev` sessions (#12277) --------------------------
+
+  private devArtifactWatcherRegistry: PluginDevArtifactWatcher | null = null;
+
+  /**
+   * Per-session state the watcher does not own. Its presence IS the session:
+   * it outlives the plugin loads the session drives, so a reload that fails to
+   * produce a loadable plugin still has somewhere to report why.
+   */
+  private devSessions = new Map<string, { reloadCount: number; detail: string | null }>();
+
+  /** One dev operation at a time per plugin — reload, or the stop behind it. */
+  private devSessionChains = new Map<string, Promise<void>>();
+
+  /**
+   * Nesting depth of in-flight plugin replacements. While non-zero the
+   * contribution registries are mid-swap, so no snapshot taken from them is
+   * authoritative — see the broadcaster's `isReplacingPlugin` dep.
+   */
+  private devReplaceDepth = 0;
+
+  private get devArtifactWatchers(): PluginDevArtifactWatcher {
+    if (!this.devArtifactWatcherRegistry) {
+      this.devArtifactWatcherRegistry = new PluginDevArtifactWatcher({
+        reload: (pluginId) => this.reloadDevPlugin(pluginId),
+        onStateChange: (pluginId) => this.emitDevStatus(pluginId),
+      });
+    }
+    return this.devArtifactWatcherRegistry;
+  }
+
+  /**
+   * Start watching this plugin's artifact, or keep watching it. Idempotent:
+   * the reconcile re-enters `loadPlugin`, which calls this again for the same
+   * session.
+   */
+  private ensureDevSession(pluginId: string, pluginDir: string): void {
+    if (this.disposed) return;
+    if (!this.devSessions.has(pluginId)) {
+      this.devSessions.set(pluginId, { reloadCount: 0, detail: null });
+    }
+    this.devArtifactWatchers.ensure(pluginId, pluginDir);
+    this.emitDevStatus(pluginId);
+  }
+
+  /**
+   * End a dev session and unload its plugin (`plugin.dev.stop`).
+   *
+   * The watcher is stopped BEFORE the queue is joined, so no further rebuild
+   * can queue work behind the unload; the unload itself goes through the chain
+   * so it lands after any reconcile already in flight rather than racing it.
+   */
+  async stopDevSession(pluginId: string): Promise<void> {
+    this.devArtifactWatcherRegistry?.stop(pluginId);
+    await this.serializeDevSession(pluginId, async () => {
+      // Stopped a second time, deliberately. A reconcile already in flight when
+      // the first stop landed re-enters `loadPlugin`, which re-arms the session
+      // through `ensureDevSession` — so without this the queued teardown would
+      // unload the plugin and leave that replacement subscription watching a
+      // session nobody owns.
+      this.devArtifactWatcherRegistry?.stop(pluginId);
+      const had = this.devSessions.delete(pluginId);
+      this.unloadPlugin(pluginId);
+      if (had) this.emitDevStatus(pluginId);
+    });
+  }
+
+  /** Live state of every dev session, for a renderer that has just attached. */
+  listPluginDevStatuses(): PluginDevStatus[] {
+    const statuses: PluginDevStatus[] = [];
+    for (const pluginId of this.devSessions.keys()) {
+      const status = this.buildDevStatus(pluginId);
+      if (status) statuses.push(status);
+    }
+    return statuses;
+  }
+
+  private buildDevStatus(pluginId: string): PluginDevStatus | null {
+    const session = this.devSessions.get(pluginId);
+    if (!session) return null;
+    const watcher = this.devArtifactWatcherRegistry?.stateOf(pluginId);
+    return {
+      pluginId,
+      viewGeneration: this.plugins.get(pluginId)?.viewGeneration ?? null,
+      reloadCount: session.reloadCount,
+      watcher: watcher?.state ?? "waiting",
+      // The session's own last failure outranks the watcher's: a healthy watch
+      // that keeps loading a broken manifest is the case the author needs told.
+      detail: session.detail ?? watcher?.detail ?? null,
+    };
+  }
+
+  private emitDevStatus(pluginId: string): void {
+    if (this.disposed) return;
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:dev-status-changed",
+      payload: { pluginId, status: this.buildDevStatus(pluginId) },
+    });
+  }
+
+  private setDevSessionDetail(pluginId: string, detail: string | null): void {
+    const session = this.devSessions.get(pluginId);
+    if (!session || session.detail === detail) return;
+    session.detail = detail;
+    this.emitDevStatus(pluginId);
+  }
+
+  /**
+   * Serialize dev work for one plugin. The chain is kept settled rather than
+   * rejected so one failed reconcile does not poison every reload queued
+   * behind it.
+   */
+  private serializeDevSession<T>(pluginId: string, task: () => Promise<T>): Promise<T> {
+    const prior = this.devSessionChains.get(pluginId) ?? Promise.resolve();
+    const run = prior.then(task, task);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.devSessionChains.set(pluginId, settled);
+    void settled.then(() => {
+      if (this.devSessionChains.get(pluginId) === settled) {
+        this.devSessionChains.delete(pluginId);
+      }
+    });
+    return run;
+  }
+
+  /**
+   * Reconcile a dev plugin against what is now on disk — manifest, views and
+   * backend as one artifact generation.
+   *
+   * This is `loadDevPlugin`'s path, not a second loader, which is the whole
+   * point: the manifest is re-read, `loadPlugin` mints a fresh
+   * `viewGeneration`, and every contribution is re-registered under it — so a
+   * view-only rebuild republishes `componentPath` on a URL the renderer's
+   * module map has never seen, and the backend that answers it is the one that
+   * shipped in the same build.
+   */
+  private reloadDevPlugin(pluginId: string): Promise<boolean> {
+    return this.serializeDevSession(pluginId, () => this.doReloadDevPlugin(pluginId));
+  }
+
+  /**
+   * Returns whether the artifact on disk was actually adopted. A `false` here
+   * is not a failure the author has to see — it is the watcher being told not
+   * to treat these bytes as loaded, so the next save still reconciles rather
+   * than comparing equal against a build that never ran.
+   */
+  private async doReloadDevPlugin(pluginId: string): Promise<boolean> {
+    if (this.disposed) return false;
+    // Same escape gate `loadDevPlugin` applies: the id becomes a path segment
+    // under `pluginsRoot` (#10518).
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) return false;
+    // A stop that landed while the settle was in flight wins.
+    if (!this.devSessions.has(pluginId)) return false;
+    // Re-read rather than captured at arm time: the user can disable the plugin
+    // in Preferences while the CLI session keeps running, and an unload-then-load
+    // would quietly bring it back.
+    if (this.records.getDisabledIds().has(pluginId)) return false;
+
+    const pluginDir = path.join(this.pluginsRoot, pluginId);
+    const manifestError = await readDevManifestError(pluginDir, pluginId);
+    if (manifestError) {
+      // Checked BEFORE anything is unloaded: a manifest the author is midway
+      // through editing must never take the running plugin down with it, and
+      // the next save reconciles. Reported rather than swallowed, so "my
+      // rebuild did nothing" has an answer.
+      this.setDevSessionDetail(pluginId, manifestError);
+      return false;
+    }
+    if (this.disposed || !this.devSessions.has(pluginId)) return false;
+
+    // The author's own diagnostics are usually WHY they are saving, so a
+    // reconcile that wipes them on every rebuild makes the Logs tab useless
+    // exactly when it matters. Carried here and nowhere else: an ordinary
+    // unload still clears, because that plugin is going away rather than being
+    // replaced by its next build.
+    const carriedLogs = this.logBuffers.get(pluginId);
+    const restoreLogs = (): void => {
+      if (!carriedLogs?.length) return;
+      const fresh = this.logBuffers.get(pluginId) ?? [];
+      this.logBuffers.set(pluginId, [...carriedLogs, ...fresh].slice(-PLUGIN_LOG_BUFFER_MAX));
+    };
+
+    // Everything from here to the matching decrement runs against half-swapped
+    // contribution registries. Snapshots taken in that window are not
+    // authoritative, and the renderer prunes persisted preferences off ones
+    // that claim to be — see the broadcaster's `isReplacingPlugin`.
+    this.devReplaceDepth++;
+    try {
+      if (this.plugins.has(pluginId)) this.unloadPlugin(pluginId);
+      const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+        isBuiltin: false,
+        disabled: this.records.getDisabledIds(),
+      });
+      if (!loaded) {
+        restoreLogs();
+        this.setDevSessionDetail(
+          pluginId,
+          `Couldn't load "${pluginId}" after a rebuild — it may be disabled in Preferences, or its plugin.json may be invalid`
+        );
+        return false;
+      }
+
+      // Disabled intent is re-read after the load as well as before it: the
+      // toggle is not serialized against this chain, so it can land in the gap
+      // and would otherwise be undone by the activation below.
+      if (this.records.getDisabledIds().has(pluginId)) {
+        this.unloadPlugin(pluginId);
+        return false;
+      }
+      await this.activatePlugin(pluginId);
+    } finally {
+      this.devReplaceDepth--;
+      // The registries are whole again, so anything the replacement held back
+      // can be published for real.
+      if (this.devReplaceDepth === 0) this.broadcaster.flushDeferredCompleteSnapshots();
+    }
+
+    // A stop admitted during the load leaves the plugin running behind a
+    // session that no longer exists; drop it rather than strand it.
+    if (!this.devSessions.has(pluginId)) {
+      this.unloadPlugin(pluginId);
+      return false;
+    }
+    restoreLogs();
+
+    const session = this.devSessions.get(pluginId);
+    if (session) {
+      session.reloadCount++;
+      // `activatePlugin` never rejects, so the activation error (if any) is
+      // read back off the provenance record rather than caught here. Assigned
+      // unconditionally so a fixed plugin clears the previous failure.
+      session.detail = this.getPluginLoadError(pluginId)?.message ?? null;
+    }
+    this.emitDevStatus(pluginId);
+    return true;
   }
 
   // ----- project-local plugins (`<projectRoot>/.daintree/plugins/`) -------

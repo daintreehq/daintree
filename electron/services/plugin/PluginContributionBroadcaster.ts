@@ -209,6 +209,16 @@ interface PluginContributionBroadcasterDeps {
   listPluginActions: () => PluginActionDescriptor[];
   /** Resolves once startup load + activation has settled (or dispose ran). */
   initPromise: Promise<void>;
+  /** Live `daintree-plugin dev` sessions, for the cold-start replay (#12277). */
+  listPluginDevStatuses: () => import("../../../shared/types/plugin.js").PluginDevStatus[];
+  /**
+   * True while a plugin is being replaced in place (a dev rebuild reconcile).
+   * The unload half of a replacement empties the registries for one turn, and a
+   * `complete` snapshot taken there is a lie the renderer acts on destructively
+   * — it sweeps persisted preferences for contributions that are about to come
+   * straight back (#12277).
+   */
+  isReplacingPlugin: () => boolean;
 }
 
 /**
@@ -353,6 +363,20 @@ export class PluginContributionBroadcaster {
     this.scheduleContextMenuItemsBroadcast(true);
   }
 
+  /**
+   * Re-publish any authoritative snapshot that was held back while a plugin was
+   * being replaced. Called once the replacement completes; a no-op when nothing
+   * was suppressed.
+   */
+  flushDeferredCompleteSnapshots(): void {
+    if (this.deps.isDisposed() || this.deps.isReplacingPlugin()) return;
+    if (this.toolbarButtonsBroadcastComplete) this.scheduleToolbarButtonsBroadcast(true);
+    if (this.keybindingsBroadcastComplete) this.scheduleKeybindingsBroadcast(true);
+    if (this.contextMenuItemsBroadcastComplete) this.scheduleContextMenuItemsBroadcast(true);
+    if (this.agentsBroadcastComplete) this.scheduleAgentsBroadcast(true);
+    if (this.recipesBroadcastComplete) this.scheduleRecipesBroadcast(true);
+  }
+
   broadcastProvenanceChanged(): void {
     if (this.deps.isDisposed()) return;
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
@@ -407,8 +431,11 @@ export class PluginContributionBroadcaster {
     this.toolbarButtonsBroadcastPending = true;
     queueMicrotask(() => {
       this.toolbarButtonsBroadcastPending = false;
-      const complete = this.toolbarButtonsBroadcastComplete;
-      this.toolbarButtonsBroadcastComplete = false;
+      const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isReplacingPlugin();
+      // Cleared only when it was actually published: a `complete` suppressed
+      // mid-replacement is still owed, and dropping it here would leave the
+      // renderer's stale entries un-swept until some later authoritative event.
+      if (complete) this.toolbarButtonsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginToolbarButtons(complete);
     });
@@ -427,9 +454,9 @@ export class PluginContributionBroadcaster {
     if (this.keybindingsBroadcastPending) return;
     this.keybindingsBroadcastPending = true;
     queueMicrotask(() => {
-      const isComplete = this.keybindingsBroadcastComplete;
+      const isComplete = this.keybindingsBroadcastComplete && !this.deps.isReplacingPlugin();
       this.keybindingsBroadcastPending = false;
-      this.keybindingsBroadcastComplete = false;
+      if (isComplete) this.keybindingsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.emitScoped("plugin:keybindings-changed", (projectId) => ({
         keybindings: forProject(getPluginKeybindings(), (e) => e.pluginId, projectId),
@@ -449,8 +476,8 @@ export class PluginContributionBroadcaster {
     this.contextMenuItemsBroadcastPending = true;
     queueMicrotask(() => {
       this.contextMenuItemsBroadcastPending = false;
-      const drained = this.contextMenuItemsBroadcastComplete;
-      this.contextMenuItemsBroadcastComplete = false;
+      const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isReplacingPlugin();
+      if (drained) this.contextMenuItemsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginContextMenuItems(drained);
     });
@@ -475,8 +502,8 @@ export class PluginContributionBroadcaster {
     this.agentsBroadcastPending = true;
     queueMicrotask(() => {
       this.agentsBroadcastPending = false;
-      const drained = this.agentsBroadcastComplete;
-      this.agentsBroadcastComplete = false;
+      const drained = this.agentsBroadcastComplete && !this.deps.isReplacingPlugin();
+      if (drained) this.agentsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginAgents(drained);
     });
@@ -501,8 +528,8 @@ export class PluginContributionBroadcaster {
     this.recipesBroadcastPending = true;
     queueMicrotask(() => {
       this.recipesBroadcastPending = false;
-      const drained = this.recipesBroadcastComplete;
-      this.recipesBroadcastComplete = false;
+      const drained = this.recipesBroadcastComplete && !this.deps.isReplacingPlugin();
+      if (drained) this.recipesBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginRecipes(drained);
     });
@@ -576,7 +603,10 @@ export class PluginContributionBroadcaster {
         name: "plugin:keybindings-changed",
         payload: {
           keybindings: forProject(getPluginKeybindings(), (e) => e.pluginId, target),
-          complete: true,
+          // Authoritative only when the registries are whole. A view attaching
+          // mid-replacement would otherwise be handed a snapshot missing the
+          // plugin being rebuilt and sweep its preferences against it.
+          complete: !this.deps.isReplacingPlugin(),
         },
       },
       {
@@ -594,6 +624,13 @@ export class PluginContributionBroadcaster {
         name: "plugin:recipes-changed",
         payload: { recipes: getPluginRecipes(), complete: false },
       },
+      // Not project-scoped: a dev session is a global plugin by construction,
+      // and a view that missed the live event has no other way to learn which
+      // generation is running.
+      ...this.deps.listPluginDevStatuses().map((status) => ({
+        name: "plugin:dev-status-changed",
+        payload: { pluginId: status.pluginId, status },
+      })),
     ];
     for (const event of events) {
       try {

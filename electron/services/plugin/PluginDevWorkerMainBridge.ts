@@ -195,24 +195,25 @@ export class PluginDevWorkerMainBridge {
   private readonly providerDisposers = new Map<string, () => void>();
   /** Live handles for processes the worker spawned via `host.process.spawn`,
    * keyed by the host-assigned handle id. The worker addresses `kill` /
-   * `restart` / `onExit` / `onCrash` by id; all are killed on reload and dispose
-   * (a reloaded generation re-spawns from its fresh module realm). */
+   * `restart` / `onExit` / `onCrash` by id; all are killed when a generation is
+   * retired and on dispose (the next generation re-spawns from its fresh module
+   * realm). */
   private readonly processHandles = new Map<string, PluginProcessHandle>();
 
   /**
    * Required registrations still awaiting main-side deep validation (#12282).
    * A `host-notify` carrying a `registrationKey` is a contribution the plugin
    * believes it made — the worker proxy already returned success to it — so the
-   * activation commit waits on this set draining. Cleared on reload and dispose
-   * with the rest of the generation's state.
+   * activation commit waits on this set draining. Cleared when a generation is
+   * retired and on dispose, with the rest of that generation's state.
    */
   private readonly pendingRegistrations = new Set<PendingRegistration>();
   private activationPhase: ActivationPhase = "activating";
   /**
-   * True between retiring a generation and the replacement child's boot `ready`.
+   * True between retiring a generation and the respawned child's boot `ready`.
    *
    * The generation counter alone cannot attribute these: a message the outgoing
-   * child posted before it was killed is delivered AFTER `reloadGeneration` was
+   * child posted before it died is delivered AFTER `reloadGeneration` was
    * bumped, so it reads as belonging to the incoming one. That is harmless for
    * a late `host-result` (the id is simply dropped) but not for an activation
    * outcome — a dying worker's `activate-error` would otherwise latch a failure
@@ -223,7 +224,7 @@ export class PluginDevWorkerMainBridge {
   private awaitingReplacement = false;
 
   /** First-activation gate. Resolved on `activated`, rejected on activate/crash
-   * errors. Subsequent reload activations don't re-await this. */
+   * errors. A later generation's activation doesn't re-await this. */
   private activationSettled = false;
   private activationResolve: (() => void) | null = null;
   private activationReject: ((error: Error) => void) | null = null;
@@ -251,7 +252,6 @@ export class PluginDevWorkerMainBridge {
 
     this.workerHost.on("worker-message", this.onWorkerMessage);
     this.workerHost.on("ready", this.onWorkerReady);
-    this.workerHost.on("reloading", this.onReloading);
     this.workerHost.on("exit", this.onWorkerExit);
     this.workerHost.on("crash-loop", this.onCrashLoop);
     this.workerHost.on("protocol-violation", this.onProtocolViolation);
@@ -267,7 +267,6 @@ export class PluginDevWorkerMainBridge {
     this.disposed = true;
     this.workerHost.off("worker-message", this.onWorkerMessage);
     this.workerHost.off("ready", this.onWorkerReady);
-    this.workerHost.off("reloading", this.onReloading);
     this.workerHost.off("exit", this.onWorkerExit);
     this.workerHost.off("crash-loop", this.onCrashLoop);
     this.workerHost.off("protocol-violation", this.onProtocolViolation);
@@ -317,8 +316,8 @@ export class PluginDevWorkerMainBridge {
     this.providerDisposers.clear();
   }
 
-  /** Kill every process the worker spawned (worker is going away or reloading —
-   * a fresh generation re-spawns from its own module realm). */
+  /** Kill every process the worker spawned (the worker is going away — a fresh
+   * generation re-spawns from its own module realm). */
   private disposeProcessHandles(): void {
     for (const handle of this.processHandles.values()) {
       try {
@@ -330,17 +329,17 @@ export class PluginDevWorkerMainBridge {
     this.processHandles.clear();
   }
 
-  /** The replacement child booted — everything from here belongs to it. */
+  /** The crash-respawned child booted — everything from here belongs to it. */
   private onWorkerReady = (): void => {
     this.awaitingReplacement = false;
   };
 
-  private onReloading = (): void => {
-    this.retireGeneration("Plugin reloaded before invocation completed");
-  };
-
   /**
    * Retire everything bound to the outgoing worker generation.
+   *
+   * Reached from an unexpected worker exit. A rebuild no longer routes through
+   * here: it replaces the whole plugin, so this bridge is disposed outright
+   * rather than carried across the boundary (#12277).
    *
    * Bumping `reloadGeneration` is the load-bearing part: request ids are a
    * per-worker counter that restarts at 1, so a result from the outgoing
@@ -386,16 +385,16 @@ export class PluginDevWorkerMainBridge {
   /**
    * The worker process is gone (#12216).
    *
-   * An INTENTIONAL exit (reload, dispose) announces itself first — the host
-   * emits `reloading` before the kill — so the generation is already retired
-   * and only a straggler admitted in the gap needs settling.
+   * An INTENTIONAL exit is a dispose, and this bridge is disposed before the
+   * host that owns the worker — so the handler has normally already returned
+   * above. The branch below only settles a straggler admitted in the gap.
    *
    * A CRASH announces nothing. The host respawns a worker that has never seen
    * the outstanding request ids, so without this every in-flight invoke hangs
    * its caller forever, the crashed generation's subscriptions and providers
    * stay registered against a worker that cannot serve them, and a late
    * host-result can be delivered to the replacement under a colliding id. It
-   * is the same generation boundary a reload is, so it gets the same teardown.
+   * is a generation boundary like any other, so it gets the same teardown.
    *
    * Deliberately no wall-clock timeout on `invoke` itself. This bridge carries
    * actions, IPC handlers and decoration calls whose legitimate durations
@@ -413,8 +412,8 @@ export class PluginDevWorkerMainBridge {
       );
       return;
     }
-    // `reloading` already retired the generation; anything still here entered
-    // during the gap between that and the process actually going away.
+    // Nothing left to settle in the ordinary case; anything still here entered
+    // during the gap before the process actually went away.
     if (this.pendingInvokes.size === 0 && this.hostCallAborts.size === 0) return;
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {

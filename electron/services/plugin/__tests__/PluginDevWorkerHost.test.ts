@@ -3,21 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 import { Readable } from "node:stream";
 
-const { forkMock, mockChildren, appMock, watchMock, watchCalls, loggerMock } = vi.hoisted(() => {
+const { forkMock, mockChildren, appMock, loggerMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require("events") as typeof import("events");
   const forkMock = vi.fn();
   const mockChildren: any[] = [];
   const appEmitter = new EventEmitter();
   const appMock = Object.assign(appEmitter, { getPath: vi.fn(() => "/tmp/userData") });
-  const watchCalls: { dir: string; cb: (event: string, filename: string | null) => void }[] = [];
-  const watchMock = vi.fn((dir: string, _opts: unknown, cb: any) => {
-    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
-    watchCalls.push({ dir, cb });
-    return watcher;
-  });
   const loggerMock = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  return { forkMock, mockChildren, appMock, watchMock, watchCalls, loggerMock };
+  return { forkMock, mockChildren, appMock, loggerMock };
 });
 
 class MockUtilityChild extends EventEmitter {
@@ -39,20 +33,6 @@ vi.mock("electron", () => ({
   app: appMock,
   UtilityProcess: class {},
 }));
-
-vi.mock("fs", async (importOriginal) => {
-  const actual = (await importOriginal()) as any;
-  // existsSync → true so the watcher targets the dist dir directly (the fake
-  // test paths don't exist on the real fs, which would otherwise route through
-  // the "dist not created yet" plugin-root fallback).
-  const existsSync = () => true;
-  return {
-    ...actual,
-    default: { ...actual.default, watch: watchMock, existsSync },
-    watch: watchMock,
-    existsSync,
-  };
-});
 
 vi.mock("../../../utils/logger.js", () => ({
   createLogger: () => loggerMock,
@@ -86,8 +66,6 @@ describe("PluginDevWorkerHost", () => {
     vi.resetModules();
     forkMock.mockReset();
     mockChildren.length = 0;
-    watchCalls.length = 0;
-    watchMock.mockClear();
     appMock.removeAllListeners();
     loggerMock.debug.mockClear();
     loggerMock.info.mockClear();
@@ -280,110 +258,6 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
-  it("watches the bundle's dist directory and debounces a rebuild into one reload", async () => {
-    vi.useFakeTimers();
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    void host.start();
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "ready" });
-
-    expect(watchCalls).toHaveLength(1);
-    expect(watchCalls[0].dir).toBe("/plugins/acme.demo/dist");
-
-    // Two rapid change events for index.js → one reload after debounce.
-    watchCalls[0].cb("change", "index.js");
-    watchCalls[0].cb("change", "index.js");
-    vi.advanceTimersByTime(250);
-
-    // Reload sends a dispose to the old child, then the old child exits.
-    const disposeSent = child.postMessage.mock.calls.some((c) => c[0]?.type === "dispose");
-    expect(disposeSent).toBe(true);
-    host.dispose();
-  });
-
-  it("ignores change events for unrelated files in the dist dir", async () => {
-    vi.useFakeTimers();
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    void host.start();
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "ready" });
-    child.postMessage.mockClear();
-
-    watchCalls[0].cb("change", "style.css");
-    vi.advanceTimersByTime(250);
-
-    const disposeSent = child.postMessage.mock.calls.some((c) => c[0]?.type === "dispose");
-    expect(disposeSent).toBe(false);
-    host.dispose();
-  });
-
-  it("a reload clears the crash window so deliberate restarts never trip the cap", async () => {
-    vi.useFakeTimers();
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    const crashLoop = vi.fn();
-    host.on("crash-loop", crashLoop);
-    void host.start();
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "ready" });
-
-    // Trigger a reload (deliberate kill).
-    watchCalls[0].cb("change", "index.js");
-    vi.advanceTimersByTime(250);
-    // Old child exits as a result of the reload's dispose/kill.
-    child.emit("exit", 0);
-    await vi.runOnlyPendingTimersAsync();
-
-    // A fresh worker was forked for the reload.
-    expect(forkMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(crashLoop).not.toHaveBeenCalled();
-    host.dispose();
-  });
-
-  it("ignores a `ready` from a child already being killed for a reload (#12282)", async () => {
-    vi.useFakeTimers();
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    const ready = vi.fn();
-    host.on("ready", ready);
-    const started = host.start();
-    let rejected: unknown = null;
-    started.catch((e) => (rejected = e));
-    const child = mockChildren[0] as MockUtilityChild;
-
-    // A rebuild lands while the first child is still booting, so it is killed
-    // before it ever announced itself.
-    watchCalls[0].cb("change", "index.js");
-    vi.advanceTimersByTime(250);
-
-    // Its `ready` arrives anyway. Telling it to `start` would have it import and
-    // activate against its own teardown, and the outcome it then posts would be
-    // attributed to the replacement that has not even forked yet.
-    child.emit("message", { type: "ready" });
-    expect(child.postMessage.mock.calls.find((c) => c[0]?.type === "start")).toBeUndefined();
-    expect(ready).not.toHaveBeenCalled();
-
-    // Suppressing that `ready` must not strand the boot gate. The doomed child's
-    // exit reaches `handleExit` with the original waiter still armed, and a
-    // rejection there is fatal: `activateViaDevWorker` reads it as a hard fork
-    // failure and disposes the bridge, host and watcher, killing the dev plugin
-    // with no auto-recovery.
-    child.emit("exit", 0);
-    await vi.runOnlyPendingTimersAsync();
-    expect(rejected).toBeNull();
-
-    // The replacement announces itself normally and settles the original wait.
-    const replacement = mockChildren[1] as MockUtilityChild;
-    replacement.emit("message", { type: "ready" });
-
-    expect(replacement.postMessage.mock.calls.find((c) => c[0]?.type === "start")).toBeTruthy();
-    expect(ready).toHaveBeenCalledTimes(1);
-    await expect(started).resolves.toBeUndefined();
-    host.dispose();
-  });
-
   it("gives up after the crash threshold of unexpected exits", async () => {
     const { PluginDevWorkerHost, CRASH_WINDOW_MS } = await loadModule();
     expect(CRASH_WINDOW_MS).toBeGreaterThan(0);
@@ -419,7 +293,7 @@ describe("PluginDevWorkerHost", () => {
     expect(child.kill).toHaveBeenCalled();
   });
 
-  it("prod mode forks with the prod-worker kind and starts NO file watcher (#10526)", async () => {
+  it("prod mode forks with the prod-worker kind (#10526)", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost({ ...OPTS, mode: "prod" });
     host.waitForReady().catch(() => {});
@@ -427,21 +301,17 @@ describe("PluginDevWorkerHost", () => {
     const child = mockChildren[0] as MockUtilityChild;
     child.emit("message", { type: "ready" });
 
-    // Forked with the prod kind for process-monitor observability...
     const [, , options] = forkMock.mock.calls[0];
     expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-prod-worker");
-    // ...and crucially never arms the hot-reload bundle watcher.
-    expect(watchCalls).toHaveLength(0);
     host.dispose();
   });
 
-  it("dev mode arms the file watcher (contrast with prod) (#10526)", async () => {
+  it("dev mode forks with the dev-worker kind (contrast with prod) (#10526)", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost({ ...OPTS, mode: "dev" });
     void host.start();
     (mockChildren[0] as MockUtilityChild).emit("message", { type: "ready" });
 
-    expect(watchCalls).toHaveLength(1);
     const [, , options] = forkMock.mock.calls[0];
     expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-dev-worker");
     host.dispose();
@@ -461,68 +331,14 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
-  // #12279: a reload asks the worker to dispose cooperatively and only
-  // force-kills it after a grace period, so the outgoing worker stays alive and
-  // connected after `reloading` has already retired its generation. Anything it
-  // says in that window would be stamped with the INCOMING generation and pass
-  // every downstream staleness check.
-  it("drops messages from a worker that is being retired (#12279)", async () => {
-    vi.useFakeTimers();
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    const seen: any[] = [];
-    host.on("worker-message", (m) => seen.push(m));
-    void host.start();
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "ready" });
-
-    watchCalls[0].cb("change", "index.js");
-    vi.advanceTimersByTime(250);
-
-    // The dying worker's cleanup runs before the process exits and can still
-    // call the host — a settings write here must not be forwarded.
-    child.emit("message", {
-      type: "host-call",
-      requestId: "late",
-      method: "settings.set",
-      params: { key: "k", value: "v" },
-    });
-
-    expect(seen).toHaveLength(0);
-    // The cooperative dispose must still reach it — gating receives, not sends.
-    expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
-    host.dispose();
-  });
-
-  it("lets the replacement satisfy a start() that a rebuild interrupted (#12279)", async () => {
-    vi.useFakeTimers();
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    const started = host.start();
-    let rejected: unknown = null;
-    started.catch((e) => (rejected = e));
-
-    // A rebuild lands before the first worker ever reported ready.
-    const oldChild = mockChildren[0] as MockUtilityChild;
-    watchCalls[0].cb("change", "index.js");
-    vi.advanceTimersByTime(250);
-    // Its late `ready` is correctly ignored — that generation is retired.
-    oldChild.emit("message", { type: "ready" });
-    oldChild.emit("exit", 0);
-    await vi.runOnlyPendingTimersAsync();
-
-    // The deliberate kill must NOT fail the activation: PluginService reads a
-    // start() rejection as a hard fork failure and disposes the replacement.
-    expect(rejected).toBeNull();
-
-    const newChild = mockChildren[mockChildren.length - 1] as MockUtilityChild;
-    newChild.emit("message", { type: "ready" });
-    await expect(started).resolves.toBeUndefined();
-    host.dispose();
-  });
-
+  // #12279: a retiring worker stays alive and connected until the cooperative
+  // dispose lands or the grace period force-kills it, so a superseded child can
+  // still speak. Anything it says would be stamped with the CURRENT generation
+  // and pass every downstream staleness check. A rebuild takes this route now
+  // too (#12277): PluginService disposes the host outright rather than reloading
+  // the worker in place, so a crash respawn is the one path that leaves an old
+  // child behind while this host is still live.
   it("ignores a superseded child once its replacement takes over (#12279)", async () => {
-    vi.useFakeTimers();
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost(OPTS);
     const seen: any[] = [];
@@ -531,10 +347,8 @@ describe("PluginDevWorkerHost", () => {
     const oldChild = mockChildren[0] as MockUtilityChild;
     oldChild.emit("message", { type: "ready" });
 
-    watchCalls[0].cb("change", "index.js");
-    vi.advanceTimersByTime(250);
-    oldChild.emit("exit", 0);
-    await vi.runOnlyPendingTimersAsync();
+    oldChild.emit("exit", 1);
+    await flush();
 
     const newChild = mockChildren[mockChildren.length - 1] as MockUtilityChild;
     expect(newChild).not.toBe(oldChild);
