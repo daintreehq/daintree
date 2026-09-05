@@ -723,9 +723,13 @@ export class PluginDevWorkerHost extends EventEmitter {
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
     const forward = (kind: "stdout" | "stderr", chunk: Buffer): void => {
       // Keep draining after teardown starts (an unread stream stalls the child's
-      // exit) but stop decoding and logging it — a worker being killed for a
-      // protocol violation has no business writing to the app log on its way out.
-      if (this.isDisposed) return;
+      // exit) but stop decoding and logging it once the worker has been killed
+      // for a protocol violation — it has no business writing to the app log on
+      // its way out. Narrowed to that case deliberately: a graceful teardown
+      // (unload, idle-dispose, quit) runs the plugin's own disposer, and its
+      // failures are logged on stderr from there, so gating on `isDisposed`
+      // would silently discard a plugin author's broken cleanup.
+      if (this.protocolViolated) return;
       const text = chunk.toString("utf8").trimEnd();
       if (!text) return;
       const line = `[plugin-dev:${this.pluginId}] ${text}`;

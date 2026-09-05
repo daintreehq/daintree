@@ -2330,10 +2330,6 @@ export class PluginService {
         this.removeHandlers(pluginId);
         this.unregisterImperativePluginActions(pluginId);
       },
-      // Fires on every activation outcome (initial + each reload). Keeps the
-      // provenance `loadError` in sync so a fix-and-save clears a stale error
-      // and a freshly-introduced one is recorded — the first-activation promise
-      // alone can't see post-reload outcomes.
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
       // state the owner holds — worker entry, activation cache, prompts — so the
@@ -2344,6 +2340,10 @@ export class PluginService {
         // by its predecessor's failure.
         if (this.pluginWorkers.get(pluginId) === entry) this.deactivateWorker(pluginId);
       },
+      // Fires on every activation outcome (initial + each reload). Keeps the
+      // provenance `loadError` in sync so a fix-and-save clears a stale error
+      // and a freshly-introduced one is recorded — the first-activation promise
+      // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
         lastActivationOk = result.ok;
         if (result.ok) {
@@ -4589,7 +4589,7 @@ export class PluginService {
       try {
         cleanup();
       } catch (err) {
-        console.error(`[PluginService] Idle-dispose cleanup for "${pluginId}" threw:`, err);
+        console.error(`[PluginService] Worker teardown cleanup for "${pluginId}" threw:`, err);
       }
       this.cleanupMap.delete(pluginId);
     }

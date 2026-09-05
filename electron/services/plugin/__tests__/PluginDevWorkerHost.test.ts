@@ -694,19 +694,34 @@ describe("PluginDevWorkerHost", () => {
       expect(forwarded).toHaveLength(0);
     });
 
-    it("stops forwarding worker output once torn down", async () => {
-      const { host, child } = await startedHost();
+    it("stops forwarding worker output once a violation kills it", async () => {
+      const { child } = await startedHost();
       loggerMock.info.mockClear();
       // Positive control: while the worker is live, its stdout is forwarded.
       child.stdout.push(Buffer.from("still running"));
       await flush();
       expect(loggerMock.info).toHaveBeenCalledWith(expect.stringContaining("still running"));
 
-      host.dispose();
+      child.emit("message", null);
       child.stdout.push(Buffer.from("noise on the way out"));
       await flush();
       expect(loggerMock.info).not.toHaveBeenCalledWith(
         expect.stringContaining("noise on the way out")
+      );
+    });
+
+    // The suppression above is scoped to the terminal case on purpose. A normal
+    // unload/idle-dispose/quit runs the plugin's own disposer, and a throw from
+    // it reaches the worker's stderr AFTER dispose() has set `isDisposed` — so
+    // gating on that flag would silently discard a broken disposer's only signal.
+    it("still forwards worker output through a graceful teardown", async () => {
+      const { host, child } = await startedHost();
+      loggerMock.warn.mockClear();
+      host.dispose();
+      child.stderr.push(Buffer.from("[PluginDevWorker] Plugin cleanup threw: boom"));
+      await flush();
+      expect(loggerMock.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Plugin cleanup threw: boom")
       );
     });
   });
