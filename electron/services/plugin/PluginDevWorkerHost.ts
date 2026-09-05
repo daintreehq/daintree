@@ -13,10 +13,12 @@ import {
   PLUGIN_PROD_WORKER_KIND,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginIdentity } from "../../../shared/types/plugin.js";
-import type {
-  PluginHostToWorkerMessage,
-  PluginWorkerToHostMessage,
-} from "../../../shared/types/pluginDevWorker.js";
+import type { PluginHostToWorkerMessage } from "../../../shared/types/pluginDevWorker.js";
+import {
+  MAX_WORKER_MESSAGE_BYTES,
+  measureWorkerMessageBytes,
+  parseWorkerToHostMessage,
+} from "../../schemas/pluginDevWorker.js";
 
 const logger = createLogger("main:PluginDevWorker");
 
@@ -85,8 +87,11 @@ export interface PluginDevWorkerHostOptions {
  *
  * Messages from the worker are re-emitted as `worker-message` events; the
  * {@link PluginDevWorkerMainBridge} consumes them and replies via {@link send}.
- * Lifecycle signals are emitted as `ready`, `reloading`, `exit`, and
- * `crash-loop`.
+ * Messages are validated against the protocol schema before they are forwarded;
+ * anything that fails is a terminal, plugin-scoped failure (#12276).
+ *
+ * Lifecycle signals are emitted as `ready`, `reloading`, `exit`, `crash-loop`,
+ * and `protocol-violation`.
  */
 export class PluginDevWorkerHost extends EventEmitter {
   private child: UtilityProcess | null = null;
@@ -114,6 +119,13 @@ export class PluginDevWorkerHost extends EventEmitter {
   private crashTimestamps: number[] = [];
   /** Set true around an intentional kill so the exit handler skips crash accounting. */
   private expectingExit = false;
+
+  /**
+   * Latched once this worker has spoken the protocol wrongly. Terminal: the
+   * worker is torn down and never respawned, so the latch only ever guards
+   * against re-reporting from a message admitted in the same tick.
+   */
+  private protocolViolated = false;
 
   private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
   private childProcessGoneHandler:
@@ -465,9 +477,25 @@ export class PluginDevWorkerHost extends EventEmitter {
     // never speak for the host (#12279).
     const child = this.child;
 
-    child.on("message", (msg: PluginWorkerToHostMessage) => {
+    child.on("message", (raw: unknown) => {
+      // Third-party code can post to `parentPort` directly, so this callback is
+      // an untrusted-input boundary. Node re-throws straight out of `emit()`,
+      // which lands in `uncaughtException` and takes the whole app into fatal
+      // recovery over one plugin's bug (#12276) — so nothing may escape here,
+      // including a throw from a synchronous `worker-message` listener.
+      //
+      // Authority is checked BEFORE validation: a retiring generation's messages
+      // are not this host's to read at all, malformed or not, and rejecting one
+      // must not tear down the incoming worker that already replaced it.
       if (!this.hasAuthority(child)) return;
-      this.handleWorkerMessage(msg);
+      try {
+        this.handleWorkerMessage(raw);
+      } catch (error) {
+        logger.error(`[${this.serviceName}] Worker message handling threw`, {
+          error: formatErrorMessage(error, "handler threw"),
+        });
+        this.failProtocolViolation("worker message handling failed");
+      }
     });
 
     child.on("exit", (code) => {
@@ -496,8 +524,31 @@ export class PluginDevWorkerHost extends EventEmitter {
     return !this.isDisposed && !this.isReloading && this.child === child;
   }
 
-  private handleWorkerMessage(msg: PluginWorkerToHostMessage): void {
-    if (this.isDisposed) return;
+  private handleWorkerMessage(raw: unknown): void {
+    if (this.isDisposed || this.protocolViolated) return;
+
+    const bytes = measureWorkerMessageBytes(raw);
+    if (bytes === null || bytes > MAX_WORKER_MESSAGE_BYTES) {
+      logger.error(`[${this.serviceName}] Worker message rejected on size`, {
+        bytes: bytes ?? "unmeasurable",
+        limit: MAX_WORKER_MESSAGE_BYTES,
+      });
+      this.failProtocolViolation("worker message exceeded the size limit");
+      return;
+    }
+
+    const parsed = parseWorkerToHostMessage(raw);
+    if (!parsed.ok) {
+      // Field paths and issue codes only — the offending values stay out of
+      // the log, and the reason handed onward becomes user-visible provenance.
+      logger.error(`[${this.serviceName}] Worker sent a message that violates the protocol`, {
+        issues: parsed.issues,
+      });
+      this.failProtocolViolation("worker sent a malformed message");
+      return;
+    }
+    const msg = parsed.message;
+
     if (msg.type === "ready") {
       // A child we have already asked to die must not be told to `start`: it
       // would import and activate the plugin while racing its own teardown, and
@@ -547,6 +598,40 @@ export class PluginDevWorkerHost extends EventEmitter {
     // All other messages (host-call, host-notify, subscribe, invoke-result,
     // activated, activate-error, error) are routed to the bridge.
     this.emit("worker-message", msg);
+  }
+
+  /**
+   * Terminal failure for one plugin instance: the worker is speaking a protocol
+   * main does not understand, so stop it rather than keep reading from it.
+   *
+   * Deliberately NOT routed through the crash window. `crashTimestamps` records
+   * the process actually exiting; a live-but-misbehaving worker is a different
+   * failure class, and feeding it in would both mis-report the cause and race a
+   * second provenance write against the one the bridge is about to make.
+   *
+   * `dispose()` is what stops it — it sets `isDisposed`, so the exit this
+   * triggers is never counted or respawned.
+   */
+  private failProtocolViolation(reason: string): void {
+    if (this.protocolViolated || this.isDisposed) return;
+    this.protocolViolated = true;
+    logger.error(`[${this.serviceName}] Protocol violation: ${reason}; stopping the worker`);
+    if (this.readyReject) {
+      this.readyReject(new Error(`Plugin dev worker "${this.pluginId}": ${reason}`));
+      this.readyReject = null;
+      this.readyResolve = null;
+    }
+    try {
+      // The bridge turns this into the plugin's `loadError` and tears its own
+      // side down. Emitted before `dispose()`, which drops every listener.
+      this.emit("protocol-violation", reason);
+    } catch (error) {
+      logger.error(`[${this.serviceName}] protocol-violation listener threw`, {
+        error: formatErrorMessage(error, "listener threw"),
+      });
+    }
+    // Runs even with no bridge attached, and even if a listener threw above.
+    this.dispose();
   }
 
   private handleExit(code: number | undefined): void {
@@ -632,6 +717,10 @@ export class PluginDevWorkerHost extends EventEmitter {
     const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
     const forward = (kind: "stdout" | "stderr", chunk: Buffer): void => {
+      // Keep draining after teardown starts (an unread stream stalls the child's
+      // exit) but stop decoding and logging it — a worker being killed for a
+      // protocol violation has no business writing to the app log on its way out.
+      if (this.isDisposed) return;
       const text = chunk.toString("utf8").trimEnd();
       if (!text) return;
       const line = `[plugin-dev:${this.pluginId}] ${text}`;

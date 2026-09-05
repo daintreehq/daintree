@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 import { Readable } from "node:stream";
+import { MAX_WORKER_MESSAGE_BYTES } from "../../../schemas/pluginDevWorker.js";
 
 const { forkMock, mockChildren, appMock, watchMock, watchCalls, loggerMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -552,5 +553,118 @@ describe("PluginDevWorkerHost", () => {
       method: "getWorktrees",
     });
     host.dispose();
+  });
+
+  describe("protocol violations (#12276)", () => {
+    /** Start a host with a live child and drop the boot `ready` handshake. */
+    async function startedHost() {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const forwarded: any[] = [];
+      const violations: string[] = [];
+      host.on("worker-message", (m) => forwarded.push(m));
+      host.on("protocol-violation", (reason: string) => violations.push(reason));
+      void host.start();
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      return { host, child, forwarded, violations };
+    }
+
+    it("contains a malformed message instead of throwing out of the child listener", async () => {
+      const { child, forwarded, violations } = await startedHost();
+      // Each of these read `msg.type` off a non-object before this fix and threw
+      // a TypeError straight into `uncaughtException`.
+      expect(() => child.emit("message", null)).not.toThrow();
+      expect(forwarded).toHaveLength(0);
+      expect(violations).toEqual(["worker sent a malformed message"]);
+    });
+
+    it("rejects primitives, unknown tags and methods outside the allowlist", async () => {
+      for (const raw of [
+        42,
+        "host-call",
+        { type: "nope" },
+        { type: "host-call", requestId: "c1", method: "fs.unlink" },
+      ]) {
+        const { child, forwarded, violations } = await startedHost();
+        expect(() => child.emit("message", raw)).not.toThrow();
+        expect(forwarded).toHaveLength(0);
+        expect(violations).toHaveLength(1);
+        mockChildren.length = 0;
+      }
+    });
+
+    it("rejects a message over the size ceiling before forwarding it", async () => {
+      const { child, forwarded, violations } = await startedHost();
+      child.emit("message", {
+        type: "host-call",
+        requestId: "c1",
+        method: "clipboard.writeImage",
+        params: { pngData: new Uint8Array(MAX_WORKER_MESSAGE_BYTES + 1024) },
+      });
+      expect(forwarded).toHaveLength(0);
+      expect(violations).toEqual(["worker message exceeded the size limit"]);
+    });
+
+    it("does not count a protocol violation as a crash or respawn the worker", async () => {
+      const { child, violations } = await startedHost();
+      const crashLoop = vi.fn();
+      child.emit("message", null);
+      expect(violations).toHaveLength(1);
+      // dispose() ran, so the exit it triggers is neither counted nor respawned.
+      child.emit("exit", 0);
+      await flush();
+      expect(forkMock).toHaveBeenCalledTimes(1);
+      expect(crashLoop).not.toHaveBeenCalled();
+    });
+
+    it("contains a throwing worker-message listener", async () => {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const violations: string[] = [];
+      host.on("worker-message", () => {
+        throw new Error("bridge blew up");
+      });
+      host.on("protocol-violation", (reason: string) => violations.push(reason));
+      void host.start();
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      expect(() =>
+        child.emit("message", { type: "host-call", requestId: "c1", method: "getWorktrees" })
+      ).not.toThrow();
+      expect(violations).toEqual(["worker message handling failed"]);
+    });
+
+    it("stops the worker even with no bridge listening", async () => {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const ready = host.start();
+      ready.catch(() => undefined);
+      const child = mockChildren[0] as MockUtilityChild;
+      expect(() => child.emit("message", null)).not.toThrow();
+      await expect(ready).rejects.toThrow(/malformed message/);
+      expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    });
+
+    it("ignores anything the child says after teardown", async () => {
+      const { host, child, forwarded } = await startedHost();
+      host.dispose();
+      expect(() => child.emit("message", null)).not.toThrow();
+      expect(() =>
+        child.emit("message", { type: "host-call", requestId: "c1", method: "getWorktrees" })
+      ).not.toThrow();
+      expect(forwarded).toHaveLength(0);
+    });
+
+    it("stops forwarding worker output once torn down", async () => {
+      const { host, child } = await startedHost();
+      loggerMock.info.mockClear();
+      host.dispose();
+      child.stdout.push(Buffer.from("noise on the way out"));
+      await flush();
+      expect(loggerMock.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("noise on the way out")
+      );
+    });
   });
 });

@@ -17,6 +17,10 @@ class FakeWorkerHost extends EventEmitter {
   });
   isReady = () => this.ready;
   off = this.removeListener;
+  dispose = vi.fn(() => {
+    this.ready = false;
+    this.removeAllListeners();
+  });
 }
 
 function makeHost() {
@@ -1609,6 +1613,128 @@ describe("PluginDevWorkerMainBridge", () => {
       );
       expect(res).toMatchObject({ ok: false });
       expect(res.error).toMatch(/PERMISSION_REQUIRED/);
+    });
+  });
+
+  describe("protocol violations (#12276)", () => {
+    /** The reason recorded as the plugin's user-visible loadError, if any. */
+    function recordedError(onActivationResult: any): string | undefined {
+      const failure = onActivationResult.mock.calls.map(([r]: any[]) => r).find((r: any) => !r.ok);
+      return failure?.error;
+    }
+
+    it("contains a malformed worker message instead of letting it throw", () => {
+      const { workerHost, onActivationResult } = makeBridge();
+      for (const raw of [null, 42, "host-call", { type: "not-a-type" }]) {
+        expect(() => workerHost.emit("worker-message", raw)).not.toThrow();
+      }
+      expect(recordedError(onActivationResult)).toContain("malformed message");
+      expect(workerHost.dispose).toHaveBeenCalled();
+    });
+
+    it("reports a violation the host detected and stops that worker", () => {
+      const { workerHost, onActivationResult, bridge } = makeBridge();
+      bridge.waitForActivation().catch(() => undefined);
+      workerHost.emit("protocol-violation", "worker sent a malformed message");
+      expect(recordedError(onActivationResult)).toContain("worker sent a malformed message");
+      expect(workerHost.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("still records provenance for a violation after a successful activation", () => {
+      const { workerHost, onActivationResult } = makeBridge();
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      expect(onActivationResult as any).toHaveBeenCalledWith({ ok: true });
+      workerHost.emit("worker-message", null);
+      // The activation promise has already settled, so `onActivationResult` is
+      // the only channel left that reaches the plugin's loadError.
+      expect(recordedError(onActivationResult)).toBeDefined();
+    });
+
+    it("keeps the rejected message out of the reason it reports", () => {
+      const { workerHost, onActivationResult } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "",
+        method: "getWorktrees",
+        params: { token: "s3cret-value" },
+      });
+      const error = recordedError(onActivationResult) ?? "";
+      expect(error).not.toContain("s3cret-value");
+      expect(error).not.toContain("requestId");
+      expect(error).toContain("acme.demo");
+    });
+
+    it("fails the instance when the worker reuses an outstanding request id", async () => {
+      const { host, workerHost, onActivationResult } = makeBridge();
+      host.getWorktrees.mockImplementation(() => new Promise(() => {}));
+      const call = { type: "host-call", requestId: "c1", method: "getWorktrees" };
+      workerHost.emit("worker-message", { ...call });
+      workerHost.emit("worker-message", { ...call });
+      await flush();
+      expect(host.getWorktrees).toHaveBeenCalledTimes(1);
+      expect(recordedError(onActivationResult)).toContain("outstanding request id");
+      expect(workerHost.dispose).toHaveBeenCalled();
+    });
+
+    it("lets a request id be reused once its call has settled", async () => {
+      const { host, workerHost, onActivationResult } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c1",
+        method: "getWorktrees",
+      });
+      await flush();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c1",
+        method: "getWorktrees",
+      });
+      await flush();
+      expect(host.getWorktrees).toHaveBeenCalledTimes(2);
+      expect((onActivationResult as any).mock.calls.every(([r]: any[]) => r.ok)).toBe(true);
+      expect(workerHost.dispose).not.toHaveBeenCalled();
+    });
+
+    it("retires the generation's registrations and subscriptions", async () => {
+      const { host, workerHost, clear } = makeBridge();
+      const unsubscribe = vi.fn();
+      host.onDidChangeWorktrees.mockReturnValue(unsubscribe);
+      workerHost.emit("worker-message", {
+        type: "subscribe",
+        subscriptionId: "s1",
+        kind: "worktrees",
+      });
+      await flush();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "",
+        method: "getWorktrees",
+      });
+      expect(clear).toHaveBeenCalled();
+      expect(unsubscribe).toHaveBeenCalled();
+    });
+
+    it("reports and tears down only once however many bad messages arrive", () => {
+      const { workerHost, onActivationResult } = makeBridge();
+      workerHost.emit("worker-message", null);
+      workerHost.emit("worker-message", 7);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      expect((onActivationResult as any).mock.calls.filter(([r]: any[]) => !r.ok)).toHaveLength(1);
+      expect(workerHost.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a healthy plugin serving while another one violates the protocol", async () => {
+      const bad = makeBridge();
+      const good = makeBridge();
+      bad.workerHost.emit("worker-message", null);
+      good.workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c1",
+        method: "getWorktrees",
+      });
+      await flush();
+      expect(good.host.getWorktrees).toHaveBeenCalled();
+      expect(good.workerHost.dispose).not.toHaveBeenCalled();
     });
   });
 });
