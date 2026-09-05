@@ -91,7 +91,7 @@ const DRIVER = path.join(HERE, "scenarioSmokeDriver.ts");
 /**
  * Scenarios this guard deliberately does NOT run, and why.
  *
- * SIX are excluded on cost: a single `run()` costing more than ~12 seconds on
+ * SEVEN are excluded on cost: a single `run()` costing more than ~12 seconds on
  * the reference machine (M-series macOS, serial). Each is expensive BY DESIGN —
  * it idles for a fixed wall-clock window, or builds real multi-worktree git
  * topologies — so no amount of harness work makes it cheap, and a guard that
@@ -100,14 +100,14 @@ const DRIVER = path.join(HERE, "scenarioSmokeDriver.ts");
  * re-judge the trade rather than inherit it, and so an entry that stops being
  * expensive is visible rather than permanent.
  *
- * The SEVENTH, PERF-004, is not a cost exclusion at all: it launches the
+ * The EIGHTH, PERF-004, is not a cost exclusion at all: it launches the
  * packaged binary, so it cannot run without a `npm run package` build under
  * `release/` that no test environment has. Cheap or not, there is nothing here
  * for it to drive.
  *
- * All seven are a REAL GAP, and exactly as capable of dying silently as the
+ * All eight are a REAL GAP, and exactly as capable of dying silently as the
  * thirteen that did. Run them by hand after touching `lib/idleWindow*`,
- * `lib/gitPipeline*` or `lib/worktreeSidebar*`:
+ * `lib/gitPipeline*`, `lib/worktreeSidebar*` or `pty/ImagePathProbe`:
  *   npx tsx scripts/perf/__tests__/scenarioSmokeDriver.ts PERF-092
  */
 const EXPENSIVE_SCENARIOS: Readonly<Record<string, string>> = {
@@ -118,6 +118,8 @@ const EXPENSIVE_SCENARIOS: Readonly<Record<string, string>> = {
   "PERF-105": "~17s — a fixed 10s idle window on an armed git watcher",
   "PERF-106": "~17s — the same 10s idle window, after a transient probe failure",
   "PERF-138": "~19s — builds real 1/5/20/50-worktree git topologies before it measures",
+  "PERF-405":
+    "~62s — the 40 reads a 1500ms poll makes in a minute, against a failing PID, plus a drain for the last arm's children; a shorter window cannot show the backoff ladder still spacing retries in its back half",
 };
 
 /**

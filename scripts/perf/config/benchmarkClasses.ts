@@ -426,6 +426,14 @@ const FAMILIES: readonly Family[] = [
       "Real ranking and one-edit correction over the real project list. No painted list, no selection, no dispatched action.",
   },
   {
+    label: "image-path probe",
+    ids: ["PERF-405"],
+    kind: "mechanism",
+    fidelity: withFidelity({ entryPoint: "public-api", processTopology: "partial" }),
+    claim:
+      "The real probe making real OS lookups at the pty-host's own poll cadence, with both the current and the pre-backoff read rule measured in the same window. It is how often a permanently failing PID starts a subprocess, NOT what one probe costs against a live process — an absent PID is cheaper for `lsof` to answer — and not the detector latency a user would notice. Skipped on Linux, where the probe is a bare readlink and starts nothing; diagnostic on Windows, where PowerShell start cost dominates the reading.",
+  },
+  {
     label: "terminal submit lane",
     ids: ["PERF-036"],
     kind: "mechanism",
