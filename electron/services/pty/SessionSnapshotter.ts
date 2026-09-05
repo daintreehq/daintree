@@ -160,12 +160,17 @@ export class SessionSnapshotter {
 
     // Buffer unchanged since the last persisted snapshot — nothing to write.
     // Checked before the throttle so an unchanged flush never consumes the
-    // throttle window a later changed-content flush needs. Coverage means those
-    // exact bytes are already on disk, which also satisfies any pending
-    // debounced write.
+    // throttle window a later changed-content flush needs.
+    //
+    // Only a PERIODIC trigger discharges `dirty` here: it is that deadline's own
+    // pending work, and finding it already on disk is what makes the debounce a
+    // no-op. An event call finding coverage says nothing about the debounce, and
+    // clearing it would let an unchanged settle swallow a later geometry-only
+    // change — resize bumps contentEpoch without calling schedule(), so the
+    // timer would bail at `!dirty` before ever comparing the newer epoch.
     const epoch = this.host.contentEpoch;
     if (epoch === this.lastFlushedEpoch) {
-      this.dirty = false;
+      if (trigger === "periodic") this.dirty = false;
       return;
     }
 

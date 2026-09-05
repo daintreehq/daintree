@@ -736,6 +736,31 @@ describe("SessionSnapshotter", () => {
       expect(persistAsyncMock).toHaveBeenCalledTimes(2);
     });
 
+    it("does not let an unchanged event flush discharge the pending debounce", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // A second settle on unchanged content. It must skip — but skipping is
+      // not the same as satisfying the debounce, which is still holding the
+      // deadline for whatever comes next.
+      vi.advanceTimersByTime(2001);
+      snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // A resize reflow, then the deadline: the write must still happen.
+      host.contentEpoch = 2;
+      vi.advanceTimersByTime(3000);
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+
     it("still persists a geometry-only change from teardown", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);
