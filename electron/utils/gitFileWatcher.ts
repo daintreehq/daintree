@@ -1,7 +1,15 @@
 import { watch as fsWatch, FSWatcher } from "fs";
-import { readFile } from "fs/promises";
-import { join as pathJoin, dirname, isAbsolute, basename, normalize as pathNormalize } from "path";
+import { readFile, realpath } from "fs/promises";
+import {
+  join as pathJoin,
+  dirname,
+  isAbsolute,
+  basename,
+  sep as pathSep,
+  normalize as pathNormalize,
+} from "path";
 import { getGitDir } from "./gitUtils.js";
+import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "./gitCheckIgnore.js";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 import { subscribeParcelWatcher } from "./parcelWatcherBackend.js";
 import { logWarn } from "./logger.js";
@@ -50,6 +58,52 @@ const WORKTREE_IGNORE_GLOBS = [
   "**/.git",
   "**/.git/**",
 ];
+
+/**
+ * Cap on the paths retained for one burst. Past it the burst degrades to
+ * "unknown" and takes the full refresh — a checkout storm rewriting thousands
+ * of files is never going to classify as ignored-only, so the memory is spent
+ * for nothing. Bounds both the retained set and the stdin body written to git.
+ */
+const WORKTREE_BURST_PATH_CAP = 2048;
+
+/**
+ * Deadline for the per-flush classification. `GIT_BLOCK_TIMEOUT_MS` (30s) stays
+ * the hard ceiling inside the helper, but this path is latency-sensitive: a
+ * wedged git must not hold an isolated save's status refresh open for half a
+ * minute. On expiry the burst falls back to the full refresh.
+ */
+const WORKTREE_CLASSIFY_TIMEOUT_MS = 2_000;
+
+/** Minimum gap between classification-failure warnings, per watcher. */
+const CLASSIFY_WARN_THROTTLE_MS = 30_000;
+
+/**
+ * Worktree files whose contents change what `git status` reports about OTHER
+ * paths, at any depth. A burst touching one always refreshes.
+ *
+ * None of them can be classified on their own membership: each may itself be
+ * untracked and ignored — `.gitignore` can name itself, or `.git/info/exclude`
+ * can name it — in which case plain check-ignore reports it and the burst
+ * would look skippable while the rule change it carried altered the listing.
+ *
+ * `.gitattributes` earns its place through normalisation rather than ignore
+ * rules: flipping `text`/`-text` changes whether a CRLF working file still
+ * compares equal to its LF blob. `.gitmodules` carries
+ * `submodule.<name>.ignore`, which hides or reveals submodule modifications.
+ *
+ * Compared case-insensitively: on APFS or NTFS a file written as `.GITIGNORE`
+ * is the same file to git. On a case-sensitive filesystem that name is a
+ * different file and matching it merely costs one refresh — the conservative
+ * direction.
+ */
+const STATUS_AFFECTING_FILE_NAMES = new Set([".gitignore", ".gitattributes", ".gitmodules"]);
+
+/** A `@parcel/watcher` event as far as this file needs to read it. */
+interface WorktreeEvent {
+  path?: string;
+  type?: string;
+}
 
 export interface GitFileWatcherOptions {
   worktreePath: string;
@@ -138,6 +192,27 @@ export class GitFileWatcher {
   private readonly onWorktreeFilesChanged: (() => void) | undefined;
   /** Set when the current (unflushed) burst touched `.git/config`. */
   private gitConfigChangePending = false;
+  /**
+   * Absolute paths seen in the current (unflushed) worktree burst, or `null`
+   * once the burst is "unknown" — an overflow signal, an event without a
+   * usable path, a path outside the worktree, or more paths than the cap. An
+   * unknown burst always takes the full refresh.
+   */
+  private pendingWorktreePaths: Set<string> | null = new Set();
+  /** Canonical form of `worktreePath`, when it differs (macOS /var -> /private/var). */
+  private worktreeRealPath: string | null = null;
+  /** Aborts the in-flight classification when it is superseded or disposed. */
+  private classifyController: AbortController | null = null;
+  /** Bumped on every flush and on disposal so a stale result cannot act. */
+  private classifyGeneration = 0;
+  private lastClassifyWarnAt = 0;
+  /**
+   * Cached "does this repo contain tracked files that match an ignore rule?".
+   * Dropped whenever a git-internal file changes, which is where `git add -f`
+   * shows up (the index is watched). Null means "ask again on the next skip
+   * opportunity".
+   */
+  private trackedIgnoredProbe: Promise<boolean> | null = null;
   /** Directory holding `.git/config` — always the common dir. */
   private gitConfigDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
@@ -232,6 +307,21 @@ export class GitFileWatcher {
       this.watchRemoteRefsDir(pathJoin(commonDir, "refs", "remotes", "origin"));
 
       if (this.watchWorktree) {
+        // Resolve the canonical root once so burst paths can be proved to live
+        // inside this worktree. macOS FSEvents reports realpath'd paths, so a
+        // worktree reached through a symlinked ancestor (/var -> /private/var,
+        // the shape every temp-dir fixture has) yields events that match
+        // neither the configured root nor each other. Best-effort: a failure
+        // costs the optimisation for this watcher, never the watching.
+        try {
+          const resolved = await realpath(this.worktreePath);
+          this.worktreeRealPath = resolved === this.worktreePath ? null : resolved;
+        } catch {
+          this.worktreeRealPath = null;
+        }
+        if (this.disposed) {
+          return false;
+        }
         // Fire-and-forget: subscribe() schedules the platform watcher
         // asynchronously. Startup failures (ENOSPC, EMFILE) route through
         // onWatcherFailed / onInotifyLimitReached / onEmfileLimitReached
@@ -271,6 +361,12 @@ export class GitFileWatcher {
     }
     this.worktreeBurstCount = 0;
     this.gitConfigChangePending = false;
+    // Retire any in-flight classification: the generation bump makes its
+    // result inert, and the abort stops the subprocess rather than leaving it
+    // to run out its deadline against a worktree nobody is watching.
+    this.abortClassification();
+    this.pendingWorktreePaths = new Set();
+    this.trackedIgnoredProbe = null;
 
     for (const watcher of this.watchers) {
       try {
@@ -319,11 +415,12 @@ export class GitFileWatcher {
           return;
         }
         if (this.disposed || !events || events.length === 0) return;
-        // Passing the batch size preserves the burstCount-driven adaptive
-        // debounce ramp (100 files in a batch -> burstCount=100 ->
-        // maxDebounce) while clearing/setting the debounce timer once per
-        // batch instead of once per event.
-        this.handleWorktreeChange(events.length);
+        // The batch drives two things: its size preserves the burstCount
+        // adaptive debounce ramp (100 files in a batch -> burstCount=100 ->
+        // maxDebounce) while the timer is still cleared/set once per batch,
+        // and its paths let the flush decide whether the burst can affect
+        // tracked status at all (#12235).
+        this.handleWorktreeChange(events);
       },
       { ignore: WORKTREE_IGNORE_GLOBS }
     )
@@ -388,7 +485,10 @@ export class GitFileWatcher {
       // raw-filesystem signal the file browser reads and the git-status
       // recompute. `handleGitFileChange` would only do the latter, leaving
       // writes to gitignored paths invisible (#11330).
-      this.handleWorktreeChange();
+      //
+      // `null` rather than an empty batch: events were LOST, so the burst's
+      // paths are unknowable and the flush must not classify it as skippable.
+      this.handleWorktreeChange(null);
       return;
     }
 
@@ -524,6 +624,12 @@ export class GitFileWatcher {
       return;
     }
 
+    // A git-internal write is where the tracked/ignored overlap can change:
+    // `git add -f` of an ignored file writes the index, and a checkout can
+    // move a tracked file into an ignored directory. Drop the cached answer
+    // rather than reasoning about which write it was.
+    this.trackedIgnoredProbe = null;
+
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
@@ -551,11 +657,23 @@ export class GitFileWatcher {
    * period flushes on the short leading delay instead — an isolated save
    * surfaces near-instantly, while continued events replace the leading timer
    * with the trailing ramp so real bursts still coalesce.
+   *
+   * `events` is the raw batch: its length drives the ramp exactly as the old
+   * count did, and its paths accumulate for the flush's ignore classification.
+   * `null` means the paths are unknowable (overflow/rescan) and forces the
+   * full refresh.
    */
-  private handleWorktreeChange(eventCount = 1): void {
+  private handleWorktreeChange(events: readonly WorktreeEvent[] | null = null): void {
     if (this.disposed) {
       return;
     }
+
+    // A null batch is the overflow/rescan signal: something happened but what
+    // is unknowable, so the burst can never be proved skippable. An empty array
+    // is not reachable from the subscribe callback (it returns early), and is
+    // treated as one anonymous event to preserve the old default of 1.
+    const eventCount = events === null ? 1 : Math.max(1, events.length);
+    this.collectWorktreePaths(events);
 
     const burstStart = this.worktreeBurstCount === 0;
     this.worktreeBurstCount += eventCount;
@@ -584,6 +702,108 @@ export class GitFileWatcher {
     }
   }
 
+  /**
+   * Accumulate the burst's changed paths, or mark the burst unknown.
+   *
+   * Unknown is the conservative answer and it is sticky for the rest of the
+   * burst: once anything in it cannot be classified, the whole flush takes the
+   * full refresh. Deliberately cheap — no filesystem calls, no realpath per
+   * event — because this runs once per watcher event.
+   */
+  private collectWorktreePaths(events: readonly WorktreeEvent[] | null): void {
+    const pending = this.pendingWorktreePaths;
+    if (pending === null) return;
+
+    if (events === null) {
+      this.pendingWorktreePaths = null;
+      return;
+    }
+
+    for (const event of events) {
+      const path = event?.path;
+      // A non-string path is an event shape we cannot reason about. The
+      // Windows adapter also collapses a null fs.watch filename to the watch
+      // root itself, which means "something under here changed" — equally
+      // unclassifiable.
+      if (typeof path !== "string" || path.length === 0 || !this.isInsideWorktree(path)) {
+        this.pendingWorktreePaths = null;
+        return;
+      }
+      if (STATUS_AFFECTING_FILE_NAMES.has(basename(path).toLowerCase())) {
+        // Such a write can also create the tracked/ignored overlap the hazard
+        // probe caches an answer about — newly ignoring a directory that holds
+        // a tracked file — and that change reaches no watched git-internal
+        // file, so the cached answer has to be dropped here too.
+        this.trackedIgnoredProbe = null;
+        this.pendingWorktreePaths = null;
+        return;
+      }
+      pending.add(path);
+      if (pending.size > WORKTREE_BURST_PATH_CAP) {
+        this.pendingWorktreePaths = null;
+        return;
+      }
+    }
+  }
+
+  /**
+   * Whether an absolute event path lives strictly inside the watched worktree,
+   * against the configured root or its canonical alias. Separator-aware so
+   * `/repo-other/x` is not read as living under `/repo`, and strict so the root
+   * itself (the Windows "unknown filename" signal) does not qualify.
+   */
+  private isInsideWorktree(path: string): boolean {
+    for (const root of [this.worktreePath, this.worktreeRealPath]) {
+      if (!root) continue;
+      const prefix = root.endsWith(pathSep) ? root : root + pathSep;
+      if (path.startsWith(prefix) && path.length > prefix.length) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether check-ignore's answer can be trusted outright for this repo.
+   *
+   * git exempts tracked paths from check-ignore via a case-SENSITIVE index
+   * lookup, even on a case-insensitive filesystem. So a file force-added as
+   * `.output/Keep.txt` and renamed on disk to `.output/keep.txt` stays tracked
+   * and shows as modified, while check-ignore reports the on-disk spelling as
+   * ignored — skipping a refresh that was needed. Reproduced on APFS with git
+   * 2.55.0.
+   *
+   * The hazard needs a tracked file matching an ignore rule to exist at all,
+   * which is empty for essentially every repo, so the answer is cached and
+   * costs nothing per flush. It is dropped on any git-internal write, which is
+   * where `git add -f` lands.
+   */
+  private probeTrackedIgnored(): Promise<boolean> {
+    if (!this.trackedIgnoredProbe) {
+      // `attempt` is the promise the slot actually holds, so the identity
+      // check below compares like with like. Its own handler runs on a later
+      // tick, well after the assignment.
+      const attempt: Promise<boolean> = hasTrackedIgnoredPaths(this.worktreePath, {
+        timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
+      }).catch((error: unknown) => {
+        // Fail closed and do not cache the failure: an unanswerable probe must
+        // mean "refresh", not "assume safe forever". Clear the slot only if it
+        // still holds THIS attempt — an invalidation may already have replaced
+        // it, and erasing a newer probe would just re-spawn for nothing.
+        if (this.trackedIgnoredProbe === attempt) this.trackedIgnoredProbe = null;
+        throw error;
+      });
+      this.trackedIgnoredProbe = attempt;
+    }
+    return this.trackedIgnoredProbe;
+  }
+
+  private abortClassification(): void {
+    this.classifyGeneration += 1;
+    if (this.classifyController) {
+      this.classifyController.abort();
+      this.classifyController = null;
+    }
+  }
+
   private flushWorktreeChange(): void {
     if (this.worktreeDebounceTimer) {
       clearTimeout(this.worktreeDebounceTimer);
@@ -595,13 +815,113 @@ export class GitFileWatcher {
     }
     this.worktreeBurstCount = 0;
     this.lastWorktreeFlushAt = Date.now();
-    if (!this.disposed) {
-      // Raw-filesystem signal first, then the git-status recompute: a browser
-      // subscriber that only cares about files-on-disk shouldn't have to wait
-      // for the status pass, and firing it here (not the git-internal path)
-      // keeps it scoped to actual working-tree writes.
-      this.onWorktreeFilesChanged?.();
+
+    // Detach the burst and re-arm collection before any callback runs: a write
+    // landing while they execute belongs to the next burst, not this one.
+    const burst = this.pendingWorktreePaths;
+    this.pendingWorktreePaths = new Set();
+
+    // A classification still in flight belongs to an older burst whose
+    // `onChange` was never fired. Retire it and refresh for both: the newer
+    // burst is unclassified, and dropping the old job must not drop the
+    // refresh it was still deciding about.
+    const superseded = this.classifyController !== null;
+    this.abortClassification();
+
+    if (this.disposed) return;
+
+    // Raw-filesystem signal first, and unconditionally: a browser subscriber
+    // that only cares about files-on-disk shouldn't have to wait for the
+    // status pass, let alone for a classification that may decide to skip it
+    // (#11330). Firing it here (not the git-internal path) keeps it scoped to
+    // actual working-tree writes.
+    this.onWorktreeFilesChanged?.();
+
+    // The callback above is synchronous and may dispose this watcher.
+    if (this.disposed) return;
+
+    const paths = burst === null || superseded ? null : [...burst];
+    if (paths === null || paths.length === 0) {
       this.onChange();
+      return;
     }
+
+    const generation = this.classifyGeneration;
+    const controller = new AbortController();
+    this.classifyController = controller;
+
+    // One `git check-ignore --stdin -z` answers the whole question. In default
+    // mode git never reports a TRACKED path as ignored, so a path present in
+    // the result is ignored AND untracked — the exact predicate for "cannot
+    // affect git status". Everything ambiguous therefore fails membership on
+    // its own and needs no special case: a `.gitignore` edit (nothing ignores
+    // it), a delete of a tracked file (still in the index), the create half of
+    // a rename into a tracked location.
+    void checkIgnoredPaths(this.worktreePath, paths, {
+      signal: controller.signal,
+      timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
+    })
+      .then(
+        async (ignored) => {
+          if (this.disposed || generation !== this.classifyGeneration) return;
+          // Skip only when EVERY path is provably irrelevant. A mixed burst
+          // exits 0 too, so the exit code is not the test — membership is.
+          if (!paths.every((path) => ignored.has(path))) {
+            this.classifyController = null;
+            this.onChange();
+            return;
+          }
+          // Only a burst we are about to SKIP needs the hazard answer, so the
+          // probe stays off the path of every burst that was going to refresh
+          // anyway — a checkout storm pays check-ignore and nothing more. It
+          // is cached besides, so even the skip path usually spends no spawn.
+          let hasTrackedIgnored: boolean;
+          try {
+            hasTrackedIgnored = await this.probeTrackedIgnored();
+          } catch (error) {
+            if (this.disposed || generation !== this.classifyGeneration) return;
+            this.classifyController = null;
+            this.warnClassifyFailure(error);
+            this.onChange();
+            return;
+          }
+          if (this.disposed || generation !== this.classifyGeneration) return;
+          this.classifyController = null;
+          if (hasTrackedIgnored) this.onChange();
+        },
+        // Two-argument form, not a chained `.catch`: a `.catch` here would
+        // also catch an exception thrown by `onChange()` in the success
+        // handler and call `onChange()` a second time.
+        (error: unknown) => {
+          if (this.disposed || generation !== this.classifyGeneration) return;
+          this.classifyController = null;
+          this.warnClassifyFailure(error);
+          this.onChange();
+        }
+      )
+      .catch((error: unknown) => {
+        // Only reachable when `onChange()` itself threw. Report it rather than
+        // retrying it — a retry is what the two-argument form above avoids —
+        // and never leave it as an unhandled rejection.
+        logWarn("Worktree status refresh threw after ignore classification", {
+          path: this.worktreePath,
+          error: (error as Error)?.message ?? String(error),
+        });
+      });
+  }
+
+  /**
+   * Throttled because this runs per flush, not on demand: a repo that makes
+   * check-ignore fail (a wedged filesystem, a hostile git on PATH) would
+   * otherwise write a log line for every debounce during a build.
+   */
+  private warnClassifyFailure(error: unknown): void {
+    const now = Date.now();
+    if (now - this.lastClassifyWarnAt < CLASSIFY_WARN_THROTTLE_MS) return;
+    this.lastClassifyWarnAt = now;
+    logWarn("Worktree burst ignore-classification failed; refreshing status", {
+      path: this.worktreePath,
+      error: (error as Error)?.message ?? String(error),
+    });
   }
 }

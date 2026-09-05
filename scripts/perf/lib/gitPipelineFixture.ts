@@ -320,7 +320,14 @@ export interface GitPipelineFixture {
    *  path-keyed cache for 600s — sharing one worktree would leak the fault
    *  state into the healthy reading. */
   faultPath: string;
+  /** PERF-107 worktree whose own `.gitignore` excludes a directory that is
+   *  deliberately absent from WORKTREE_IGNORE_GLOBS, so writes there reach the
+   *  recursive watcher and have to be classified rather than filtered. */
+  ignoredPath: string;
 }
+
+/** Directory PERF-107's fixture gitignores. Not a WORKTREE_IGNORE_GLOBS name. */
+export const IGNORED_BURST_DIR = ".output";
 
 let fixture: GitPipelineFixture | null = null;
 
@@ -440,6 +447,34 @@ export function getGitPipelineFixture(): GitPipelineFixture {
   const faultPath = join(root, "wt-fault");
   git(mainPath, ["worktree", "add", faultPath, "-b", "wt-fault-branch", "main"]);
 
+  // PERF-107: a repo that gitignores its own build directory. `.output/` is
+  // chosen precisely because it is NOT in WORKTREE_IGNORE_GLOBS — the watcher
+  // therefore delivers every write there, which is the whole cost this
+  // scenario measures. The directory is created up front so the burst does not
+  // also measure a mkdir, and `.gitignore` is committed so the worktree starts
+  // clean.
+  const ignoredPath = join(root, "wt-ignored");
+  git(mainPath, ["worktree", "add", ignoredPath, "-b", "wt-ignored-branch", "main"]);
+  writeFileSync(join(ignoredPath, ".gitignore"), `${IGNORED_BURST_DIR}/\n`);
+  mkdirSync(join(ignoredPath, IGNORED_BURST_DIR), { recursive: true });
+  git(ignoredPath, ["add", ".gitignore"]);
+  git(ignoredPath, ["commit", "-m", "ignore build output"]);
+  // The same standing dirty set as `dirtyPath`, and for the same reason the
+  // issue gives: a full status pass on a CLEAN worktree is one cheap spawn on
+  // the stat-skip fast path, while the ~3-5 spawn chain this scenario exists
+  // to avoid (numstat + per-file line counts) only appears once the worktree
+  // has real work in it. A developer running a build has uncommitted work;
+  // measuring the clean case would price the cheapest possible baseline.
+  const ignoredDirtyBody = fileBody("ignored-dirty");
+  for (let i = 0; i < DIRTY_MODIFIED_FILES; i++) {
+    const dir = i % BASE_FILE_DIRS;
+    const file = i % BASE_FILES_PER_DIR;
+    writeFileSync(join(ignoredPath, `module-${dir}`, `file-${file}.txt`), ignoredDirtyBody);
+  }
+  for (let i = 0; i < DIRTY_UNTRACKED_FILES; i++) {
+    writeFileSync(join(ignoredPath, `untracked-${i}.txt`), ignoredDirtyBody);
+  }
+
   fixture = {
     root,
     mainPath,
@@ -450,6 +485,7 @@ export function getGitPipelineFixture(): GitPipelineFixture {
     stormBranches: ["storm-alt", "storm-base"],
     idlePath,
     faultPath,
+    ignoredPath,
   };
 
   return fixture;

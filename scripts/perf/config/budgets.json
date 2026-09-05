@@ -315,6 +315,19 @@
         "residualGitSpawns": 0
       }
     },
+    "PERF-107": {
+      "p95Ms": 3000,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "gitSpawnsPerIgnoredFlush": 2,
+        "statusPassesPerIgnoredFlush": 0,
+        "checkIgnoresPerIgnoredFlush": 1,
+        "browserSignalMisses": 0,
+        "trackedRefreshMisses": 0,
+        "ignoreEditRefreshMisses": 0,
+        "spawnObserverMisses": 0
+      }
+    },
     "PERF-130": {
       "p95Ms": 400,
       "maxRegressionPct": 75,
