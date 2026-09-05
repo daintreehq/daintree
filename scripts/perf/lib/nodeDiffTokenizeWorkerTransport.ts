@@ -1,6 +1,7 @@
 // Aliased so bare `Worker` in type position stays the DOM interface — the one
 // `DiffTokenizeClient` is written against.
 import { Worker as NodeWorker } from "node:worker_threads";
+import type { HunkData } from "react-diff-view";
 import type {
   DiffTokenizeWorkerRequest,
   DiffTokenizeWorkerResponse,
@@ -25,13 +26,40 @@ export interface DiffTokenizeWorkerStats {
   executedIds: number[];
 }
 
+/** One posted request, tagged with enough content to say WHICH selection it was. */
+export interface PostedRequest {
+  id: number;
+  sample: string;
+}
+
+/**
+ * The first changed line of a request.
+ *
+ * The client never exposes its request ids, so this is how an observer tells
+ * one selection from another. The burst fixture gives every entry its own seed
+ * and the generator writes that seed into the changed lines, so this string is
+ * unique per selection — which is what lets the scenario assert that the FINAL
+ * selection is the one that reached the worker, rather than inferring it from
+ * id ordering.
+ */
+export function requestSample(hunks: readonly HunkData[]): string {
+  for (const hunk of hunks) {
+    for (const change of hunk.changes) {
+      if (change.type !== "normal") return change.content;
+    }
+  }
+  return "";
+}
+
 export class NodeDiffTokenizeWorkerHarness {
   onmessage: ((event: MessageEvent<DiffTokenizeWorkerResponse>) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
   onmessageerror: (() => void) | null = null;
 
-  /** Ids that actually crossed `postMessage`, in order. */
-  readonly posted: number[] = [];
+  /** Requests that actually crossed `postMessage`, in order, tagged by content. */
+  readonly posted: PostedRequest[] = [];
+  /** Ids whose worker response was handed to the client, in order. */
+  readonly delivered: number[] = [];
   /** Transport-level breakage. A scenario that saw any of this measured nothing. */
   readonly failures: string[] = [];
 
@@ -53,8 +81,13 @@ export class NodeDiffTokenizeWorkerHarness {
         this.settleStats(message);
         return;
       }
+      this.delivered.push(message.id);
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- minimal MessageEvent shape, the only part of it the client reads
       this.onmessage?.({ data: message } as MessageEvent<DiffTokenizeWorkerResponse>);
+    });
+
+    this.thread.on("messageerror", () => {
+      this.onmessageerror?.();
     });
 
     this.thread.on("error", (error: Error) => {
@@ -70,12 +103,15 @@ export class NodeDiffTokenizeWorkerHarness {
   }
 
   postMessage(message: DiffTokenizeWorkerRequest): void {
-    this.posted.push(message.id);
+    this.posted.push({ id: message.id, sample: requestSample(message.hunks) });
     this.thread.postMessage(message);
   }
 
   terminate(): void {
     this.closing = true;
+    // Settle first: `closing` makes the exit handler skip `fail()`, so a stats
+    // request already in flight would otherwise never be answered.
+    this.settleStats({ control: "stats", executed: 0, executedIds: [] });
     void this.thread.terminate();
   }
 

@@ -72,5 +72,7 @@ port.on("message", (message: DiffTokenizeWorkerRequest | DiffTokenizeStatsReques
         error: formatErrorMessage(err, "Tokenization failed"),
       } satisfies DiffTokenizeWorkerResponse);
     });
-  settled = Promise.all([settled, job]);
+  // Discard the aggregate value: `Promise.all` fulfils with an array holding
+  // the previous fulfilment, which would nest one level deeper per job.
+  settled = Promise.all([settled, job]).then(() => undefined);
 });

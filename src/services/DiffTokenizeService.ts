@@ -171,6 +171,15 @@ export class DiffTokenizeClient {
     }
   }
 
+  /** Settle a held request null without running it anywhere. */
+  private dropHeld(key: string): void {
+    const held = this.heldByKey.get(key);
+    if (!held) return;
+    this.heldByKey.delete(key);
+    this.clearLatest(key, held.id);
+    held.resolve(null);
+  }
+
   private releaseInFlight(key: string, id: number): void {
     if (this.inFlightByKey.get(key) === id) this.inFlightByKey.delete(key);
   }
@@ -263,6 +272,12 @@ export class DiffTokenizeClient {
     entry.resolve(null);
     this.releaseInFlight(entry.key, id);
     if (this.replacements >= MAX_WORKER_REPLACEMENTS) {
+      // Fallback runs on the main thread, and this key's held successor is the
+      // likeliest carrier of the input that just wedged three workers in a row
+      // — same viewer, same file. Handing it to the fallback would freeze the
+      // UI with exactly the pathology the timeout exists to contain, so it is
+      // dropped for the same reason the timed-out request is never re-run.
+      this.dropHeld(entry.key);
       this.failOver(new Error("Diff tokenize worker kept timing out"));
       return;
     }

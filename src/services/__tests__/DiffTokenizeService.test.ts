@@ -422,6 +422,38 @@ describe("DiffTokenizeClient timeout", () => {
     expect(mockRunDiffTokenize).not.toHaveBeenCalled();
   });
 
+  it("never hands a held successor to the fallback once the budget is exhausted", async () => {
+    vi.useFakeTimers();
+    const { client, workers } = createReplacingClient();
+    mockRunDiffTokenize.mockResolvedValue(tokensA);
+
+    // Same key throughout: one wedging request on the worker and one identical
+    // successor held behind it, re-held after each replacement.
+    const first = client.tokenize("viewer-1", makeRequest());
+    let held = client.tokenize("viewer-1", makeRequest());
+    await expect(first).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const second = held;
+    held = client.tokenize("viewer-1", makeRequest());
+    await expect(second).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const third = held;
+    held = client.tokenize("viewer-1", makeRequest());
+    await expect(third).resolves.toBeNull();
+
+    // Budget exhausted: the client gives up on the worker. The successor is
+    // the same viewer asking for the same file that wedged three workers, and
+    // the fallback runs on the main thread — so it is dropped, not run.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.runAllTimersAsync();
+
+    await expect(held).resolves.toBeNull();
+    expect(mockRunDiffTokenize).not.toHaveBeenCalled();
+    expect(workers).toHaveLength(3);
+  });
+
   it("falls back permanently once the replacement budget is exhausted", async () => {
     vi.useFakeTimers();
     const { client, workers, factory } = createReplacingClient();
