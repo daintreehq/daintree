@@ -1516,6 +1516,64 @@ describe("HttpLifecycle", () => {
   });
 
   describe("auth gate", () => {
+    it.each(["/mcp", "/messages?sessionId=victim-session"])(
+      "cannot revoke a session claimed by an unauthenticated request to %s",
+      async (url) => {
+        const deps = fakeDeps();
+        vi.mocked(deps.abusePolicy.recordDenial).mockReturnValue({ tripped: true });
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const req = {
+          method: "POST",
+          url,
+          headers: { host: "127.0.0.1:45454", "mcp-session-id": "victim-session" },
+        } as unknown as http.IncomingMessage;
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(req, res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(401, expect.anything());
+        expect(deps.auditService.recordAuth401).toHaveBeenCalledOnce();
+        expect(deps.abusePolicy.recordDenial).not.toHaveBeenCalled();
+        expect(deps.sessionStore.revokeSession).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["Authorization", "Host", "Origin", "Mcp-Session-Id"])(
+      "refuses ambiguous duplicate %s headers before resolving a session",
+      async (header) => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const req = {
+          method: "GET",
+          url: "/unknown",
+          headers: {
+            host: "127.0.0.1:45454",
+            authorization: "Bearer test-api-key",
+          },
+          rawHeaders: [header, "first", header.toLowerCase(), "second"],
+        } as unknown as http.IncomingMessage;
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(req, res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(400, expect.anything());
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+        expect(deps.sessionStore.revokeSession).not.toHaveBeenCalled();
+      }
+    );
+
     it("returns 401 with WWW-Authenticate: Bearer realm header", async () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);

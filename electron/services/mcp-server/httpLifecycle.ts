@@ -1075,6 +1075,28 @@ export class HttpLifecycle {
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    // Node drops some repeated headers and joins others. Trust decisions must
+    // reject ambiguity before those normalised values select a bearer or session.
+    const securityHeaders = new Set([
+      "authorization",
+      "host",
+      "origin",
+      "mcp-session-id",
+      MCP_WORKSPACE_ID_HEADER,
+    ]);
+    const seen = new Set<string>();
+    const rawHeaders = req.rawHeaders ?? [];
+    for (let index = 0; index < rawHeaders.length; index += 2) {
+      const name = rawHeaders[index].toLowerCase();
+      if (!securityHeaders.has(name)) continue;
+      if (seen.has(name)) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Ambiguous request headers");
+        return;
+      }
+      seen.add(name);
+    }
+
     const host = req.headers.host ?? "";
     if (!(host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`)) {
       res.writeHead(403, { "Content-Type": "text/plain" });
@@ -1095,49 +1117,13 @@ export class HttpLifecycle {
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
 
-    // Extract the claimed session identifier before the auth gate so a 401 on
-    // a session-carrying request feeds the per-session abuse policy. Handshake-
-    // level requests (GET /sse, initial Streamable HTTP without a session
-    // header) have no session to associate with and remain global-only.
-    let claimedSessionId: string | undefined;
-    if (req.method === "POST" && url.pathname === "/messages") {
-      claimedSessionId = url.searchParams.get("sessionId") ?? undefined;
-    } else if (url.pathname === "/mcp") {
-      const headerValue = req.headers["mcp-session-id"];
-      const mcpSessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-      if (mcpSessionId) claimedSessionId = mcpSessionId;
-    }
-
     const authHeader = req.headers.authorization ?? "";
     if (!isAuthorized(authHeader, this.apiKeyBearerHash, this.helpTokenValidator)) {
+      // A session id is a routing handle, not proof of ownership. Attributing
+      // this rejection to the claimed id lets an unauthenticated caller revoke
+      // somebody else's session by repeatedly naming it. Keep global telemetry;
+      // session abuse accounting belongs after bearer and ownership validation.
       this.deps.auditService.recordAuth401();
-      if (claimedSessionId) {
-        const result = this.deps.abusePolicy.recordDenial(claimedSessionId, "auth401");
-        if (result.tripped) {
-          // Same origin gate as the notification closures in
-          // `buildSessionServerDeps` (#11789): a workspace-bound external
-          // session has a renderer route, but its revocation is not an
-          // Assistant event and must not raise a banner in someone's HelpPanel.
-          const pinnedId = this.deps.sessionStore.isRendererOwnedOrigin(claimedSessionId)
-            ? this.deps.sessionStore.sessionWebContentsMap.get(claimedSessionId)
-            : undefined;
-          this.deps.sessionStore.revokeSession(claimedSessionId);
-          this.deps.abusePolicy.dropSession(claimedSessionId);
-          if (pinnedId !== undefined) {
-            const wc = webContentsModule.fromId(pinnedId);
-            if (wc && !wc.isDestroyed()) {
-              try {
-                wc.send(CHANNELS.MCP_SESSION_REVOKED, {
-                  sessionId: claimedSessionId,
-                  denialKind: "auth401",
-                });
-              } catch (err) {
-                console.error("[MCP] session-revoked send failed:", err);
-              }
-            }
-          }
-        }
-      }
       res.writeHead(401, {
         "Content-Type": "text/plain",
         "WWW-Authenticate": 'Bearer realm="Daintree MCP"',
