@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { percentile } from "./stats";
 
 /**
  * How responsive the rest of the process stayed while something else ran.
@@ -107,6 +108,35 @@ export interface BystanderReading {
    * unavailable", which a median cannot express and a max hides the frequency of.
    */
   blockedMs: number;
+  /**
+   * 95th percentile of the OBSERVED GAPS, boundary-inclusive.
+   *
+   * The gap distribution rather than its extreme: `longestStallMs` reports the
+   * single worst freeze, which one unlucky collection can own, and `blockedMs`
+   * sums excess without saying how any individual pause looked.
+   *
+   * Read it as exactly what it is — a percentile over this window's gaps — and
+   * nothing more. It is NOT a caller's waiting-time distribution, and it is not
+   * a rate: among 100 gaps, one 100ms freeze beside 99 ordinary 4ms gaps has a
+   * p95 of 4ms, because the freeze is a single sample. Catch-up scheduling
+   * (`schedule()` anchors to absolute expected times) adds short gaps after a
+   * block, which pulls the distribution further from timer lateness.
+   *
+   * So it needs a control measured the same way on the same machine, like every
+   * other reading in this file — more so, because a window that is mostly idle
+   * puts the 95th percentile among idle gaps, where the workload cannot move it.
+   */
+  p95StallMs: number;
+  /**
+   * The same percentile over gaps with one cadence subtracted, floored at zero.
+   *
+   * One cadence of every gap was always going to be spent waiting, so removing
+   * it makes two arms measured at the SAME cadence comparable — an idle loop
+   * reads ~0 here and a full cadence in {@link p95StallMs}. It is a percentile
+   * of excess gap, not an attribution of that excess to the workload: the
+   * caveats on {@link p95StallMs} apply unchanged.
+   */
+  p95DelayMs: number;
   /** Wall clock the probe covered. */
   windowMs: number;
   /** Share of the window spent blocked, 0..1. */
@@ -208,6 +238,15 @@ function start(options: BystanderOptions): InternalProbe {
    * `startBystanderProbe` documents.
    */
   let windowApparatusSound: boolean | undefined;
+  /**
+   * The analysed reading, computed once.
+   *
+   * `stop()` sorts the gap list twice to produce percentiles. That work is not
+   * the subject of any scenario, so it must not be repeated by a second
+   * `stop()` in a `finally`, and callers should capture their workload's end
+   * timestamp BEFORE the first one.
+   */
+  let closedReading: BystanderReading | undefined;
 
   let resolveArmed: (value: boolean) => void = () => {};
   const armed = new Promise<boolean>((resolve) => {
@@ -299,11 +338,14 @@ function start(options: BystanderOptions): InternalProbe {
         if (timer) clearTimeout(timer);
         settleArming(everFired);
       }
+      if (closedReading) return closedReading;
+
       const closedAt = endedAt ?? performance.now();
       const windowMs = closedAt - startedAt;
 
       let longestStallMs = 0;
       let blockedMs = 0;
+      const gaps: number[] = [];
       const stallFloor = cadenceMs * 2;
       let previous = startedAt;
       // The tail counts: a block that is still running when the workload
@@ -311,19 +353,26 @@ function start(options: BystanderOptions): InternalProbe {
       // observations would discard the largest gap in the window.
       for (const at of [...observations, closedAt]) {
         const gap = at - previous;
+        gaps.push(gap);
         if (gap > longestStallMs) longestStallMs = gap;
         if (gap > stallFloor) blockedMs += gap - cadenceMs;
         previous = at;
       }
 
-      return {
+      closedReading = {
         ticksObserved: observations.length,
         probeMisses: (windowApparatusSound ?? everFired) ? 0 : 1,
         longestStallMs,
         blockedMs,
+        p95StallMs: percentile(gaps, 95),
+        p95DelayMs: percentile(
+          gaps.map((gap) => Math.max(0, gap - cadenceMs)),
+          95
+        ),
         windowMs,
         blockedFraction: windowMs > 0 ? blockedMs / windowMs : 0,
       };
+      return closedReading;
     },
   };
 }
@@ -344,6 +393,8 @@ export function bystanderMetrics(
     [`${prefix}LongestStallMs`]: reading.longestStallMs,
     [`${prefix}BlockedMs`]: reading.blockedMs,
     [`${prefix}BlockedPct`]: reading.blockedFraction * 100,
+    [`${prefix}P95StallMs`]: reading.p95StallMs,
+    [`${prefix}P95DelayMs`]: reading.p95DelayMs,
     [`${prefix}ProbeTicks`]: reading.ticksObserved,
   };
 }

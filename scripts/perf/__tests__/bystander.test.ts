@@ -245,6 +245,8 @@ describe("bystander probe", () => {
       probeMisses: 0,
       longestStallMs: 4,
       blockedMs: 0,
+      p95StallMs: 3,
+      p95DelayMs: 1,
       windowMs: 100,
       blockedFraction: 0,
     });
@@ -252,11 +254,67 @@ describe("bystander probe", () => {
       "workerBlockedMs",
       "workerBlockedPct",
       "workerLongestStallMs",
+      "workerP95DelayMs",
+      "workerP95StallMs",
       "workerProbeTicks",
     ]);
     // Not folded into the prefix: one scenario declares one predicate for the
     // probe regardless of how many arms it runs, and an undeclared one is
     // invisible to the runner.
     expect(metrics).not.toHaveProperty("workerProbeMisses");
+  });
+
+  it("carries each percentile through to its own prefixed metric", () => {
+    // Distinct non-zero values, because an implementation that reported a
+    // constant 0 — or wired both keys to the same field — satisfies any
+    // assertion written as an inequality.
+    const metrics = bystanderMetrics("burst", {
+      ticksObserved: 12,
+      probeMisses: 0,
+      longestStallMs: 91,
+      blockedMs: 40,
+      p95StallMs: 7,
+      p95DelayMs: 3,
+      windowMs: 100,
+      blockedFraction: 0.4,
+    });
+    expect(metrics.burstP95StallMs).toBe(7);
+    expect(metrics.burstP95DelayMs).toBe(3);
+  });
+
+  it("reports a gap percentile well below the one freeze that dominates the max", async () => {
+    const probe = await armBystanderProbe({ cadenceMs: 8 });
+    // Many ordinary gaps around a single long block, so the distribution and
+    // its extreme are far apart and a p95 cannot be confused with either.
+    await sleep(120);
+    blockFor(120);
+    await sleep(120);
+    const reading = probe.stop();
+
+    expect(reading.ticksObserved).toBeGreaterThan(10);
+    // The block owns the max...
+    expect(reading.longestStallMs).toBeGreaterThan(100);
+    // ...but it is one sample among many, so it must not own the percentile.
+    // This is what fails for an implementation returning the maximum.
+    expect(reading.p95StallMs).toBeLessThan(reading.longestStallMs / 2);
+    // And a real cadence still separates it from an implementation that
+    // returns a constant zero.
+    expect(reading.p95StallMs).toBeGreaterThan(0);
+    // Strictly between the two bounds, which is what separates a real excess
+    // calculation from the two ways of getting it wrong: hardcoding zero, and
+    // reporting the same figure as the raw gap percentile.
+    expect(reading.p95DelayMs).toBeGreaterThan(0);
+    expect(reading.p95DelayMs).toBeLessThan(reading.p95StallMs);
+  });
+
+  it("analyses once, so a second stop() returns the same reading it already computed", () => {
+    // `stop()` sorts the gap list to produce percentiles. A `finally` that
+    // stops an already-stopped probe must not repeat that work inside a
+    // scenario's measured bracket.
+    const probe = startBystanderProbe({ cadenceMs: 8 });
+    blockFor(20);
+    const first = probe.stop();
+    const second = probe.stop();
+    expect(second).toBe(first);
   });
 });

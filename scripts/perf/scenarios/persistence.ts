@@ -17,7 +17,11 @@ import Database from "better-sqlite3";
 import { desc, eq } from "drizzle-orm";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
+import { readFile } from "node:fs/promises";
 import type { PerfScenario, ScenarioSample } from "../types";
+import { armBystanderProbe, bystanderMetrics } from "../lib/bystander";
+import { percentile } from "../lib/stats";
 import * as schema from "../../../electron/services/persistence/schema";
 import {
   appliedMigrationCount,
@@ -39,6 +43,9 @@ import {
   seededProjectPath,
   trackConnection,
   walKB,
+  createProjectStateFixture,
+  withProjectStateCounters,
+  type ProjectStateFixture,
 } from "../lib/persistenceFixture";
 
 const BATCH_ROWS = 200;
@@ -48,6 +55,19 @@ const WAL_ROWS_PER_TRANSACTION = 25;
 const APP_STATE_PANELS = 400;
 const SETTINGS_WRITES = 12;
 const KEY_READS = 200;
+const STATE_PANELS = 40;
+/**
+ * Bursts per measured window.
+ *
+ * One burst is far too short to describe a loop: a coalesced K=20 burst is two
+ * atomic writes, which at a 4ms cadence can finish between two probe ticks and
+ * leave a single gap equal to the whole burst. A percentile over that is the
+ * burst duration wearing a percentile's name. Ten back-to-back bursts give both
+ * arms a real gap distribution and match the thing being claimed anyway —
+ * sustained layout traffic during a fleet launch, not one isolated write.
+ */
+const STATE_BURST_REPEATS = 10;
+const STATE_PROBE_CADENCE_MS = 4;
 
 const MIGRATION_COUNT = countRealMigrations();
 
@@ -594,6 +614,264 @@ async function runStoreOpenScenario(): Promise<ScenarioSample> {
   };
 }
 
+// --- PERF-406/407: coalescing the project-state write queue -------------------
+
+interface BurstExpectation {
+  key: string;
+  value: string;
+}
+
+/**
+ * One burst: K updates fired with NO await between them, exactly as the
+ * per-field IPC handlers do during a drag or a fleet launch.
+ *
+ * Every update writes a UNIQUE draft key, so the on-disk oracle proves all K
+ * landed. Overwriting one shared field instead would prove only that the last
+ * writer ran — the coalescing failure mode that drops the middle of a burst
+ * would score perfectly. A rotating second field keeps the shape realistic
+ * without weakening that.
+ */
+async function fireStateBurst(
+  fixture: ProjectStateFixture,
+  burstSize: number,
+  round: number,
+  latencies: number[]
+): Promise<BurstRun> {
+  const expected: BurstExpectation[] = Array.from({ length: burstSize }, (_, i) => ({
+    key: `burst-${round}-${i}`,
+    value: `draft-${round}-${i}`,
+  }));
+
+  const settled = await Promise.allSettled(
+    expected.map(({ key, value }, i) => {
+      const startedAt = performance.now();
+      return fixture.manager
+        .enqueueProjectStateUpdate(fixture.projectId, (existing) => {
+          if (!existing) return null;
+          const next = {
+            ...existing,
+            draftInputs: { ...existing.draftInputs, [key]: value },
+          };
+          // A rotating second field, so the burst touches the spread of state a
+          // real layout change does rather than one key repeatedly.
+          switch (i % 4) {
+            case 0:
+              return { ...next, sidebarWidth: 320 + (i % 60) };
+            case 1:
+              return { ...next, focusMode: i % 8 === 1 };
+            case 2:
+              return { ...next, activeWorktreeId: `wt-perf-${i % 24}` };
+            default:
+              return {
+                ...next,
+                terminalSizes: {
+                  ...next.terminalSizes,
+                  [`panel-${i % STATE_PANELS}`]: { cols: 100 + (i % 40), rows: 30 + (i % 20) },
+                },
+              };
+          }
+        })
+        .then(() => {
+          latencies.push(performance.now() - startedAt);
+        });
+    })
+  );
+
+  return {
+    enqueued: settled.length,
+    fulfilled: settled.filter((s) => s.status === "fulfilled").length,
+    rejected: settled.filter((s) => s.status === "rejected").length,
+  };
+}
+
+/**
+ * Every key the whole workload owes, built BEFORE any of it runs.
+ *
+ * Deriving the expectation from what executed is the trap this avoids: a loop
+ * that skipped rounds would shrink its own oracle to match, and a workload that
+ * did nothing at all would be graded against an empty list and post the best
+ * numbers in the suite.
+ */
+function burstExpectations(burstSize: number): BurstExpectation[] {
+  const expected: BurstExpectation[] = [];
+  for (let round = 0; round < STATE_BURST_REPEATS; round += 1) {
+    for (let i = 0; i < burstSize; i += 1) {
+      expected.push({ key: `burst-${round}-${i}`, value: `draft-${round}-${i}` });
+    }
+  }
+  return expected;
+}
+
+interface BurstRun {
+  /** Updates actually handed to the queue. */
+  enqueued: number;
+  /** Promises that came back fulfilled. */
+  fulfilled: number;
+  /** Promises that came back rejected. */
+  rejected: number;
+}
+
+async function runStateBurstWorkload(
+  fixture: ProjectStateFixture,
+  burstSize: number,
+  latencies: number[]
+): Promise<BurstRun> {
+  const run: BurstRun = { enqueued: 0, fulfilled: 0, rejected: 0 };
+  for (let round = 0; round < STATE_BURST_REPEATS; round += 1) {
+    const outcome = await fireStateBurst(fixture, burstSize, round, latencies);
+    run.enqueued += outcome.enqueued;
+    run.fulfilled += outcome.fulfilled;
+    run.rejected += outcome.rejected;
+  }
+  return run;
+}
+
+/** Read back what actually landed, never what the manager's cache believes. */
+async function readStateFromDisk(fixture: ProjectStateFixture): Promise<{
+  draftInputs?: Record<string, string>;
+  terminals?: Array<{ title?: string; cwd?: string }>;
+  tabGroups?: unknown[];
+  mruList?: unknown[];
+}> {
+  return JSON.parse(await readFile(fixture.filePath, "utf8"));
+}
+
+/**
+ * Everything the burst was supposed to leave alone, plus everything it was
+ * supposed to change. Graded on BOTH passes.
+ *
+ * Counting terminals is not preservation: a save that kept 40 entries but
+ * stripped their titles and paths writes a much smaller payload and would score
+ * better on every number this scenario reports.
+ */
+function stateBurstMisses(
+  onDisk: Awaited<ReturnType<typeof readStateFromDisk>>,
+  expected: BurstExpectation[]
+): { updateMisses: number; preservationMisses: number } {
+  const drafts = onDisk.draftInputs ?? {};
+  const terminals = onDisk.terminals ?? [];
+  let preservationMisses = 0;
+
+  if (terminals.length !== STATE_PANELS) preservationMisses += 1;
+  if ((onDisk.tabGroups?.length ?? 0) !== Math.ceil(STATE_PANELS / 8)) preservationMisses += 1;
+  if ((onDisk.mruList?.length ?? 0) !== 24) preservationMisses += 1;
+  // The seeded payload itself, not just its shape: these strings are most of
+  // the bytes the coalescing is supposed to stop rewriting.
+  if (terminals.some((t) => !t.title || !t.cwd)) preservationMisses += 1;
+  // A seeded draft, which the burst adds to and must never replace wholesale.
+  if (drafts["panel-0"] === undefined) preservationMisses += 1;
+
+  return {
+    updateMisses: expected.filter(({ key, value }) => drafts[key] !== value).length,
+    preservationMisses,
+  };
+}
+
+async function runStateBurstScenario(burstSize: number): Promise<ScenarioSample> {
+  // Owed up front, so a workload that ran fewer rounds than it claims is graded
+  // against what it PROMISED rather than against what it happened to do.
+  const expected = burstExpectations(burstSize);
+
+  // PASS 1 — timing and main-thread availability, with NO global instrumentation
+  // installed. The counter proxies in pass 2 cost a trap per clone and per
+  // stringify, which is work proportional to exactly the operations under
+  // measurement; counting and timing in one window inflates the number the
+  // counts exist to explain.
+  const timed = await createProjectStateFixture(STATE_PANELS);
+  let burstMs: number;
+  let reading;
+  let timedRun: BurstRun;
+  const latencies: number[] = [];
+  let onDiskTimed;
+
+  try {
+    // The probe's own window must not inherit a collection that fell due for
+    // the fixture build.
+    globalThis.gc?.();
+    const probe = await armBystanderProbe({ cadenceMs: STATE_PROBE_CADENCE_MS });
+    const startedAt = performance.now();
+    let endedAt = startedAt;
+    try {
+      timedRun = await runStateBurstWorkload(timed, burstSize, latencies);
+    } finally {
+      // Workload end recorded BEFORE any analysis: `stop()` sorts the gap list
+      // to compute percentiles, and that work is not the subject.
+      endedAt = performance.now();
+      probe.stop();
+    }
+    // Idempotent, and analysed once — this returns the reading `stop()` already
+    // computed rather than recomputing it.
+    reading = probe.stop();
+    burstMs = endedAt - startedAt;
+    onDiskTimed = await readStateFromDisk(timed);
+  } finally {
+    timed.dispose();
+  }
+
+  // PASS 2 — the same workload on a fresh fixture, counted.
+  const counted = await createProjectStateFixture(STATE_PANELS);
+  let counts;
+  let countedRun: BurstRun;
+  let onDiskCounted;
+  try {
+    const outcome = await withProjectStateCounters(counted, () =>
+      runStateBurstWorkload(counted, burstSize, [])
+    );
+    counts = outcome.counts;
+    countedRun = outcome.result;
+    onDiskCounted = await readStateFromDisk(counted);
+  } finally {
+    counted.dispose();
+  }
+
+  // Both passes are graded. A pass that silently dropped half a burst would
+  // otherwise hide behind the other one's clean predicate.
+  const timedMisses = stateBurstMisses(onDiskTimed, expected);
+  const countedMisses = stateBurstMisses(onDiskCounted, expected);
+
+  const owed = expected.length;
+  const enqueued = timedRun.enqueued + countedRun.enqueued;
+  const fulfilled = timedRun.fulfilled + countedRun.fulfilled;
+
+  return {
+    durationMs: burstMs,
+    metrics: {
+      burstSize,
+      burstRepeats: STATE_BURST_REPEATS,
+      // What the scenario OWES, and what it actually handed to the queue. The
+      // floors below sit on the observed pair, so a fixture or loop that quietly
+      // scaled itself down is a measurement failure rather than a better number.
+      updatesRequested: owed,
+      updatesEnqueued: enqueued,
+      updatesFulfilled: fulfilled,
+      fixturePanelCount: onDiskTimed.terminals?.length ?? 0,
+
+      // The headline: how many durable writes a burst of `burstSize` costs.
+      saves: counts.saves,
+      savesPerBurst: counts.saves / STATE_BURST_REPEATS,
+      atomicReplaces: counts.atomicReplaces,
+      clones: counts.clones,
+      clonesPerBurst: counts.clones / STATE_BURST_REPEATS,
+      stringifyBytes: counts.stringifyBytes,
+      stringifyBytesPerBurst: counts.stringifyBytes / STATE_BURST_REPEATS,
+
+      // What the burst cost the rest of the main process.
+      ...bystanderMetrics("burst", reading),
+
+      // What a caller actually waited for its own update to be durable.
+      callerAwaitP95Ms: percentile(latencies, 95),
+      callerAwaitMaxMs: latencies.length > 0 ? Math.max(...latencies) : 0,
+
+      probeMisses: reading.probeMisses,
+      // Graded across BOTH passes: a rejection in the counted pass is just as
+      // much a failed durable write as one in the timed pass.
+      callerResolutionMisses: timedRun.rejected + countedRun.rejected + (owed * 2 - enqueued),
+      onDiskUpdateMisses: timedMisses.updateMisses + countedMisses.updateMisses,
+      fixturePreservationMisses: timedMisses.preservationMisses + countedMisses.preservationMisses,
+    },
+  };
+}
+
 export const persistenceScenarios: PerfScenario[] = [
   {
     id: "PERF-053",
@@ -672,5 +950,51 @@ export const persistenceScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: ["keyReadMisses", "hydrationMisses"],
     run: runStoreOpenScenario,
+  },
+  {
+    id: "PERF-406",
+    name: "Project State Write Queue — 5-update burst",
+    description:
+      "A real ProjectStateManager over a real temp config dir holding a 40-panel project with draft inputs and tab groups, taking ten back-to-back bursts of 5 per-field updates enqueued with no await between them. Reports durable writes, whole-state clones and payload bytes per burst alongside main-thread availability. The IPC hop, the renderer debounce and ProjectStore's derived metadata are out of frame.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 3, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: [
+      "onDiskUpdateMisses",
+      "callerResolutionMisses",
+      "fixturePreservationMisses",
+      "probeMisses",
+    ],
+    workloadFloors: {
+      updatesRequested: 5 * STATE_BURST_REPEATS,
+      updatesEnqueued: 2 * 5 * STATE_BURST_REPEATS,
+      updatesFulfilled: 2 * 5 * STATE_BURST_REPEATS,
+      fixturePanelCount: STATE_PANELS,
+    },
+    run: () => runStateBurstScenario(5),
+  },
+  {
+    id: "PERF-407",
+    name: "Project State Write Queue — 20-update burst",
+    description:
+      "The PERF-406 workload at the burst size a fleet launch or a drag actually produces: twenty per-field updates enqueued with no await between them, ten times over. The burst size is the variable; fixture, probe cadence and predicates are identical.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 3, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: [
+      "onDiskUpdateMisses",
+      "callerResolutionMisses",
+      "fixturePreservationMisses",
+      "probeMisses",
+    ],
+    workloadFloors: {
+      updatesRequested: 20 * STATE_BURST_REPEATS,
+      updatesEnqueued: 2 * 20 * STATE_BURST_REPEATS,
+      updatesFulfilled: 2 * 20 * STATE_BURST_REPEATS,
+      fixturePanelCount: STATE_PANELS,
+    },
+    run: () => runStateBurstScenario(20),
   },
 ];

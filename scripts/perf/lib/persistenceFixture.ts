@@ -32,6 +32,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as schema from "../../../electron/services/persistence/schema";
+import type { ProjectState } from "../../../electron/types/index";
+import type { ProjectStateManager } from "../../../electron/services/ProjectStateManager";
 import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -354,6 +356,7 @@ export const POST_MIGRATION_PROJECT_COLUMNS: readonly string[] = [
 ];
 
 let migrationSeq = 0;
+let projectStateSeq = 0;
 
 /**
  * A database sitting at the baseline schema with `count` project rows in it,
@@ -530,4 +533,198 @@ export function appStateSnapshot(panelCount: number): Record<string, unknown> {
     })),
     mruList: Array.from({ length: Math.min(panelCount, 64) }, (_, i) => `panel-${i}`),
   };
+}
+
+// --- Project state: the per-project state.json queue -------------------------
+
+/**
+ * A realistic project state: a full terminal list with draft inputs and tab
+ * groups, which is what makes a one-field update expensive.
+ *
+ * The size is the point. `saveProjectState` validates every terminal entry and
+ * stringifies the whole payload on each call, so the cost a coalesced burst
+ * avoids is proportional to this fixture, not to the field being written.
+ */
+export function projectStateSnapshot(projectId: string, panelCount: number): ProjectState {
+  const terminals = Array.from({ length: panelCount }, (_, i) => ({
+    id: `panel-${i}`,
+    title: `agent ${i} — feature/some-reasonably-long-branch-name-${i}`,
+    location: (i % 5 === 0 ? "dock" : "grid") as "dock" | "grid",
+    kind: "terminal" as const,
+    cwd: `/Users/perf/code/repo-${String(i % 200).padStart(5, "0")}/packages/app`,
+    worktreeId: `wt-perf-${i % 24}`,
+    command: i % 3 === 0 ? "claude --dangerously-skip-permissions" : "codex",
+    agentSessionId: i % 4 === 0 ? `sess-${i}-0191f2c8-4a1b-7c3d-9e5f-a6b7c8d9e0f1` : undefined,
+  }));
+
+  return {
+    projectId,
+    activeWorktreeId: "wt-perf-0",
+    sidebarWidth: 350,
+    terminals,
+    tabGroups: Array.from({ length: Math.ceil(panelCount / 8) }, (_, g) => ({
+      id: `group-${g}`,
+      location: "grid" as const,
+      activeTabId: `panel-${g * 8}`,
+      panelIds: terminals.slice(g * 8, g * 8 + 8).map((t) => t.id),
+    })),
+    terminalSizes: Object.fromEntries(terminals.map((t) => [t.id, { cols: 120, rows: 40 }])),
+    draftInputs: Object.fromEntries(
+      terminals
+        .filter((_, i) => i % 3 === 0)
+        .map((t) => [t.id, `a half-typed prompt for ${t.id} that was never sent`])
+    ),
+    mruList: terminals.slice(0, 24).map((t) => t.id),
+  } as ProjectState;
+}
+
+export interface ProjectStateFixture {
+  manager: ProjectStateManager;
+  projectId: string;
+  filePath: string;
+  dispose(): void;
+}
+
+/**
+ * A real {@link ProjectStateManager} over a real temp config dir, seeded and
+ * cache-warm.
+ *
+ * Seeded through the manager's own save path rather than by writing JSON
+ * directly, so the on-disk bytes are exactly what the product writes and the
+ * read the burst starts from is a cache hit, as it is in a running app.
+ */
+export async function createProjectStateFixture(panelCount: number): Promise<ProjectStateFixture> {
+  projectStateSeq += 1;
+  const configDir = join(getTempRoot(), `project-state-${projectStateSeq}`);
+  mkdirSync(configDir, { recursive: true });
+
+  const { ProjectStateManager } = await import("../../../electron/services/ProjectStateManager");
+  const { generateProjectId, stateFilePath } =
+    await import("../../../electron/services/projectStorePaths");
+
+  const projectId = generateProjectId(`/Users/perf/code/state-project-${projectStateSeq}`);
+  mkdirSync(join(configDir, projectId), { recursive: true });
+
+  const manager = new ProjectStateManager(configDir);
+  await manager.saveProjectState(projectId, projectStateSnapshot(projectId, panelCount));
+
+  const filePath = stateFilePath(configDir, projectId);
+  if (!filePath) throw new Error(`[perf] could not resolve a state path for ${projectId}`);
+
+  return {
+    manager,
+    projectId,
+    filePath,
+    dispose() {
+      manager.dispose();
+      rmSync(configDir, { recursive: true, force: true });
+    },
+  };
+}
+
+export interface ProjectStateCounts {
+  /** `saveProjectState` calls that ran to completion for the subject project. */
+  saves: number;
+  /** Atomic temp-file renames onto the subject's state.json. */
+  atomicReplaces: number;
+  /** `structuredClone` calls whose argument was a whole project state. */
+  clones: number;
+  /** Bytes handed to `JSON.stringify` for a versioned save payload. */
+  stringifyBytes: number;
+}
+
+/**
+ * Count the real operations a burst performs, with no production instrumentation.
+ *
+ * Every seam here is one the product already uses dynamically: `saveProjectState`
+ * is a public method (an own property shadows the prototype for `this` calls),
+ * `stubborn-fs` exports a mutable object whose `retry.rename` is read per call,
+ * and `structuredClone`/`JSON.stringify` are globals. Nothing under `electron/`
+ * changes to be measurable.
+ *
+ * INSTALL INSIDE `run()`, NEVER AT MODULE SCOPE — `scenarios/index.ts` imports
+ * every scenario eagerly, so a module-scope patch would be live in every perf
+ * process whichever id `--scenario` names (`moduleHookHygiene.test.ts`).
+ *
+ * The global proxies cost a trap per call, so this belongs in its own pass
+ * rather than inside a latency or bystander bracket: counting the work and
+ * timing it in the same window inflates the very number the counts explain.
+ */
+export async function withProjectStateCounters<T>(
+  fixture: ProjectStateFixture,
+  body: () => Promise<T>
+): Promise<{ result: T; counts: ProjectStateCounts }> {
+  const counts: ProjectStateCounts = {
+    saves: 0,
+    atomicReplaces: 0,
+    clones: 0,
+    stringifyBytes: 0,
+  };
+
+  const { manager, projectId, filePath } = fixture;
+  const stubbornFs = (await import("stubborn-fs")).default as {
+    retry: { rename: (options: unknown) => (from: string, to: string) => Promise<void> };
+  };
+
+  const ownSave = Object.getOwnPropertyDescriptor(manager, "saveProjectState");
+  const originalSave = manager.saveProjectState.bind(manager);
+  const originalRename = stubbornFs.retry.rename;
+  const originalClone = globalThis.structuredClone;
+  const originalStringify = JSON.stringify;
+
+  // A whole project state, not an arbitrary object: the manager clones and
+  // stringifies plenty of small things, and counting those would drown the
+  // signal the scenario exists to report.
+  const isWholeState = (value: unknown): boolean =>
+    typeof value === "object" &&
+    value !== null &&
+    (value as { projectId?: unknown }).projectId === projectId &&
+    Array.isArray((value as { terminals?: unknown }).terminals);
+
+  manager.saveProjectState = async (id: string, state: ProjectState): Promise<void> => {
+    await originalSave(id, state);
+    if (id === projectId) counts.saves += 1;
+  };
+
+  stubbornFs.retry.rename = (options: unknown) => {
+    const rename = originalRename(options);
+    return async (from: string, to: string): Promise<void> => {
+      await rename(from, to);
+      if (to === filePath) counts.atomicReplaces += 1;
+    };
+  };
+
+  globalThis.structuredClone = ((value: unknown, options?: unknown) => {
+    if (isWholeState(value)) counts.clones += 1;
+    return (originalClone as (v: unknown, o?: unknown) => unknown)(value, options);
+  }) as typeof structuredClone;
+
+  JSON.stringify = ((value: unknown, replacer?: unknown, space?: unknown) => {
+    const out = (originalStringify as (v: unknown, r?: unknown, s?: unknown) => string)(
+      value,
+      replacer,
+      space
+    );
+    // The versioned write payload specifically — the manager's own save, not a
+    // logger or a caller serializing something unrelated on the same tick.
+    if (
+      typeof out === "string" &&
+      isWholeState(value) &&
+      (value as { _schemaVersion?: unknown })._schemaVersion !== undefined
+    ) {
+      counts.stringifyBytes += Buffer.byteLength(out, "utf8");
+    }
+    return out;
+  }) as typeof JSON.stringify;
+
+  try {
+    const result = await body();
+    return { result, counts };
+  } finally {
+    if (ownSave) Object.defineProperty(manager, "saveProjectState", ownSave);
+    else Reflect.deleteProperty(manager, "saveProjectState");
+    stubbornFs.retry.rename = originalRename;
+    globalThis.structuredClone = originalClone;
+    JSON.stringify = originalStringify;
+  }
 }

@@ -36,6 +36,28 @@ export interface ProjectStateReadResult {
  */
 export type ProjectStatePersistedObserver = (projectId: string, state: ProjectState | null) => void;
 
+type ProjectStateUpdater = (
+  existing: ProjectState | null
+) => ProjectState | null | Promise<ProjectState | null>;
+
+/** One caller's update, plus the settlement of the promise it was handed. */
+interface QueuedUpdate {
+  updater: ProjectStateUpdater;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+/**
+ * What one updater in a batch did, recorded rather than acted on.
+ *
+ * Settlement waits for the batch's save: a later updater that throws must not
+ * resolve ahead of an earlier one whose result is still unwritten.
+ */
+type UpdateOutcome =
+  | { entry: QueuedUpdate; kind: "wrote" }
+  | { entry: QueuedUpdate; kind: "noop" }
+  | { entry: QueuedUpdate; kind: "threw"; error: unknown };
+
 export class ProjectStateManager {
   private projectStateCache = new Map<string, ProjectStateCacheEntry>();
   private pendingQuarantines = new Map<string, string>();
@@ -49,7 +71,16 @@ export class ProjectStateManager {
   // (genuinely no saved state) is authoritative emptiness, not unreadability,
   // and must never land here.
   private unreadableProjectIds = new Set<string>();
-  private writeQueues = new Map<string, Promise<void>>();
+  /**
+   * Updates waiting BEHIND the batch a project's runner is currently applying.
+   *
+   * Not a promise tail any more: the whole point is that several updates
+   * waiting together become one save, and a chain of `.then()` links can only
+   * express one save each.
+   */
+  private writeQueues = new Map<string, QueuedUpdate[]>();
+  /** Projects whose runner is live. Claimed before the runner starts. */
+  private drainingProjects = new Set<string>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private onStatePersisted: ProjectStatePersistedObserver | null = null;
 
@@ -122,9 +153,23 @@ export class ProjectStateManager {
   }
 
   private setProjectStateCache(projectId: string, state: ProjectState | null): void {
+    this.cacheUnsharedProjectState(projectId, this.cloneProjectState(state));
+  }
+
+  /**
+   * Cache a value nothing else holds a reference to.
+   *
+   * {@link setProjectStateCache} clones because its argument is normally the
+   * caller's object. A freshly parsed disk read is not: it is built here field
+   * by field, and the only other reference handed out is the clone returned to
+   * the caller. Cloning it a second time buys no isolation the first one did
+   * not already provide, and a project's state is the largest thing this class
+   * copies.
+   */
+  private cacheUnsharedProjectState(projectId: string, state: ProjectState | null): void {
     this.projectStateCache.set(projectId, {
       expiresAt: Date.now() + PROJECT_STATE_CACHE_TTL_MS,
-      value: this.cloneProjectState(state),
+      value: state,
     });
   }
 
@@ -140,35 +185,212 @@ export class ProjectStateManager {
    * Serialize read-merge-write updates per project. ipcMain.handle runs
    * handlers concurrently, so two unqueued read-modify-write cycles for the
    * same projectId read the same snapshot and the last write silently reverts
-   * the other's field. Each queued updater sees the previous update's
-   * committed state. Returning null from the updater skips the save.
+   * the other's field. Returning null from the updater skips the save.
+   *
+   * Updates that arrive while one is already being applied are folded into a
+   * single batch: each still runs, in order, against the previous one's result,
+   * but the batch costs ONE save instead of one per update. The returned
+   * promise still resolves only once that save is durable, and a failed save
+   * rejects every caller whose update it carried.
+   *
+   * The one guarantee that narrowed: an updater now sees the previous update's
+   * ACCEPTED state, which for a folded batch has not reached disk yet — before,
+   * it always saw committed state. Three consequences worth knowing:
+   *
+   *   - An updater must not await another update for the SAME project. Its own
+   *     batch cannot save until every updater in it has returned, so waiting on
+   *     one of them — including one enqueued earlier — deadlocks. Enqueuing
+   *     without awaiting is fine; it simply lands in a later batch.
+   *   - Terminal validation runs once, over the batch's final state, not after
+   *     every updater. Nothing invalid can reach disk either way, because the
+   *     filter is a per-entry predicate over whatever is saved; what changed is
+   *     that a mid-batch entry another updater goes on to repair is no longer
+   *     dropped before that updater can see it.
+   *   - Returning null means "I want no write", and such a caller resolves even
+   *     if the batch's save fails. An updater that returns null because the
+   *     state ALREADY satisfies it is making a claim about durability it cannot
+   *     see, and should return the state instead so it shares the save's fate.
+   *   - An updater must hand over the value it returns rather than keep hold of
+   *     it. The queue may carry that object until the batch's save, so mutating
+   *     it after returning changes what gets written. This was always racy —
+   *     the old path serialized the returned object a microtask later — but the
+   *     window is now the rest of the batch. Return a fresh value, or the
+   *     object you were given; every caller here does one of those.
    */
-  enqueueProjectStateUpdate(
-    projectId: string,
-    updater: (existing: ProjectState | null) => ProjectState | null | Promise<ProjectState | null>
-  ): Promise<void> {
-    const current = this.writeQueues.get(projectId) ?? Promise.resolve();
-    // .catch() keeps one failed update from poisoning the chain for later
-    // updates; the failure still propagates to that update's own caller.
-    const next = current
-      .catch(() => {})
-      .then(async () => {
-        const existing = await this.getProjectState(projectId);
-        const updated = await updater(existing);
+  enqueueProjectStateUpdate(projectId: string, updater: ProjectStateUpdater): Promise<void> {
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    // The old chain hung `.then(cleanup, cleanup)` off the promise it returned,
+    // which incidentally marked a rejection as handled. Callers that never
+    // await (relocation fans several of these into allSettled) relied on that,
+    // so keep it: this handler settles a derived promise, not the returned one,
+    // and the caller still sees the rejection.
+    void promise.catch(() => {});
+
+    const entry: QueuedUpdate = { updater, resolve, reject };
+
+    if (this.drainingProjects.has(projectId)) {
+      // A batch is already applying. Wait behind it — with everything else that
+      // arrives before it finishes, so the whole group costs one save.
+      const pending = this.writeQueues.get(projectId);
+      if (pending) pending.push(entry);
+      else this.writeQueues.set(projectId, [entry]);
+    } else {
+      this.drainingProjects.add(projectId);
+      // Claimed before the runner starts, and the batch handed straight to it:
+      // nothing here depends on how much of `drainQueue` happens to run before
+      // its first await.
+      void this.drainQueue(projectId, [entry]);
+    }
+
+    return promise;
+  }
+
+  /**
+   * Apply batches for one project, back to back, until nothing is waiting.
+   *
+   * A batch is frozen when the runner picks it up, so an update arriving later
+   * can never postpone a save that is already due — the longest anything waits
+   * is the batch in front of it, never a deadline that keeps moving. That is
+   * why there is no flush ceiling here: there is no timer to starve.
+   */
+  private async drainQueue(projectId: string, firstBatch: QueuedUpdate[]): Promise<void> {
+    try {
+      let batch = firstBatch;
+      for (;;) {
+        // `runBatch` settles every entry itself and is not supposed to throw.
+        // If it ever does, this catch keeps the runner alive: the alternative
+        // is an exception unwinding out of a promise nobody awaits, leaving
+        // this batch AND everything queued behind it pending forever.
+        try {
+          await this.runBatch(projectId, batch);
+        } catch (error) {
+          // Reaching here means `runBatch` has a hole. Entries it already
+          // settled ignore this (a promise settles once); the rest get the
+          // failure rather than hanging. Logged because an exception swallowed
+          // to keep the runner alive is otherwise invisible.
+          console.error(
+            `[ProjectStateManager] Batch failed outside its own handling for project ${projectId}:`,
+            error
+          );
+          for (const entry of batch) entry.reject(error);
+        }
+        const pending = this.writeQueues.get(projectId);
+        // Nothing waiting. The `finally` below releases the claim in this same
+        // synchronous step, so no enqueue can slip in between the two and be
+        // left with no runner to pick it up.
+        if (!pending) return;
+        this.writeQueues.delete(projectId);
+        batch = pending;
+      }
+    } finally {
+      this.drainingProjects.delete(projectId);
+    }
+  }
+
+  /**
+   * Read once, apply every updater in order, save once.
+   *
+   * `runBatch` never throws: each caller's outcome is delivered through its own
+   * promise, and a runner that died would strand every update behind it.
+   */
+  private async runBatch(projectId: string, batch: QueuedUpdate[]): Promise<void> {
+    let existing: ProjectState | null;
+    try {
+      existing = await this.getProjectState(projectId);
+    } catch (error) {
+      for (const entry of batch) entry.reject(error);
+      return;
+    }
+
+    // One update is by far the common case. Keep it on the original path so an
+    // isolated write pays nothing at all for the batching machinery.
+    const only = batch.length === 1 ? batch[0] : undefined;
+    if (only) {
+      try {
+        const updated = await only.updater(existing);
         if (updated !== null) {
           await this.saveProjectState(projectId, updated);
         }
-      });
-    this.writeQueues.set(projectId, next);
-    const cleanup = () => {
-      if (this.writeQueues.get(projectId) === next) {
-        this.writeQueues.delete(projectId);
+        only.resolve();
+      } catch (error) {
+        only.reject(error);
       }
-    };
-    // .then(cleanup, cleanup) instead of .finally(): .finally would create a
-    // new rejected promise nobody handles when the update fails.
-    next.then(cleanup, cleanup);
-    return next;
+      return;
+    }
+
+    let state = existing;
+    let pendingSave: ProjectState | null = null;
+    const outcomes: UpdateOutcome[] = [];
+
+    for (const entry of batch) {
+      try {
+        // Every updater gets its own copy, including the first.
+        //
+        // An updater may mutate what it is handed and THEN throw or return
+        // null, and that mutation has to be discarded — which is what happens
+        // today, where each update reads its own copy and a declined write
+        // simply abandons it. `shutdown.ts` and `projectSessionJournal.ts` both
+        // mutate `state.terminals[n]` in place and return the same object, so
+        // this is the live shape, not a hypothetical one.
+        //
+        // Handing the first updater the read's own clone would save a copy and
+        // was tried: it lets a first updater that mutates and then declines
+        // write straight through to the state the rest of the batch builds on.
+        //
+        // INSIDE the try: `state` is a previous updater's return value, which
+        // is arbitrary caller data. A value structuredClone rejects (a function,
+        // a proxy, a class with an unclonable field) throws here, and an escape
+        // would kill the runner and leave every caller in this batch — and
+        // everything queued behind it — pending forever.
+        const input = this.cloneProjectState(state);
+        const updated = await entry.updater(input);
+        if (updated === null) {
+          outcomes.push({ entry, kind: "noop" });
+          continue;
+        }
+        // Stamp the id the state directory says, which is what the next updater
+        // would have read back through the cache had this update saved on its
+        // own. Deliberately NOT re-running terminal validation per step: the
+        // save filters the batch's final state, and a filter is a per-entry
+        // predicate, so no entry survives to disk that a per-step pass would
+        // have dropped.
+        state = updated.projectId === projectId ? updated : { ...updated, projectId };
+        pendingSave = state;
+        outcomes.push({ entry, kind: "wrote" });
+      } catch (error) {
+        outcomes.push({ entry, kind: "threw", error });
+      }
+    }
+
+    let saveError: { error: unknown } | undefined;
+    if (pendingSave) {
+      try {
+        // The last accepted result is the one object in the batch nothing else
+        // re-copies: every earlier one was cloned to become the next updater's
+        // input. Take an owned snapshot so a caller that kept a reference to
+        // what it returned cannot change what gets written after the fact.
+        await this.saveProjectState(projectId, this.cloneProjectState(pendingSave)!);
+      } catch (error) {
+        saveError = { error };
+      }
+    }
+
+    for (const outcome of outcomes) {
+      if (outcome.kind === "threw") {
+        outcome.entry.reject(outcome.error);
+      } else if (outcome.kind === "wrote" && saveError) {
+        // Everything this save carried fails together — it is one write.
+        outcome.entry.reject(saveError.error);
+      } else {
+        // A null updater asked for no write, so a failed one is not its failure.
+        outcome.entry.resolve();
+      }
+    }
   }
 
   async saveProjectState(projectId: string, state: ProjectState): Promise<void> {
@@ -352,7 +574,9 @@ export class ProjectStateManager {
           : undefined,
       };
 
-      this.setProjectStateCache(projectId, state);
+      // `state` was just built from parsed JSON and is shared with nothing, so
+      // the cache can take it as-is and the caller gets the only other copy.
+      this.cacheUnsharedProjectState(projectId, state);
       return this.cloneProjectState(state);
     } catch (error) {
       const code =
