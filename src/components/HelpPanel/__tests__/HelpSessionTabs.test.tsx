@@ -694,7 +694,6 @@ describe("HelpSessionTabs", () => {
   });
 });
 
-
 afterEach(() => {
   releaseAssistantStore(1);
 });
@@ -721,7 +720,11 @@ describe("native session tab state", () => {
       });
     });
     await waitFor(() => expect(native.getAttribute("aria-describedby")).not.toBe(null));
-    expect(container.querySelector(`#${native.getAttribute("aria-describedby")}`)?.textContent).toContain("working");
-    expect(container.querySelector(`#${terminal.getAttribute("aria-describedby")}`)?.textContent).toContain("working");
+    expect(
+      container.querySelector(`#${native.getAttribute("aria-describedby")}`)?.textContent
+    ).toContain("working");
+    expect(
+      container.querySelector(`#${terminal.getAttribute("aria-describedby")}`)?.textContent
+    ).toContain("working");
   });
 });

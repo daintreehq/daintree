@@ -246,14 +246,14 @@ describe("help.launchAgent", () => {
     // Two different settings answering two different questions. The global default
     // names what a DIRECT launch spawns; the assistant setting names what the
     // assistant runs, and this action opens the assistant.
-    useHelpPanelStore.setState({ preferredAgentId: "gemini" });
+    useHelpPanelStore.setState({ preferredAgentId: "claude" });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
 
     await action.run(undefined, stubCtx);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -266,6 +266,8 @@ describe("help.launchAgent", () => {
     // block sits at `tier: "deprecated"`, so `provisionSession` refuses it.
     // The implicit default has to skip it rather than resolve into that
     // refusal — this suite mocks provisioning, so nothing else would notice.
+    mockPlatformSupport.mockReturnValue({ supported: false });
+    useHelpPanelStore.setState({ preferredAgentId: null });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability(),

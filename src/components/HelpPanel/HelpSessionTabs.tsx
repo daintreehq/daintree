@@ -507,18 +507,18 @@ export function HelpSessionTabs({
         {tabs.map((tab) => {
           const Chip = tab.native ? NativeSessionTabChip : SessionTabChip;
           return (
-          <Chip
-            key={tab.slot}
-            tab={tab}
-            agentState={tab.agentState}
-            isActive={tab.slot === activeSlot}
-            hasTabStop={tab.slot === rovingSlot}
-            tabId={helpSessionTabId(idBase, tab.slot)}
-            panelId={panelId}
-            onSelect={onSelect}
-            onClose={handlePointerClose}
-            onFocusTab={handleTabFocus}
-          />
+            <Chip
+              key={tab.slot}
+              tab={tab}
+              agentState={tab.agentState}
+              isActive={tab.slot === activeSlot}
+              hasTabStop={tab.slot === rovingSlot}
+              tabId={helpSessionTabId(idBase, tab.slot)}
+              panelId={panelId}
+              onSelect={onSelect}
+              onClose={handlePointerClose}
+              onFocusTab={handleTabFocus}
+            />
           );
         })}
       </div>

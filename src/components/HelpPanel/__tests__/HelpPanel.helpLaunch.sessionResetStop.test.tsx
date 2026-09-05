@@ -1463,9 +1463,9 @@ describe("HelpPanel — the native assistant's destructive controls", () => {
     const { container, getByTestId } = render(<HelpPanel width={380} />);
     nativePanelProps.length = 0;
 
-    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    fireEvent.click(restartConversationButton(container)!);
 
-    expect(getByTestId("dialog-title").textContent).toBe("Start a new session?");
+    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
     // And nothing has happened yet: the restart is a nonce bump, so an unasked restart
     // shows up as the lane re-rendering with a higher one.
     expect(nativePanelProps.every((p) => p.restartNonce === 0)).toBe(true);
@@ -1476,7 +1476,7 @@ describe("HelpPanel — the native assistant's destructive controls", () => {
     seedConversation();
     const { container, getByTestId } = render(<HelpPanel width={380} />);
 
-    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    fireEvent.click(restartConversationButton(container)!);
     nativePanelProps.length = 0;
     act(() => {
       fireEvent.click(getByTestId("dialog-confirm"));
@@ -1491,7 +1491,7 @@ describe("HelpPanel — the native assistant's destructive controls", () => {
     nativePanelProps.length = 0;
 
     act(() => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     // An empty lane has nothing to lose, so the confirm would be pure friction.
