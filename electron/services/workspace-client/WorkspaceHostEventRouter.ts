@@ -5,6 +5,7 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
+import { fileSearchCacheInvalidator } from "./fileSearchCacheInvalidation.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
@@ -66,6 +67,27 @@ export class WorkspaceHostEventRouter {
         const worktree = event.worktree;
         if (worktree.path) {
           this.worktreePathToProject.set(path.resolve(worktree.path), entry.projectPath);
+        }
+        // Watcher-driven file-search invalidation (#12240). Runs here, on the
+        // raw event, rather than off `queueSysWorktreeUpdate`'s 50ms window:
+        // the whole point is that a keystroke arriving in the same tick sees
+        // the dropped index instead of the stale one, and the invalidator's own
+        // timestamp check is what keeps unrelated snapshots from costing a
+        // rebuild.
+        // Guarded because this is the hot path: `worktree-update` streams at
+        // 10-50/s under multi-agent load and everything below it — the plugin
+        // bus emit, the sys-bus queue, the cloud-teardown notification — would
+        // be lost with it if a cache drop ever threw.
+        try {
+          fileSearchCacheInvalidator.handleWorktreeUpdate(worktree, {
+            projectPath: entry.projectPath,
+            // `epoch` is reminted on every workspace-host start, so a change of
+            // it is the only evidence main gets that the host was down and may
+            // have missed filesystem writes entirely.
+            hostEpoch: event.epoch,
+          });
+        } catch (error) {
+          console.warn("[workspace-host] file search cache invalidation failed:", error);
         }
         // No renderer relay: the host already fans every worktree-update
         // directly to each per-view worktree MessagePort
@@ -146,6 +168,15 @@ export class WorkspaceHostEventRouter {
         // WORKTREE_DELETE IPC handler's eviction does not.
         gitServiceCache.delete(event.worktreeId);
         gitServiceCache.delete(path.resolve(event.worktreeId));
+        // Same reasoning as the GitService eviction above: this event covers
+        // external removals too, which the WORKTREE_DELETE handler's own
+        // `fileSearchService.invalidate` never sees. Guarded like the update
+        // path — an exception here would skip the toast-key pruning below it.
+        try {
+          fileSearchCacheInvalidator.handleWorktreeRemoved(event.worktreeId);
+        } catch (error) {
+          console.warn("[workspace-host] file search cache invalidation failed:", error);
+        }
         // Prune cloud-teardown failure-toast dedup keys for the removed
         // worktree. Keys are `${worktreeId}:${startedAt}`, so a prefix scan
         // covers every teardown attempt; otherwise the Set only grows until

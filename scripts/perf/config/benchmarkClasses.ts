@@ -248,6 +248,22 @@ const FAMILIES: readonly Family[] = [
       "The real file-search service and real git path listing, warm and cold. Ends at ranked results, not at a painted, selectable list.",
   },
   {
+    label: "file picker cache lifecycle",
+    ids: ["PERF-197"],
+    kind: "mechanism",
+    fidelity: withFidelity({ processTopology: "partial" }),
+    claim:
+      "The real cache policy and the real watcher-to-invalidation rule, driven directly. Idle time is a Date.now() offset, so nothing here says how long the filesystem watch, its debounce or the utility-process hop take to deliver a change.",
+  },
+  {
+    label: "file search index retention",
+    ids: ["PERF-198"],
+    kind: "diagnostic",
+    fidelity: withFidelity({ processTopology: "partial" }),
+    claim:
+      "A SIGNAL about what the file-search cache releases when its entries expire, read as a forced-GC heap delta against an unprimed control. Heap readings are machine-dependent and V8 decides when memory is actually returned, so this is never a claim about the app's footprint or about resident memory the user would see.",
+  },
+  {
     label: "terminal search",
     ids: ["PERF-193", "PERF-194"],
     kind: "mechanism",

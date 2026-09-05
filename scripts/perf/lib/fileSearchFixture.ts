@@ -157,6 +157,16 @@ export interface FileSearchFixture {
   monorepo: FileSearchRepo;
 }
 
+/**
+ * Number of worktree indexes the retention scenario holds at once. Matches
+ * `FILE_LIST_CACHE`'s `maxSize`, so the measurement is of a full cache rather
+ * than of whatever fraction of one happened to fit.
+ */
+export const RETENTION_REPO_COUNT = 30;
+
+/** Paths per retention repo — a representative worktree, thirty times over. */
+export const RETENTION_FILE_COUNT = 3200;
+
 let fixture: FileSearchFixture | null = null;
 
 function buildRepo(root: string, name: string, fileCount: number, seed: number): FileSearchRepo {
@@ -208,11 +218,104 @@ export function getFileSearchFixture(): FileSearchFixture {
   return fixture;
 }
 
+let retentionRepos: FileSearchRepo[] | null = null;
+
+/**
+ * A fleet of distinct worktrees, one cache entry each.
+ *
+ * Built with the same index-only trick as `buildRepo`: `update-index
+ * --index-info` registers every path against one shared blob and nothing is
+ * written to the working tree, so thirty 3,200-path repos cost thirty git
+ * inits rather than 96,000 files on disk. `git ls-files --cached` still returns
+ * the full corpus, which is what `FileSearchService` reads, so each entry is
+ * the full-size index the retention number is about.
+ */
+export function getFileSearchRetentionRepos(): FileSearchRepo[] {
+  if (retentionRepos) return retentionRepos;
+
+  const root = createPerfTempRoot("daintree-perf-filesearch-fleet-", { canonical: true });
+  const repos: FileSearchRepo[] = [];
+  for (let index = 0; index < RETENTION_REPO_COUNT; index += 1) {
+    // A distinct seed per repo: identical path arrays across thirty entries
+    // would let the engine intern one copy of every string and understate
+    // exactly the retention this measures.
+    repos.push(buildRepo(root, `worktree-${index}`, RETENTION_FILE_COUNT, 1000 + index));
+  }
+
+  retentionRepos = repos;
+  return retentionRepos;
+}
+
+/**
+ * Add a tracked path to a fixture repo and return it, so a scenario can prove
+ * an invalidated listing actually got rebuilt rather than merely re-timed.
+ * Index-only, matching how the repo was built.
+ *
+ * Pair every call with `removeTrackedPath` in a `finally`: the fixture is built
+ * once per process and shared across every iteration, so a probe left behind
+ * grows the measured corpus with each one and two runs of the same scenario
+ * would no longer be measuring the same repository.
+ */
+export function addTrackedPath(repo: FileSearchRepo, relativePath: string): string {
+  const blob = git(repo.path, ["hash-object", "-w", "--stdin"], "//\n").trim();
+  git(repo.path, ["update-index", "--add", "--index-info"], `100644 ${blob}\t${relativePath}\n`);
+  return relativePath;
+}
+
+/** Undo `addTrackedPath`, restoring the repo to its generated corpus. */
+export function removeTrackedPath(repo: FileSearchRepo, relativePath: string): void {
+  git(repo.path, ["update-index", "--force-remove", relativePath]);
+}
+
+/**
+ * Move `Date.now()` forward for the duration of a measurement.
+ *
+ * `Cache` decides expiry against `Date.now()`, so this is what lets a scenario
+ * ask "what does the picker do when the user comes back after a pause" without
+ * the scenario itself pausing. `performance.now()` is untouched, so every timing
+ * in the bracket is still real elapsed time — only the cache's age arithmetic
+ * moves. Always restore in a `finally`: the offset is process-global.
+ */
+export function withClockOffset<T>(offsetMs: number, body: () => T): T {
+  const realNow = Date.now;
+  Date.now = () => realNow.call(Date) + offsetMs;
+  try {
+    return body();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+/** Async form of `withClockOffset`, for a bracket that awaits a search. */
+export async function withClockOffsetAsync<T>(
+  offsetMs: number,
+  body: () => Promise<T>
+): Promise<T> {
+  const realNow = Date.now;
+  Date.now = () => realNow.call(Date) + offsetMs;
+  try {
+    return await body();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
 export interface FileSearchModule {
   fileSearchService: import("../../../electron/services/FileSearchService").FileSearchService;
 }
 
+export interface FileSearchInvalidationModule {
+  fileSearchCacheInvalidator: import("../../../electron/services/workspace-client/fileSearchCacheInvalidation").FileSearchCacheInvalidator;
+}
+
 let modulePromise: Promise<FileSearchModule> | null = null;
+let invalidationModulePromise: Promise<FileSearchInvalidationModule> | null = null;
+
+function ensureUserDataDir(): void {
+  if (!process.env.DAINTREE_USER_DATA) {
+    process.env.DAINTREE_USER_DATA = createPerfTempRoot("daintree-perf-userdata-");
+  }
+}
 
 /**
  * Loaded lazily: FileSearchService pulls in the logger, which resolves its file
@@ -220,14 +323,33 @@ let modulePromise: Promise<FileSearchModule> | null = null;
  */
 export function loadFileSearchModule(): Promise<FileSearchModule> {
   if (!modulePromise) {
-    if (!process.env.DAINTREE_USER_DATA) {
-      process.env.DAINTREE_USER_DATA = createPerfTempRoot("daintree-perf-userdata-");
-    }
+    ensureUserDataDir();
     modulePromise = import("../../../electron/services/FileSearchService").then((mod) => ({
       fileSearchService: mod.fileSearchService,
     }));
   }
   return modulePromise;
+}
+
+/**
+ * The production watcher-to-cache decision, loadable on its own.
+ *
+ * `FileSearchCacheInvalidator` is deliberately separate from
+ * `WorkspaceHostEventRouter` so a benchmark can drive the real rule — the
+ * `workingTreeChangedAt` comparison and the descendant-scoped drop — without
+ * the router's `electron`, store and renderer-broadcast imports. What is NOT in
+ * the bracket, and must not be claimed from it: the filesystem watch itself,
+ * its debounce, and the utility-process hop that carries the snapshot to main.
+ */
+export function loadFileSearchInvalidationModule(): Promise<FileSearchInvalidationModule> {
+  if (!invalidationModulePromise) {
+    ensureUserDataDir();
+    invalidationModulePromise =
+      import("../../../electron/services/workspace-client/fileSearchCacheInvalidation").then(
+        (mod) => ({ fileSearchCacheInvalidator: mod.fileSearchCacheInvalidator })
+      );
+  }
+  return invalidationModulePromise;
 }
 
 /**

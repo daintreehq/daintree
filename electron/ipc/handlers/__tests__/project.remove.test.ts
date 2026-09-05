@@ -63,6 +63,16 @@ const pluginLifecycleMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
+const fileSearchCacheInvalidatorMock = vi.hoisted(() => ({
+  handleWorktreeUpdate: vi.fn(),
+  handleWorktreeRemoved: vi.fn(),
+  handleProjectClosed: vi.fn(),
+  reset: vi.fn(),
+}));
+vi.mock("../../../services/workspace-client/fileSearchCacheInvalidation.js", () => ({
+  fileSearchCacheInvalidator: fileSearchCacheInvalidatorMock,
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
@@ -87,6 +97,34 @@ describe("project:remove handler", () => {
       confirmed: true,
       terminalsKilled: 0,
     });
+  });
+
+  it("drops the removed project's file indexes (#12240)", async () => {
+    // The worktree-delete path invalidates per worktree; a project removed
+    // whole never goes through it, so its indexes used to sit in main-process
+    // memory until something happened to read those exact paths again.
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-1",
+      name: "Project",
+      path: "/test/proj-1",
+    });
+    projectStoreMock.removeProject.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient: {
+        getProjectStats: vi.fn(),
+        onProjectSwitch: vi.fn(),
+        setActiveProject: vi.fn(),
+      },
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await handler(fakeEvent, "proj-1");
+
+    expect(fileSearchCacheInvalidatorMock.handleProjectClosed).toHaveBeenCalledWith("/test/proj-1");
   });
 
   it("gracefully tears down and journals terminals before removing the project", async () => {
