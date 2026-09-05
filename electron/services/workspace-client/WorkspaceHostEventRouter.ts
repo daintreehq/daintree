@@ -170,8 +170,13 @@ export class WorkspaceHostEventRouter {
         gitServiceCache.delete(path.resolve(event.worktreeId));
         // Same reasoning as the GitService eviction above: this event covers
         // external removals too, which the WORKTREE_DELETE handler's own
-        // `fileSearchService.invalidate` never sees.
-        fileSearchCacheInvalidator.handleWorktreeRemoved(event.worktreeId);
+        // `fileSearchService.invalidate` never sees. Guarded like the update
+        // path — an exception here would skip the toast-key pruning below it.
+        try {
+          fileSearchCacheInvalidator.handleWorktreeRemoved(event.worktreeId);
+        } catch (error) {
+          console.warn("[workspace-host] file search cache invalidation failed:", error);
+        }
         // Prune cloud-teardown failure-toast dedup keys for the removed
         // worktree. Keys are `${worktreeId}:${startedAt}`, so a prefix scan
         // covers every teardown attempt; otherwise the Set only grows until

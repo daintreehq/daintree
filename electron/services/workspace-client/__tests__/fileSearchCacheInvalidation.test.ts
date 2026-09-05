@@ -99,11 +99,23 @@ describe("FileSearchCacheInvalidator", () => {
       expect(invalidateUnder).toHaveBeenCalledWith(WORKTREE);
     });
 
-    it("stays quiet on a first sighting that reports no flush", () => {
-      // Zero is "the recursive watcher has never fired here" — a background
-      // worktree on the git-only watch reports it forever. Dropping on it would
-      // wipe every index a project rebuild just warmed.
+    it("drops on a first sighting even when no flush is reported", () => {
+      // Having no record is not evidence of freshness: a search can cache a
+      // scope before this producer ever mentions it, and a zero timestamp would
+      // then preserve a listing taken before the watcher existed.
       const invalidator = makeInvalidator();
+
+      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 0 }), source());
+
+      expect(invalidateUnder).toHaveBeenCalledExactlyOnceWith(WORKTREE);
+    });
+
+    it("stays quiet on later snapshots that still report no flush", () => {
+      // Zero is "the recursive watcher has never fired here" — a background
+      // worktree on the git-only watch reports it forever, and dropping on every
+      // one of those would defeat the cache entirely.
+      const invalidator = makeInvalidator();
+      seed(invalidator, { workingTreeChangedAt: 0 });
 
       invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 0 }), source());
       invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: undefined }), source());
@@ -142,7 +154,37 @@ describe("FileSearchCacheInvalidator", () => {
 
       invalidator.handleWorktreeUpdate(snapshot(), source({ hostEpoch: "epoch-2" }));
 
-      expect(invalidateUnder).toHaveBeenCalledExactlyOnceWith(WORKTREE);
+      expect(invalidateUnder).toHaveBeenCalledWith(WORKTREE);
+    });
+
+    it("drops every scope the restarted host owned, not just the one it re-reports", () => {
+      // A worktree removed while the host was down is never mentioned again, so
+      // a per-path epoch check would never run for it and its index would
+      // survive on a stale record until the TTL lapsed.
+      const invalidator = makeInvalidator();
+      seed(invalidator, { path: WORKTREE });
+      seed(invalidator, { path: SIBLING_TREE, workingTreeChangedAt: 2_000 });
+
+      invalidator.handleWorktreeUpdate(
+        snapshot({ path: WORKTREE }),
+        source({ hostEpoch: "epoch-2" })
+      );
+
+      expect(invalidateUnder.mock.calls.map(([root]) => root)).toEqual(
+        expect.arrayContaining([WORKTREE, SIBLING_TREE])
+      );
+    });
+
+    it("reconciles a restart once, not on every following snapshot", () => {
+      const invalidator = makeInvalidator();
+      seed(invalidator);
+      const restarted = source({ hostEpoch: "epoch-2" });
+
+      invalidator.handleWorktreeUpdate(snapshot(), restarted);
+      invalidateUnder.mockClear();
+      invalidator.handleWorktreeUpdate(snapshot(), restarted);
+
+      expect(invalidateUnder).not.toHaveBeenCalled();
     });
 
     it("drops when the monitor is rebuilt at the same path", () => {
@@ -280,8 +322,9 @@ describe("FileSearchCacheInvalidator", () => {
       invalidator.handleProjectClosed(PROJECT);
       invalidateUnder.mockClear();
 
-      // The closed project's record is gone, so the repeated stamp reads as a
-      // first sighting and drops. The other project still remembers it.
+      // The closed project's record is gone, so its next snapshot is a first
+      // sighting and drops. The other project still remembers the worktree, so
+      // the identical snapshot is recognised as unchanged and costs nothing.
       invalidator.handleWorktreeUpdate(snapshot(), source());
       const afterReopen = invalidateUnder.mock.calls.length;
       invalidator.handleWorktreeUpdate(snapshot(), source({ projectPath: OTHER_PROJECT }));
