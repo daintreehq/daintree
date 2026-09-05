@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { TriangleAlert } from "lucide-react";
-import { scrubReportText } from "@shared/utils/reportScrubbers";
+import { buildPluginViewDiagnostics } from "@/components/Plugin/buildPluginViewDiagnostics";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 export interface PluginViewDiagnosticsFallbackProps {
-  error: Error;
+  /**
+   * Whatever the view threw. Typed `unknown` rather than `Error` because React
+   * stores the thrown value unnormalized — `getDerivedStateFromError`'s `Error`
+   * annotation is the type system's claim, not the runtime's.
+   */
+  error: unknown;
   errorInfo?: React.ErrorInfo;
   resetError: () => void;
   incidentId?: string | null;
@@ -34,16 +39,6 @@ export interface PluginViewDiagnosticsFallbackProps {
 const BUTTON_BASE = "rounded px-3 py-1.5 text-xs transition-colors";
 const NEUTRAL_BUTTON = "bg-border-default text-text-primary hover:bg-daintree-border/80";
 
-function buildTrace(error: Error, errorInfo: React.ErrorInfo | undefined): string {
-  return [
-    "Stack:",
-    error.stack || "No stack trace available",
-    "",
-    "Component stack:",
-    errorInfo?.componentStack || "No component stack available",
-  ].join("\n");
-}
-
 /**
  * Diagnostics pane for a plugin view that threw during render. Replaces the
  * shared `component` ErrorFallback at the plugin boundary only — that variant
@@ -52,9 +47,14 @@ function buildTrace(error: Error, errorInfo: React.ErrorInfo | undefined): strin
  *
  * Detail depth keys off the plugin's own `devMode`, never `import.meta.env.DEV`:
  * plugin authors build against a *production* Daintree, so a build-mode gate
- * blinds the exact audience the trace exists for. The trace is redacted rather
+ * blinds the exact audience the trace exists for. Content is redacted rather
  * than hidden for installed plugins — visibility isn't the risk, leaking the
  * user's paths and secrets into a pasted report is (#9427).
+ *
+ * Redaction covers the whole document — message and cause chain included, not
+ * just the stacks — because the plugin author decides what goes in them
+ * (#12281). See `buildPluginViewDiagnostics` for why that differs from the
+ * sibling `ErrorFallback`, which keeps its first-party message raw.
  */
 export function PluginViewDiagnosticsFallback({
   error,
@@ -70,7 +70,6 @@ export function PluginViewDiagnosticsFallback({
   onRequestClose,
 }: PluginViewDiagnosticsFallbackProps) {
   const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
-  const message = error.message || "Unknown render error";
 
   const announcedRef = useRef(false);
   useEffect(() => {
@@ -79,41 +78,34 @@ export function PluginViewDiagnosticsFallback({
     useAnnouncerStore.getState().announce(`${panelDisplayName} error`, "polite");
   }, [panelDisplayName]);
 
-  // Scrubbed once, here, so the rendered trace and the copied report can never
-  // diverge. A dev-mode plugin's paths are the author's own — redacting them
-  // would strip the file references they need to find the throw.
-  const trace = useMemo(() => {
-    const raw = buildTrace(error, errorInfo);
-    return devMode ? raw : scrubReportText(raw);
-  }, [error, errorInfo, devMode]);
-
-  // Identity and message stay raw in both surfaces: they name the plugin, not
-  // the user, and redacting them costs signal for no leak benefit.
-  const report = useMemo(
+  // Built once, here, so the rendered pane and the copied report can never
+  // diverge — the label claiming redaction has to describe both.
+  const diagnostics = useMemo(
     () =>
-      [
-        `Plugin: ${pluginDisplayName} (${pluginId})`,
-        `Panel: ${panelDisplayName} (${kindId})`,
-        `Module: ${componentPath}`,
-        ...(incidentId ? [`Error ID: ${incidentId}`] : []),
-        `Trace: ${devMode ? "raw (dev mode)" : "redacted"}`,
-        "",
-        `Message: ${message}`,
-        "",
-        trace,
-      ].join("\n"),
+      buildPluginViewDiagnostics({
+        error,
+        componentStack: errorInfo?.componentStack,
+        devMode,
+        pluginId,
+        pluginDisplayName,
+        kindId,
+        panelDisplayName,
+        componentPath,
+        incidentId,
+      }),
     [
-      pluginDisplayName,
+      error,
+      errorInfo,
+      devMode,
       pluginId,
-      panelDisplayName,
+      pluginDisplayName,
       kindId,
+      panelDisplayName,
       componentPath,
       incidentId,
-      devMode,
-      message,
-      trace,
     ]
   );
+  const { message, trace, report } = diagnostics;
 
   const handleCopy = useCallback(() => {
     void copy(report);
@@ -140,7 +132,12 @@ export function PluginViewDiagnosticsFallback({
         </h2>
       </div>
 
-      <p className="text-xs text-text-primary" data-testid="plugin-view-diagnostics-message">
+      {/* Wraps and keeps newlines: a thrown non-Error renders as formatted JSON
+          here, and a plugin's message is routinely multi-line. */}
+      <p
+        className="text-xs break-words whitespace-pre-wrap text-text-primary"
+        data-testid="plugin-view-diagnostics-message"
+      >
         {message}
       </p>
 
@@ -161,6 +158,18 @@ export function PluginViewDiagnosticsFallback({
             <dd className="font-mono break-all text-text-primary">{incidentId}</dd>
           </>
         )}
+        {diagnostics.code && (
+          <>
+            <dt className="text-text-muted">Code</dt>
+            <dd className="font-mono break-all text-text-primary">{diagnostics.code}</dd>
+          </>
+        )}
+        {/* The pane makes a claim about its own contents, so it has to state
+            which claim — an unlabelled raw view is how #12281 happened. */}
+        <dt className="text-text-muted">Report</dt>
+        <dd className="text-text-primary" data-testid="plugin-view-diagnostics-mode">
+          {diagnostics.mode}
+        </dd>
       </dl>
 
       <div className="flex flex-wrap gap-2">
