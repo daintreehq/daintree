@@ -597,18 +597,22 @@ describe("PluginDevWorkerHost", () => {
     });
 
     it("admits a large but legitimate payload", async () => {
-      // No blanket size ceiling: a plugin writing a big file or putting a large
-      // image on the clipboard is doing something the host allows, and killing
-      // it would be a worse bug than the one this validation fixes.
+      // No blanket size ceiling. A plugin writing a big file through
+      // `host.fs.writeFile` is doing something the host allows with no size
+      // contract of its own, so killing it would be a worse bug than the crash
+      // this validation fixes. Deliberately past the 32 MiB ceiling an earlier
+      // draft imposed, so restoring one fails here.
       const { child, forwarded, violations } = await startedHost();
+      const contents = "x".repeat(33 * 1024 * 1024);
       child.emit("message", {
         type: "host-call",
         requestId: "c1",
-        method: "clipboard.writeImage",
-        params: { pngData: new Uint8Array(4 * 1024 * 1024) },
+        method: "fs.writeFile",
+        params: { path: "/tmp/big.bin", contents },
       });
       expect(violations).toHaveLength(0);
       expect(forwarded).toHaveLength(1);
+      expect(forwarded[0].params.contents).toHaveLength(contents.length);
     });
 
     it("does not count a protocol violation as a crash or respawn the worker", async () => {

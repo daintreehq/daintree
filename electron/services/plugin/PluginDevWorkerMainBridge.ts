@@ -459,60 +459,81 @@ export class PluginDevWorkerMainBridge {
    * the misbehaving worker running.
    */
   private failProtocolViolation(reason: string): void {
-    if (this.protocolViolated || this.disposed) return;
+    if (this.protocolViolated) {
+      // A first pass whose reporting threw must not leave the worker running.
+      this.contain("worker dispose", () => this.workerHost.dispose());
+      return;
+    }
+    if (this.disposed) return;
     this.protocolViolated = true;
     const error = `Plugin "${this.pluginId}" dev worker stopped: ${reason}`;
-    // Every step below is contained on its own, and the worker teardown sits in
-    // a `finally`: a throw anywhere in the reporting must not be what leaves the
-    // misbehaving worker running — or, worse, escape into `uncaughtException`
-    // and cause the very fatal recovery this whole path exists to prevent.
-    const contain = (what: string, step: () => void): void => {
-      try {
-        step();
-      } catch (err) {
-        try {
-          logger.error(`[${this.pluginId}] ${what} threw during protocol teardown`, err);
-        } catch {
-          // swallowed
-        }
-      }
-    };
+    // Every step is contained on its own and the teardown sits in a `finally`:
+    // a throw anywhere in the reporting must not be what leaves the misbehaving
+    // worker running — or, worse, escape into `uncaughtException` and cause the
+    // very fatal recovery this whole path exists to prevent.
     try {
-      contain("failure log", () => logger.error(`[${this.pluginId}] ${error}`));
-      contain("activation-result listener", () => this.onActivationResult?.({ ok: false, error }));
-      contain("activation rejection", () => this.rejectActivation(new Error(error)));
-      contain("generation retire", () => this.retireGeneration(error));
-      contain("bridge dispose", () => this.dispose());
+      this.contain("failure log", () => logger.error(`[${this.pluginId}] ${error}`));
+      this.contain("activation-result listener", () =>
+        this.onActivationResult?.({ ok: false, error })
+      );
+      this.contain("activation rejection", () => this.rejectActivation(new Error(error)));
+      this.contain("generation retire", () => this.retireGeneration(error));
+      this.contain("bridge dispose", () => this.dispose());
     } finally {
-      contain("worker dispose", () => this.workerHost.dispose());
+      this.contain("worker dispose", () => this.workerHost.dispose());
       // Owner-level teardown last: it re-enters `dispose()` on both sides, which
       // is inert by now, and it is the step that lets the plugin be retried.
-      contain("owner teardown", () => this.onTerminalFailure?.());
+      this.contain("owner teardown", () => this.onTerminalFailure?.());
     }
+  }
+
+  /** Run one teardown step, absorbing (and best-effort logging) a throw. */
+  private contain(what: string, step: () => void): void {
+    try {
+      step();
+    } catch (err) {
+      try {
+        logger.error(`[${this.pluginId}] ${what} threw during protocol teardown`, err);
+      } catch {
+        // swallowed
+      }
+    }
+  }
+
+  /**
+   * An exception from validating, reporting or dispatching a worker message.
+   * The handlers below report their own operational failures, so reaching here
+   * means the reporting itself broke — terminal, and it must not escape as an
+   * uncaught exception or an unhandled rejection.
+   */
+  private failHandlerException(err: unknown): void {
+    try {
+      logger.error(`[${this.pluginId}] worker message handling threw`, err);
+    } catch {
+      // swallowed: the teardown below is what matters
+    }
+    this.failProtocolViolation("worker message handling failed");
   }
 
   private onWorkerMessage = (raw: unknown): void => {
     if (this.disposed || this.protocolViolated) return;
     // Second ingress point (#12276): `worker-message` is an ordinary emitter
     // event, not a runtime-typed channel, so validate here too rather than
-    // trusting that every emitter upstream already did.
-    const parsed = parseWorkerToHostMessage(raw);
-    if (!parsed.ok) {
-      logger.error(`[${this.pluginId}] worker message violates the protocol`, undefined, {
-        issues: parsed.issues,
-      });
-      this.failProtocolViolation("worker sent a malformed message");
-      return;
-    }
+    // trusting that every emitter upstream already did. Validation and its own
+    // diagnostic log sit INSIDE the guard — a logger that throws must not be
+    // what escapes this listener.
     try {
+      const parsed = parseWorkerToHostMessage(raw);
+      if (!parsed.ok) {
+        logger.error(`[${this.pluginId}] worker message violates the protocol`, undefined, {
+          issues: parsed.issues,
+        });
+        this.failProtocolViolation("worker sent a malformed message");
+        return;
+      }
       this.dispatchWorkerMessage(parsed.message);
     } catch (err) {
-      try {
-        logger.error(`[${this.pluginId}] worker message handling threw`, err);
-      } catch {
-        // swallowed: the teardown below is what matters
-      }
-      this.failProtocolViolation("worker message handling failed");
+      this.failHandlerException(err);
     }
   };
 
@@ -544,7 +565,7 @@ export class PluginDevWorkerMainBridge {
         this.failActivation(msg.error);
         return;
       case "host-call":
-        void this.handleHostCall(msg).catch(() => undefined);
+        void this.handleHostCall(msg).catch((err) => this.failHandlerException(err));
         return;
       case "host-cancel": {
         const controller = this.hostCallAborts.get(msg.requestId);
@@ -561,11 +582,11 @@ export class PluginDevWorkerMainBridge {
             ? { registrationKey: msg.registrationKey }
             : undefined;
         if (registration) this.pendingRegistrations.add(registration);
-        void this.handleHostNotify(msg, registration).catch(() => undefined);
+        void this.handleHostNotify(msg, registration).catch((err) => this.failHandlerException(err));
         return;
       }
       case "subscribe":
-        void this.handleSubscribe(msg).catch(() => undefined);
+        void this.handleSubscribe(msg).catch((err) => this.failHandlerException(err));
         return;
       case "unsubscribe": {
         const dispose = this.subscriptionDisposers.get(msg.subscriptionId);

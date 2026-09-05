@@ -226,8 +226,11 @@ type WireMessage<T = PluginWorkerToHostMessage> = T extends { params: unknown }
  * direction alone would let the schema silently strip (say) `requestId` while
  * {@link parseWorkerToHostMessage} keeps advertising it.
  *
- * Neither direction sees runtime refinements (`.min(1)`, the method enums) —
- * those are pinned by the fixtures in the schema's test.
+ * Two things stay out of reach here and are pinned by the schema's test
+ * fixtures instead: runtime refinements (`.min(1)`, the method enums), and a
+ * dropped OPTIONAL field — an object without an optional property is assignable
+ * in both directions, so only the round-trip fixture notices if `debounceMs`
+ * goes missing.
  */
 type _SchemaMatchesProtocol = (WireMessage extends z.infer<typeof PluginWorkerToHostMessageSchema>
   ? true
@@ -249,7 +252,10 @@ function summarizeIssues(error: z.ZodError): string {
       // A union issue's own path is the root, so descend — otherwise every
       // rejection reads "(root): invalid_union" and says nothing.
       const nested = (issue as { errors?: (readonly z.core.$ZodIssue[])[] }).errors;
-      if (nested) {
+      // A union issue's own path is the root, so descend into its branches. An
+      // EMPTY `errors` array is what Zod reports for a bad discriminator, and
+      // that leaf's own path is the useful part — descending would lose it.
+      if (nested?.length) {
         for (const group of nested) walk(group);
         continue;
       }

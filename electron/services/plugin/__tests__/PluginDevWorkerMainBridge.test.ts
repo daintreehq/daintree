@@ -2,8 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 
+// One shared logger instance so a test can make it throw — the failure paths
+// have to survive a logger that is itself broken.
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 vi.mock("../../../utils/logger.js", () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => loggerMock,
 }));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
@@ -180,7 +186,11 @@ function makeBridge(
 const flush = () => new Promise((r) => setImmediate(r));
 
 describe("PluginDevWorkerMainBridge", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // `clearAllMocks` keeps implementations, so a throwing logger would leak.
+    for (const fn of Object.values(loggerMock)) fn.mockReset();
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it("routes a host-call to the real host and replies with host-result", async () => {
@@ -1780,6 +1790,34 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(() => workerHost.emit("worker-message", null)).not.toThrow();
       expect(workerHost.dispose).toHaveBeenCalledTimes(1);
       expect(onTerminalFailure).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops the worker even when the rejection logger itself throws", () => {
+      const { workerHost, onTerminalFailure } = makeBridge();
+      loggerMock.error.mockImplementation(() => {
+        throw new Error("log sink is down");
+      });
+      expect(() => workerHost.emit("worker-message", null)).not.toThrow();
+      expect(workerHost.dispose).toHaveBeenCalled();
+      expect(onTerminalFailure).toHaveBeenCalled();
+    });
+
+    it("treats an exception in a handler's own reporting as terminal", async () => {
+      // A fire-and-forget dispatch whose internal catch throws used to reject
+      // into nothing: no reply, no teardown, and the worker's promise hangs.
+      const { host, workerHost, onTerminalFailure } = makeBridge();
+      host.broadcastToRenderer.mockRejectedValue(new Error("host refused"));
+      loggerMock.warn.mockImplementation(() => {
+        throw new Error("log sink is down");
+      });
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "broadcastToRenderer",
+        params: { channel: "c", payload: 1 },
+      });
+      await flush();
+      expect(onTerminalFailure).toHaveBeenCalled();
+      expect(workerHost.dispose).toHaveBeenCalled();
     });
 
     it("keeps a healthy plugin serving while another one violates the protocol", async () => {
