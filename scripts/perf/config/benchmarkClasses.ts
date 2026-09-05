@@ -187,7 +187,16 @@ const FAMILIES: readonly Family[] = [
   },
   {
     label: "git pipeline",
-    ids: ["PERF-100", "PERF-101", "PERF-102", "PERF-103", "PERF-104", "PERF-105", "PERF-106"],
+    ids: [
+      "PERF-100",
+      "PERF-101",
+      "PERF-102",
+      "PERF-103",
+      "PERF-104",
+      "PERF-105",
+      "PERF-106",
+      "PERF-107",
+    ],
     kind: "mechanism",
     fidelity: withFidelity({ processTopology: "partial" }),
     claim:
