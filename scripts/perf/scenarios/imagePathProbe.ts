@@ -27,14 +27,21 @@ import {
  *
  *   - the SUSTAINED arm is one long-lived probe read 40 times, which is what
  *     the product does;
- *   - the BASELINE arm is a fresh probe per read. That is not a simulation of
- *     the old code — it is the old rule exactly, because a read of a PID with
- *     no result scheduled a probe every time, which is what a first read of a
- *     fresh instance does. Same PID, same machine, same session, same minute.
+ *   - the BASELINE arm is a fresh probe per read. A first read on a fresh
+ *     instance takes the same path the old gate took on EVERY read of an
+ *     unresolved PID, so its start count is the old rule's start count —
+ *     subject to the one condition the old gate also carried, `!refreshing`,
+ *     which `baselineFidelityMisses` checks by requiring one start per read.
+ *     Same PID, same machine, same session, same minute.
  *
  * So `baselineToSustainedSpawnRatio` is a measured before/after rather than
  * arithmetic over a remembered number, and it stays honest if the curve is
- * ever retuned.
+ * ever retuned. It is a comparison of START COUNTS and only that: a fresh
+ * instance also allocates a map and runs the creation-time sweep, so the two
+ * arms are not identical in every byte of work, just in the thing being
+ * counted. For a full before/after of the whole implementation, run this
+ * scenario on the parent commit — `backoffMisses` is deliberately not an
+ * integrity predicate so that reading stays valid.
  *
  * PLATFORMS. Linux is declared `unsupported` and skipped rather than reported:
  * there the probe is `readlink /proc/<pid>/exe`, pure Node with no subprocess
@@ -55,10 +62,13 @@ import {
  */
 
 /**
- * A PID no platform will have allocated: above 32-bit `pid_t`'s positive range
- * and far above every default `pid_max`. Chosen over "a PID owned by another
- * user" (which depends on who is running the benchmark) and over "a PID that
- * just exited" (which is a PID-reuse race against the rest of the machine).
+ * `INT32_MAX` — a valid positive PID as far as the probe's own argument check
+ * is concerned, so the lookup really does reach the OS, but far above every
+ * default `pid_max` and above macOS's allocation range, so nothing holds it.
+ * Chosen over "a PID owned by another user" (which depends on who is running
+ * the benchmark) and over "a PID that just exited" (which is a PID-reuse race
+ * against the rest of the machine). `faultQualificationMisses` checks the
+ * choice rather than trusting it.
  */
 const ABSENT_PID = 2_147_483_647;
 
@@ -83,12 +93,26 @@ const QUALIFY_SETTLE_MS = 1_500;
 /** The reduction the issue requires before this change is worth shipping. */
 const REQUIRED_REDUCTION = 5;
 
+/**
+ * Apparatus predicates only.
+ *
+ * `backoffMisses` — the issue's 5x bar — is REPORTED but deliberately not
+ * declared here. It grades the subject rather than the apparatus, so under
+ * `--enforce-integrity` it would make the pre-backoff tree unmeasurable, and a
+ * valid reading of the old behaviour has to stay valid evidence.
+ *
+ * `retryLivenessMisses` is the term that makes the rest safe. Without it a
+ * probe whose retries had stopped completely reports one start against a
+ * forty-start reference — an 8x "improvement" bettered only by breaking it
+ * further — with every other predicate at zero.
+ */
 const CORRECTNESS = [
   "spawnObserverMisses",
   "probeLivenessMisses",
   "faultQualificationMisses",
   "absentPidResolutionMisses",
-  "backoffMisses",
+  "retryLivenessMisses",
+  "baselineFidelityMisses",
   "cadenceMisses",
 ] as const;
 
@@ -155,7 +179,7 @@ export const imagePathProbeScenarios: PerfScenario[] = [
     id: "PERF-405",
     name: "Image-Path Probe Retry Storm",
     description:
-      "A real ImagePathProbe read at the pty-host's own 1500ms cadence for a full 60s window against a PID that can never resolve, counting the `lsof`/PowerShell starts it actually makes. Two arms share the window: one long-lived probe (what the product does) and a fresh probe per read, which is the pre-#12239 rule exactly rather than a stand-in for it — a read of an unresolved PID scheduled a probe every time. The ratio between them is therefore a measured before/after on one machine in one session. Graded against the apparatus rather than against itself: the observer proves it can still see a start, a positive control on this process's own PID proves the probe still resolves anything at all, the absent PID is qualified as genuinely costing a subprocess before the window opens, and the required 5x reduction is a predicate rather than a note. Skipped on Linux, where the probe is a bare readlink and there is no subprocess storm to measure.",
+      "A real ImagePathProbe read at the pty-host's own 1500ms cadence for the 40 polls a minute contains, against a PID that can never resolve, counting the `lsof`/PowerShell starts it actually makes. Two arms share the window: one long-lived probe (what the product does) and a fresh probe per read, whose first read takes the same path the pre-#12239 gate took on every read of an unresolved PID. The ratio between them is a measured before/after on one machine in one session rather than arithmetic over a remembered number. The predicates grade the apparatus, not the feature: the observer proves it can still see a start, a positive control on this process's own PID proves the probe resolves anything at all, the absent PID is qualified as genuinely costing a subprocess, the reference arm must achieve its one-start-per-read workload, and — the one without which none of the rest is safe — the sustained arm must have retried at all and still be retrying in the back half of the window, because a probe whose retries died reports one start against forty and scores better than a working one. The issue's 5x bar is reported but deliberately left out of the predicates, so a reading taken on the pre-backoff tree stays valid evidence. Skipped on Linux, where the probe is a bare readlink and there is no subprocess storm to measure.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     // One 60s window per iteration, and the count is a rate over that window:
@@ -181,16 +205,23 @@ export const imagePathProbeScenarios: PerfScenario[] = [
         // Control: a PID that CAN be read must resolve. Without it, "almost no
         // probe starts" is indistinguishable from a probe that stopped working,
         // and the broken one posts the better number. It is also the only
-        // probe here with an observable end, so it is where the per-probe wall
-        // cost is taken — to a 5ms polling granularity, and against a live
-        // process rather than an absent one.
+        // probe here with an observable end, so it is where the wall cost is
+        // taken — against a live process rather than an absent one, to a 5ms
+        // polling granularity, and measured to PUBLICATION: if the first
+        // lookup failed this includes its cooldown and the retry after it, so
+        // read it as an upper bound on one probe, not as one probe.
         const controlStart = performance.now();
         const controlBasename = await awaitResolution(control, process.pid);
         const controlProbeWallMs = performance.now() - controlStart;
 
-        // Qualification: the absent PID must actually cost a subprocess and
-        // must actually fail. A candidate that resolved, or that never reached
-        // the OS, would make every count below meaningless.
+        // Qualification: the absent PID must cost a start and must not come
+        // back with a basename. A candidate that resolved, or that the probe
+        // rejected before reaching the OS, would make every count below
+        // meaningless. This establishes "a start was attempted and nothing was
+        // published", not the exit status of the command — the observer records
+        // the start before handing off to the real `spawn`. That the lookups
+        // genuinely COMPLETE is established later, by `retryLivenessMisses`:
+        // the gate will not start a second probe while the first is in flight.
         const qualifyMark = allSpawnMark();
         absent.readBasename(ABSENT_PID);
         const qualifySpawns = probeSpawnCount(allSpawnsSince(qualifyMark));
@@ -217,34 +248,39 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           );
         }
 
-        let sustainedSpawns = 0;
         let baselineSpawns = 0;
         let cadenceMisses = 0;
         let absentPidResolutionMisses = 0;
+        /** Offset of every start the sustained arm made, for the liveness read. */
+        const sustainedLaunchOffsets: number[] = [];
 
         const start = performance.now();
         for (let read = 0; read < WINDOW_READS; read += 1) {
           const deadline = start + read * POLL_INTERVAL_MS;
           const waitMs = deadline - performance.now();
-          if (waitMs > 0) {
-            await sleep(waitMs);
-          } else if (waitMs < -POLL_INTERVAL_MS) {
-            // A slot missed by more than a whole interval: the window did not
-            // deliver the cadence it claims, so the rate it reports is not the
-            // rate the product would pay.
-            cadenceMisses += 1;
-          }
+          if (waitMs > 0) await sleep(waitMs);
+
+          // Lateness is read AFTER the wait, not before it. Checking the
+          // pre-sleep clock scores the slot the scheduler was asked for rather
+          // than the one it delivered, so an oversleeping runner produces a
+          // burst of catch-up reads that all look punctual.
+          const offset = performance.now() - start;
+          if (offset - read * POLL_INTERVAL_MS > POLL_INTERVAL_MS) cadenceMisses += 1;
 
           // The shipped path. `readBasename` starts its subprocess
           // synchronously, so the bracket needs no await to be complete.
           const sustainedMark = allSpawnMark();
           const served = sustained.readBasename(ABSENT_PID);
-          sustainedSpawns += probeSpawnCount(allSpawnsSince(sustainedMark));
+          if (probeSpawnCount(allSpawnsSince(sustainedMark)) > 0) {
+            sustainedLaunchOffsets.push(offset);
+          }
           // A PID that does not exist must never acquire a basename. This is
           // the direction a cache bug would break in silently.
           if (served !== null) absentPidResolutionMisses += 1;
 
-          // The pre-fix rule: one probe per read of an unresolved PID.
+          // The reference arm: a first read on a fresh instance, which is what
+          // the pre-fix gate did on EVERY read of an unresolved PID — provided
+          // the previous probe had settled, which the gate also required then.
           const baselineMark = allSpawnMark();
           const fresh = new ImagePathProbe();
           fresh.readBasename(ABSENT_PID);
@@ -254,6 +290,29 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           fresh.dispose();
         }
         const windowMs = performance.now() - start;
+        const sustainedSpawns = sustainedLaunchOffsets.length;
+        const lastLaunchOffset = sustainedLaunchOffsets[sustainedSpawns - 1] ?? 0;
+
+        // Let the last arm's children finish rather than returning over the top
+        // of them: `dispose()` clears cache state and cancels nothing, and the
+        // smoke driver exits the process on return.
+        await sleep(QUALIFY_SETTLE_MS);
+
+        // THE predicate this scenario cannot be trusted without. A probe whose
+        // retries stopped after the first failure reports one start against a
+        // forty-start reference and scores better than a working one. Two
+        // readings, both of which a dead retry path fails: it must have
+        // retried at all, and it must still have been retrying in the back
+        // half of the window. It doubles as proof that the probes COMPLETE —
+        // the gate refuses to start a second one while the first is in flight,
+        // so a second start cannot happen unless the first settled.
+        const retryLivenessMisses =
+          sustainedSpawns >= 2 && lastLaunchOffset >= windowMs / 2 ? 0 : 1;
+
+        // The reference has to be the workload it claims. One start per read is
+        // the pre-fix rule; anything less means its probes were not settling
+        // between polls and it is understating what the old code cost.
+        const baselineFidelityMisses = baselineSpawns === WINDOW_READS ? 0 : 1;
 
         const backoffMisses =
           sustainedSpawns >= 1 && baselineSpawns >= sustainedSpawns * REQUIRED_REDUCTION ? 0 : 1;
@@ -263,9 +322,12 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           sustainedProbeSpawns: sustainedSpawns,
           baselineProbeSpawns: baselineSpawns,
           baselineToSustainedSpawnRatio: sustainedSpawns > 0 ? baselineSpawns / sustainedSpawns : 0,
+          lastSustainedLaunchMs: lastLaunchOffset,
           readCalls: WINDOW_READS,
           windowMs,
           absentPidResolutionMisses,
+          retryLivenessMisses,
+          baselineFidelityMisses,
           backoffMisses,
           cadenceMisses,
         };
@@ -278,8 +340,8 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           metrics,
           notes:
             backoffMisses === 1
-              ? `no meaningful backoff: ${sustainedSpawns} starts against a ${baselineSpawns}-start baseline, short of the required ${REQUIRED_REDUCTION}x`
-              : `control resolved as "${controlBasename}"; ${sustainedSpawns} starts against a ${baselineSpawns}-start baseline over ${WINDOW_READS} reads`,
+              ? `no meaningful backoff: ${sustainedSpawns} starts against a ${baselineSpawns}-start reference, short of the required ${REQUIRED_REDUCTION}x`
+              : `control resolved as "${controlBasename}"; ${sustainedSpawns} starts against a ${baselineSpawns}-start reference over ${WINDOW_READS} reads, last retry at ${Math.round(lastLaunchOffset)}ms`,
         };
       } finally {
         control.dispose();

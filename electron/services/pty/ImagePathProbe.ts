@@ -10,16 +10,21 @@ const IMAGE_PATH_PROBE_TIMEOUT_MS = 750;
 // across long sessions with many short-lived children. ProcessDetector also
 // evicts disappeared child PIDs proactively so PID reuse cannot return a
 // stale prior-process basename.
-const IMAGE_PATH_EVICTION_TTL_MS = 30_000;
+export const IMAGE_PATH_EVICTION_TTL_MS = 30_000;
 // Negative-result backoff. A probe that resolves nothing is not retried until
 // the delay has passed, and the delay doubles on each consecutive failure from
 // 3s to a 48s ceiling. ProcessDetector reads every shallow PID on every
 // ProcessTreeCache poll, so without this a PID the probe can never read costs
 // one `lsof`/PowerShell start per poll for as long as the process lives.
-// Every step is a whole multiple of the 1500ms poll interval rather than a
-// value near it, so a retry cannot land between two polls and slip a whole
-// interval (#8794). The resulting ladder — probes at 0s, 3s, 9s, 21s, 45s —
-// is 5 starts a minute against the 40 a 1.5s poll used to produce.
+//
+// Each step is a whole multiple of the 1500ms poll interval rather than a value
+// near it (#8794). That does NOT make retries land exactly on a poll: the
+// cooldown runs from when the probe SETTLED, so a probe that took 40ms pushes
+// eligibility 40ms past the poll boundary and the retry lands on the following
+// poll. With instantaneous settling the ladder is 0s, 3s, 9s, 21s, 45s; with a
+// real lookup it is one poll later at each step from the first retry on. Either
+// way it is 5 starts in the first minute against the 40 a 1.5s poll produced,
+// and roughly one per 48s after that.
 export const IMAGE_PATH_RETRY_BASE_MS = 3_000;
 export const IMAGE_PATH_RETRY_MAX_MS = 48_000;
 
@@ -125,12 +130,15 @@ export class ImagePathProbe {
     entry.lastReadAt = now;
 
     // Once a probe has returned a non-null result for a PID we serve it
-    // unconditionally: a process that has exec'd a different image is a
-    // different program under the same number, and ProcessDetector evicts a
-    // PID the moment it leaves probe range, so the entry cannot outlive the
-    // process it describes. A null result is retried, but only once the
-    // backoff earned by the previous failures has elapsed — `retryDelayMs` is
-    // 0 on a fresh entry, so the first probe of a PID is never delayed.
+    // unconditionally, and ProcessDetector evicts a PID the moment it leaves
+    // probe range. That is a retention POLICY, not a guarantee: a process that
+    // exec()s a new image keeps its PID and its probe range, so its entry
+    // still reports the old binary. Unchanged here, and out of scope for
+    // #12239 — the same policy predates the backoff.
+    //
+    // A null result is retried, but only once the backoff earned by the
+    // previous failures has elapsed. `retryDelayMs` is 0 on a fresh entry, so
+    // the first probe of a PID is never delayed.
     if (
       entry.basename === null &&
       !entry.refreshing &&
@@ -204,6 +212,11 @@ export class ImagePathProbe {
     current.basename = basename;
     current.updatedAt = Date.now();
     current.refreshing = false;
+    // The success reset is defensive rather than load-bearing: a non-null
+    // basename is served for the life of the entry, so nothing reads the delay
+    // back. It is kept so the field means one thing — consecutive failures
+    // since the last success — for anyone who later makes a resolved entry
+    // re-probe.
     current.retryDelayMs = basename === null ? nextRetryDelayMs(current.retryDelayMs) : 0;
   }
 

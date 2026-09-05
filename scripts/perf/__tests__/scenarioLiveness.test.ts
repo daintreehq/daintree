@@ -119,7 +119,7 @@ const EXPENSIVE_SCENARIOS: Readonly<Record<string, string>> = {
   "PERF-106": "~17s — the same 10s idle window, after a transient probe failure",
   "PERF-138": "~19s — builds real 1/5/20/50-worktree git topologies before it measures",
   "PERF-405":
-    "~62s — a fixed 60s window reading a failing PID at the 1500ms poll cadence; the backoff ladder it measures reaches its 48s ceiling inside that window and nowhere shorter",
+    "~62s — the 40 reads a 1500ms poll makes in a minute, against a failing PID, plus a drain for the last arm's children; a shorter window cannot show the backoff ladder still spacing retries in its back half",
 };
 
 /**

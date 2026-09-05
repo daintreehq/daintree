@@ -52,8 +52,12 @@ vi.mock("node:fs/promises", () => ({
   readlink: readlinkMock,
 }));
 
-const { ImagePathProbe, IMAGE_PATH_RETRY_BASE_MS, IMAGE_PATH_RETRY_MAX_MS } =
-  await import("../ImagePathProbe.js");
+const {
+  ImagePathProbe,
+  IMAGE_PATH_RETRY_BASE_MS,
+  IMAGE_PATH_RETRY_MAX_MS,
+  IMAGE_PATH_EVICTION_TTL_MS,
+} = await import("../ImagePathProbe.js");
 
 /** ProcessTreeCache's base poll interval — the cadence `readBasename` is read at. */
 const POLL_INTERVAL_MS = 1_500;
@@ -87,17 +91,65 @@ async function resolveNewestProbe(target: string): Promise<void> {
 }
 
 /**
- * Read `pid` once and report whether that read launched a probe, failing it
- * when it did. The launch count is taken from the mock's own call log rather
- * than from anything the probe exposes, so the reading survives a refactor of
- * the cache internals.
+ * Read `pid` once and report how many probes that read launched, failing the
+ * launched one. The count comes from the mock's own call log rather than from
+ * anything the probe exposes, so the reading survives a refactor of the cache
+ * internals — and it is a COUNT rather than a boolean so a read that launched
+ * twice cannot be recorded as a read that launched once.
  */
-async function readAndFail(probe: InstanceType<typeof ImagePathProbe>, pid: number) {
+async function readAndFail(
+  probe: InstanceType<typeof ImagePathProbe>,
+  pid: number
+): Promise<number> {
   const before = readlinkMock.calls.length;
   probe.readBasename(pid);
-  const launched = readlinkMock.calls.length > before;
-  if (launched) await failNewestProbe();
+  const launched = readlinkMock.calls.length - before;
+  // One read may schedule at most one probe. Anything else means the gate
+  // fired twice and every launch count in these tests is understated.
+  expect(launched).toBeLessThanOrEqual(1);
+  if (launched === 1) await failNewestProbe();
   return launched;
+}
+
+/**
+ * Drive a PID that has already failed once all the way to the backoff ceiling,
+ * one failure per step. Asserts each step launched exactly one probe, so a
+ * caller that reaches the ceiling has proved the climb as well as arriving.
+ */
+async function climbToCeiling(
+  probe: InstanceType<typeof ImagePathProbe>,
+  pid: number
+): Promise<void> {
+  let delay = IMAGE_PATH_RETRY_BASE_MS;
+  while (delay < IMAGE_PATH_RETRY_MAX_MS) {
+    vi.advanceTimersByTime(delay);
+    expect(await readAndFail(probe, pid)).toBe(1);
+    delay = Math.min(delay * 2, IMAGE_PATH_RETRY_MAX_MS);
+  }
+}
+
+/**
+ * The launch instants the published curve implies, at a fixed poll cadence and
+ * with probes that settle instantly (which is what fake timers give us).
+ *
+ * Derived from the exported constants and the doubling rule rather than
+ * written out, so retuning the curve retargets the expectation instead of
+ * forcing a matching edit — while a change to the SHAPE (dropping the
+ * doubling, dropping the cap, charging the cooldown from launch instead of
+ * settle) still fails the assertion.
+ */
+function expectedLaunchOffsets(reads: number, intervalMs: number): number[] {
+  const offsets: number[] = [];
+  let delay = 0;
+  let eligibleAt = 0;
+  for (let read = 0; read < reads; read += 1) {
+    const now = read * intervalMs;
+    if (now < eligibleAt) continue;
+    offsets.push(now);
+    delay = delay === 0 ? IMAGE_PATH_RETRY_BASE_MS : Math.min(delay * 2, IMAGE_PATH_RETRY_MAX_MS);
+    eligibleAt = now + delay;
+  }
+  return offsets;
 }
 
 describe("ImagePathProbe", () => {
@@ -367,7 +419,7 @@ describe("ImagePathProbe", () => {
           if (await readAndFail(probe, 123)) launchOffsets.push(Date.now() - start);
 
           const fresh = new ImagePathProbe();
-          if (await readAndFail(fresh, 123)) baselineLaunches += 1;
+          baselineLaunches += await readAndFail(fresh, 123);
           fresh.dispose();
 
           vi.advanceTimersByTime(POLL_INTERVAL_MS);
@@ -376,11 +428,18 @@ describe("ImagePathProbe", () => {
         // Every read in the baseline arm launched: 40 `lsof`/PowerShell starts
         // a minute for one PID the probe can never read.
         expect(baselineLaunches).toBe(POLL_READS);
-        // 3s, then 6, 12 and 24 — the ladder, stated as instants so a change
-        // to the curve has to be a deliberate edit here.
-        expect(launchOffsets).toEqual([0, 3_000, 9_000, 21_000, 45_000]);
+        // The whole ladder, against a schedule re-derived from the published
+        // curve rather than a copy of it. Catches a missing cap, a missing
+        // doubling, and a cooldown charged from launch instead of settle.
+        expect(launchOffsets).toEqual(expectedLaunchOffsets(POLL_READS, POLL_INTERVAL_MS));
         // The bar the issue sets for shipping this at all.
         expect(baselineLaunches / launchOffsets.length).toBeGreaterThanOrEqual(5);
+        // Retries were still happening late in the window, not just early —
+        // the reading that separates "backed off" from "stopped retrying",
+        // which the ratio above rewards.
+        expect(launchOffsets[launchOffsets.length - 1]).toBeGreaterThan(
+          (POLL_READS * POLL_INTERVAL_MS) / 2
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -441,27 +500,43 @@ describe("ImagePathProbe", () => {
         await failNewestProbe();
 
         // Walk the ladder to the ceiling, one failure per step.
-        let delay = IMAGE_PATH_RETRY_BASE_MS;
-        while (delay < IMAGE_PATH_RETRY_MAX_MS) {
-          vi.advanceTimersByTime(delay);
-          expect(await readAndFail(probe, 123)).toBe(true);
-          delay = Math.min(delay * 2, IMAGE_PATH_RETRY_MAX_MS);
-        }
+        await climbToCeiling(probe, 123);
 
         // Two more failures at the ceiling: the gap must stop growing, and
         // must still be exactly the ceiling rather than creeping past it.
         for (let step = 0; step < 2; step++) {
           vi.advanceTimersByTime(IMAGE_PATH_RETRY_MAX_MS - 1);
-          expect(await readAndFail(probe, 123)).toBe(false);
+          expect(await readAndFail(probe, 123)).toBe(0);
           vi.advanceTimersByTime(1);
-          expect(await readAndFail(probe, 123)).toBe(true);
+          expect(await readAndFail(probe, 123)).toBe(1);
         }
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it("resets the backoff on success and stops probing for good", async () => {
+    it("recovers from a PID that has been failing at the ceiling", async () => {
+      // The direction the storm test cannot see: a probe that stopped retrying
+      // altogether posts the best launch count in the suite, so recovery after
+      // a long run of failures has to be asserted on its own.
+      vi.useFakeTimers();
+      try {
+        const probe = new ImagePathProbe();
+        probe.readBasename(123);
+        await failNewestProbe();
+        await climbToCeiling(probe, 123);
+
+        vi.advanceTimersByTime(IMAGE_PATH_RETRY_MAX_MS);
+        probe.readBasename(123);
+        await resolveNewestProbe("/opt/homebrew/bin/claude");
+
+        expect(probe.readBasename(123)).toBe("claude");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("caches the eventual success and stops probing for good", async () => {
       vi.useFakeTimers();
       try {
         const probe = new ImagePathProbe();
@@ -469,7 +544,7 @@ describe("ImagePathProbe", () => {
         await failNewestProbe();
 
         vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS);
-        expect(await readAndFail(probe, 123)).toBe(true);
+        expect(await readAndFail(probe, 123)).toBe(1);
 
         vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS * 2);
         probe.readBasename(123);
@@ -485,36 +560,121 @@ describe("ImagePathProbe", () => {
       }
     });
 
-    it("backs off each PID independently", async () => {
+    it("keeps one PID's backoff out of every other PID's way", async () => {
       vi.useFakeTimers();
       try {
         const probe = new ImagePathProbe();
         probe.readBasename(123);
         await failNewestProbe();
+        await climbToCeiling(probe, 123);
 
-        // A second PID arriving mid-cooldown is a first-ever probe and must
-        // not inherit anything from its neighbour.
-        expect(await readAndFail(probe, 456)).toBe(true);
-        expect(readlinkMock.calls).toEqual(["/proc/123/exe", "/proc/456/exe"]);
+        // A second PID arriving mid-cooldown probes at once — and when IT
+        // fails it must earn the BASE delay, not the ceiling its neighbour is
+        // sitting on. Checking only the first read would miss a pooled delay
+        // entirely: a fresh entry's gate is `now >= 0 + delay`, and Date.now()
+        // is an epoch, so an inherited delay is invisible until the first
+        // failure charges it.
+        expect(await readAndFail(probe, 456)).toBe(1);
+        vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS - 1);
+        expect(await readAndFail(probe, 456)).toBe(0);
+        vi.advanceTimersByTime(1);
+        expect(await readAndFail(probe, 456)).toBe(1);
+
+        // Only the base delay has elapsed for 123, nowhere near its ceiling.
+        expect(await readAndFail(probe, 123)).toBe(0);
+
+        // A third PID resolving must not clear 123's cooldown either.
+        probe.readBasename(789);
+        await resolveNewestProbe("/usr/bin/codex");
+        expect(probe.readBasename(789)).toBe("codex");
+
+        vi.advanceTimersByTime(IMAGE_PATH_RETRY_MAX_MS - IMAGE_PATH_RETRY_BASE_MS - 1);
+        expect(await readAndFail(probe, 123)).toBe(0);
+        vi.advanceTimersByTime(1);
+        expect(await readAndFail(probe, 123)).toBe(1);
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it("evict() clears the backoff so a recycled PID probes immediately", async () => {
+    it("evict() clears the backoff so a recycled PID starts from the base delay", async () => {
+      vi.useFakeTimers();
+      try {
+        const probe = new ImagePathProbe();
+        probe.readBasename(123);
+        await failNewestProbe();
+        await climbToCeiling(probe, 123);
+
+        // A neighbour that stays in the map across the eviction, so an
+        // implementation that pooled retry state between entries would have
+        // something for the recreated entry to inherit.
+        probe.readBasename(999);
+        await failNewestProbe();
+
+        // Deep into a ceiling-length cooldown, the number is handed to a
+        // different process.
+        probe.evict(123);
+        expect(await readAndFail(probe, 123)).toBe(1);
+
+        // The new entry's FIRST failure must earn the base delay, not resume
+        // the streak the previous process built up. Checked on the boundary in
+        // both directions, so a retained ceiling is caught rather than assumed.
+        vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS - 1);
+        expect(await readAndFail(probe, 123)).toBe(0);
+        vi.advanceTimersByTime(1);
+        expect(await readAndFail(probe, 123)).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps a suppressed read counting as a reference against the eviction TTL", async () => {
+      // `lastReadAt` is updated on every read, including the ones the backoff
+      // suppresses. If it were only updated when a probe launched, a PID being
+      // polled every 1.5s would be swept mid-cooldown and re-probe at once —
+      // silently undoing the backoff for exactly the PIDs it exists for.
+      vi.useFakeTimers();
+      try {
+        const probe = new ImagePathProbe();
+        probe.readBasename(123);
+        await failNewestProbe();
+        await climbToCeiling(probe, 123);
+
+        // Poll it across the eviction TTL without ever launching anything.
+        const settled = readlinkMock.calls.length;
+        for (let elapsed = 0; elapsed < IMAGE_PATH_EVICTION_TTL_MS + 5_000; elapsed += 1_500) {
+          vi.advanceTimersByTime(1_500);
+          probe.readBasename(123);
+        }
+        expect(readlinkMock.calls).toHaveLength(settled);
+
+        // Creating another entry runs the sweep; the actively read 123 must
+        // survive it and keep its cooldown.
+        probe.readBasename(456);
+        await failNewestProbe();
+        expect(await readAndFail(probe, 123)).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("dedupes reads against an in-flight retry, not just an in-flight first probe", async () => {
       vi.useFakeTimers();
       try {
         const probe = new ImagePathProbe();
         probe.readBasename(123);
         await failNewestProbe();
 
-        // Deep into the cooldown, the number is handed to a different process.
-        vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS / 2);
-        probe.evict(123);
+        vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS);
+        probe.readBasename(123); // retry launches
+        expect(readlinkMock.calls).toHaveLength(2);
 
+        // Further polls while that retry is in flight must add nothing, even
+        // though the gate itself is open.
+        vi.advanceTimersByTime(POLL_INTERVAL_MS);
         probe.readBasename(123);
-        await resolveNewestProbe("/usr/bin/codex");
-        expect(probe.readBasename(123)).toBe("codex");
+        vi.advanceTimersByTime(POLL_INTERVAL_MS);
+        probe.readBasename(123);
         expect(readlinkMock.calls).toHaveLength(2);
       } finally {
         vi.useRealTimers();
@@ -530,16 +690,10 @@ describe("ImagePathProbe", () => {
         const probe = new ImagePathProbe();
         probe.readBasename(123);
         await failNewestProbe();
-
-        let delay = IMAGE_PATH_RETRY_BASE_MS;
-        while (delay < IMAGE_PATH_RETRY_MAX_MS) {
-          vi.advanceTimersByTime(delay);
-          expect(await readAndFail(probe, 123)).toBe(true);
-          delay = Math.min(delay * 2, IMAGE_PATH_RETRY_MAX_MS);
-        }
+        await climbToCeiling(probe, 123);
 
         // Idle past the eviction TTL but well short of the ceiling.
-        vi.advanceTimersByTime(31_000);
+        vi.advanceTimersByTime(IMAGE_PATH_EVICTION_TTL_MS + 1_000);
         const before = readlinkMock.calls.length;
         // Reading any PID runs the sweep on entry creation.
         probe.readBasename(456);
@@ -552,7 +706,7 @@ describe("ImagePathProbe", () => {
       }
     });
 
-    it("does not launch or advance the backoff after dispose", async () => {
+    it("launches nothing more when a refresh settles into a disposed probe", async () => {
       const probe = new ImagePathProbe();
       probe.readBasename(123);
       probe.dispose();
@@ -597,15 +751,22 @@ describe("ImagePathProbe", () => {
         probe.evict(123);
         probe.readBasename(123); // new entry, second refresh in flight
 
-        // The superseded refresh fails. Its checkId no longer matches, so it
-        // must not stamp a cooldown onto the entry that replaced it.
+        // Settle the RECREATED entry first, so it owns a base-delay cooldown
+        // of its own. Resolving it instead would wipe any cooldown the stale
+        // completion wrote and hide exactly the bug this guards.
+        readlinkMock.queue[1]!.reject(new Error("EACCES"));
+        await flush();
+
+        // Now the superseded refresh fails. Its checkId no longer matches, so
+        // it must not touch the live entry's basename or advance its cooldown.
         readlinkMock.queue[0]!.reject(new Error("EACCES"));
         await flush();
 
-        readlinkMock.queue[1]!.resolve("/usr/bin/claude");
-        await flush();
-        expect(probe.readBasename(123)).toBe("claude");
-        expect(readlinkMock.calls).toHaveLength(2);
+        // Still on the BASE delay, not doubled by the stale completion.
+        vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS - 1);
+        expect(await readAndFail(probe, 123)).toBe(0);
+        vi.advanceTimersByTime(1);
+        expect(await readAndFail(probe, 123)).toBe(1);
       } finally {
         vi.useRealTimers();
       }
@@ -676,8 +837,9 @@ describe("ImagePathProbe", () => {
         // Reading a different PID re-runs eviction; the long-idle 123 entry
         // is dropped, so a subsequent read of 123 must re-probe.
         probe.readBasename(456);
-        readlinkMock.queue[0]!.resolve("/usr/bin/codex");
-        await flush();
+        // 456's own probe, not 123's — queue[0] settled two lines above, and
+        // resolving it again left 456 pending forever.
+        await resolveNewestProbe("/usr/bin/codex");
 
         expect(probe.readBasename(123)).toBeNull();
         expect(readlinkMock.calls).toContain("/proc/123/exe");
