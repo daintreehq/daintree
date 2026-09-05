@@ -9,7 +9,11 @@ import { getHelpFolderPath } from "./HelpService.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { probeMcpServer, probeMcpSseServer } from "./mcp-server/readinessProbe.js";
-import { getAssistantWiredAgentIds } from "../../shared/config/agentRegistry.js";
+import {
+  getAssistantWiredAgentIds,
+  getEffectiveAgentConfig,
+  hasAssistantMcpImplementation,
+} from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -289,13 +293,20 @@ async function readTemplateHashStamp(sessionPath: string): Promise<string | null
  * state unprovable) or a stale managed skill could not be removed. Launching
  * anyway would run the session with outdated or unowned skill instructions,
  * so provisioning fails closed and the renderer shows a retryable error.
+ *
+ * `UNSUPPORTED_ASSISTANT_AGENT` is a refusal rather than a failure: the agent
+ * declares an `mcpInjection` mode Daintree has no implementation for, so a
+ * session provisioned under it would launch with no MCP wiring at all. The
+ * renderer has no dedicated copy for it yet and degrades to the generic
+ * spawn-failed shape.
  */
 export type HelpSessionErrorCode =
   | "MCP_NOT_READY"
   | "MCP_SERVER_NOT_STARTED"
   | "MCP_PROBE_FAILED"
   | "USER_CONTENT_SYNC_FAILED"
-  | "MIXED_AGENT_LANES";
+  | "MIXED_AGENT_LANES"
+  | "UNSUPPORTED_ASSISTANT_AGENT";
 
 export class HelpSessionError extends Error {
   readonly code: HelpSessionErrorCode;
@@ -486,11 +497,18 @@ export class HelpSessionService {
    * here too. This is the second line of defense behind the displacement in
    * `doProvision`: covers the renderer race where a new spawn arrives before
    * a prior provision's terminal binding was recorded.
+   *
+   * `expectedAgentId` is the cross-agent token-reuse check. Claude, Codex and
+   * Copilot each get it for free from their launch-arg getters, which return
+   * `null` when the token belongs to another agent's session; an `env-only`
+   * agent has no such getter, so without this a token minted for one env-only
+   * session could bind a terminal running a different one (#12262).
    */
-  markTerminalForToken(token: string, terminalId: string): boolean {
+  markTerminalForToken(token: string, terminalId: string, expectedAgentId?: string): boolean {
     if (!token || !terminalId) return false;
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
+    if (expectedAgentId !== undefined && record.agentId !== expectedAgentId) return false;
 
     // The lane comes from the authenticated record, never from the caller — a
     // renderer-supplied slot here could evict a sibling lane's PTY using a
@@ -1827,6 +1845,20 @@ export class HelpSessionService {
     // list) keeps it hidden until promoted. Deprecated-tier agents (e.g.
     // gemini) are excluded here and cannot provision a help session.
     if (!getAssistantWiredAgentIds().includes(input.agentId)) {
+      // Separate the two refusals. A tier or registration miss is a
+      // configuration choice, but an agent whose declared injection mode has no
+      // implementation used to clear this gate and then match none of the
+      // literal-id branches below — provisioning a real session dir, bearer and
+      // probed port for an agent that would launch entirely unwired (#12262).
+      // Both messages keep the "not assistant-supported" wording the renderer
+      // and existing callers already match on.
+      const supports = getEffectiveAgentConfig(input.agentId)?.supports;
+      if (supports && !hasAssistantMcpImplementation(input.agentId)) {
+        throw new HelpSessionError(
+          "UNSUPPORTED_ASSISTANT_AGENT",
+          `agentId "${input.agentId}" is not assistant-supported: Daintree implements no "${supports.mcpInjection}" MCP wiring for it`
+        );
+      }
       throw new Error(`agentId "${input.agentId}" is not assistant-supported`);
     }
   }
@@ -2144,12 +2176,18 @@ export class HelpSessionService {
   }
 
   /**
-   * Writes `<sessionPath>/.mcp.json` for a Copilot help session. Copilot's
-   * MCP discovery is CWD-only and the file shape is `{ mcpServers: { name: {
-   * type: "http", url, headers } } }`. Auth uses Copilot's native env-var
-   * substitution (`$VAR`, single-dollar form) so the literal session token
-   * never lands on disk — the bearer is delivered through
-   * `DAINTREE_MCP_TOKEN` in PTY spawn env.
+   * Writes `<sessionPath>/.mcp.json` for a Copilot help session. Daintree wires
+   * Copilot through discovery in the managed session directory it already sets
+   * as cwd, so the file shape is `{ mcpServers: { name: { type: "http", url,
+   * headers } } }`. Auth uses Copilot's native env-var substitution (`$VAR`,
+   * single-dollar form) so the literal session token never lands on disk — the
+   * bearer is delivered through `DAINTREE_MCP_TOKEN` in PTY spawn env.
+   *
+   * Recent Copilot CLIs also accept a session-scoped `--additional-mcp-config`
+   * flag, so cwd discovery is Daintree's choice rather than the CLI's only
+   * option; the previous "discovery is CWD-only" note here was wrong about that.
+   * Switching would mean re-verifying the flag against the pinned CLI and
+   * moving the bearer into argv, so it stays as-is.
    */
   private async writeCopilotMcpConfig(
     sessionPath: string,

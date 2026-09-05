@@ -433,6 +433,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const isAssistantAgent =
       typeof launchAgentId === "string" && getAssistantWiredAgentIds().includes(launchAgentId);
     const isHelpLaunch = helpTier !== false && isAssistantAgent && safeCommand.length > 0;
+    // Whether the agent claims assistant wiring at all, independent of whether
+    // that wiring is admissible. The rejection below has to key off this rather
+    // than `isAssistantAgent`: an agent excluded from the wired list (deprecated
+    // tier, or an injection mode Daintree implements for no such agent) would
+    // otherwise sail past the throw and fall through to the ordinary launch
+    // path with a help bearer still in its env (#12262). A plain shell that
+    // merely inherited DAINTREE_MCP_TOKEN from the user's own environment
+    // declares no `supports` and is left alone.
+    const claimsAssistantWiring = typeof launchAgentId === "string" &&
+      Boolean(getEffectiveAgentConfig(launchAgentId)?.supports);
 
     // If a help-session token was supplied but is invalid (revoked between
     // provision and spawn — typically because a sibling provision displaced
@@ -441,7 +451,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // renderer must always provision a fresh session before spawning the
     // assistant; falling through would resurrect the orphan-backend failure
     // mode (#7509) by spawning an unmanaged Claude in the assistant slot.
-    if (!isHelpLaunch && helpToken && isAssistantAgent && safeCommand.length > 0) {
+    if (!isHelpLaunch && helpToken && claimsAssistantWiring && safeCommand.length > 0) {
       throw new Error(
         "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
       );
@@ -621,7 +631,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // spawn (e.g. a stale resume against a session a sibling provision
       // already displaced) — refuse to launch as a help session rather
       // than silently degrading to a non-help Claude.
-      if (!helpSessionService.markTerminalForToken(helpToken, id)) {
+      if (!helpSessionService.markTerminalForToken(helpToken, id, launchAgentId)) {
         throw new Error(
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
         );
