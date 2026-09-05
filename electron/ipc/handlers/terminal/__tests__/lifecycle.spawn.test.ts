@@ -135,50 +135,6 @@ vi.mock("../../../utils.js", () => ({
   },
 }));
 
-vi.mock("../../../../shared/config/agentRegistry.js", () => ({
-  isRegisteredAgent: vi.fn(() => false),
-  getAssistantWiredAgentIds: vi.fn(() => ["claude", "codex", "copilot"]),
-  getEffectiveAgentConfig: vi.fn((id: string) => {
-    if (id === "claude") {
-      return {
-        supports: {
-          mcpInjection: "project-config",
-          settingsOverlay: true,
-          permissionBypass: true,
-          trustDialog: true,
-          versionProbe: true,
-          tier: "stable",
-        },
-      };
-    }
-    if (id === "codex") {
-      return {
-        supports: {
-          mcpInjection: "cli-flags",
-          settingsOverlay: false,
-          permissionBypass: true,
-          trustDialog: false,
-          versionProbe: true,
-          tier: "stable",
-        },
-      };
-    }
-    if (id === "copilot") {
-      return {
-        supports: {
-          mcpInjection: "project-config",
-          settingsOverlay: false,
-          permissionBypass: false,
-          trustDialog: false,
-          versionProbe: true,
-          tier: "experimental",
-        },
-      };
-    }
-    return undefined;
-  }),
-}));
-
 const {
   mockValidateToken,
   mockIsRunning,
@@ -217,7 +173,7 @@ const mockGetClaudeLaunchArgs = vi.hoisted(() =>
 );
 
 const mockMarkTerminalForToken = vi.hoisted(() =>
-  vi.fn<(token: string, terminalId: string) => boolean>(() => true)
+  vi.fn<(token: string, terminalId: string, expectedAgentId?: string) => boolean>(() => true)
 );
 
 const mockUnbindTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => void>());
