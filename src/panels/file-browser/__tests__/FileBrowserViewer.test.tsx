@@ -659,10 +659,11 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     const { container } = renderViewer("/repo/media/demo.webm");
 
     await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
-    // The bytes come from the protocol handler via fetch; the text-read IPC
-    // path (whose 500 KB cap produced the misleading error) must never run.
+    // The size probe goes to daintree-file://, the bytes stream from
+    // daintree-media://; the text-read IPC path (whose 500 KB cap produced the
+    // misleading error) must never run.
     expect(String(videoFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
-    expect(container.querySelector("video")?.getAttribute("src")).toMatch(/^blob:/);
+    expect(container.querySelector("video")?.getAttribute("src")).toMatch(/^daintree-media:\/\//);
     expect(readMock).not.toHaveBeenCalled();
   });
 
@@ -753,7 +754,7 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
 
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     expect(String(audioFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
-    expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^blob:/);
+    expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^daintree-media:\/\//);
     expect(readMock).not.toHaveBeenCalled();
   });
 

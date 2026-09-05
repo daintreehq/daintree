@@ -35,10 +35,9 @@ interface FilePdfPreviewProps {
  *    PDFium outright (ERR_BLOCKED_BY_CLIENT) — it needs same-origin
  *    postMessage with the viewer frame it installs. Isolation comes from the
  *    scheme instead: `daintree-pdf://` only ever emits `application/pdf`.
- * 3. A direct `src`, not a blob. `FileVideoPreview` detours through a Blob
- *    object URL to dodge the single-shot custom-scheme media loader, but
- *    PDFium won't accept a `blob:` navigation — it needs a real URL serving
- *    `application/pdf`, which is exactly what this scheme is for.
+ * 3. A direct `src`, not a blob. PDFium won't accept a `blob:` navigation — it
+ *    needs a real URL serving `application/pdf`, which is exactly what this
+ *    scheme is for.
  */
 export function FilePdfPreview({ filePath, rootPath, label, reloadKey }: FilePdfPreviewProps) {
   const src = useMemo(() => {

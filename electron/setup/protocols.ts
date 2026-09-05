@@ -611,6 +611,101 @@ function trustedAppCorsOrigin(request: GlobalRequest): string | null {
 }
 
 /**
+ * Method gate and `?path=&root=` validation shared by the three query-string
+ * schemes (daintree-file://, daintree-pdf://, daintree-media://). Returns the
+ * normalized pair, or the Response to relay.
+ *
+ * Validation order is load-bearing and identical for all three: a malformed
+ * request must be refused on its shape before anything touches the filesystem.
+ */
+function parseContainedFileRequest(
+  request: GlobalRequest
+): { normalizedRoot: string; normalizedFile: string } | Response {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  const url = new URL(request.url);
+  const filePath = url.searchParams.get("path");
+  const rootPath = url.searchParams.get("root");
+
+  if (!filePath || !rootPath) {
+    return new Response("Missing path or root parameter", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  if (filePath.includes("\0") || rootPath.includes("\0")) {
+    return new Response("Invalid path", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
+    return new Response("Paths must be absolute", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  return { normalizedRoot: path.normalize(rootPath), normalizedFile: path.normalize(filePath) };
+}
+
+/**
+ * Create the daintree-media:// protocol handler — direct range-streamed
+ * playback for <video>/<audio> (#12242). URL shape mirrors daintree-file://:
+ * `daintree-media://load?path=…&root=…`.
+ *
+ * Media-only by construction: a canonical path that isn't audio or video 404s
+ * rather than falling through to a buffered read, so this scheme can never
+ * serve an arbitrary repo file the way daintree-file:// legitimately does. That
+ * is the same narrowing daintree-pdf:// applies, and it is what makes the extra
+ * `standard: true` privilege cheap — the scheme's whole reachable surface is
+ * media files under a caller-supplied root.
+ *
+ * The streaming, containment, O_NOFOLLOW and range handling are
+ * streamContainedMediaFile's, unchanged and shared with daintree-file://.
+ */
+function createDaintreeMediaProtocolHandler() {
+  return async (request: GlobalRequest) => {
+    try {
+      const parsed = parseContainedFileRequest(request);
+      if (parsed instanceof Response) return parsed;
+      const { normalizedRoot, normalizedFile } = parsed;
+
+      const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
+      if (contained instanceof Response) return contained;
+
+      // Classified from the canonical path, not the request path: on Windows
+      // O_NOFOLLOW is a no-op, so a final-component symlink (`clip.mp4` →
+      // `secrets.env`) opens fine and request-path routing would stream it
+      // under a media MIME. On POSIX ELOOP rejects that symlink at open, so the
+      // two spellings agree either way.
+      const realMimeType = getMimeType(contained.realFile);
+      if (!isMediaMimeType(realMimeType)) {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+
+      return await streamContainedMediaFile(normalizedFile, realMimeType, request);
+    } catch (err) {
+      console.error("[MAIN] daintree-media protocol error:", err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+  };
+}
+
+/**
  * Create the daintree-file:// protocol handler function.
  */
 function createDaintreeFileProtocolHandler() {
@@ -629,41 +724,10 @@ function createDaintreeFileProtocolHandler() {
 /** The daintree-file:// request core, minus the CORS header pass. */
 function createDaintreeFileRequestCore() {
   return async (request: GlobalRequest) => {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method Not Allowed", {
-        status: 405,
-        headers: buildDaintreeFileErrorHeaders(),
-      });
-    }
-
     try {
-      const url = new URL(request.url);
-      const filePath = url.searchParams.get("path");
-      const rootPath = url.searchParams.get("root");
-
-      if (!filePath || !rootPath) {
-        return new Response("Missing path or root parameter", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (filePath.includes("\0") || rootPath.includes("\0")) {
-        return new Response("Invalid path", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
-        return new Response("Paths must be absolute", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      const normalizedRoot = path.normalize(rootPath);
-      const normalizedFile = path.normalize(filePath);
+      const parsed = parseContainedFileRequest(request);
+      if (parsed instanceof Response) return parsed;
+      const { normalizedRoot, normalizedFile } = parsed;
 
       // Audio and video take the streaming path instead of the buffer-and-cap
       // core. Classification must come from the canonical path, not the request
@@ -965,42 +1029,13 @@ function buildDaintreePdfHeaders(realFile: string, contentLength: number): Recor
  */
 function createDaintreePdfProtocolHandler() {
   return async (request: GlobalRequest) => {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method Not Allowed", {
-        status: 405,
-        headers: buildDaintreeFileErrorHeaders(),
-      });
-    }
-
     try {
-      const url = new URL(request.url);
-      const filePath = url.searchParams.get("path");
-      const rootPath = url.searchParams.get("root");
-
-      if (!filePath || !rootPath) {
-        return new Response("Missing path or root parameter", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (filePath.includes("\0") || rootPath.includes("\0")) {
-        return new Response("Invalid path", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
-        return new Response("Paths must be absolute", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
+      const parsed = parseContainedFileRequest(request);
+      if (parsed instanceof Response) return parsed;
 
       const result = await readContainedDaintreeFile(
-        path.normalize(rootPath),
-        path.normalize(filePath),
+        parsed.normalizedRoot,
+        parsed.normalizedFile,
         "pdf"
       );
       if (result instanceof Response) return result;
@@ -1283,8 +1318,8 @@ export function createPluginProtocolHandler(getPluginRoot: GetPluginRootByAuthor
 }
 
 /**
- * Register app://, daintree-file://, daintree-html://, daintree-pdf:// and
- * plugin:// protocol handlers on a specific session.
+ * Register app://, daintree-file://, daintree-html://, daintree-pdf://,
+ * daintree-media:// and plugin:// protocol handlers on a specific session.
  * Safe to call multiple times — skips sessions that are already configured.
  * Used for per-project session partitions that don't inherit the default session's handlers.
  *
@@ -1302,6 +1337,7 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
   ses.protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
   ses.protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
+  ses.protocol.handle("daintree-media", createDaintreeMediaProtocolHandler());
   if (cachedPluginRootResolver) {
     ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginRoot));
   }
@@ -1350,6 +1386,10 @@ export function registerDaintreeHtmlProtocol(): void {
 
 export function registerDaintreePdfProtocol(): void {
   protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
+}
+
+export function registerDaintreeMediaProtocol(): void {
+  protocol.handle("daintree-media", createDaintreeMediaProtocolHandler());
 }
 
 // Stable indirection so the live `plugin://` resolver can be swapped after the
