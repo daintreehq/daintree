@@ -587,9 +587,14 @@
    
    Driven by `animation-timeline: scroll()`: the fade is at full strength while there is
    more to the right and gone once the reader reaches the end, with no scroll listener
-   and no re-render. Engines without scroll-driven animations simply show the fade
-   permanently, which is the safe way to be wrong — a fence that admits it might continue
-   beats one that hides that it does. */
+   and no re-render.
+
+   The `@supports` guard below is not belt and braces. An `animation-timeline` an engine
+   does not understand leaves an ordinary TIME-based animation behind, and one with no
+   duration and `both` fill settles instantly on its end state — `opacity: 0`. So the
+   unguarded failure mode is the fade vanishing everywhere, which is precisely the
+   silent clipping this exists to prevent. Guarded, it holds at full strength instead: a
+   fence that admits it might continue beats one that hides that it does. */
 @keyframes assistant-fence-end {
   to {
     opacity: 0;
@@ -607,6 +612,12 @@
   animation: assistant-fence-end linear both;
   animation-timeline: scroll(self inline);
   animation-range: contain;
+}
+
+@supports not (animation-timeline: scroll(self inline)) {
+  .assistant-prose pre::after {
+    animation: none;
+  }
 }
 
 /* Inside a fence the block IS the container, so the span's own ground, rule and
