@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
 
@@ -222,6 +222,50 @@ describe("usePanelPalette", () => {
 
     const browser = result.current.results.find((item) => item.id === "browser");
     expect(browser?.description).toBe("Cmd+B");
+  });
+
+  it("keeps origin out of the search index", async () => {
+    // The tier is a marker, not a keyword: typing "plugin" must not silently
+    // become a way to filter the palette by provenance, which would make the
+    // result list mean something different from what the query says.
+    getPanelKindIdsMock.mockReturnValue(["vendor.kind", "project:proj-1/vendor/local"]);
+    const base = {
+      iconId: "package",
+      color: "#aaa",
+      showInPalette: true,
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "vendor",
+    };
+    getPanelKindConfigMock.mockImplementation((kind: string) => {
+      if (kind === "vendor.kind") return { ...base, id: "vendor.kind", name: "Zephyr" };
+      if (kind === "project:proj-1/vendor/local")
+        return { ...base, id: "project:proj-1/vendor/local", name: "Quartz", projectId: "proj-1" };
+      return undefined;
+    });
+    getPanelKindDefinitionMock.mockImplementation((kind: string) => ({
+      id: kind,
+      component: () => null,
+    }));
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    act(() => result.current.setQuery("plugin"));
+    await waitFor(() => expect(result.current.query).toBe("plugin"));
+    await waitFor(() => {
+      const ids = result.current.results.map((item) => item.id);
+      expect(ids).not.toContain("vendor.kind");
+      expect(ids).not.toContain("project:proj-1/vendor/local");
+    });
+
+    // The control: both are still findable by the thing the user actually sees.
+    act(() => result.current.setQuery("quartz"));
+    await waitFor(() => {
+      expect(result.current.results.map((item) => item.id)).toContain(
+        "project:proj-1/vendor/local"
+      );
+    });
   });
 
   it("leaves agent options without an origin, which is a panel-kind notion", () => {

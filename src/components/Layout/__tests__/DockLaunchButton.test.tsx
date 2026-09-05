@@ -3082,6 +3082,29 @@ describe("panel origin marker", () => {
     expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("Panel");
   });
 
+  it("speaks both tiers while searching, not just in browse", () => {
+    // `rowNamed` only needs the name prefix, so the visual-qualifier cases
+    // above would still pass if search dropped origin from the spoken name.
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Dashnotes", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "dash" } });
+
+    expect(rowNamed(container, "Dashboard").getAttribute("aria-label")).toContain("Plugin");
+    expect(rowNamed(container, "Dashnotes").getAttribute("aria-label")).toContain("Project plugin");
+  });
+
+  it("speaks a global plugin's tier in browse too", () => {
+    registerKind(GLOBAL_KIND, "Dashboard");
+    const { container } = renderButton();
+
+    const label = rowNamed(container, "Dashboard").getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Dashboard, Grid")).toBe(true);
+    expect(label).toContain("Plugin");
+    expect(label).not.toContain("Project plugin");
+  });
+
   it("speaks the origin without disturbing the accessible-name prefix", () => {
     // `e2e/helpers/panels.ts` matches rows by `[aria-label^="Name,"]`, and a
     // listener has no trailing span to read — so origin is appended as its own
@@ -3097,19 +3120,19 @@ describe("panel origin marker", () => {
   it("adds nothing to a built-in row's accessible name", () => {
     const { container } = renderButton();
 
+    // Case-insensitive: `toContain("Plugin")` alone would let a stray
+    // "Project plugin" through on the row that is meant to carry neither.
     const label = rowNamed(container, "Review").getAttribute("aria-label") ?? "";
     expect(label.startsWith("Review, Grid")).toBe(true);
-    expect(label).not.toContain("Plugin");
-    expect(label).not.toContain("Built-in");
+    expect(label).not.toMatch(/plugin|built-in/i);
   });
 
-  it("lets a disabled reason outrank the origin in the visible slot", () => {
-    // State changes what Enter does; provenance does not. The reason still
-    // shares the accessible name with the origin, where there is room for both.
-    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+  it("keeps a disabled reason ahead of the panel branch in the slot", () => {
+    // State changes what Enter does; provenance does not. Guards the branch
+    // ordering: a panel branch inserted above the disabled one would blank this
+    // row's reason, and only a panel can reach either.
     const { container } = renderButton({ hasProject: false });
 
-    const row = rowNamed(container, "Dev Preview");
-    expect(qualifierTextOf(row)).toBe("Needs a project");
+    expect(qualifierTextOf(rowNamed(container, "Dev Preview"))).toBe("Needs a project");
   });
 });

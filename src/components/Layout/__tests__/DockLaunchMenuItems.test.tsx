@@ -254,20 +254,24 @@ describe("DockLaunchMenuItems — panel origin", () => {
     return node;
   }
 
-  it("names both plugin tiers on the item itself", () => {
-    // The menu has no aria-label of its own — a menuitem's accessible name is
-    // its text content, so rendering the marker is what makes it spoken.
+  it("names both plugin tiers in the item's computed accessible name", () => {
+    // The menu item has no label of its own — its name IS its content — so this
+    // queries by role rather than reading textContent: an `aria-hidden` on the
+    // marker would keep the text and lose the announcement.
     registerKind(GLOBAL_KIND, "Dashboard");
     registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
-    const { container } = renderItems();
+    const { getByRole } = renderItems();
 
-    expect(itemNamed(container, "Dashboard").textContent).toContain("Plugin");
-    expect(itemNamed(container, "Scratch").textContent).toContain("Project plugin");
+    // Whitespace-tolerant: adjacent spans concatenate without a separator, and
+    // the assertion is about the marker reaching the name, not its spacing.
+    expect(getByRole("button", { name: /^Dashboard\s*Plugin$/ })).toBeTruthy();
+    expect(getByRole("button", { name: /^Scratch\s*Project plugin$/ })).toBeTruthy();
   });
 
-  it("leaves a built-in item's text as just its name", () => {
-    const { container } = renderItems();
+  it("leaves a built-in item's name as just its name", () => {
+    const { getByRole, container } = renderItems();
 
+    expect(getByRole("button", { name: "Review" })).toBeTruthy();
     expect(itemNamed(container, "Review").textContent).toBe("Review");
   });
 

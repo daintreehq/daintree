@@ -176,18 +176,21 @@ describe("PanelPalette panel origin (#12272)", () => {
   it("leaves a built-in row showing only its shortcut", () => {
     render(<PanelPalette {...baseProps} query="" results={toolResults} />);
 
+    // Exactly the shortcut, not merely containing it: a "Built-in · Cmd+B"
+    // regression is the shape this has to reject, and it is the one the rule
+    // against marking the default exists to prevent.
     const browser = optionNamed("Browser");
-    expect(browser.textContent).toContain("Cmd+B");
-    expect(browser.textContent).not.toContain("Plugin");
+    expect(browser.textContent).toBe("BrowserCmd+B");
   });
 
-  it("puts the origin in the option's accessible name, which is its content", () => {
-    // The row is a <button role="option"> with no aria-label, so what the row
-    // renders is exactly what is announced.
+  it("puts the origin in the option's computed accessible name", () => {
+    // Through the role query, not textContent: an `aria-hidden` on the marker
+    // would leave the text intact and silently take the origin away from the
+    // only users who cannot see it.
     render(<PanelPalette {...baseProps} query="" results={toolResults} />);
 
-    expect(optionNamed("Local").getAttribute("aria-label")).toBeNull();
-    expect(optionNamed("Local").textContent).toContain("Project plugin");
+    expect(screen.getByRole("option", { name: /Project plugin/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /\bPlugin\b/ })).toBeTruthy();
   });
 
   it("keeps the trailing badge for state, which outranks provenance", () => {
