@@ -38,7 +38,7 @@ Each project gets its own `WebContentsView` and V8 context via `ProjectViewManag
 
 Panels are a 7-member union in `shared/types/panel.ts` (`terminal`, `browser`, `dev-preview`, `review`, `file`, `file-browser`, `diff`) with per-kind modules in `src/panels/<kind>/` and the registry in `shared/config/panelKindRegistry.ts`.
 
-Plugins are manifest-driven, run in sandboxed utility subprocesses, and contribute actions, panels, agents, toolbar buttons, and forge providers under capability + consent gating. GitHub ships as a builtin forge plugin (`plugins/builtin/github`) so the host stays forge-neutral. Author SDK = the `packages/*` npm workspace (`npm run packages:build`).
+Plugins are manifest-driven, activate out-of-process in unsandboxed `utilityProcess.fork` workers (builtins are the exception and load in-process), and contribute actions, panels, agents, toolbar buttons, and forge providers under capability + consent gating. GitHub ships as a builtin forge plugin (`plugins/builtin/github`) so the host stays forge-neutral. Author SDK = the `packages/*` npm workspace (`npm run packages:build`).
 
 ## Generated code and ratchets
 
