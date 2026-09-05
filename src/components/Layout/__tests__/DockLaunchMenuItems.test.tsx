@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   getPanelKindIds,
   getPanelKindConfig,
+  registerPanelKind,
+  unregisterPanelKind,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 
@@ -216,5 +218,66 @@ describe("DockLaunchMenuItems", () => {
 
     fireEvent.click(getByText("Review"));
     expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ location: "grid" }));
+  });
+});
+
+describe("DockLaunchMenuItems — panel origin", () => {
+  const GLOBAL_KIND = "acme.dashboard.overview";
+  const PROJECT_KIND = "project:proj-1/acme.notes/scratch";
+
+  function registerKind(id: string, name: string, over: Partial<PanelKindConfig> = {}) {
+    registerPanelKind({
+      id,
+      name,
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      dockable: false,
+      extensionId: "acme.dashboard",
+      ...over,
+    });
+  }
+
+  afterEach(() => {
+    unregisterPanelKind(GLOBAL_KIND);
+    unregisterPanelKind(PROJECT_KIND);
+  });
+
+  /** The menu item carrying a name, by the text a reader gets from it. */
+  function itemNamed(container: HTMLElement, name: string): HTMLElement {
+    const node = Array.from(container.querySelectorAll<HTMLElement>("button")).find((el) =>
+      Array.from(el.querySelectorAll("span")).some((s) => s.textContent === name)
+    );
+    if (!node) throw new Error(`no menu item named ${name}`);
+    return node;
+  }
+
+  it("names both plugin tiers on the item itself", () => {
+    // The menu has no aria-label of its own — a menuitem's accessible name is
+    // its text content, so rendering the marker is what makes it spoken.
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { container } = renderItems();
+
+    expect(itemNamed(container, "Dashboard").textContent).toContain("Plugin");
+    expect(itemNamed(container, "Scratch").textContent).toContain("Project plugin");
+  });
+
+  it("leaves a built-in item's text as just its name", () => {
+    const { container } = renderItems();
+
+    expect(itemNamed(container, "Review").textContent).toBe("Review");
+  });
+
+  it("still launches the kind the marked row names", () => {
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { container } = renderItems();
+
+    fireEvent.click(itemNamed(container, "Scratch"));
+    expect(addPanelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: PROJECT_KIND, location: "grid" })
+    );
   });
 });

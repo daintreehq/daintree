@@ -566,6 +566,32 @@ export function getPanelKindConfig(kind: PanelKind): PanelKindConfig | undefined
 }
 
 /**
+ * Where a panel kind came from, as three tiers a launcher can speak about.
+ * Ordered by how much the distinction costs the user: a `project-plugin` kind
+ * exists only inside the project that ships it and is gone in the next one,
+ * which is the surprise this classification exists to prevent (#12272).
+ */
+export type PanelKindOrigin = "builtin" | "plugin" | "project-plugin";
+
+/**
+ * Classify a kind's origin from the ownership fields the registry already
+ * carries. Project ownership wins: a project-local kind always has an
+ * `extensionId` too, so testing `projectId` second would collapse tier 3 into
+ * tier 2.
+ *
+ * Takes the config rather than the id on purpose. The id is enough to derive
+ * this (see {@link toPersistedPanelKindRef}), but every caller that needs the
+ * tier is already projecting a `PanelKindConfig` into a row model, and parsing
+ * it back out of the id at each render site is how the surfaces drift apart.
+ */
+export function getPanelKindOrigin(
+  config: Pick<PanelKindConfig, "extensionId" | "projectId">
+): PanelKindOrigin {
+  if (config.projectId != null) return "project-plugin";
+  return config.extensionId !== undefined ? "plugin" : "builtin";
+}
+
+/**
  * Resolve a panel kind's policy, layering its declared `policy` block over
  * `DEFAULT_PANEL_KIND_POLICY`. Returns a fully-populated `Required<PanelKindPolicy>`
  * so callers can read fields without an undefined check.

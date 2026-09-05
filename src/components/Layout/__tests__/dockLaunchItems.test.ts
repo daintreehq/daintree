@@ -120,6 +120,7 @@ const PANEL_LIMIT_MESSAGE = `Can't open another panel: ${PANEL_LIMIT_ERROR_SUFFI
 const PLUGIN_DOCKABLE = "test-plugin-dockable";
 const PLUGIN_GRID_ONLY = "test-plugin-grid-only";
 const PLUGIN_HIDDEN = "test-plugin-hidden";
+const PLUGIN_PROJECT_LOCAL = "project:proj-1/test-plugin/local";
 
 beforeEach(() => {
   addPanelMock.mockReset().mockResolvedValue("panel-1");
@@ -132,7 +133,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const id of [PLUGIN_DOCKABLE, PLUGIN_GRID_ONLY, PLUGIN_HIDDEN]) {
+  for (const id of [PLUGIN_DOCKABLE, PLUGIN_GRID_ONLY, PLUGIN_HIDDEN, PLUGIN_PROJECT_LOCAL]) {
     unregisterPanelKind(id);
   }
 });
@@ -205,6 +206,42 @@ describe("buildDockLaunchModel — panel offering", () => {
 
     expect(model.dockPanels.map((p) => p.kindId)).toContain(PLUGIN_DOCKABLE);
     expect(model.gridPanels.map((p) => p.kindId)).toContain(PLUGIN_GRID_ONLY);
+  });
+
+  it("carries each kind's origin tier onto its row", () => {
+    // The whole gap this closes: the registry knows all three tiers and the row
+    // model used to flatten them into one.
+    registerPluginKind(PLUGIN_DOCKABLE);
+    registerPluginKind(PLUGIN_PROJECT_LOCAL, { projectId: "proj-1", dockable: false });
+    const model = build();
+    const byKind = new Map(
+      [...model.dockPanels, ...model.gridPanels].map((p) => [p.kindId, p.origin])
+    );
+
+    expect(byKind.get("file")).toBe("builtin");
+    expect(byKind.get(PLUGIN_DOCKABLE)).toBe("plugin");
+    expect(byKind.get(PLUGIN_PROJECT_LOCAL)).toBe("project-plugin");
+  });
+
+  it("keeps origin on the rows search actually ranks", () => {
+    // browseRows and searchItems are built separately; a marker present in one
+    // and missing in the other is the drift this asserts against.
+    registerPluginKind(PLUGIN_PROJECT_LOCAL, { projectId: "proj-1", dockable: false });
+    const model = build();
+
+    const searched = model.searchItems.find(
+      (item) => item.category === "panel" && item.kindId === PLUGIN_PROJECT_LOCAL
+    );
+    expect(searched).toBeDefined();
+    expect(searched).toMatchObject({ origin: "project-plugin" });
+
+    const browsed = model.browseRows.find(
+      (row) =>
+        row.kind === "item" &&
+        row.item.category === "panel" &&
+        row.item.kindId === PLUGIN_PROJECT_LOCAL
+    );
+    expect(browsed).toBeDefined();
   });
 
   it("honours a plugin kind's showInPalette opt-out", () => {

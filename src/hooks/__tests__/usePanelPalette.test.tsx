@@ -32,7 +32,8 @@ const {
   projectState: { currentProject: { id: "proj-1" } as { id: string } | null },
 }));
 
-vi.mock("@shared/config/panelKindRegistry", () => ({
+vi.mock("@shared/config/panelKindRegistry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@shared/config/panelKindRegistry")>()),
   getPanelKindIds: getPanelKindIdsMock,
   getPanelKindConfig: getPanelKindConfigMock,
 }));
@@ -175,6 +176,60 @@ describe("usePanelPalette", () => {
 
     const browser = result.current.results.find((item) => item.id === "browser");
     expect(browser?.category).toBe("tool");
+  });
+
+  it("classifies each tool option's origin from the registry's ownership fields", () => {
+    getPanelKindIdsMock.mockReturnValue(["browser", "vendor.kind", "project:proj-1/vendor/local"]);
+    const base = {
+      iconId: "package",
+      color: "#aaa",
+      showInPalette: true,
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+    };
+    getPanelKindConfigMock.mockImplementation((kind: string) => {
+      if (kind === "browser") return { ...base, id: "browser", name: "Browser", shortcut: "Cmd+B" };
+      if (kind === "vendor.kind")
+        return { ...base, id: "vendor.kind", name: "Vendor", extensionId: "vendor" };
+      if (kind === "project:proj-1/vendor/local")
+        return {
+          ...base,
+          id: "project:proj-1/vendor/local",
+          name: "Local",
+          extensionId: "vendor",
+          projectId: "proj-1",
+        };
+      return undefined;
+    });
+    getPanelKindDefinitionMock.mockImplementation((kind: string) => ({
+      id: kind,
+      component: () => null,
+    }));
+
+    const { result } = renderHook(() => usePanelPalette());
+    const originOf = (id: string) => result.current.results.find((item) => item.id === id)?.origin;
+
+    expect(originOf("browser")).toBe("builtin");
+    expect(originOf("vendor.kind")).toBe("plugin");
+    expect(originOf("project:proj-1/vendor/local")).toBe("project-plugin");
+  });
+
+  it("keeps the shortcut in description rather than spending it on origin", () => {
+    // The palette's second line is composed at render time; `description` stays
+    // the shortcut alone so Fuse never starts matching rows on their tier.
+    const { result } = renderHook(() => usePanelPalette());
+
+    const browser = result.current.results.find((item) => item.id === "browser");
+    expect(browser?.description).toBe("Cmd+B");
+  });
+
+  it("leaves agent options without an origin, which is a panel-kind notion", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const claude = result.current.results.find((item) => item.id === "agent:claude");
+    expect(claude?.category).toBe("agent");
+    expect(claude?.origin).toBeUndefined();
   });
 
   it("assigns category 'agent' to the MORE_AGENTS_PANEL_ID entry", () => {

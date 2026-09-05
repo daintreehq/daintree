@@ -75,6 +75,7 @@ import {
   type DockLaunchRow,
 } from "./dockLaunchItems";
 import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
+import { PANEL_KIND_ORIGIN_LABELS } from "@/utils/panelKindOriginCopy";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 // Same weighting as the ⌘⇧P panel palette so a name match outranks an alias or
@@ -1156,6 +1157,10 @@ function DockLaunchOption({
   // ordinary.
   const unavailableAgent = agent && !isAgentLaunchable(agent.availability) ? agent : null;
   const disabledReason = item?.disabled?.reason;
+  // Undefined on every built-in panel and on every non-panel row, so the marker
+  // only ever appears on the minority it is about.
+  const originLabel =
+    item?.category === "panel" ? PANEL_KIND_ORIGIN_LABELS[item.origin] : undefined;
   const isDimmed =
     unavailableAgent !== null ||
     disabledReason !== undefined ||
@@ -1243,18 +1248,30 @@ function DockLaunchOption({
                 isSearchResult
                 ? "Setup"
                 : undefined
-              : isSearchResult
-                ? // One axis for the whole result list. Giving the recipe its
-                  // scope and the panel its category put two different kinds of
-                  // answer in one column, so the two rows a query for "re"
-                  // returns — a recipe named Review and a panel named Review —
-                  // still had to be compared across "Team" and "Panel". Scope is
-                  // a browsing nicety; which of the two things this IS is the
-                  // question search has to answer.
-                  DOCK_LAUNCH_CATEGORY_LABELS[item!.category]
-                : item!.category === "recipe"
-                  ? item!.scopeLabel
-                  : undefined;
+              : item!.category === "panel"
+                ? // Provenance is the panel row's only metadata, and in browse it
+                  // has the column to itself — the band heading already said
+                  // "Open in dock", so nothing else is competing for it. In
+                  // search the category still has to come first (a query for
+                  // "re" returns a recipe named Review and a panel named
+                  // Review), so the two stack rather than one displacing the
+                  // other. Built-in contributes nothing to either mode, which
+                  // is what leaves the browse slot empty on most rows.
+                  [isSearchResult ? DOCK_LAUNCH_CATEGORY_LABELS.panel : undefined, originLabel]
+                    .filter(Boolean)
+                    .join(" · ") || undefined
+                : isSearchResult
+                  ? // One axis for the whole result list. Giving the recipe its
+                    // scope and the panel its category put two different kinds of
+                    // answer in one column, so the two rows a query for "re"
+                    // returns — a recipe named Review and a panel named Review —
+                    // still had to be compared across "Team" and "Panel". Scope is
+                    // a browsing nicety; which of the two things this IS is the
+                    // question search has to answer.
+                    DOCK_LAUNCH_CATEGORY_LABELS[item!.category]
+                  : item!.category === "recipe"
+                    ? item!.scopeLabel
+                    : undefined;
 
   // What the row conveys visually, in one string — the option is what
   // `aria-activedescendant` points at, and its children (the trailing qualifier,
@@ -1268,6 +1285,12 @@ function DockLaunchOption({
   // description, so repeating it here would announce it twice.
   const optionLabel = [
     spokenQualifier ? `${displayName}, ${spokenQualifier}` : displayName,
+    // Its own clause rather than folded into `spokenQualifier`, which for a
+    // panel is always the destination and for a disabled one is the reason it
+    // cannot launch. Appending keeps the `Name,` prefix that
+    // `e2e/helpers/panels.ts` matches rows by, and states provenance for a
+    // listener who never sees the trailing span.
+    originLabel,
     agent?.isNew ? "New" : undefined,
     // Stated only where it applies, so the phrase never advertises a key that
     // would do nothing on this row.

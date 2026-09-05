@@ -43,6 +43,7 @@ function panelItem(kindId: string, name = kindId): DockLaunchItem {
     iconId: "terminal",
     color: "#000000",
     location: "grid",
+    origin: "builtin",
   };
 }
 

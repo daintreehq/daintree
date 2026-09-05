@@ -5,6 +5,7 @@ import {
   getPanelKindConfig,
   getExtensionFallbackDefaults,
   getPanelKindIds,
+  getPanelKindOrigin,
   getPluginPanelKinds,
   onPanelKindRegistered,
   onPanelKindUnregistered,
@@ -910,5 +911,56 @@ describe("panel kind identity split", () => {
     );
     expect(registered).toBe("project.dashboard.overview");
     expect(isProjectQualifiedPanelKindId(registered as string)).toBe(false);
+  });
+});
+
+describe("getPanelKindOrigin", () => {
+  it("classifies a built-in kind as builtin", () => {
+    expect(getPanelKindOrigin({})).toBe("builtin");
+    for (const kind of BUILT_IN_PANEL_KINDS) {
+      const config = getPanelKindConfig(kind);
+      if (!config) continue;
+      expect(getPanelKindOrigin(config)).toBe("builtin");
+    }
+  });
+
+  it("classifies a globally installed plugin's kind as plugin", () => {
+    expect(getPanelKindOrigin({ extensionId: "acme.dashboard" })).toBe("plugin");
+  });
+
+  it("treats an absent and a null projectId the same", () => {
+    // `PanelKindConfig` documents both as "not project-owned", and PluginService
+    // writes null where the registration has no project.
+    expect(getPanelKindOrigin({ extensionId: "acme.dashboard", projectId: null })).toBe("plugin");
+    expect(getPanelKindOrigin({ extensionId: "acme.dashboard", projectId: undefined })).toBe(
+      "plugin"
+    );
+  });
+
+  it("lets project ownership win over the extension id", () => {
+    // A project-local kind always carries an extensionId too, so testing that
+    // first would collapse the tier this issue exists to surface.
+    expect(getPanelKindOrigin({ extensionId: "acme.dashboard", projectId: "project-7" })).toBe(
+      "project-plugin"
+    );
+  });
+
+  it("reads the same tier off a registered config as off the literal", () => {
+    registerPanelKind({
+      id: "project:project-7/acme.dashboard/overview",
+      name: "Overview",
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.dashboard",
+      projectId: "project-7",
+      pluginManifestId: "acme.dashboard",
+    });
+    const config = getPanelKindConfig("project:project-7/acme.dashboard/overview");
+    expect(config).toBeDefined();
+    expect(getPanelKindOrigin(config!)).toBe("project-plugin");
+    unregisterPanelKind("project:project-7/acme.dashboard/overview");
   });
 });

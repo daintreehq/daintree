@@ -126,3 +126,83 @@ describe("PanelPalette results region (#11431)", () => {
     expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 });
+
+describe("PanelPalette panel origin (#12272)", () => {
+  const toolResults: PanelKindOption[] = [
+    {
+      id: "browser",
+      name: "Browser",
+      iconId: "browser",
+      color: "#aaa",
+      category: "tool",
+      description: "Cmd+B",
+      origin: "builtin",
+    },
+    {
+      id: "vendor.kind",
+      name: "Vendor",
+      iconId: "package",
+      color: "#aaa",
+      category: "tool",
+      origin: "plugin",
+    },
+    {
+      id: "project:proj-1/vendor/local",
+      name: "Local",
+      iconId: "package",
+      color: "#aaa",
+      category: "tool",
+      description: "Cmd+L",
+      origin: "project-plugin",
+    },
+  ];
+
+  function optionNamed(name: string): HTMLElement {
+    const node = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]')).find(
+      (el) => el.textContent?.startsWith(name)
+    );
+    if (!node) throw new Error(`no option named ${name}`);
+    return node;
+  }
+
+  it("names a plugin tier on its own, and beside a shortcut when there is one", () => {
+    render(<PanelPalette {...baseProps} query="" results={toolResults} />);
+
+    expect(optionNamed("Vendor").textContent).toContain("Plugin");
+    // Origin leads, so it is the half that survives a truncated line.
+    expect(optionNamed("Local").textContent).toContain("Project plugin · Cmd+L");
+  });
+
+  it("leaves a built-in row showing only its shortcut", () => {
+    render(<PanelPalette {...baseProps} query="" results={toolResults} />);
+
+    const browser = optionNamed("Browser");
+    expect(browser.textContent).toContain("Cmd+B");
+    expect(browser.textContent).not.toContain("Plugin");
+  });
+
+  it("puts the origin in the option's accessible name, which is its content", () => {
+    // The row is a <button role="option"> with no aria-label, so what the row
+    // renders is exactly what is announced.
+    render(<PanelPalette {...baseProps} query="" results={toolResults} />);
+
+    expect(optionNamed("Local").getAttribute("aria-label")).toBeNull();
+    expect(optionNamed("Local").textContent).toContain("Project plugin");
+  });
+
+  it("keeps the trailing badge for state, which outranks provenance", () => {
+    render(
+      <PanelPalette {...baseProps} query="" results={[{ ...toolResults[2]!, installed: false }]} />
+    );
+
+    const row = optionNamed("Local");
+    expect(row.textContent).toContain("Not installed");
+    expect(row.textContent).toContain("Project plugin");
+  });
+
+  it("still names the origin while searching", () => {
+    render(<PanelPalette {...baseProps} query="loc" results={toolResults} />);
+
+    expect(optionNamed("Local").textContent).toContain("Project plugin");
+  });
+});

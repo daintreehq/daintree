@@ -5,6 +5,7 @@ import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPalette
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
+import { PANEL_KIND_ORIGIN_LABELS } from "@/utils/panelKindOriginCopy";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PanelKindIcon } from "./PanelKindIcon";
 import { usePanelStore } from "@/store/panelStore";
@@ -114,6 +115,16 @@ export function PanelPalette({
       : kind.installed === false
         ? "Not installed"
         : null;
+    // The palette already has a second line, so provenance goes there rather
+    // than into the trailing badge, which is reserved for state ("Not
+    // installed", "Worktree removed") — what a row IS never outranks whether it
+    // can be launched. Origin leads the line so it is the half that survives
+    // truncation; the shortcut stays in `description` alone, out of the Fuse
+    // index, so typing "plugin" doesn't start matching rows on their tier.
+    const secondaryText =
+      [kind.origin ? PANEL_KIND_ORIGIN_LABELS[kind.origin] : undefined, kind.description]
+        .filter(Boolean)
+        .join(" · ") || null;
     return (
       <button
         key={kind.id}
@@ -144,8 +155,8 @@ export function PanelPalette({
               indices={findMatchIndices(matchesById.get(kind.id), "name")}
             />
           </div>
-          {kind.description && (
-            <div className="text-xs text-text-secondary truncate">{kind.description}</div>
+          {secondaryText && (
+            <div className="text-xs text-text-secondary truncate">{secondaryText}</div>
           )}
         </div>
         {badgeLabel && (
