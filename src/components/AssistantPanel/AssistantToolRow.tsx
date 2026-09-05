@@ -254,10 +254,12 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
             {/* The sentence when there is one, the code only as a fallback: a bare
                 code tells a reader that something failed, not what. */}
             {call.errorMessage ?? call.errorCode}
+            {/* No size class on the span below: it sits INSIDE a `.assistant-text-sm`
+                paragraph and `em` compounds, so restating the step there resolved to
+                0.8464em — a third type step, below the chrome tier, on a panel that has
+                exactly two and reserves anything smaller for keycaps. */}
             {call.errorMessage && call.errorCode && (
-              <span className="ml-1 assistant-text-sm text-[var(--assistant-fg-secondary)]">
-                ({call.errorCode})
-              </span>
+              <span className="ml-1 text-[var(--assistant-fg-secondary)]">({call.errorCode})</span>
             )}
           </p>
         )}
@@ -435,10 +437,12 @@ export function AssistantToolGroupHeader({
       aria-controls={panelId}
       aria-label={accessibleName}
       className={cn(
-        "assistant-tool-header flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left",
+        "assistant-tool-header flex w-full items-center gap-2 py-1 text-left",
         "assistant-text-sm",
-        // A disclosure rule groups the calls without filling every row.
-        "border border-[var(--assistant-border)]",
+        // No border and no radius: the expanded calls already hang under a left rule,
+        // and a box here made the summary a third container shape in a single turn.
+        // Hover is the affordance, and it bleeds the full width of the rail the way a
+        // terminal highlights a line.
         "transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)]",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
       )}

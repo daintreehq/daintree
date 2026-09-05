@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ChevronDown,
   ChevronRight,
+  CircleDashed,
   Info,
   Square,
   TriangleAlert,
@@ -236,7 +237,20 @@ function LiveStatus({
 
   return (
     <div className={cn("assistant-live-status mt-3 assistant-text-sm", stalled && "is-stalled")}>
-      <span aria-hidden="true" className="assistant-spinner" />
+      {/* The SAME dashed circle every active tool row spins, rather than the animated
+          braille character this line used to draw.
+
+          Two reasons, and the second is the one that decides it. The house rule is
+          Lucide-only for app concepts, and a bespoke `content`-animated glyph is a
+          second state vocabulary beside the one the rows below already speak. But the
+          braille frames also do not READ: each is three or four dots inside a 12px cell,
+          which at rest is a speck of dust rather than an indicator — and at rest is
+          exactly where reduced motion leaves it, frozen on frame one, permanently
+          meaningless to the readers who most need a legible cue. */}
+      <CircleDashed
+        aria-hidden="true"
+        className="assistant-live-spinner size-3.5 shrink-0 animate-spin-slow"
+      />
       <span role="status">
         {label}
         {stalled && " · still working"}
@@ -279,7 +293,7 @@ function NoticeRow({ notice }: { notice: AssistantNotice }) {
         ? "text-[var(--assistant-warning)]"
         : "text-[var(--assistant-danger)]";
   return (
-    <div className="flex items-start gap-2 px-1 py-1 assistant-text-base">
+    <div className="assistant-mark-row flex items-start py-1 assistant-text-base">
       <Icon aria-hidden="true" className={cn("mt-px size-3.5 shrink-0", tone)} />
       <p
         data-testid="assistant-notice"
@@ -663,8 +677,18 @@ export function ToolSegment({
   // a batch dispatches concurrently, so the elapsed turn is shorter than this and
   // claiming otherwise would be a lie the header tells every time. undefined when
   // nothing settled, so the slot simply does not render.
+  //
+  // A HANDED-OFF call is excluded, because the number it carries is not tool time. An
+  // accepted async call settles the moment the engine passes the work to a background
+  // agent, and `durationMs` then measures the dispatch while the actual work carries on.
+  // `AssistantToolRow` already suppresses it per row for exactly that reason — this
+  // total was quietly adding it back, so a group whose agent is still running showed a
+  // completed-looking duration for work that has not finished.
   const totalDurationMs = useMemo(() => {
-    const known = calls.map((c) => c.durationMs).filter((d): d is number => typeof d === "number");
+    const known = calls
+      .filter((c) => c.asyncId === undefined || c.asyncId === null)
+      .map((c) => c.durationMs)
+      .filter((d): d is number => typeof d === "number");
     return known.length > 0 ? known.reduce((a, b) => a + b, 0) : undefined;
   }, [calls]);
 
@@ -709,10 +733,13 @@ function Masthead({ state, live }: { state: AssistantSessionState; live: boolean
   if (!state.engineVersion && !state.tier && !state.backend && !state.routing) return null;
 
   return (
-    <div className="assistant-session mb-5 select-text">
+    <div className="assistant-session assistant-gap-line select-text">
       <details>
         <summary className="assistant-session-trigger assistant-text-sm">
-          <ChevronRight aria-hidden="true" className="assistant-session-chevron size-3" />
+          <ChevronRight
+            aria-hidden="true"
+            className="assistant-session-chevron size-3.5 shrink-0"
+          />
           <span>Session details</span>
           {state.engineVersion && (
             <span className="ml-auto truncate tabular-nums">
@@ -750,7 +777,7 @@ function Masthead({ state, live }: { state: AssistantSessionState; live: boolean
         )}
       </details>
       {state.autoApprove && (
-        <p className="mt-2 flex items-start gap-2 assistant-text-sm text-[var(--assistant-danger)]">
+        <p className="assistant-mark-row mt-2 flex items-start assistant-text-sm text-[var(--assistant-danger)]">
           <TriangleAlert aria-hidden="true" className="mt-px size-3.5 shrink-0" />
           {live
             ? "Auto-approve · actions won't ask first"
@@ -850,6 +877,10 @@ export function AssistantPanelView({
   const operationsButtonRef = useRef<HTMLButtonElement>(null);
   const composerRef = useRef<HybridInputBarHandle>(null);
   const pinnedRef = useRef(true);
+  // Last observed scrollTop, so `onScroll` can tell which WAY the reader moved. A ref
+  // rather than state: it is read and written inside the scroll handler itself and must
+  // never cause a render.
+  const lastScrollTopRef = useRef(0);
   const [pinned, setPinned] = useState(true);
 
   // The deck replaces the transcript rather than sitting beside it: the panel is a
@@ -890,10 +921,37 @@ export function AssistantPanelView({
 
   // Stick to the bottom only while the reader is already there. Yanking someone back
   // down while they are reading earlier output is the classic chat-scroll annoyance.
+  //
+  // Geometry alone was not enough to tell "already there" from "just left". The pin was
+  // recomputed from distance-to-bottom on every scroll event, so anyone who nudged up a
+  // line or two to reread the sentence that had just streamed past stayed inside the
+  // 48px band, stayed pinned, and got dragged back down on the very next frame of
+  // output. A terminal never does that, and it is the least terminal-like thing the
+  // panel did.
+  //
+  // So DIRECTION now unpins as well as distance. Being far from the bottom still
+  // detaches, exactly as before — that is the reader who has scrolled back to read
+  // something and must not be dragged forward. What is added is that moving UP detaches
+  // too, however small the movement: inside the old 48px band the pin was recomputed
+  // from geometry alone, so nudging up a line to reread the sentence that had just
+  // streamed past left the reader pinned and dragged them straight back down.
+  //
+  // Arrival at the bottom is tested FIRST, and that order is load-bearing. When the
+  // transcript shrinks — `/clear`, or a turn collapsing — the browser clamps `scrollTop`
+  // down and fires a scroll event indistinguishable from the reader moving up. Checking
+  // the bottom first means a clamp that lands at the bottom re-pins, instead of
+  // stranding an all-but-empty transcript behind a jump-to-latest button.
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    const top = el.scrollTop;
+    const delta = top - lastScrollTopRef.current;
+    lastScrollTopRef.current = top;
+    const distance = el.scrollHeight - top - el.clientHeight;
+    // 2px rather than 0 at the bottom: sub-pixel layout leaves a fractional remainder at
+    // a true bottom, and no real scroll gesture moves anything by less than that either.
+    if (distance <= 2) pinnedRef.current = true;
+    else if (delta < -2 || distance > 48) pinnedRef.current = false;
     setPinned(pinnedRef.current);
   }, []);
 
@@ -1383,7 +1441,7 @@ export function AssistantPanelView({
         <div
           ref={scrollRef}
           onScroll={onScroll}
-          className="assistant-transcript min-h-0 flex-1 cursor-text overflow-y-auto overscroll-contain px-3 py-3"
+          className="assistant-transcript min-h-0 flex-1 cursor-text overflow-y-auto overscroll-contain"
         >
           {!booting && <Masthead state={state} live={live} />}
           {/* HEADS the transcript. See `leadingNotices` — a notice with no turn behind
@@ -1395,7 +1453,7 @@ export function AssistantPanelView({
             splash is keyed on a boot generation that only a NEW engine bumps, so an
             emptied transcript mid-session is not a boot. */}
           {!booting && leadingNotices.length > 0 && (
-            <div className={cn("space-y-0.5", !empty && "mb-5")}>
+            <div className={cn("space-y-0.5", !empty && "assistant-gap-line")}>
               {leadingNotices.map((notice) => (
                 <NoticeRow key={notice.id} notice={notice} />
               ))}
@@ -1420,8 +1478,8 @@ export function AssistantPanelView({
             // pushed the notice into a scroller that had one line in it.
             leadingNotices.length > 0 ? null : (
               <div className="assistant-welcome">
-                <div className="flex items-center gap-2 text-[var(--assistant-fg)]">
-                  <DaintreeIcon aria-hidden="true" className="size-4" />
+                <div className="assistant-mark-row flex items-center text-[var(--assistant-fg)]">
+                  <DaintreeIcon aria-hidden="true" className="size-3.5 shrink-0" />
                   <p className="font-medium">Put agents to work</p>
                 </div>
                 <p className="mt-3 text-[var(--assistant-fg-secondary)]">
@@ -1448,7 +1506,7 @@ export function AssistantPanelView({
                       className="assistant-starter assistant-text-control"
                       onClick={() => fillComposer(prompt)}
                     >
-                      <ChevronRight aria-hidden="true" className="size-3" />
+                      <ChevronRight aria-hidden="true" className="size-3.5 shrink-0" />
                       {label}
                     </button>
                   ))}
@@ -1459,7 +1517,7 @@ export function AssistantPanelView({
               </div>
             )
           ) : (
-            <div className="space-y-6">
+            <div className="assistant-turn-flow">
               {state.turns.map((turn) => (
                 // `group/turn` scopes the endcap's copy button to the turn it closes:
                 // hovering anywhere in the answer reveals it, and it is the wrapper
