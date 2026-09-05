@@ -7,6 +7,7 @@ import {
   replaySnapshot,
   REPRESENTATIVE_FLEET,
 } from "../lib/scrollbackSnapshotFixture";
+import { runScriptedTurns } from "../lib/sessionSnapshotSchedulingFixture";
 import { percentile } from "../lib/stats";
 import type { PerfScenario } from "../types";
 
@@ -36,6 +37,9 @@ import type { PerfScenario } from "../types";
 
 /** A serialized 10k-line coloured buffer is ~600 KiB; well under this is empty or broken. */
 const MIN_LARGE_SNAPSHOT_BYTES = 250_000;
+
+/** Scripted agent turns per terminal in PERF-408. */
+const SCHEDULED_TURNS = 3;
 
 export const scrollbackSnapshotScenarios: PerfScenario[] = [
   {
@@ -183,6 +187,61 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
         disposeTerminals(largeTargets);
         disposeTerminals(smallTargets);
       }
+    },
+  },
+  {
+    id: "PERF-408",
+    name: "Session Snapshot Scheduling - Agent Turn Coalescing",
+    description:
+      "Drives the real SessionSnapshotter through the sequence that ends every agent turn — " +
+      "output burst arming the 5s debounce, FSM settle firing the event-driven flush 2s later, " +
+      "then quiet past the debounce deadline — across a 12-terminal fleet at maximum scrollback. " +
+      "serializeCallsPerTurn is the subject: two independent scheduling paths pay for the same " +
+      "buffer twice, one coordinator pays once. The hosts have no launchAgentId, so this measures " +
+      "the terminals that get BOTH triggers — a runtime-detected agent in an ordinary terminal. " +
+      "Explicitly launched agent terminals are event-driven only and never had the periodic half " +
+      "to remove. payloadMisses re-checks every terminal's persisted bytes against a direct " +
+      "serialize after EVERY turn, so coalescing cannot be bought with a stale snapshot or a " +
+      "skipped turn; writeMisses catches a writer that serialized and quietly wrote nothing.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 3, ci: 4, nightly: 6 },
+    warmups: 1,
+    correctness: ["payloadMisses", "writeMisses"],
+    workloadFloors: {
+      fleetSize: REPRESENTATIVE_FLEET,
+      snapshotKB: MIN_LARGE_SNAPSHOT_BYTES / 1024,
+    },
+    async run() {
+      // Its own fleet: this scenario writes turn output into the buffers, and
+      // PERF-195/196 read their cached sources expecting them unchanged.
+      const fleet = await getSnapshotFleet(SCROLLBACK_MAX, REPRESENTATIVE_FLEET, "scheduling");
+      const result = await runScriptedTurns(fleet.sources, SCHEDULED_TURNS);
+
+      const turnCount = fleet.sources.length * SCHEDULED_TURNS;
+      // Serialize time only, matching PERF-195: the writes are real and counted
+      // but their latency is not in the bracket.
+      const durationMs = result.serializeMs;
+
+      return {
+        durationMs,
+        metrics: {
+          serializeCalls: result.serializeCalls,
+          persistWrites: result.persistWrites,
+          serializeCallsPerTurn: result.serializeCalls / turnCount,
+          persistWritesPerTurn: result.persistWrites / turnCount,
+          msPerTurn: durationMs / turnCount,
+          snapshotKB: result.totalPayloadBytes / 1024 / fleet.sources.length,
+          fleetSize: fleet.sources.length,
+          turnCount,
+          payloadMisses: result.payloadMisses,
+          writeMisses: result.writeMisses,
+        },
+        notes:
+          result.payloadMisses > 0 || result.writeMisses > 0
+            ? `${result.payloadMisses} stale final payloads, ${result.writeMisses} captures wrote nothing`
+            : undefined,
+      };
     },
   },
 ];
