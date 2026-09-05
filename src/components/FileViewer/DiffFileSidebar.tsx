@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 import { Check, Folder, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { basename, dirname, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -42,6 +44,150 @@ function formatDir(dir: string, maxSegments = 3): string {
   const segments = dir.split("/");
   if (segments.length <= maxSegments) return dir;
   return "…/" + segments.slice(-maxSegments).join("/");
+}
+
+/** Per-row inputs, shared by the static and windowed paths so they cannot drift. */
+interface ShelfRowContext {
+  currentIndex: number;
+  viewedSet: ReadonlySet<string>;
+  worktreePath: string;
+  hasRowMenu: boolean;
+  onSelect: (index: number) => void;
+  toggleViewed: (worktreePath: string, viewedKey: string) => void;
+  renderFileRowMenuItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
+}
+
+/**
+ * One file line in the shelf.
+ *
+ * `file.index` is the entry's position in the ORIGINAL changeset, not in the
+ * filtered, grouped display order — `onSelect` and `aria-current` both speak
+ * that coordinate system, and windowing must not quietly swap it for the
+ * display index.
+ */
+function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext }) {
+  const config = DIFF_STATUS_CONFIG[file.status] ?? DIFF_STATUS_CONFIG.untracked;
+  const viewed = ctx.viewedSet.has(file.viewedKey);
+  const isCurrent = file.index === ctx.currentIndex;
+  const row = (
+    <div
+      data-file-index={file.index}
+      // Stands the global Shift+F10 / Menu-key handler down so
+      // the row's own menu opens instead of the focused panel's
+      // (`useGlobalKeybindings` matches on the attribute's
+      // presence). Absent without a menu to open, so the key
+      // falls through to that handler as it did before.
+      data-row-menu={ctx.hasRowMenu ? "" : undefined}
+      className={cn(
+        "group/diffrow flex items-center rounded px-1.5 py-1 text-xs font-mono transition-colors",
+        isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5",
+        // The row whose menu is open lifts a tier above the open
+        // file's own subtle fill, so the two never read as one.
+        "data-[state=open]:bg-overlay-raised"
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => ctx.onSelect(file.index)}
+        onKeyDown={(event) => {
+          if (!ctx.hasRowMenu || !isFileRowMenuKey(event)) return;
+          // Anchored to the whole row, not this button: the menu
+          // targets the file, and the row is what lifts to show
+          // which one.
+          event.preventDefault();
+          event.stopPropagation();
+          openFileRowMenuFromKeyboard(event.currentTarget.parentElement);
+        }}
+        aria-current={isCurrent || undefined}
+        aria-label={`Open ${file.path}`}
+        className="flex min-w-0 flex-1 items-center text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
+        data-testid="diff-sidebar-file"
+      >
+        <span className={cn("w-4 shrink-0 font-bold", config.color)}>{config.label}</span>
+        <span
+          className={cn(
+            "truncate font-medium",
+            viewed ? "text-text-secondary" : "text-text-primary"
+          )}
+        >
+          {basename(file.path)}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
+          {(file.insertions ?? 0) > 0 && (
+            <span className="text-status-success/80">+{file.insertions}</span>
+          )}
+          {(file.deletions ?? 0) > 0 && (
+            <span className="text-status-error/80">-{file.deletions}</span>
+          )}
+        </span>
+      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => ctx.toggleViewed(ctx.worktreePath, file.viewedKey)}
+            aria-pressed={viewed}
+            aria-label={`Mark ${file.path} as viewed`}
+            className={cn(
+              "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
+              viewed
+                ? "border-status-success/60 bg-status-success/20 text-status-success"
+                : "border-border-default text-transparent opacity-0 hover:border-border-strong group-hover/diffrow:opacity-100 focus-visible:opacity-100"
+            )}
+            data-testid="diff-sidebar-viewed-toggle"
+          >
+            <Check className="h-3 w-3" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">Viewed</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+
+  // Every item in the row menu names a path on disk, and the
+  // entries here are worktree-relative. A pane whose worktree
+  // hasn't resolved reports an empty root (`DiffPane` does this
+  // deliberately rather than guessing), and joining against it
+  // would hand `file.view` a relative path it resolves against
+  // the *current project* — a different repo, a different file.
+  // No root, no row menu: the same state this surface shipped in
+  // before it had one.
+  if (!ctx.hasRowMenu) return row;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
+        {row}
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        {ctx.renderFileRowMenuItems(
+          {
+            absolutePath: join(ctx.worktreePath, file.path),
+            relativePath: file.path,
+            name: basename(file.path),
+            isDirectory: false,
+            status: file.status,
+          },
+          {
+            // Steps this sidebar's own viewer rather than opening
+            // a second diff dialog over it.
+            onOpenDiff: () => ctx.onSelect(file.index),
+            hasChanges: true,
+          }
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** The directory band above each run of files. Sticky on the windowed path. */
+function DiffShelfGroupHeader({ dir }: { dir: string }) {
+  return (
+    <div className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary">
+      <Folder className="h-3 w-3 shrink-0" />
+      <span className="truncate font-mono">{formatDir(dir)}</span>
+    </div>
+  );
 }
 
 /**
@@ -105,16 +251,97 @@ export function DiffFileSidebar({
     [groups]
   );
 
+  // The grouped virtualizer wants the same list twice over: the files flat, and
+  // how many of them fall under each directory header. `slotIndexByFileIndex`
+  // is the bridge back — reveal speaks slot order, everything else (the open
+  // file, `onSelect`, `aria-current`) speaks the original changeset's order.
+  const flat = useMemo(() => {
+    const entries: IndexedEntry[] = [];
+    const counts: number[] = [];
+    const dirs: string[] = [];
+    // `itemContent` is the odd one out: it is called with the file-only index,
+    // while `computeItemKey` and the imperative handle's `scrollIntoView` /
+    // `scrollToIndex` all speak the raw SLOT index, which COUNTS GROUP HEADERS.
+    // Indexing the file array with a slot hands the first file the second
+    // file's key — and a key that names the wrong row is how React moves one
+    // file's open menu onto another file. Handing a file-only index to the
+    // reveal scrolls short by every header ahead of it. So the keys are built
+    // once, in slot order, and `keysBySlot.length` IS the slot the next file
+    // lands on, headers already counted.
+    const keysBySlot: string[] = [];
+    const slotIndexByFileIndex = new Map<number, number>();
+    for (const group of groups) {
+      counts.push(group.files.length);
+      dirs.push(group.dir);
+      keysBySlot.push(`group:${group.dir || "(root)"}`);
+      for (const file of group.files) {
+        slotIndexByFileIndex.set(file.index, keysBySlot.length);
+        entries.push(file);
+        keysBySlot.push(`file:${file.viewedKey}-${file.index}`);
+      }
+    }
+    return { entries, counts, dirs, slotIndexByFileIndex, keysBySlot };
+  }, [groups]);
+
+  const virtuosoRef = useRef<GroupedVirtuosoHandle | null>(null);
+  // Unlike the Review Hub's sections, this shelf's list area is a scroller of
+  // its own with nothing else in it — so the virtualizer OWNS that scroller
+  // rather than windowing against an ancestor. That buys two things the hub
+  // cannot have: the reveal is Virtuoso's own scroll, with no parent-offset
+  // arithmetic to get wrong, and windowing starts on the first commit instead
+  // of after a full static render.
+  const windowed = shouldVirtualizeFileList(visibleCount);
+
+  const rowContext: ShelfRowContext = useMemo(
+    () => ({
+      currentIndex,
+      viewedSet,
+      worktreePath,
+      hasRowMenu,
+      onSelect,
+      toggleViewed,
+      renderFileRowMenuItems,
+    }),
+    [
+      currentIndex,
+      viewedSet,
+      worktreePath,
+      hasRowMenu,
+      onSelect,
+      toggleViewed,
+      renderFileRowMenuItems,
+    ]
+  );
+
+  // Bumped the first time the virtualizer reports a rendered range, which is
+  // the first moment it has measured anything. The reveal below needs it: on
+  // the mount commit Virtuoso knows no item sizes, so its scroll is a no-op —
+  // and measurement, on its own, re-runs no effect. Without this a diff opened
+  // on the four-hundredth file comes up at the top of the shelf.
+  const [measuredGeneration, setMeasuredGeneration] = useState(0);
+  const handleRangeChanged = useCallback(() => {
+    setMeasuredGeneration((current) => (current === 0 ? 1 : current));
+  }, []);
+
   // Keep the open file's row in view while stepping with the keyboard.
   // `groups` is a dependency so the row is re-revealed when a filter that hid
-  // it is cleared.
+  // it is cleared. Windowed, the row may not exist to be queried, so the
+  // virtualizer is asked for it by SLOT index instead — the handle counts group
+  // headers; `scrollIntoView` leaves an already-visible row alone either way.
   useEffect(() => {
-    if (currentIndex < 0 || !listRef.current) return;
+    if (currentIndex < 0) return;
+    if (windowed) {
+      const slotIndex = flat.slotIndexByFileIndex.get(currentIndex);
+      if (slotIndex === undefined) return;
+      virtuosoRef.current?.scrollIntoView({ index: slotIndex, behavior: "auto" });
+      return;
+    }
+    if (!listRef.current) return;
     const row = listRef.current.querySelector<HTMLElement>(`[data-file-index="${currentIndex}"]`);
     if (typeof row?.scrollIntoView === "function") {
       row.scrollIntoView({ behavior: "instant", block: "nearest" });
     }
-  }, [currentIndex, groups]);
+  }, [currentIndex, groups, windowed, flat, measuredGeneration]);
 
   // self-stretch (not h-full): a percentage height against the dialog's
   // content-sized row collapses to content height and lets the dialog
@@ -178,7 +405,15 @@ export function DiffFileSidebar({
         </div>
       </div>
 
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
+      <div
+        ref={listRef}
+        className={cn(
+          "min-h-0 flex-1 overscroll-contain px-2 pb-2",
+          // The virtualizer brings its own scroller; two nested ones would give
+          // the shelf two scrollbars.
+          windowed ? "overflow-hidden" : "overflow-y-auto"
+        )}
+      >
         {visibleCount === 0 && (
           <EmptyState
             variant="filtered-empty"
@@ -195,133 +430,47 @@ export function DiffFileSidebar({
             }
           />
         )}
-        {groups.map((group) => (
-          <div key={group.dir || "(root)"} className="mb-1.5">
-            <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
-              <Folder className="h-3 w-3 shrink-0" />
-              <span className="truncate font-mono">{formatDir(group.dir)}</span>
-            </div>
-            <div className="flex flex-col gap-px">
-              {group.files.map((file) => {
-                const config = DIFF_STATUS_CONFIG[file.status] ?? DIFF_STATUS_CONFIG.untracked;
-                const viewed = viewedSet.has(file.viewedKey);
-                const isCurrent = file.index === currentIndex;
-                const row = (
-                  <div
+        {windowed ? (
+          <GroupedVirtuoso
+            ref={virtuosoRef}
+            groupCounts={flat.counts}
+            style={{ height: "100%" }}
+            rangeChanged={handleRangeChanged}
+            groupContent={(groupIndex) => (
+              <DiffShelfGroupHeader dir={flat.dirs[groupIndex] ?? ""} />
+            )}
+            itemContent={(index) => {
+              const file = flat.entries[index];
+              if (!file) return null;
+              // The static path spaces rows with `gap-px` and groups with
+              // `mb-1.5`; a virtualizer places items itself and never sees a
+              // gap, so the same space rides inside the measured item.
+              return (
+                <div className="pb-px">
+                  <DiffShelfRow file={file} ctx={rowContext} />
+                </div>
+              );
+            }}
+            computeItemKey={(slot) => flat.keysBySlot[slot] ?? slot}
+            increaseViewportBy={200}
+            skipAnimationFrameInResizeObserver
+          />
+        ) : (
+          groups.map((group) => (
+            <div key={group.dir || "(root)"} className="mb-1.5">
+              <DiffShelfGroupHeader dir={group.dir} />
+              <div className="flex flex-col gap-px">
+                {group.files.map((file) => (
+                  <DiffShelfRow
                     key={`${file.viewedKey}-${file.index}`}
-                    data-file-index={file.index}
-                    // Stands the global Shift+F10 / Menu-key handler down so
-                    // the row's own menu opens instead of the focused panel's
-                    // (`useGlobalKeybindings` matches on the attribute's
-                    // presence). Absent without a menu to open, so the key
-                    // falls through to that handler as it did before.
-                    data-row-menu={hasRowMenu ? "" : undefined}
-                    className={cn(
-                      "group/diffrow flex items-center rounded px-1.5 py-1 text-xs font-mono transition-colors",
-                      isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5",
-                      // The row whose menu is open lifts a tier above the open
-                      // file's own subtle fill, so the two never read as one.
-                      "data-[state=open]:bg-overlay-raised"
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onSelect(file.index)}
-                      onKeyDown={(event) => {
-                        if (!hasRowMenu || !isFileRowMenuKey(event)) return;
-                        // Anchored to the whole row, not this button: the menu
-                        // targets the file, and the row is what lifts to show
-                        // which one.
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openFileRowMenuFromKeyboard(event.currentTarget.parentElement);
-                      }}
-                      aria-current={isCurrent || undefined}
-                      aria-label={`Open ${file.path}`}
-                      className="flex min-w-0 flex-1 items-center text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
-                      data-testid="diff-sidebar-file"
-                    >
-                      <span className={cn("w-4 shrink-0 font-bold", config.color)}>
-                        {config.label}
-                      </span>
-                      <span
-                        className={cn(
-                          "truncate font-medium",
-                          viewed ? "text-text-secondary" : "text-text-primary"
-                        )}
-                      >
-                        {basename(file.path)}
-                      </span>
-                      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
-                        {(file.insertions ?? 0) > 0 && (
-                          <span className="text-status-success/80">+{file.insertions}</span>
-                        )}
-                        {(file.deletions ?? 0) > 0 && (
-                          <span className="text-status-error/80">-{file.deletions}</span>
-                        )}
-                      </span>
-                    </button>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => toggleViewed(worktreePath, file.viewedKey)}
-                          aria-pressed={viewed}
-                          aria-label={`Mark ${file.path} as viewed`}
-                          className={cn(
-                            "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
-                            viewed
-                              ? "border-status-success/60 bg-status-success/20 text-status-success"
-                              : "border-border-default text-transparent opacity-0 hover:border-border-strong group-hover/diffrow:opacity-100 focus-visible:opacity-100"
-                          )}
-                          data-testid="diff-sidebar-viewed-toggle"
-                        >
-                          <Check className="h-3 w-3" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">Viewed</TooltipContent>
-                    </Tooltip>
-                  </div>
-                );
-
-                // Every item in the row menu names a path on disk, and the
-                // entries here are worktree-relative. A pane whose worktree
-                // hasn't resolved reports an empty root (`DiffPane` does this
-                // deliberately rather than guessing), and joining against it
-                // would hand `file.view` a relative path it resolves against
-                // the *current project* — a different repo, a different file.
-                // No root, no row menu: the same state this surface shipped in
-                // before it had one.
-                if (!hasRowMenu) return row;
-
-                return (
-                  <ContextMenu key={`${file.viewedKey}-${file.index}`}>
-                    <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
-                      {row}
-                    </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      {renderFileRowMenuItems(
-                        {
-                          absolutePath: join(worktreePath, file.path),
-                          relativePath: file.path,
-                          name: basename(file.path),
-                          isDirectory: false,
-                          status: file.status,
-                        },
-                        {
-                          // Steps this sidebar's own viewer rather than opening
-                          // a second diff dialog over it.
-                          onOpenDiff: () => onSelect(file.index),
-                          hasChanges: true,
-                        }
-                      )}
-                    </ContextMenuContent>
-                  </ContextMenu>
-                );
-              })}
+                    file={file}
+                    ctx={rowContext}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     </div>
   );

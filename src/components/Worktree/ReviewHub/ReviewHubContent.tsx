@@ -15,6 +15,14 @@ import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
+import {
+  EMPTY_MOUNTED_RANGE,
+  rangeCovers,
+  sameRange,
+  shouldVirtualizeFileList,
+  type MountedRange,
+} from "@/lib/fileListWindowing";
+import type { VirtuosoHandle } from "react-virtuoso";
 
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
@@ -49,11 +57,11 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
+import { BaseBranchFileList } from "./BaseBranchFileList";
 import {
   useReviewHubStagingActions,
   type ReviewHubActionFailure,
 } from "./useReviewHubStagingActions";
-import { BaseBranchFileRow } from "./BaseBranchFileRow";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
 import { CommitPanel } from "./CommitPanel";
@@ -282,11 +290,47 @@ export function ReviewHubContent({
   // (a `section:path` key) preserves focus on the same file across list mutations.
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const fileListRef = useRef<HTMLDivElement | null>(null);
+  // Reveal handles for the two windowed sections. Null on the static path,
+  // where the DOM query below still finds every row.
+  const stagedListRef = useRef<VirtuosoHandle | null>(null);
+  const unstagedListRef = useRef<VirtuosoHandle | null>(null);
+  // What each section currently has MOUNTED, in that section's OWN index space.
+  // Deliberately not converted to flat coordinates on the way in: the staged
+  // count shifts every unstaged row's flat index, and Virtuoso does not re-emit
+  // an unchanged local range, so a stored flat range would silently describe
+  // rows that had moved out from under it. `null` means no virtualizer has
+  // reported yet — read as "nothing mounted", never as "everything".
+  const [stagedRange, setStagedRange] = useState<MountedRange>(null);
+  const [unstagedRange, setUnstagedRange] = useState<MountedRange>(null);
+  // A row menu asked for on a row the window had scrolled past. Held until the
+  // reveal mounts the row, then replayed — see the effect near the key handler.
+  // Carries the file's identity as well as its index: a refresh can put a
+  // DIFFERENT file at the same index, and opening that file's menu is worse
+  // than dropping the key.
+  const [pendingMenu, setPendingMenu] = useState<{ index: number; key: string } | null>(null);
   const focusedItemKeyRef = useRef<string | null>(null);
+  // The same `section:path` value as the ref above, mirrored into state so it
+  // can drive the reveal effect — a ref cannot. The ref stays the source of
+  // truth because the reconciler reads it synchronously, before the render that
+  // would publish new state. `writeCursorKey` keeps the two in step; nothing
+  // may write one without the other.
+  const [focusedCursorKey, setFocusedCursorKey] = useState<string | null>(null);
+  const writeCursorKey = useCallback((key: string | null) => {
+    focusedItemKeyRef.current = key;
+    setFocusedCursorKey(key);
+  }, []);
   const refreshIdRef = useRef(0);
   const bgRefreshIdRef = useRef(0);
   const baseBranchRequestRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // The same element as `scrollContainerRef`, held in STATE as well: Virtuoso
+  // needs it as a prop, and a ref mutation does not re-render, so windowing
+  // would otherwise never learn the container exists.
+  const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
+  const attachScrollContainer = useCallback((node: HTMLDivElement | null) => {
+    scrollContainerRef.current = node;
+    setScrollParent(node);
+  }, []);
   const savedScrollTop = useRef(0);
   const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
   const conflictSectionRef = useRef<HTMLDivElement>(null);
@@ -366,7 +410,7 @@ export function ReviewHubContent({
   // list, clamp to the nearest valid index so focus never points off the end.
   useEffect(() => {
     if (navigableItems.length === 0) {
-      focusedItemKeyRef.current = null;
+      writeCursorKey(null);
       setFocusedIndex((prev) => (prev === -1 ? prev : -1));
       return;
     }
@@ -376,24 +420,137 @@ export function ReviewHubContent({
     if (nextIdx === -1) {
       const clamped = Math.min(focusedIndex < 0 ? 0 : focusedIndex, navigableItems.length - 1);
       const clampedItem = navigableItems[clamped];
-      focusedItemKeyRef.current = clampedItem
-        ? `${clampedItem.section}:${clampedItem.file.path}`
-        : null;
+      writeCursorKey(clampedItem ? `${clampedItem.section}:${clampedItem.file.path}` : null);
       setFocusedIndex(clamped);
     } else if (nextIdx !== focusedIndex) {
       setFocusedIndex(nextIdx);
     }
-  }, [navigableItems, focusedIndex]);
+  }, [navigableItems, focusedIndex, writeCursorKey]);
 
-  // Scroll the focused row into view. `useLayoutEffect` so the scroll lands in
-  // the same frame as the focus change, avoiding lag during key-repeat.
+  // Whether the working-tree list windows. Decided across BOTH sections: they
+  // share one scroll container and one cursor, so windowing one and not the
+  // other would leave the cursor crossing a seam between two reveal mechanisms.
+  const workingTreeVirtualized = shouldVirtualizeFileList(navigableItems.length);
+
+  // Reveal, in two steps rather than one, because react-virtuoso cannot do the
+  // first one correctly here.
+  //
+  // A MOUNTED row is scrolled natively, exactly as this list always did. That
+  // is not a fallback: with `customScrollParent`, Virtuoso clamps its
+  // section-local scrollTop to zero while keeping the PARENT's full viewport
+  // height, so a section sitting below the fold believes its first rows are on
+  // screen. `scrollIntoView`'s already-visible check reads those numbers and
+  // no-ops on a row the user cannot see. The DOM knows the truth.
+  //
+  // An ABSENT row only the virtualizer can place, and `scrollToIndex` is the
+  // right call there precisely because it skips that visibility check — the
+  // destination it computes is in parent coordinates and is correct.
+  const revealCursor = useEffectEvent(() => revealRow(focusedIndex));
+
+  const revealRow = useEffectEvent((index: number) => {
+    const row = fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${index}"]`);
+    if (row) {
+      row.scrollIntoView({ behavior: "instant", block: "nearest" });
+      return;
+    }
+    if (!workingTreeVirtualized) return;
+    const stagedCount = derivedStaged.length;
+    const handle = index < stagedCount ? stagedListRef.current : unstagedListRef.current;
+    handle?.scrollToIndex({
+      index: index < stagedCount ? index : index - stagedCount,
+      // `start`, never `center`: centring subtracts half the viewport height,
+      // and the viewport height a `customScrollParent` list is given is
+      // `parentHeight - max(0, listTop - parentTop)` — which goes NEGATIVE for a
+      // section far below the fold and sends the scroll past the row entirely.
+      // Aligning to the top needs no viewport arithmetic at all.
+      align: "start",
+      behavior: "auto",
+    });
+  });
+
+  // Reveal when the cursor lands on a DIFFERENT FILE — never merely because its
+  // index moved. Reconciliation renumbers every row below a stage, an unstage
+  // or a re-sort, so a stationary cursor takes a new index constantly, and
+  // scrolling for that drags the view off whatever the user was looking at
+  // (#11684).
+  //
+  // `focusedCursorKey` is the same `section:path` value `focusedItemKeyRef`
+  // holds, mirrored into state because a ref cannot drive an effect. Keying on
+  // it rather than on `focusedIndex` + `navigableItems` also settles the
+  // ordering: a refresh swaps the list one commit before the reconcile effect
+  // below moves the index to follow the file, and an effect that read the new
+  // list at the old index would see a different file, reveal it, and reveal
+  // again on the way back. Both writers below set the key and the index
+  // together, so this only ever fires on a settled cursor.
   useLayoutEffect(() => {
-    if (focusedIndex < 0 || !fileListRef.current) return;
-    const row = fileListRef.current.querySelector<HTMLElement>(
-      `[data-row-index="${focusedIndex}"]`
+    if (focusedCursorKey === null) return;
+    revealCursor();
+  }, [focusedCursorKey]);
+
+  // A row menu requested on a row the window had scrolled past. `revealRow`
+  // above has already asked for it; this fires on the commit that mounts it.
+  // Dropped rather than retried if the row leaves the list first — a filter, a
+  // stage or a refresh means the menu no longer names anything.
+  useEffect(() => {
+    if (pendingMenu === null) return;
+    const item = navigableItems[pendingMenu.index];
+    const key = item ? `${item.section}:${item.file.path}` : null;
+    // Everything that makes the request meaningless cancels it. An armed
+    // request that outlives its reason is the failure mode here: it would open
+    // a menu the user never asked for, on whatever file happens to occupy that
+    // index by the time a row mounts.
+    if (
+      pendingMenu.index !== focusedIndex ||
+      key !== pendingMenu.key ||
+      !fileListExpanded ||
+      diffMode === "base-branch" ||
+      selectedFile !== null ||
+      selectedBaseBranchFile !== null
+    ) {
+      setPendingMenu(null);
+      return;
+    }
+    const row = fileListRef.current?.querySelector<HTMLElement>(
+      `[data-row-index="${pendingMenu.index}"]`
     );
-    row?.scrollIntoView({ behavior: "instant", block: "nearest" });
-  }, [focusedIndex]);
+    if (!row) return;
+    setPendingMenu(null);
+    openFileRowMenuFromKeyboard(row);
+  }, [
+    pendingMenu,
+    focusedIndex,
+    navigableItems,
+    fileListExpanded,
+    diffMode,
+    selectedFile,
+    selectedBaseBranchFile,
+    stagedRange,
+    unstagedRange,
+  ]);
+
+  // Guarded rather than set unconditionally: Virtuoso fires `rangeChanged` on
+  // every scroll frame, and re-rendering the hub at that cadence would cost far
+  // more than the attribute it feeds is worth. Stable identities, so a changing
+  // staged count cannot make Virtuoso resubscribe — it would not replay the
+  // current range if it did.
+  const handleStagedRangeChange = useCallback((range: MountedRange) => {
+    setStagedRange((current) => (sameRange(current, range) ? current : range));
+  }, []);
+  const handleUnstagedRangeChange = useCallback((range: MountedRange) => {
+    setUnstagedRange((current) => (sameRange(current, range) ? current : range));
+  }, []);
+
+  // Never point `aria-activedescendant` at a row that is not in the document.
+  // On the static path every row is mounted and the answer is always yes; the
+  // windowed path mounts a slice, so a cursor the user has scrolled away from
+  // has an index in `navigableItems` and no DOM node at all.
+  const focusedRowExists = focusedIndex >= 0 && focusedIndex < navigableItems.length;
+  const focusedRowIsMounted =
+    focusedRowExists &&
+    (!workingTreeVirtualized ||
+      (focusedIndex < derivedStaged.length
+        ? rangeCovers(stagedRange ?? EMPTY_MOUNTED_RANGE, focusedIndex)
+        : rangeCovers(unstagedRange ?? EMPTY_MOUNTED_RANGE, focusedIndex - derivedStaged.length)));
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -845,7 +1002,7 @@ export function ReviewHubContent({
       setSelectionSection(null);
       selectionAnchorRef.current = null;
       setFocusedIndex(-1);
-      focusedItemKeyRef.current = null;
+      writeCursorKey(null);
       hasAutoStagedRef.current = false;
       // Filter state lives in `stagedView`/`changesView` rather than refs, so the
       // modal-shell path (which unmounts on close) never noticed leftover
@@ -857,7 +1014,7 @@ export function ReviewHubContent({
       setStagedView(DEFAULT_SECTION_STATE);
       setChangesView(DEFAULT_SECTION_STATE);
     }
-  }, [isOpen, refresh]);
+  }, [isOpen, refresh, writeCursorKey]);
 
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
@@ -1342,6 +1499,15 @@ export function ReviewHubContent({
     []
   );
 
+  const handleOpenBaseBranchFile = useCallback((file: CrossWorktreeFile, trigger: HTMLElement) => {
+    diffTriggerRef.current = trigger;
+    setSelectedBaseBranchFile(file);
+  }, []);
+
+  const handleOpenDecorationUrl = useCallback((url: string) => {
+    void systemClient.openExternal(url);
+  }, []);
+
   const handleRowClick = useCallback(
     (
       section: FileStageRowSection,
@@ -1504,6 +1670,19 @@ export function ReviewHubContent({
         // the menu can't double-fire.
         e.preventDefault();
         e.stopPropagation();
+        return;
+      }
+      // No node for a cursor that DOES name a row: the windowed list has
+      // scrolled past it. Reveal it and replay the menu on the commit that
+      // mounts it, rather than dropping a key the user pressed on a row they
+      // can see the cursor on.
+      if (rowElement === null && focusedRowExists) {
+        e.preventDefault();
+        e.stopPropagation();
+        const item = navigableItems[focusedIndex];
+        if (!item) return;
+        revealRow(focusedIndex);
+        setPendingMenu({ index: focusedIndex, key: `${item.section}:${item.file.path}` });
       }
       return;
     }
@@ -1517,7 +1696,7 @@ export function ReviewHubContent({
       const item = navigableItems[index];
       if (!item) return;
       setFocusedIndex(index);
-      focusedItemKeyRef.current = `${item.section}:${item.file.path}`;
+      writeCursorKey(`${item.section}:${item.file.path}`);
       // Move DOM focus to the listbox so assistive tech announces the active
       // option via aria-activedescendant. Scroll is handled by the layout effect.
       fileListRef.current?.focus({ preventScroll: true });
@@ -1546,6 +1725,10 @@ export function ReviewHubContent({
           item.section,
           item.file.path,
           item.file.status,
+          // Falls back to the listbox, which the windowed list makes routine
+          // rather than exceptional: a cursor the user has scrolled past has no
+          // row node to hand the dialog back to, and the listbox is the element
+          // that owns focus anyway.
           fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`) ??
             fileListRef.current
         );
@@ -1793,7 +1976,7 @@ export function ReviewHubContent({
 
         {/* Content */}
         <div
-          ref={scrollContainerRef}
+          ref={attachScrollContainer}
           data-testid="review-hub-scroll-container"
           className={cn(
             // `min-h-0` is load-bearing and stays alone in its Tailwind group:
@@ -1913,27 +2096,13 @@ export function ReviewHubContent({
                       </span>
                     </div>
                   </div>
-                  <div className="px-2 py-1 flex flex-col gap-0.5">
-                    {sortedBaseBranchFiles.map((file) => {
-                      const decoration = reviewDecorations[file.path];
-                      return (
-                        <BaseBranchFileRow
-                          key={`${file.status}:${file.path}`}
-                          file={file}
-                          onClick={(e) => {
-                            diffTriggerRef.current = e.currentTarget;
-                            setSelectedBaseBranchFile(file);
-                          }}
-                          unresolvedDecoration={decoration}
-                          onBadgeClick={
-                            decoration?.url
-                              ? () => void systemClient.openExternal(decoration.url as string)
-                              : undefined
-                          }
-                        />
-                      );
-                    })}
-                  </div>
+                  <BaseBranchFileList
+                    files={sortedBaseBranchFiles}
+                    decorations={reviewDecorations}
+                    onOpenFile={handleOpenBaseBranchFile}
+                    onOpenDecorationUrl={handleOpenDecorationUrl}
+                    scrollParent={scrollParent}
+                  />
                 </div>
               ) : null
             ) : (
@@ -2112,7 +2281,7 @@ export function ReviewHubContent({
                         // panel's (`useGlobalKeybindings`).
                         data-row-menu=""
                         aria-activedescendant={
-                          focusedIndex >= 0 ? `review-hub-row-${focusedIndex}` : undefined
+                          focusedRowIsMounted ? `review-hub-row-${focusedIndex}` : undefined
                         }
                         className="outline-hidden"
                       >
@@ -2148,6 +2317,10 @@ export function ReviewHubContent({
                           files={derivedStaged}
                           allFiles={status.staged}
                           indexOffset={0}
+                          virtualized={workingTreeVirtualized}
+                          scrollParent={scrollParent}
+                          listRef={stagedListRef}
+                          onRenderedRangeChange={handleStagedRangeChange}
                           focusedIndex={focusedIndex}
                           selectionSection={selectionSection}
                           selectedPaths={selectedPaths}
@@ -2179,6 +2352,10 @@ export function ReviewHubContent({
                           files={derivedUnstaged}
                           allFiles={status.unstaged}
                           indexOffset={derivedStaged.length}
+                          virtualized={workingTreeVirtualized}
+                          scrollParent={scrollParent}
+                          listRef={unstagedListRef}
+                          onRenderedRangeChange={handleUnstagedRangeChange}
                           focusedIndex={focusedIndex}
                           selectionSection={selectionSection}
                           selectedPaths={selectedPaths}

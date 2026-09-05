@@ -24,6 +24,7 @@ const PANEL_IDS = [
   "PERF-244",
   "PERF-245",
   "PERF-246",
+  "PERF-247",
 ] as const;
 
 function scenarioFor(id: string) {
@@ -40,7 +41,7 @@ function contextFor(mode: PerfMode): ScenarioContext {
 // scenarios themselves run in tens of milliseconds.
 const FIXTURE_TIMEOUT_MS = 180_000;
 
-describe("panel scenarios (PERF-240..246)", () => {
+describe("panel scenarios (PERF-240..247)", () => {
   // A vitest worker is torn down without emitting `exit`, so the fixture's own
   // exit handler never fires here and ~70 MB of synthetic trees and repos would
   // survive every `npm test`.

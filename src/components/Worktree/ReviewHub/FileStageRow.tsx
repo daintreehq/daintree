@@ -77,6 +77,15 @@ interface FileStageRowProps {
     e: React.MouseEvent
   ) => void;
   density?: "comfortable" | "compact";
+  /**
+   * Whether the parent list is windowing. Turns OFF the `content-visibility`
+   * hint below: a virtualizer measures each mounted row to place the ones after
+   * it, and `content-visibility: auto` answers that measurement with
+   * `contain-intrinsic-size` — the guess — rather than the row's real height.
+   * The two optimisations solve the same problem and cannot be stacked; the
+   * windowed list already mounts nothing off-screen, so it wins.
+   */
+  virtualized?: boolean;
   viewed?: boolean;
   onViewedChange?: (viewed: boolean) => void;
   /**
@@ -109,6 +118,7 @@ function FileStageRowComponent({
   onToggle,
   onRowClick,
   density = "comfortable",
+  virtualized = false,
   viewed = false,
   onViewedChange,
   renderRowMenu,
@@ -169,15 +179,21 @@ function FileStageRowComponent({
         "data-[state=open]:bg-overlay-raised",
         viewed && "opacity-60"
       )}
-      // The staging lists render every changed file with no windowing; a big
-      // changeset (lockfiles, codegen) mounts thousands of tooltip-wrapped
-      // rows. Off-screen rows skip layout/paint; the intrinsic-size hint keeps
-      // the scrollbar stable and roving-focus scrollIntoView still works
-      // because scrolling renders the target row.
-      style={{
-        contentVisibility: "auto",
-        containIntrinsicSize: density === "compact" ? "auto 24px" : "auto 32px",
-      }}
+      // Below the windowing threshold the staging lists still render every
+      // changed file, and a big changeset (lockfiles, codegen) mounts thousands
+      // of tooltip-wrapped rows. Off-screen rows skip layout/paint; the
+      // intrinsic-size hint keeps the scrollbar stable and roving-focus
+      // scrollIntoView still works because scrolling renders the target row.
+      // Above the threshold the list windows instead and this must come off —
+      // see `virtualized`.
+      style={
+        virtualized
+          ? undefined
+          : {
+              contentVisibility: "auto",
+              containIntrinsicSize: density === "compact" ? "auto 24px" : "auto 32px",
+            }
+      }
     >
       {isSelected && (
         <div

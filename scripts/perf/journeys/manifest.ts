@@ -308,7 +308,7 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
     coverage: "gap",
     commands: [],
     coverageNote:
-      "PERF-160..163 and PERF-244..246 measure the data and tokenize path, and PERF-246 states outright that it is not first paint. PERF-163 does measure what tokenization costs the main thread, which is the jank half of this question below the renderer.",
+      "PERF-160..163 and PERF-244..246 measure the data and tokenize path, and PERF-246 states outright that it is not first paint. PERF-163 does measure what tokenization costs the main thread, which is the jank half of this question below the renderer. PERF-247 is the closest thing to the renderer half: it mounts the real Review Hub and diff-shelf lists under jsdom, which is React commit cost without a compositor — still not a frame, but no longer blind to the list.",
     linkedScenarios: [
       "PERF-160",
       "PERF-161",
@@ -317,6 +317,7 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
       "PERF-244",
       "PERF-245",
       "PERF-246",
+      "PERF-247",
     ],
     ownerPaths: ["src/components/Worktree/**", "src/panels/review/**", "src/panels/diff/**"],
   },

@@ -40,7 +40,7 @@ export default defineConfig({
       "electron/**/*.{test,spec}.{js,ts}",
       "src/**/*.{test,spec}.{js,ts,jsx,tsx}",
       "shared/**/*.{test,spec}.{js,ts}",
-      "scripts/**/*.{test,spec}.{js,ts,mjs}",
+      "scripts/**/*.{test,spec}.{js,ts,mjs,tsx}",
       "e2e/helpers/__tests__/*.{test,spec}.{js,ts}",
       "plugins/**/*.{test,spec}.{js,ts,jsx,tsx}",
       "packages/**/*.{test,spec}.{js,ts,jsx,tsx}",

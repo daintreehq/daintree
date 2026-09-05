@@ -27,8 +27,11 @@ function collect(dir: string, out: string[]): void {
     if (!entry.isFile()) continue;
     if (EXCLUDED_FILES.test(entry.name)) continue;
     // Code and reference values only. Prose is not the instrument, and
-    // including it would refuse a comparison over a README typo.
-    if (!/\.(ts|js|json)$/.test(entry.name)) continue;
+    // including it would refuse a comparison over a README typo. `.tsx` is in
+    // because part of the instrument is now a React component tree —
+    // `renderer/` mounts the real lists for PERF-247, and a change to how it
+    // mounts them changes what the numbers mean.
+    if (!/\.(tsx|ts|js|json)$/.test(entry.name)) continue;
     out.push(path.join(dir, entry.name));
   }
 }

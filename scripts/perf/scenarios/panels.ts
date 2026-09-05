@@ -1,4 +1,8 @@
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { FileTreeNode } from "../../../shared/types/ipc";
 import type { PerfScenario } from "../types";
@@ -169,6 +173,62 @@ async function buildTreeRows(
 
 /** Monotonic per-call token so a mutating iteration cannot collide with another. */
 let mutationToken = 0;
+
+/**
+ * PERF-247 measures REACT, which this harness's own process cannot do.
+ *
+ * The runner is `node --import tsx`, and the Review Hub's and the diff shelf's
+ * real module graph reaches `import.meta.glob` (the agent-icon registry),
+ * `import.meta.env` and a Tailwind stylesheet before it reaches a row — all
+ * Vite constructs that tsx does not implement. Stubbing them would leave the
+ * benchmark mounting something that is not what ships, which is the exact
+ * failure this file's classification exists to prevent.
+ *
+ * Vitest is the one environment in the repo that supplies that pipeline, so the
+ * measurement lives in `scripts/perf/renderer/` and runs there. This spawns it
+ * and reads the numbers back. Spawning a child to measure is not new here —
+ * PERF-004 launches the packaged binary and several fixtures spawn git — but
+ * the reason is worth stating: it is the build pipeline that is needed, not the
+ * isolation.
+ */
+async function runRendererBenchmark(): Promise<Record<string, number>> {
+  const dir = mkdtempSync(path.join(tmpdir(), "daintree-perf-247-"));
+  const outPath = path.join(dir, "metrics.json");
+  const spec = "scripts/perf/renderer/__tests__/reviewListsBench.measure.test.tsx";
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [path.resolve("node_modules/vitest/vitest.mjs"), "run", spec, "--reporter=dot"],
+        {
+          stdio: ["ignore", "ignore", "pipe"],
+          env: { ...process.env, DAINTREE_PERF_OUT: outPath },
+        }
+      );
+      let stderr = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", reject);
+      child.on("close", (status) => {
+        if (status === 0) resolve();
+        else reject(new Error(`renderer benchmark exited ${status}: ${stderr.slice(-2000)}`));
+      });
+    });
+    return JSON.parse(readFileSync(outPath, "utf-8")) as Record<string, number>;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Reads a metric the child must have emitted; a missing one is a broken run, not a zero. */
+function requireMetric(metrics: Record<string, number>, key: string): number {
+  const value = metrics[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`renderer benchmark did not report ${key}`);
+  }
+  return value;
+}
 
 export const panelScenarios: PerfScenario[] = [
   {
@@ -692,6 +752,107 @@ export const panelScenarios: PerfScenario[] = [
           viewerLoadMisses > 0
             ? "the viewer pipeline did not resolve a language or did not parse the whole document"
             : undefined,
+      };
+    },
+  },
+  {
+    id: "PERF-247",
+    name: "Review Hub + Diff Shelf File Lists - Mount and Selection",
+    description:
+      "What the Review Hub's file section and the diff workspace's shelf cost to MOUNT, at " +
+      "PERF-245's 423-file changeset and a 2,000-file one. PERF-244/245 measure the same " +
+      "surfaces with the renderer deliberately absent; this is the half they cannot see. Real " +
+      "components, real react-virtuoso, real React 19 reconciliation, under jsdom — so there " +
+      "is no compositor, no paint and no Chromium layout, and the viewport is supplied by " +
+      "react-virtuoso's own VirtuosoMockContext at a documented 640px. These are JS-thread " +
+      "mount and reconcile costs, not frames. mountedRows counts DOM nodes that exist, not a " +
+      "range Virtuoso reported about itself — overscan makes those different numbers. Each run " +
+      "carries its own negative control: the same lists are measured again with windowing " +
+      "disabled, and controlMisses is nonzero unless that arm mounted every row, because a " +
+      "benchmark that cannot tell a windowed list from an unwindowed one cannot report either.",
+    tier: "heavy",
+    modes: ["ci", "nightly"],
+    iterations: { ci: 3, nightly: 5 },
+    warmups: 0,
+    correctness: ["windowingMisses", "selectionMisses", "controlMisses"],
+    workloadFloors: { workingTree2000FileCount: 2000, shelf2000FileCount: 2000 },
+    async run() {
+      const m = await runRendererBenchmark();
+
+      const windowed = [
+        "windowedWorkingTree420",
+        "windowedWorkingTree2000",
+        "windowedShelf420",
+        "windowedShelf2000",
+      ];
+      const windowingMisses = windowed.reduce(
+        (sum, key) => sum + requireMetric(m, `${key}WindowingMisses`),
+        0
+      );
+      const selectionMisses = windowed.reduce(
+        (sum, key) => sum + requireMetric(m, `${key}SelectionMisses`),
+        0
+      );
+      // Inverted on purpose: the control arm is SUPPOSED to mount every row. A
+      // control that quietly windowed would make the comparison a comparison of
+      // the same thing twice, and every "before" number below it a fiction.
+      const controlMisses =
+        (requireMetric(m, "staticWorkingTree2000MountedRows") === 2000 ? 0 : 1) +
+        (requireMetric(m, "staticShelf2000MountedRows") === 2000 ? 0 : 1);
+
+      const durationMs = windowed.reduce(
+        (sum, key) =>
+          sum +
+          requireMetric(m, `${key}InitialRenderMs`) +
+          requireMetric(m, `${key}SelectionChangeMs`),
+        0
+      );
+
+      return {
+        durationMs,
+        metrics: {
+          workingTree420MountedRows: requireMetric(m, "windowedWorkingTree420MountedRows"),
+          workingTree420InitialRenderMs: requireMetric(m, "windowedWorkingTree420InitialRenderMs"),
+          workingTree420SelectionChangeMs: requireMetric(
+            m,
+            "windowedWorkingTree420SelectionChangeMs"
+          ),
+          workingTree2000MountedRows: requireMetric(m, "windowedWorkingTree2000MountedRows"),
+          workingTree2000InitialRenderMs: requireMetric(
+            m,
+            "windowedWorkingTree2000InitialRenderMs"
+          ),
+          workingTree2000SelectionChangeMs: requireMetric(
+            m,
+            "windowedWorkingTree2000SelectionChangeMs"
+          ),
+          workingTree2000FileCount: requireMetric(m, "windowedWorkingTree2000FileCount"),
+          shelf420MountedRows: requireMetric(m, "windowedShelf420MountedRows"),
+          shelf420InitialRenderMs: requireMetric(m, "windowedShelf420InitialRenderMs"),
+          shelf420SelectionChangeMs: requireMetric(m, "windowedShelf420SelectionChangeMs"),
+          shelf2000MountedRows: requireMetric(m, "windowedShelf2000MountedRows"),
+          shelf2000InitialRenderMs: requireMetric(m, "windowedShelf2000InitialRenderMs"),
+          shelf2000SelectionChangeMs: requireMetric(m, "windowedShelf2000SelectionChangeMs"),
+          shelf2000FileCount: requireMetric(m, "windowedShelf2000FileCount"),
+          // The control arm, reported rather than discarded: it is what a
+          // before/after reading of this change is made of, measured in the
+          // same process on the same machine as the numbers above it.
+          controlWorkingTree2000MountedRows: requireMetric(m, "staticWorkingTree2000MountedRows"),
+          controlWorkingTree2000InitialRenderMs: requireMetric(
+            m,
+            "staticWorkingTree2000InitialRenderMs"
+          ),
+          controlWorkingTree2000SelectionChangeMs: requireMetric(
+            m,
+            "staticWorkingTree2000SelectionChangeMs"
+          ),
+          controlShelf2000MountedRows: requireMetric(m, "staticShelf2000MountedRows"),
+          controlShelf2000InitialRenderMs: requireMetric(m, "staticShelf2000InitialRenderMs"),
+          controlShelf2000SelectionChangeMs: requireMetric(m, "staticShelf2000SelectionChangeMs"),
+          windowingMisses,
+          selectionMisses,
+          controlMisses,
+        },
       };
     },
   },
