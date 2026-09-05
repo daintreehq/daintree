@@ -2498,8 +2498,9 @@ export class PluginService {
     // A failed first activation must not be cached as a successful one
     // (#10523): `activatePlugin` adds the id to `activatedPlugins` when this
     // method resolves, which would short-circuit every later re-open. A dev
-    // worker keeps watching so the author can fix the error and save to reload —
-    // its retry path is the watcher, not a re-activation — so leave it alive.
+    // worker is left alive so the author can fix the error and save: its retry
+    // path is `PluginDevArtifactWatcher` reconciling the whole plugin (#12277),
+    // not a re-activation of this worker.
     // A prod worker has no watcher, so the only recovery is a re-open / Settings
     // → Retry that re-runs `activatePlugin`; tear the failed worker down and
     // rethrow so the in-flight entry is dropped and the id is never cached,

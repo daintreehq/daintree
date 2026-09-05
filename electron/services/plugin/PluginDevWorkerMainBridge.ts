@@ -195,24 +195,25 @@ export class PluginDevWorkerMainBridge {
   private readonly providerDisposers = new Map<string, () => void>();
   /** Live handles for processes the worker spawned via `host.process.spawn`,
    * keyed by the host-assigned handle id. The worker addresses `kill` /
-   * `restart` / `onExit` / `onCrash` by id; all are killed on reload and dispose
-   * (a reloaded generation re-spawns from its fresh module realm). */
+   * `restart` / `onExit` / `onCrash` by id; all are killed when a generation is
+   * retired and on dispose (the next generation re-spawns from its fresh module
+   * realm). */
   private readonly processHandles = new Map<string, PluginProcessHandle>();
 
   /**
    * Required registrations still awaiting main-side deep validation (#12282).
    * A `host-notify` carrying a `registrationKey` is a contribution the plugin
    * believes it made — the worker proxy already returned success to it — so the
-   * activation commit waits on this set draining. Cleared on reload and dispose
-   * with the rest of the generation's state.
+   * activation commit waits on this set draining. Cleared when a generation is
+   * retired and on dispose, with the rest of that generation's state.
    */
   private readonly pendingRegistrations = new Set<PendingRegistration>();
   private activationPhase: ActivationPhase = "activating";
   /**
-   * True between retiring a generation and the replacement child's boot `ready`.
+   * True between retiring a generation and the respawned child's boot `ready`.
    *
    * The generation counter alone cannot attribute these: a message the outgoing
-   * child posted before it was killed is delivered AFTER `reloadGeneration` was
+   * child posted before it died is delivered AFTER `reloadGeneration` was
    * bumped, so it reads as belonging to the incoming one. That is harmless for
    * a late `host-result` (the id is simply dropped) but not for an activation
    * outcome — a dying worker's `activate-error` would otherwise latch a failure
@@ -223,7 +224,7 @@ export class PluginDevWorkerMainBridge {
   private awaitingReplacement = false;
 
   /** First-activation gate. Resolved on `activated`, rejected on activate/crash
-   * errors. Subsequent reload activations don't re-await this. */
+   * errors. A later generation's activation doesn't re-await this. */
   private activationSettled = false;
   private activationResolve: (() => void) | null = null;
   private activationReject: ((error: Error) => void) | null = null;

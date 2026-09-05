@@ -150,16 +150,16 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.registerChildProcessGoneListener();
   }
 
-  /** Fork the worker and begin watching the bundle. Resolves when the worker
-   * posts `ready`; rejects on fork failure or premature exit.
+  /** Fork the worker. Resolves when the worker posts `ready`; rejects on fork
+   * failure or premature exit.
    *
    * Deliberately NOT `async`: an async wrapper would adopt `readyPromise`'s
    * state in a *fresh* promise that bypasses the `readyPromise.catch` guard
    * (constructor / {@link startFresh}), so a fire-and-forget caller
    * (`void host.start()`) would surface an unhandled rejection when dispose or
    * a premature exit rejects ready. Returning `readyPromise` directly keeps the
-   * guard in effect; `startWorker`/`startWatching` swallow their own errors and
-   * never throw synchronously, so awaiting callers still observe rejections. */
+   * guard in effect; `startWorker` swallows its own errors and never throws
+   * synchronously, so awaiting callers still observe rejections. */
   start(): Promise<void> {
     this.startWorker();
     return this.readyPromise;
@@ -383,24 +383,13 @@ export class PluginDevWorkerHost extends EventEmitter {
     const msg = parsed.message;
 
     if (msg.type === "ready") {
-      // A child we have already asked to die must not be told to `start`: it
-      // would import and activate the plugin while racing its own teardown, and
-      // the outcome it posted would describe a generation the bridge has
-      // already retired (#12282). The replacement announces its own `ready`.
+      // No `expectingExit` guard here, unlike #12282's in-host reload. A child
+      // is only ever asked to die by `dispose()`, which sets `isDisposed`
+      // first — so both this method and `hasAuthority` have already dropped the
+      // message by the time a doomed child's `ready` could reach this branch. A
+      // rebuild no longer kills a child from under a live host at all: it
+      // replaces the whole plugin one layer up (#12277).
       //
-      // Second line of defence, not the only one: `hasAuthority` holds
-      // `isReloading` for the whole kill window and `isDisposed` for a teardown,
-      // so a retiring child's `ready` is normally dropped before it gets here
-      // (#12279). Kept because `expectingExit` is the local, caller-independent
-      // statement of "we asked THIS child to die".
-      //
-      // Deliberately does NOT settle the ready gate. A rebuild landing before
-      // the first `ready` leaves `start()`'s caller pending on purpose:
-      // `startFresh` re-uses that resolver so the replacement satisfies the
-      // original waiter, and `handleExit` excuses the doomed child's exit via
-      // `replacementComing` rather than rejecting it. Resolving here would
-      // report the worker ready while no live child exists at all.
-      if (this.expectingExit) return;
       // Spike #10890: record whether Electron honored the permission-model
       // execArgv flags. Only logged when we actually requested them, so a
       // normal fork stays quiet. `honored=false` on Electron 42 is the expected

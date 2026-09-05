@@ -872,7 +872,7 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(onTerminalFailure).toHaveBeenCalledTimes(1);
     });
 
-    it("ignores a required registration that rejects after a reload", async () => {
+    it("ignores a required registration that rejects after the generation was retired", async () => {
       const onActivationResult = vi.fn();
       const { host, workerHost, bridge } = makeBridge({ onActivationResult });
       const stale = deferred();
@@ -880,8 +880,8 @@ describe("PluginDevWorkerMainBridge", () => {
       bridge.waitForActivation().catch(() => {});
 
       workerHost.emit("worker-message", ACTION_NOTIFY);
-      workerHost.emit("reloading");
-      // The replacement boots, re-proposes the same contribution, activates.
+      workerHost.emit("exit", 139, false);
+      // The respawn boots, re-proposes the same contribution, activates.
       workerHost.emit("ready");
       workerHost.emit("worker-message", ACTION_NOTIFY);
       workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
@@ -926,20 +926,19 @@ describe("PluginDevWorkerMainBridge", () => {
       const { workerHost, bridge } = makeBridge({ onActivationResult });
       bridge.waitForActivation().catch(() => {});
 
-      // A reload lands while activate() is still awaiting a host call: worker
-      // disposal rejects that call, so the OUTGOING child posts activate-error
-      // after `reloading` already bumped the generation. It describes a worker
-      // that no longer exists and must not bind the one now booting.
-      workerHost.emit("reloading");
+      // The worker dies while activate() is still awaiting a host call, and the
+      // activate-error it had already posted arrives behind the exit that
+      // bumped the generation. It describes a worker that no longer exists and
+      // must not bind the one now booting.
+      workerHost.emit("exit", 139, false);
       workerHost.emit("worker-message", { type: "activate-error", error: "torn down mid-await" });
-      workerHost.emit("exit", 0, true);
       // What the outgoing child died of still reaches provenance...
       expect(onActivationResult).toHaveBeenCalledWith(
         expect.objectContaining({ ok: false, error: "torn down mid-await" })
       );
       onActivationResult.mockClear();
 
-      // ...but it must not veto the replacement, whose success clears it again.
+      // ...but it must not veto the respawn, whose success clears it again.
       workerHost.emit("ready");
       workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
       await flush();
@@ -956,7 +955,7 @@ describe("PluginDevWorkerMainBridge", () => {
       // Same gap, a keyed host-notify this time: the straggler's rejection is
       // still reported to the worker, but it is not the booting generation's
       // contribution and cannot fail its activation.
-      workerHost.emit("reloading");
+      workerHost.emit("exit", 139, false);
       host.registerAction.mockRejectedValueOnce(new Error("not declared"));
       workerHost.emit("worker-message", ACTION_NOTIFY);
       await flush();
@@ -986,9 +985,9 @@ describe("PluginDevWorkerMainBridge", () => {
       await flush();
       expect(onActivationResult).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
 
-      // The author fixes the manifest and saves — the reloaded generation starts
+      // The worker crashes and the host respawns it — the new generation starts
       // from a clean verdict.
-      workerHost.emit("reloading");
+      workerHost.emit("exit", 139, false);
       workerHost.emit("ready");
       workerHost.emit("worker-message", ACTION_NOTIFY);
       workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
