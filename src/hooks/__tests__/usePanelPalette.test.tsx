@@ -188,20 +188,18 @@ describe("usePanelPalette", () => {
       canRestart: false,
       canConvert: false,
     };
-    getPanelKindConfigMock.mockImplementation((kind: string) => {
-      if (kind === "browser") return { ...base, id: "browser", name: "Browser", shortcut: "Cmd+B" };
-      if (kind === "vendor.kind")
-        return { ...base, id: "vendor.kind", name: "Vendor", extensionId: "vendor" };
-      if (kind === "project:proj-1/vendor/local")
-        return {
-          ...base,
-          id: "project:proj-1/vendor/local",
-          name: "Local",
-          extensionId: "vendor",
-          projectId: "proj-1",
-        };
-      return undefined;
-    });
+    const configs: Record<string, object> = {
+      browser: { ...base, id: "browser", name: "Browser", shortcut: "Cmd+B" },
+      "vendor.kind": { ...base, id: "vendor.kind", name: "Vendor", extensionId: "vendor" },
+      "project:proj-1/vendor/local": {
+        ...base,
+        id: "project:proj-1/vendor/local",
+        name: "Local",
+        extensionId: "vendor",
+        projectId: "proj-1",
+      },
+    };
+    getPanelKindConfigMock.mockImplementation((kind: string) => configs[kind]);
     getPanelKindDefinitionMock.mockImplementation((kind: string) => ({
       id: kind,
       component: () => null,
@@ -238,12 +236,16 @@ describe("usePanelPalette", () => {
       canConvert: false,
       extensionId: "vendor",
     };
-    getPanelKindConfigMock.mockImplementation((kind: string) => {
-      if (kind === "vendor.kind") return { ...base, id: "vendor.kind", name: "Zephyr" };
-      if (kind === "project:proj-1/vendor/local")
-        return { ...base, id: "project:proj-1/vendor/local", name: "Quartz", projectId: "proj-1" };
-      return undefined;
-    });
+    const configs: Record<string, object> = {
+      "vendor.kind": { ...base, id: "vendor.kind", name: "Zephyr" },
+      "project:proj-1/vendor/local": {
+        ...base,
+        id: "project:proj-1/vendor/local",
+        name: "Quartz",
+        projectId: "proj-1",
+      },
+    };
+    getPanelKindConfigMock.mockImplementation((kind: string) => configs[kind]);
     getPanelKindDefinitionMock.mockImplementation((kind: string) => ({
       id: kind,
       component: () => null,
