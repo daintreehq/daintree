@@ -35,6 +35,16 @@ describe("PERF-247 renderer benchmark", () => {
     expect(sample.selectionMisses).toBe(0);
   });
 
+  it("reports a selection miss when the marker does not move", async () => {
+    // The negative control for `selectionMisses`. Selecting the row that is
+    // ALREADY current is a no-op re-render, so the marker never moves onto a
+    // new row — the same DOM a component that ignored `focusedIndex` entirely
+    // would produce, and the shape that makes a selection change look free.
+    const sample = await measureWorkingTreeList(300, true, { selectionIndex: -1 });
+    expect(sample.mountedRows).toBeLessThan(300);
+    expect(sample.selectionMisses).toBeGreaterThan(0);
+  });
+
   it("windows the diff shelf and keeps the current file mounted", async () => {
     const sample = await measureDiffShelf(300);
     expect(sample.fileCount).toBe(300);
@@ -44,13 +54,17 @@ describe("PERF-247 renderer benchmark", () => {
     expect(sample.selectionMisses).toBe(0);
   });
 
-  it("reports a windowing miss when every row is mounted", async () => {
-    // A list that fits inside the viewport mounts every row, which is
-    // indistinguishable — to this instrument — from a virtualizer that stopped
-    // working. The predicate must call it either way, which is also why
-    // PERF-247 only ever measures sizes far past the viewport.
-    const sample = await measureWorkingTreeList(20);
-    expect(sample.mountedRows).toBe(20);
+  it("reports a windowing miss when a large list mounts every row", async () => {
+    // The exact shape of the regression this instrument exists to catch: the
+    // same 300 files, the same components, windowing off. A benchmark that
+    // reported this as healthy would report a virtualizer that silently
+    // stopped working as the fastest run in the table.
+    const sample = await measureWorkingTreeList(300, false);
+    expect(sample.mountedRows).toBe(300);
     expect(sample.windowingMisses).toBeGreaterThan(0);
+    // The selection still lands — a regressed list is wrong, not broken — so
+    // the windowing predicate is the only thing standing between that run and
+    // a clean bill of health.
+    expect(sample.selectionMisses).toBe(0);
   });
 });

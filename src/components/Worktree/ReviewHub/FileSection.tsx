@@ -1,5 +1,5 @@
 import type React from "react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { Dispatch, Ref, RefObject, SetStateAction } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitStatus, StagingFileEntry } from "@shared/types";
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
+import { type MountedRange } from "@/lib/fileListWindowing";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import {
   REVIEW_HUB_STICKY_BAND,
@@ -92,11 +93,12 @@ interface FileSectionProps {
   /** Reveal handle for the hub's keyboard cursor. Unused on the static path. */
   listRef?: RefObject<VirtuosoHandle | null>;
   /**
-   * The slice Virtuoso currently has MOUNTED, in this section's local index
-   * space. `null` means "every row is mounted" — the static path, and the state
-   * the hub must assume before the first `rangeChanged`.
+   * The slice Virtuoso currently has MOUNTED, in this section's LOCAL index
+   * space — reported only while windowed, and never converted to the hub's flat
+   * coordinates on the way out: the staged count shifts every unstaged row's
+   * flat index, and Virtuoso does not re-emit a range that has not changed.
    */
-  onRenderedRangeChange?: (range: { start: number; end: number } | null) => void;
+  onRenderedRangeChange?: (range: MountedRange) => void;
 }
 
 /**
@@ -308,16 +310,7 @@ export function FileSection({
     ]
   );
 
-  // Reported during render rather than from an effect: the hub gates
-  // `aria-activedescendant` on this range, and an effect would leave it
-  // pointing at an id that is not in the document for a commit. `null` is the
-  // static path's honest answer — every row is mounted — and it is also what
-  // the windowed path must report before Virtuoso's first `rangeChanged`,
-  // which is why the transition out of windowing clears it here.
   const reportRange = onRenderedRangeChange;
-  useEffect(() => {
-    if (!windowed || files.length === 0) reportRange?.(null);
-  }, [windowed, files.length, reportRange]);
 
   // A plain callback, not a `useEffectEvent`: Virtuoso takes this as a prop,
   // and an effect event cannot be passed down. Identity is stable as long as
@@ -329,6 +322,13 @@ export function FileSection({
     },
     [reportRange]
   );
+
+  // Over the threshold but with nowhere to window yet: the scroll container is
+  // an ancestor, so it only exists from the hub's first commit onward. Render
+  // the empty body rather than the full static list — mounting four hundred
+  // rows for one frame, to unmount them on the next, is exactly the cost this
+  // change exists to remove.
+  const awaitingScrollParent = virtualized && scrollParent === null;
 
   return (
     <div
@@ -537,7 +537,9 @@ export function FileSection({
         </div>
       </div>
       {files.length > 0 ? (
-        windowed ? (
+        awaitingScrollParent ? (
+          <div className="px-2 py-1" />
+        ) : windowed ? (
           <div className="px-2 py-1">
             <Virtuoso<StagingFileEntry, SectionRowContext>
               ref={listRef}

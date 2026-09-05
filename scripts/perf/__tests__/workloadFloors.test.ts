@@ -121,6 +121,7 @@ describe("workload floors", () => {
       "PERF-036",
       "PERF-163",
       "PERF-164",
+      "PERF-247",
       "PERF-395",
       "PERF-406",
       "PERF-407",

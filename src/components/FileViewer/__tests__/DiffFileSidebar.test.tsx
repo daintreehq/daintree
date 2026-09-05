@@ -267,7 +267,13 @@ describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
     expect(onSelect).toHaveBeenCalledWith(119);
   });
 
-  it("marks the open file current even when it is not the first row shown", () => {
+  it("marks the open file current by its changeset index, not its display position", () => {
+    // File 119 sits in the FIRST directory on screen, because the directories
+    // sort in reverse. That is the point: display position 0 and changeset
+    // index 119 are different numbers, and `aria-current` has to follow the
+    // second one. (Revealing a genuinely off-screen row is not asserted here —
+    // Virtuoso's scroll path needs a scroller with a real height, and jsdom
+    // gives every element zero.)
     const files = reversedGroups(120);
     renderWindowed(files, 119);
     const current = screen

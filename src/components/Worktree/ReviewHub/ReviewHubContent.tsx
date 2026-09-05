@@ -15,7 +15,13 @@ import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
-import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
+import {
+  EMPTY_MOUNTED_RANGE,
+  rangeCovers,
+  sameRange,
+  shouldVirtualizeFileList,
+  type MountedRange,
+} from "@/lib/fileListWindowing";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -288,14 +294,20 @@ export function ReviewHubContent({
   // where the DOM query below still finds every row.
   const stagedListRef = useRef<VirtuosoHandle | null>(null);
   const unstagedListRef = useRef<VirtuosoHandle | null>(null);
-  // What each section currently has MOUNTED, in flat staged+unstaged
-  // coordinates. `null` means "everything" — the static path's honest answer,
-  // and the only one available before Virtuoso's first `rangeChanged`.
-  const [stagedRange, setStagedRange] = useState<{ start: number; end: number } | null>(null);
-  const [unstagedRange, setUnstagedRange] = useState<{ start: number; end: number } | null>(null);
+  // What each section currently has MOUNTED, in that section's OWN index space.
+  // Deliberately not converted to flat coordinates on the way in: the staged
+  // count shifts every unstaged row's flat index, and Virtuoso does not re-emit
+  // an unchanged local range, so a stored flat range would silently describe
+  // rows that had moved out from under it. `null` means no virtualizer has
+  // reported yet — read as "nothing mounted", never as "everything".
+  const [stagedRange, setStagedRange] = useState<MountedRange>(null);
+  const [unstagedRange, setUnstagedRange] = useState<MountedRange>(null);
   // A row menu asked for on a row the window had scrolled past. Held until the
   // reveal mounts the row, then replayed — see the effect near the key handler.
-  const [pendingMenuIndex, setPendingMenuIndex] = useState<number | null>(null);
+  // Carries the file's identity as well as its index: a refresh can put a
+  // DIFFERENT file at the same index, and opening that file's menu is worse
+  // than dropping the key.
+  const [pendingMenu, setPendingMenu] = useState<{ index: number; key: string } | null>(null);
   const focusedItemKeyRef = useRef<string | null>(null);
   const refreshIdRef = useRef(0);
   const bgRefreshIdRef = useRef(0);
@@ -412,20 +424,31 @@ export function ReviewHubContent({
   // other would leave the cursor crossing a seam between two reveal mechanisms.
   const workingTreeVirtualized = shouldVirtualizeFileList(navigableItems.length);
 
-  // The windowed reveal, split back out to the section that owns the index.
-  // `scrollIntoView` leaves an already-visible row alone, so a click on a
-  // visible row never yanks the list.
+  // Reveal, in two steps rather than one, because react-virtuoso cannot do the
+  // first one correctly here.
+  //
+  // A MOUNTED row is scrolled natively, exactly as this list always did. That
+  // is not a fallback: with `customScrollParent`, Virtuoso clamps its
+  // section-local scrollTop to zero while keeping the PARENT's full viewport
+  // height, so a section sitting below the fold believes its first rows are on
+  // screen. `scrollIntoView`'s already-visible check reads those numbers and
+  // no-ops on a row the user cannot see. The DOM knows the truth.
+  //
+  // An ABSENT row only the virtualizer can place, and `scrollToIndex` is the
+  // right call there precisely because it skips that visibility check — the
+  // destination it computes is in parent coordinates and is correct.
   const revealRow = useEffectEvent((index: number) => {
-    if (!workingTreeVirtualized) {
-      fileListRef.current
-        ?.querySelector<HTMLElement>(`[data-row-index="${index}"]`)
-        ?.scrollIntoView({ behavior: "instant", block: "nearest" });
+    const row = fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${index}"]`);
+    if (row) {
+      row.scrollIntoView({ behavior: "instant", block: "nearest" });
       return;
     }
+    if (!workingTreeVirtualized) return;
     const stagedCount = derivedStaged.length;
     const handle = index < stagedCount ? stagedListRef.current : unstagedListRef.current;
-    handle?.scrollIntoView({
+    handle?.scrollToIndex({
       index: index < stagedCount ? index : index - stagedCount,
+      align: "center",
       behavior: "auto",
     });
   });
@@ -443,6 +466,17 @@ export function ReviewHubContent({
   useLayoutEffect(() => {
     const item = focusedIndex >= 0 ? navigableItems[focusedIndex] : undefined;
     const key = item ? `${item.section}:${item.file.path}` : null;
+
+    // A refresh replaces `navigableItems` one commit BEFORE the reconcile
+    // effect below moves `focusedIndex` to follow the file. On that commit the
+    // old index names a DIFFERENT file, which reads as a cursor move and
+    // scrolls — twice, once on the way in and once on the way back. So the
+    // reveal only trusts an index the cursor's own identity agrees with, and
+    // records nothing until it does: overwriting the baseline mid-reconcile
+    // would make the settled commit look like a move as well.
+    const intended = focusedItemKeyRef.current;
+    if (item && intended !== null && key !== intended) return;
+
     const previous = previousFocusKeyRef.current;
     previousFocusKeyRef.current = { key, found: item !== undefined };
     if (!item) return;
@@ -455,43 +489,53 @@ export function ReviewHubContent({
   // Dropped rather than retried if the row leaves the list first — a filter, a
   // stage or a refresh means the menu no longer names anything.
   useEffect(() => {
-    if (pendingMenuIndex === null) return;
-    // The cursor moved on, or the list changed under it. The request named a
-    // row that is no longer the one the user asked about, so it is dropped
-    // rather than left armed to open a menu on something else later.
-    if (pendingMenuIndex !== focusedIndex) {
-      setPendingMenuIndex(null);
+    if (pendingMenu === null) return;
+    const item = navigableItems[pendingMenu.index];
+    const key = item ? `${item.section}:${item.file.path}` : null;
+    // Everything that makes the request meaningless cancels it. An armed
+    // request that outlives its reason is the failure mode here: it would open
+    // a menu the user never asked for, on whatever file happens to occupy that
+    // index by the time a row mounts.
+    if (
+      pendingMenu.index !== focusedIndex ||
+      key !== pendingMenu.key ||
+      !fileListExpanded ||
+      diffMode === "base-branch" ||
+      selectedFile !== null ||
+      selectedBaseBranchFile !== null
+    ) {
+      setPendingMenu(null);
       return;
     }
     const row = fileListRef.current?.querySelector<HTMLElement>(
-      `[data-row-index="${pendingMenuIndex}"]`
+      `[data-row-index="${pendingMenu.index}"]`
     );
     if (!row) return;
-    setPendingMenuIndex(null);
+    setPendingMenu(null);
     openFileRowMenuFromKeyboard(row);
-  }, [pendingMenuIndex, focusedIndex, navigableItems, stagedRange, unstagedRange]);
+  }, [
+    pendingMenu,
+    focusedIndex,
+    navigableItems,
+    fileListExpanded,
+    diffMode,
+    selectedFile,
+    selectedBaseBranchFile,
+    stagedRange,
+    unstagedRange,
+  ]);
 
-  // Sections report their mounted slice in LOCAL indices; the cursor lives in
-  // flat staged+unstaged coordinates, so shift the unstaged one by the staged
-  // count. Guarded rather than set unconditionally: Virtuoso fires
-  // `rangeChanged` on every scroll frame, and re-rendering the hub at that
-  // cadence would cost far more than the attribute it feeds is worth.
-  const stagedCount = derivedStaged.length;
-  const handleStagedRangeChange = useCallback((range: { start: number; end: number } | null) => {
-    setStagedRange((current) =>
-      current?.start === range?.start && current?.end === range?.end ? current : range
-    );
+  // Guarded rather than set unconditionally: Virtuoso fires `rangeChanged` on
+  // every scroll frame, and re-rendering the hub at that cadence would cost far
+  // more than the attribute it feeds is worth. Stable identities, so a changing
+  // staged count cannot make Virtuoso resubscribe — it would not replay the
+  // current range if it did.
+  const handleStagedRangeChange = useCallback((range: MountedRange) => {
+    setStagedRange((current) => (sameRange(current, range) ? current : range));
   }, []);
-  const handleUnstagedRangeChange = useCallback(
-    (range: { start: number; end: number } | null) => {
-      const shifted =
-        range === null ? null : { start: range.start + stagedCount, end: range.end + stagedCount };
-      setUnstagedRange((current) =>
-        current?.start === shifted?.start && current?.end === shifted?.end ? current : shifted
-      );
-    },
-    [stagedCount]
-  );
+  const handleUnstagedRangeChange = useCallback((range: MountedRange) => {
+    setUnstagedRange((current) => (sameRange(current, range) ? current : range));
+  }, []);
 
   // Never point `aria-activedescendant` at a row that is not in the document.
   // On the static path every row is mounted and the answer is always yes; the
@@ -502,10 +546,8 @@ export function ReviewHubContent({
     focusedRowExists &&
     (!workingTreeVirtualized ||
       (focusedIndex < derivedStaged.length
-        ? stagedRange === null ||
-          (focusedIndex >= stagedRange.start && focusedIndex <= stagedRange.end)
-        : unstagedRange === null ||
-          (focusedIndex >= unstagedRange.start && focusedIndex <= unstagedRange.end)));
+        ? rangeCovers(stagedRange ?? EMPTY_MOUNTED_RANGE, focusedIndex)
+        : rangeCovers(unstagedRange ?? EMPTY_MOUNTED_RANGE, focusedIndex - derivedStaged.length)));
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -1634,8 +1676,10 @@ export function ReviewHubContent({
       if (rowElement === null && focusedRowExists) {
         e.preventDefault();
         e.stopPropagation();
+        const item = navigableItems[focusedIndex];
+        if (!item) return;
         revealRow(focusedIndex);
-        setPendingMenuIndex(focusedIndex);
+        setPendingMenu({ index: focusedIndex, key: `${item.section}:${item.file.path}` });
       }
       return;
     }

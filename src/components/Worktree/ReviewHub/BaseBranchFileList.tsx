@@ -73,10 +73,16 @@ export function BaseBranchFileList({
     [decorations, onOpenFile, onOpenDecorationUrl]
   );
 
-  // Same rule as the working-tree sections: over the threshold AND a scroll
-  // container to window against. Before the hub's first commit there is no
-  // element yet, and the static list is the correct thing to render.
-  if (!shouldVirtualizeFileList(files.length) || scrollParent === null) {
+  // Over the threshold but with nowhere to window yet: the scroll container is
+  // an ancestor, so it only exists from the hub's first commit onward. Render
+  // the empty body rather than the full static list — mounting hundreds of rows
+  // for one frame, to unmount them on the next, is the cost this change exists
+  // to remove.
+  if (shouldVirtualizeFileList(files.length) && scrollParent === null) {
+    return <div className="px-2 py-1" />;
+  }
+
+  if (!shouldVirtualizeFileList(files.length)) {
     return (
       <div className="px-2 py-1 flex flex-col gap-0.5">
         {files.map((file) => {
@@ -101,7 +107,7 @@ export function BaseBranchFileList({
       <Virtuoso<CrossWorktreeFile, BaseRowContext>
         data={files}
         context={context}
-        customScrollParent={scrollParent}
+        customScrollParent={scrollParent ?? undefined}
         computeItemKey={computeBaseRowKey}
         itemContent={renderVirtualizedBaseRow}
         increaseViewportBy={200}

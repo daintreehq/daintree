@@ -164,7 +164,9 @@ const noop = () => {};
  */
 export async function measureWorkingTreeList(
   fileCount: number,
-  windowed = true
+  windowed = true,
+  /** Overridden only by the oracle's negative control. */
+  options: { selectionIndex?: number } = {}
 ): Promise<ReviewListSample> {
   const files = buildStagingFixture(fileCount);
   const harness = mountHarness();
@@ -220,18 +222,28 @@ export async function measureWorkingTreeList(
   // and jsdom cannot honestly measure it: Virtuoso's scroll path needs a
   // scroller with a real height, and jsdom gives every element zero. The
   // component tests cover reveal against a mocked virtualizer instead.
-  const selectionIndex = Math.min(SELECTION_TARGET_INDEX, fileCount - 1);
+  const selectionIndex = Math.min(options.selectionIndex ?? SELECTION_TARGET_INDEX, fileCount - 1);
   const selectionStart = performance.now();
   await act(async () => {
     harness.root.render(render(selectionIndex));
   });
   const selectionChangeMs = performance.now() - selectionStart;
 
+  // Not just "the row exists" — the rows around the selection were mounted
+  // before the update and would still be there if the component ignored it
+  // entirely, which is precisely the regression that makes a re-render look
+  // free. The marker has to have MOVED onto the selected row and off every
+  // other one.
   const selected = harness.container.querySelector(`[data-row-index="${selectionIndex}"]`);
   const neighbour = harness.container.querySelector(
     `[data-row-index="${Math.max(0, selectionIndex - 1)}"]`
   );
-  const selectionMisses = (selected ? 0 : 1) + (neighbour ? 0 : 1);
+  const focused = harness.container.querySelectorAll("[data-focused]");
+  const selectionMisses =
+    (selected ? 0 : 1) +
+    (neighbour ? 0 : 1) +
+    (selected?.getAttribute("data-focused") === "true" ? 0 : 1) +
+    (focused.length === 1 ? 0 : 1);
 
   harness.dispose();
   scrollParent.remove();
@@ -282,11 +294,19 @@ export async function measureDiffShelf(fileCount: number): Promise<ReviewListSam
   });
   const selectionChangeMs = performance.now() - selectionStart;
 
+  // Same reasoning as the working-tree list: the shelf marks the open file with
+  // `aria-current`, and a component that ignored `currentIndex` would still
+  // leave both queried rows mounted.
   const selected = harness.container.querySelector(`[data-file-index="${selectionIndex}"]`);
   const neighbour = harness.container.querySelector(
     `[data-file-index="${Math.max(0, selectionIndex - 1)}"]`
   );
-  const selectionMisses = (selected ? 0 : 1) + (neighbour ? 0 : 1);
+  const current = harness.container.querySelectorAll('[aria-current="true"]');
+  const selectionMisses =
+    (selected ? 0 : 1) +
+    (neighbour ? 0 : 1) +
+    (selected?.querySelector('[aria-current="true"]') ? 0 : 1) +
+    (current.length === 1 ? 0 : 1);
 
   harness.dispose();
 

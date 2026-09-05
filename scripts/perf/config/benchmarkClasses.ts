@@ -361,7 +361,7 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ renderer: "headless", processTopology: "partial" }),
     claim:
-      'The real Review Hub file section and diff shelf, mounted with react-dom and windowed by the real react-virtuoso, under jsdom. `renderer: "headless"` here means a DOM without layout — unlike the @xterm/headless family, and unlike anything else in this matrix. jsdom measures nothing, so the viewport is supplied by react-virtuoso\'s own VirtuosoMockContext: these are JS-thread mount and reconcile costs, NOT frames, and no compositor, paint or Chromium layout is present. A faster number here means React was asked to build less, which is the mechanism — it does not by itself mean the reviewer saw the list sooner.',
+      'The real Review Hub file section and diff shelf, mounted with react-dom and windowed by the real react-virtuoso, under jsdom. `renderer: "headless"` here means a DOM without layout — unlike the @xterm/headless family, and unlike anything else in this matrix. jsdom measures nothing, so the viewport is supplied by react-virtuoso\'s own VirtuosoMockContext: these are JS-thread mount and reconcile costs, NOT frames, and no compositor, paint or Chromium layout is present. A faster number here means React was asked to build less, which is the mechanism — it does not by itself mean the reviewer saw the list sooner. The child runs the ordinary vitest config: development React, and WITHOUT the React Compiler transform production ships, so memoisation the compiler would have inferred is absent from both arms.',
   },
   {
     label: "file viewer",

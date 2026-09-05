@@ -25,3 +25,30 @@ export const FILE_LIST_VIRTUALIZATION_THRESHOLD = 80;
 export function shouldVirtualizeFileList(count: number): boolean {
   return count >= FILE_LIST_VIRTUALIZATION_THRESHOLD;
 }
+
+/**
+ * The rows a windowed list currently has in the DOM, in that list's OWN index
+ * space.
+ *
+ * Only a windowed list reports one at all — the static path is answered by not
+ * asking. So the absence of a range means "no virtualizer has reported yet",
+ * NOT "everything is on screen": conflating those two lets
+ * `aria-activedescendant` name a row that is not in the document, which is the
+ * exact contract the gate exists to hold. Read an unreported range as
+ * {@link EMPTY_MOUNTED_RANGE}.
+ */
+export type MountedRange = { start: number; end: number } | null;
+
+/** Nothing mounted yet. Covers no index, so the gate stays closed until it does. */
+export const EMPTY_MOUNTED_RANGE: MountedRange = { start: 0, end: -1 };
+
+export function sameRange(a: MountedRange, b: MountedRange): boolean {
+  if (a === null || b === null) return a === b;
+  return a.start === b.start && a.end === b.end;
+}
+
+/** Whether `index` — local to the list that reported `range` — is mounted. */
+export function rangeCovers(range: MountedRange, index: number): boolean {
+  if (range === null) return true;
+  return index >= range.start && index <= range.end;
+}

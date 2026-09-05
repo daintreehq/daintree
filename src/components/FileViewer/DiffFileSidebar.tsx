@@ -260,27 +260,34 @@ export function DiffFileSidebar({
     const counts: number[] = [];
     const dirs: string[] = [];
     const displayIndexByFileIndex = new Map<number, number>();
+    // `computeItemKey` is the odd one out: react-virtuoso calls it with the raw
+    // slot index, which COUNTS GROUP HEADERS, while `itemContent` gets the
+    // file-only index. Indexing the file array with the raw index hands the
+    // first file the second file's key — and a key that names the wrong row is
+    // how React moves one file's open menu onto another file. So the keys are
+    // built once, in slot order, headers included.
+    const keysBySlot: string[] = [];
     for (const group of groups) {
       counts.push(group.files.length);
       dirs.push(group.dir);
+      keysBySlot.push(`group:${group.dir || "(root)"}`);
       for (const file of group.files) {
         displayIndexByFileIndex.set(file.index, entries.length);
         entries.push(file);
+        keysBySlot.push(`file:${file.viewedKey}-${file.index}`);
       }
     }
-    return { entries, counts, dirs, displayIndexByFileIndex };
+    return { entries, counts, dirs, displayIndexByFileIndex, keysBySlot };
   }, [groups]);
 
-  // Windowing needs the scroll container as a prop, and a ref mutation does not
-  // re-render — so the element is held in state as well as in the ref the
-  // static path's reveal still queries through.
-  const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
-  const attachList = useCallback((node: HTMLDivElement | null) => {
-    listRef.current = node;
-    setScrollParent(node);
-  }, []);
   const virtuosoRef = useRef<GroupedVirtuosoHandle | null>(null);
-  const windowed = shouldVirtualizeFileList(visibleCount) && scrollParent !== null;
+  // Unlike the Review Hub's sections, this shelf's list area is a scroller of
+  // its own with nothing else in it — so the virtualizer OWNS that scroller
+  // rather than windowing against an ancestor. That buys two things the hub
+  // cannot have: the reveal is Virtuoso's own scroll, with no parent-offset
+  // arithmetic to get wrong, and windowing starts on the first commit instead
+  // of after a full static render.
+  const windowed = shouldVirtualizeFileList(visibleCount);
 
   const rowContext: ShelfRowContext = useMemo(
     () => ({
@@ -385,7 +392,15 @@ export function DiffFileSidebar({
         </div>
       </div>
 
-      <div ref={attachList} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
+      <div
+        ref={listRef}
+        className={cn(
+          "min-h-0 flex-1 overscroll-contain px-2 pb-2",
+          // The virtualizer brings its own scroller; two nested ones would give
+          // the shelf two scrollbars.
+          windowed ? "overflow-hidden" : "overflow-y-auto"
+        )}
+      >
         {visibleCount === 0 && (
           <EmptyState
             variant="filtered-empty"
@@ -406,7 +421,7 @@ export function DiffFileSidebar({
           <GroupedVirtuoso
             ref={virtuosoRef}
             groupCounts={flat.counts}
-            customScrollParent={scrollParent}
+            style={{ height: "100%" }}
             groupContent={(groupIndex) => (
               <DiffShelfGroupHeader dir={flat.dirs[groupIndex] ?? ""} />
             )}
@@ -422,10 +437,7 @@ export function DiffFileSidebar({
                 </div>
               );
             }}
-            computeItemKey={(index) => {
-              const file = flat.entries[index];
-              return file ? `${file.viewedKey}-${file.index}` : index;
-            }}
+            computeItemKey={(slot) => flat.keysBySlot[slot] ?? slot}
             increaseViewportBy={200}
             skipAnimationFrameInResizeObserver
           />

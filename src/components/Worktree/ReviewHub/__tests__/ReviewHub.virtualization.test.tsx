@@ -289,7 +289,24 @@ import { usePreferencesStore } from "@/store/preferencesStore";
  * of the `aria-activedescendant` contract.
  */
 const virtuosoRange = { current: null as { startIndex: number; endIndex: number } | null };
-const scrollIntoViewMock = vi.fn();
+/**
+ * Reveal calls, tagged with the list that received them.
+ *
+ * One spy across every instance would not be able to tell "revealed unstaged
+ * row 1" from "revealed staged row 1" — which is the whole of the flat-index
+ * to section-local arithmetic. The tag is derived from the data the instance
+ * was handed, so it identifies the real list rather than a wiring assumption.
+ */
+const scrollToIndexMock = vi.fn<(list: string, location: { index: number }) => void>();
+
+function listTag(data: unknown[]): string {
+  const first = data[0] as { path?: string } | undefined;
+  const path = first?.path ?? "";
+  if (path.startsWith("src/staged/")) return "staged";
+  if (path.startsWith("src/unstaged/")) return "unstaged";
+  if (path.startsWith("src/base/")) return "base";
+  return "unknown";
+}
 
 vi.mock("react-virtuoso", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-virtuoso")>();
@@ -304,10 +321,17 @@ vi.mock("react-virtuoso", async (importOriginal) => {
         computeItemKey?: (index: number, item: unknown, context: unknown) => string;
         rangeChanged?: (range: { startIndex: number; endIndex: number }) => void;
       },
-      ref: ForwardedRef<Pick<VirtuosoHandle, "scrollIntoView">>
+      ref: ForwardedRef<Pick<VirtuosoHandle, "scrollToIndex">>
     ) {
-      useImperativeHandle(ref, () => ({ scrollIntoView: scrollIntoViewMock }), []);
       const { rangeChanged, data } = props;
+      const tag = listTag(data);
+      useImperativeHandle(
+        ref,
+        () => ({
+          scrollToIndex: (location: { index: number }) => scrollToIndexMock(tag, location),
+        }),
+        [tag]
+      );
       const lastIndex = data.length - 1;
       useEffect(() => {
         rangeChanged?.(virtuosoRange.current ?? { startIndex: 0, endIndex: lastIndex });
@@ -381,10 +405,24 @@ const makeLargeStatus = () =>
     })),
   });
 
+/** Drives the hub's background refresh, which is what renumbers the list. */
+const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
+  ({
+    id: path,
+    path,
+    worktreeId: path,
+    name: "test",
+    isCurrent: true,
+    worktreeChanges: null,
+    lastActivityTimestamp: null,
+  }) as WorktreeState;
+
 describe("ReviewHub windowed file list (#12241)", () => {
+  let capturedUpdateCallback: ((state: WorktreeState) => void) | null = null;
   const mockUnsubscribe = vi.fn();
 
   beforeEach(() => {
+    capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
 
     // Clear the file-list disclosure map rather than force-expanding it: the
@@ -419,7 +457,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
       // The component subscribes to the per-view worktree port; tests keep
       // driving it with a plain WorktreeState by wrapping it in the port
       // event envelope here.
-      void callback;
+      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
       return mockUnsubscribe;
     });
 
@@ -499,7 +537,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
 
   beforeEach(() => {
     virtuosoRange.current = null;
-    scrollIntoViewMock.mockClear();
+    scrollToIndexMock.mockClear();
     // jsdom implements neither; the static path's reveal calls the first and
     // Radix's menu machinery touches the second.
     HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -508,8 +546,9 @@ describe("ReviewHub windowed file list (#12241)", () => {
   const renderLargeHub = async () => {
     getStagingStatusMock.mockResolvedValue(makeLargeStatus());
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-    await waitFor(() => screen.getByTestId("file-stage-row-src/staged/file-000.ts"));
-    return screen.getByRole("listbox", { name: "Changed files" });
+    // Waits on the listbox, not on a particular row: a narrow window may not
+    // mount row zero at all.
+    return await screen.findByRole("listbox", { name: "Changed files" });
   };
 
   it("keeps row ids, roles and the flat index space across the section split", async () => {
@@ -547,9 +586,29 @@ describe("ReviewHub windowed file list (#12241)", () => {
     // outside the mounted window, so the listbox must not claim it as its
     // active descendant.
     expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
-    expect(scrollIntoViewMock).toHaveBeenCalledWith(
-      expect.objectContaining({ index: 14, behavior: "auto" })
+    expect(scrollToIndexMock).toHaveBeenCalledWith(
+      "staged",
+      expect.objectContaining({ index: 14 })
     );
+  });
+
+  it("scrolls a mounted row natively instead of asking the virtualizer", async () => {
+    // react-virtuoso cannot answer "is this row visible" correctly against a
+    // shared scroll parent — it clamps its section-local scrollTop to zero and
+    // keeps the parent's full viewport height, so a section below the fold
+    // thinks its first rows are on screen. A mounted row is scrolled through
+    // the DOM, which knows.
+    virtuosoRange.current = { startIndex: 0, endIndex: 59 };
+    const nativeScroll = vi.fn();
+    HTMLElement.prototype.scrollIntoView = nativeScroll;
+    await renderLargeHub();
+    scrollToIndexMock.mockClear();
+    nativeScroll.mockClear();
+
+    act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+    expect(nativeScroll).toHaveBeenCalled();
+    expect(scrollToIndexMock).not.toHaveBeenCalled();
   });
 
   it("names the active descendant again once the window covers the cursor", async () => {
@@ -563,39 +622,64 @@ describe("ReviewHub windowed file list (#12241)", () => {
   });
 
   it("reveals into the unstaged section using that section's own indices", async () => {
-    virtuosoRange.current = { startIndex: 0, endIndex: 59 };
+    // A window in the middle of each section, so the second unstaged row is
+    // genuinely absent and only the virtualizer can bring it back.
+    virtuosoRange.current = { startIndex: 20, endIndex: 30 };
     await renderLargeHub();
 
-    // 61 steps: 60 staged rows, then the second unstaged row.
-    for (let i = 0; i < 61; i++) {
+    // 62 steps: 60 staged rows, then the second unstaged row.
+    for (let i = 0; i < 62; i++) {
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
     }
+    expect(screen.queryByTestId("file-stage-row-src/unstaged/file-001.ts")).toBeNull();
     // Flat index 60 is the unstaged section's index 0 — the reveal has to speak
     // the section's coordinates, not the cursor's.
-    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ index: 0, behavior: "auto" })
+    // Flat index 61 is the unstaged section's index 1 — the reveal has to speak
+    // the section's own coordinates, and reach the unstaged list, not the
+    // staged one that happens to have a row at index 1 too.
+    expect(scrollToIndexMock).toHaveBeenLastCalledWith(
+      "unstaged",
+      expect.objectContaining({ index: 1 })
     );
   });
 
   it("does not re-reveal a stationary cursor when the list renumbers", async () => {
     virtuosoRange.current = { startIndex: 0, endIndex: 59 };
-    await renderLargeHub();
-    act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
-    scrollIntoViewMock.mockClear();
+    const listbox = await renderLargeHub();
+    // Park the cursor in the unstaged section, so a new STAGED file lands above
+    // it and shifts its index.
+    for (let i = 0; i < 62; i++) {
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+    }
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-61");
+    scrollToIndexMock.mockClear();
 
-    // Staging a file above the cursor shifts its index without moving it. A
+    // A background refresh that adds a file above the cursor renumbers every
+    // row below it. The cursor has not moved — it is on the same file — and a
     // reveal keyed on the index alone would scroll here and drag the view off
     // whatever the user was looking at (#11684).
     const status = makeLargeStatus();
     getStagingStatusMock.mockResolvedValue({
       ...status,
       staged: [
-        { path: "src/staged/added.ts", status: "modified" as const, insertions: 1, deletions: 0 },
+        {
+          path: "src/staged/aaa-added.ts",
+          status: "modified" as const,
+          insertions: 1,
+          deletions: 0,
+        },
         ...status.staged,
       ],
     });
-    act(() => void fireEvent.keyDown(document, { key: "v" }));
-    await waitFor(() => expect(scrollIntoViewMock).not.toHaveBeenCalled());
+    await act(async () => {
+      capturedUpdateCallback!(makeWorktreeState());
+      await Promise.resolve();
+    });
+    await waitFor(() => screen.getByTestId("file-stage-row-src/staged/aaa-added.ts"));
+
+    // The renumber happened — same file, new index — and nothing scrolled.
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-62");
+    expect(scrollToIndexMock).not.toHaveBeenCalled();
   });
 
   it("reveals the row before opening its menu when the window has scrolled past it", async () => {
@@ -605,7 +689,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
     }
     expect(screen.queryByTestId("file-stage-row-src/staged/file-014.ts")).toBeNull();
-    scrollIntoViewMock.mockClear();
+    scrollToIndexMock.mockClear();
 
     act(() => void fireEvent.keyDown(document, { key: "F10", shiftKey: true }));
 
@@ -613,8 +697,9 @@ describe("ReviewHub windowed file list (#12241)", () => {
     // may not be, and the key must not simply evaporate: the hub asks the
     // virtualizer for the row and replays the menu on the commit that mounts
     // it.
-    expect(scrollIntoViewMock).toHaveBeenCalledWith(
-      expect.objectContaining({ index: 14, behavior: "auto" })
+    expect(scrollToIndexMock).toHaveBeenCalledWith(
+      "staged",
+      expect.objectContaining({ index: 14 })
     );
   });
 
@@ -649,13 +734,16 @@ describe("ReviewHub windowed file list (#12241)", () => {
     virtuosoRange.current = { startIndex: 0, endIndex: 59 };
     await renderLargeHub();
     act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
-    scrollIntoViewMock.mockClear();
+    scrollToIndexMock.mockClear();
 
     act(() => void fireEvent.keyDown(document, { key: "F10", shiftKey: true }));
 
     // No reveal needed, and none requested — the deferred path is for absent
     // rows only, not a new cost on every menu.
-    expect(scrollIntoViewMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(0));
+    expect(scrollToIndexMock).not.toHaveBeenCalled();
+    // Named, not merely counted: the mocked section toolbars render dropdown
+    // menus of their own, so `getAllByRole("menu")` is satisfied whether or not
+    // the row menu ever opened.
+    await waitFor(() => screen.getByRole("menuitem", { name: /open diff/i }));
   });
 });
