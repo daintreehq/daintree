@@ -503,6 +503,19 @@ export class PluginDevWorkerHost extends EventEmitter {
       // would import and activate the plugin while racing its own teardown, and
       // the outcome it posted would describe a generation the bridge has
       // already retired (#12282). The replacement announces its own `ready`.
+      //
+      // Second line of defence, not the only one: `hasAuthority` holds
+      // `isReloading` for the whole kill window and `isDisposed` for a teardown,
+      // so a retiring child's `ready` is normally dropped before it gets here
+      // (#12279). Kept because `expectingExit` is the local, caller-independent
+      // statement of "we asked THIS child to die".
+      //
+      // Deliberately does NOT settle the ready gate. A rebuild landing before
+      // the first `ready` leaves `start()`'s caller pending on purpose:
+      // `startFresh` re-uses that resolver so the replacement satisfies the
+      // original waiter, and `handleExit` excuses the doomed child's exit via
+      // `replacementComing` rather than rejecting it. Resolving here would
+      // report the worker ready while no live child exists at all.
       if (this.expectingExit) return;
       // Spike #10890: record whether Electron honored the permission-model
       // execArgv flags. Only logged when we actually requested them, so a

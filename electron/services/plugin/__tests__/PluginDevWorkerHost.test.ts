@@ -348,7 +348,9 @@ describe("PluginDevWorkerHost", () => {
     const host = new PluginDevWorkerHost(OPTS);
     const ready = vi.fn();
     host.on("ready", ready);
-    void host.start();
+    const started = host.start();
+    let rejected: unknown = null;
+    started.catch((e) => (rejected = e));
     const child = mockChildren[0] as MockUtilityChild;
 
     // A rebuild lands while the first child is still booting, so it is killed
@@ -363,14 +365,22 @@ describe("PluginDevWorkerHost", () => {
     expect(child.postMessage.mock.calls.find((c) => c[0]?.type === "start")).toBeUndefined();
     expect(ready).not.toHaveBeenCalled();
 
-    // The replacement announces itself normally.
+    // Suppressing that `ready` must not strand the boot gate. The doomed child's
+    // exit reaches `handleExit` with the original waiter still armed, and a
+    // rejection there is fatal: `activateViaDevWorker` reads it as a hard fork
+    // failure and disposes the bridge, host and watcher, killing the dev plugin
+    // with no auto-recovery.
     child.emit("exit", 0);
     await vi.runOnlyPendingTimersAsync();
+    expect(rejected).toBeNull();
+
+    // The replacement announces itself normally and settles the original wait.
     const replacement = mockChildren[1] as MockUtilityChild;
     replacement.emit("message", { type: "ready" });
 
     expect(replacement.postMessage.mock.calls.find((c) => c[0]?.type === "start")).toBeTruthy();
     expect(ready).toHaveBeenCalledTimes(1);
+    await expect(started).resolves.toBeUndefined();
     host.dispose();
   });
 
