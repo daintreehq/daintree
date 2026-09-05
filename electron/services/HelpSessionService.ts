@@ -494,6 +494,20 @@ export class HelpSessionService {
   }
 
   /**
+   * Binds a provisioned session to the native engine that owns it.
+   *
+   * The counterpart to `markTerminalForToken` for a surface with no terminal: it
+   * exempts the record from the orphan sweep and nothing else. Returns false for an
+   * unknown or revoked token, so a caller cannot keep a dead session alive.
+   */
+  markEngineSession(sessionId: string): boolean {
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return false;
+    this.engineSessionIds.add(sessionId);
+    return true;
+  }
+
+  /**
    * Binds a freshly spawned PTY terminal id to its help-session token. Called
    * from the lifecycle spawn handler after `validateToken` confirms the
    * launch is a help session, so the main process owns the terminalId↔session
@@ -514,20 +528,6 @@ export class HelpSessionService {
    * agent has no such getter, so without this a token minted for one env-only
    * session could bind a terminal running a different one (#12262).
    */
-  /**
-   * Binds a provisioned session to the native engine that owns it.
-   *
-   * The counterpart to `markTerminalForToken` for a surface with no terminal: it
-   * exempts the record from the orphan sweep and nothing else. Returns false for an
-   * unknown or revoked token, so a caller cannot keep a dead session alive.
-   */
-  markEngineSession(sessionId: string): boolean {
-    const record = this.sessionsById.get(sessionId);
-    if (!record || record.revoked) return false;
-    this.engineSessionIds.add(sessionId);
-    return true;
-  }
-
   markTerminalForToken(token: string, terminalId: string, expectedAgentId?: string): boolean {
     if (!token || !terminalId) return false;
     const record = this.sessionsByToken.get(token);
