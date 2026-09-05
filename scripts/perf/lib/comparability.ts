@@ -163,7 +163,7 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
   {
     cls: "count",
     pattern:
-      /[Cc]ount|[Rr]ows|[Ss]pawns|[Ss]tarts|[Ii]nvocations|[Rr]etries|[Cc]alls|[Hh]its|[Mm]isses|[Ee]vents|[Ff]lushes|[Rr]enders|[Mm]essages|[Tt]asks|[Hh]andles|[Dd]escriptors|[Ww]rites|[Rr]eads|[Pp]asses|[Aa]ttempts|[Cc]allbacks|[Kk]eystrokes|[Rr]oundTrips|[Ll]ines|[Pp]anels|[Gg]roups|[Hh]unks|[Tt]argets|[Ff]rames|[Ff]iles|[Tt]okens|[Dd]ecorations|[Cc]hanges|[Bb]atches|[Ii]tems|[Rr]esolved|[Rr]eloads|[Jj]obs|[Pp]osted/,
+      /[Cc]ount|[Rr]ows|[Ss]pawns|[Ss]tarts|[Ll]aunches|[Ii]nvocations|[Rr]etries|[Cc]alls|[Hh]its|[Mm]isses|[Ee]vents|[Ff]lushes|[Rr]enders|[Mm]essages|[Tt]asks|[Hh]andles|[Dd]escriptors|[Ww]rites|[Rr]eads|[Pp]asses|[Aa]ttempts|[Cc]allbacks|[Kk]eystrokes|[Rr]oundTrips|[Ll]ines|[Pp]anels|[Gg]roups|[Hh]unks|[Tt]argets|[Ff]rames|[Ff]iles|[Tt]okens|[Dd]ecorations|[Cc]hanges|[Bb]atches|[Ii]tems|[Rr]esolved|[Rr]eloads|[Jj]obs|[Pp]osted/,
   },
 ];
 

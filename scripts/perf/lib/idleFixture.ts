@@ -244,8 +244,16 @@ export interface ProbeFaultHandle {
  * `execFile`/`exec` surface as a rejection. Deleting the binary would produce
  * an ENOENT the service handles on the same path, but a PATH shim also
  * reproduces the case where a wrapper exists and refuses.
+ *
+ * PATH is read at CreateProcess time, so on Windows the fault only bites a
+ * census that starts a process. Since #12243 the census is served by one
+ * persistent helper, resolved before the shim existed — so a caller that has
+ * one passes its PID and it is killed here. That is the same fault the shim
+ * is: the census loses its probe, and the replacement it starts is the one the
+ * shim intercepts. Without it the Windows arm of a fault scenario measures a
+ * perfectly healthy census under a misleading name.
  */
-export function installProcessProbeFault(): ProbeFaultHandle {
+export function installProcessProbeFault(censusHelperPid?: number | null): ProbeFaultHandle {
   const dir = createPerfTempRoot("daintree-perf-probe-fault-");
   if (process.platform === "win32") {
     // ProcessTreeCache launches the explicit `powershell.exe` name. A `.cmd`
@@ -259,6 +267,13 @@ export function installProcessProbeFault(): ProbeFaultHandle {
   }
   const previousPath = process.env.PATH;
   process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
+  if (process.platform === "win32" && censusHelperPid) {
+    try {
+      process.kill(censusHelperPid);
+    } catch {
+      // Already gone, which is the state this was trying to reach.
+    }
+  }
   return { dir, previousPath };
 }
 

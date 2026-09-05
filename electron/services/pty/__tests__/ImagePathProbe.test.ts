@@ -371,40 +371,34 @@ describe("ImagePathProbe", () => {
       setPlatform("win32");
     });
 
-    it("invokes PowerShell with Get-CimInstance", () => {
+    it("starts no subprocess at all", () => {
+      // `ExecutablePath` is a `Win32_Process` property, so the census
+      // `ProcessTreeCache` already runs carries it for every PID in the
+      // snapshot. Probing per PID for the same field meant a second
+      // `powershell.exe` per unresolved process, per poll (#12243).
       const probe = new ImagePathProbe();
-      probe.readBasename(5005);
-      expect(execFileMock.calls).toHaveLength(1);
-      expect(execFileMock.calls[0]!.cmd).toBe("powershell.exe");
-      const args = execFileMock.calls[0]!.args ?? [];
-      expect(args).toContain("-NoProfile");
-      expect(args).toContain("-NonInteractive");
-      expect(args[args.length - 1]).toContain("ProcessId=5005");
-      expect(args[args.length - 1]).toContain("Win32_Process");
-    });
-
-    it("strips .exe and lowercases the result", async () => {
-      const probe = new ImagePathProbe();
-      probe.readBasename(5005);
-      execFileMock.calls[0]!.resolve("C:\\Program Files\\Claude\\Claude.exe\r\n");
-      await flush();
-      expect(probe.readBasename(5005)).toBe("claude");
-    });
-
-    it("returns null on empty output", async () => {
-      const probe = new ImagePathProbe();
-      probe.readBasename(5005);
-      execFileMock.calls[0]!.resolve("");
-      await flush();
       expect(probe.readBasename(5005)).toBeNull();
+      expect(execFileMock.calls).toHaveLength(0);
+      expect(readlinkMock.queue).toHaveLength(0);
     });
 
-    it("strips other Windows executable extensions", async () => {
+    it("stays null across repeated reads without ever scheduling a refresh", async () => {
       const probe = new ImagePathProbe();
-      probe.readBasename(5006);
-      execFileMock.calls[0]!.resolve("C:\\npm\\claude.cmd\r\n");
-      await flush();
-      expect(probe.readBasename(5006)).toBe("claude");
+      for (let i = 0; i < 5; i++) {
+        expect(probe.readBasename(5005)).toBeNull();
+        await flush();
+      }
+      expect(execFileMock.calls).toHaveLength(0);
+    });
+
+    it("keeps evict and dispose harmless", () => {
+      const probe = new ImagePathProbe();
+      probe.readBasename(5005);
+      expect(() => {
+        probe.evict(5005);
+        probe.dispose();
+      }).not.toThrow();
+      expect(probe.readBasename(5005)).toBeNull();
     });
   });
 

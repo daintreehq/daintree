@@ -488,7 +488,15 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ entryPoint: "public-api", processTopology: "partial" }),
     claim:
-      "The real probe making real OS lookups at the pty-host's own poll cadence, with both the current and the pre-backoff read rule measured in the same window. It is how often a permanently failing PID starts a subprocess, NOT what one probe costs against a live process — an absent PID is cheaper for `lsof` to answer — and not the detector latency a user would notice. Skipped on Linux, where the probe is a bare readlink and starts nothing; diagnostic on Windows, where PowerShell start cost dominates the reading.",
+      "The real probe making real OS lookups at the pty-host's own poll cadence, with both the current and the pre-backoff read rule measured in the same window. It is how often a permanently failing PID starts a subprocess, NOT what one probe costs against a live process — an absent PID is cheaper for `lsof` to answer — and not the detector latency a user would notice. Skipped on Linux, where the probe is a bare readlink and starts nothing, and skipped on Windows since #12243, where the probe no longer has a Windows path at all: `ExecutablePath` arrives in the ProcessTreeCache census and there is no per-PID subprocess left to storm. It is a macOS reading now.",
+  },
+  {
+    label: "windows census transport",
+    ids: ["PERF-409"],
+    kind: "mechanism",
+    fidelity: withFidelity({ entryPoint: "public-api", processTopology: "partial" }),
+    claim:
+      "The real ProcessTreeCache making real CIM enumerations at the pty-host's own cadence, with the shipped persistent-helper transport and the pre-#12243 process-per-poll transport measured in the same window over the same exported query. The START COUNT is the finding and is exact. The CPU and latency figures are a COMPARISON between two arms sharing a machine under each other's load, never an absolute cost, and neither includes the work the CIM call causes inside WmiPrvSE; the one-shot arm's CPU is sampled before its own teardown, so it is undercounted in the direction that works against the finding. It is the census transport, not the poller's idle cadence — the cache is driven explicitly here, and PERF-092 is what measures the schedule. Windows only; there is no equivalent transport to compare elsewhere.",
   },
   {
     label: "terminal submit lane",

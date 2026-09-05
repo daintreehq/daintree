@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "node:util";
 import { readlink } from "node:fs/promises";
+import { toExecutableBasename } from "../../utils/executableBasename.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,7 +16,7 @@ export const IMAGE_PATH_EVICTION_TTL_MS = 30_000;
 // the delay has passed, and the delay doubles on each consecutive failure from
 // 3s to a 48s ceiling. ProcessDetector reads every shallow PID on every
 // ProcessTreeCache poll, so without this a PID the probe can never read costs
-// one `lsof`/PowerShell start per poll for as long as the process lives.
+// one `lsof` start per poll for as long as the process lives.
 //
 // Each step is a whole multiple of the 1500ms poll interval rather than a value
 // near it (#8794). That does NOT make retries land exactly on a poll: the
@@ -78,8 +79,13 @@ function nextRetryDelayMs(currentMs: number): number {
  * Platform dispatch:
  *  - Linux: `readlink /proc/<pid>/exe` (pure Node, ~instant)
  *  - macOS: `lsof -a -d txt -p <pid> -Fn` filtered to skip system libs
- *  - Windows: PowerShell `Get-CimInstance Win32_Process … ExecutablePath`
  *  - Other: returns null (no probe scheduled)
+ *
+ * Windows is deliberately NOT here. `ExecutablePath` is a `Win32_Process`
+ * property, so `ProcessTreeCache`'s census already carries it for every PID in
+ * the snapshot and `ProcessDetector` reads it from `ProcessInfo` instead. This
+ * probe used to start its own `powershell.exe` per PID for the same field
+ * (#12243).
  *
  * All probe failures are swallowed — image-path is a supplementary signal,
  * not a primary one, so falling back to the existing comm/argv path is
@@ -168,9 +174,7 @@ export class ImagePathProbe {
   }
 
   private isPlatformSupported(): boolean {
-    return (
-      process.platform === "linux" || process.platform === "darwin" || process.platform === "win32"
-    );
+    return process.platform === "linux" || process.platform === "darwin";
   }
 
   private evictStale(now: number): void {
@@ -225,7 +229,6 @@ export class ImagePathProbe {
       const platform = process.platform;
       if (platform === "linux") return await this.resolveLinux(pid);
       if (platform === "darwin") return await this.resolveMacOS(pid);
-      if (platform === "win32") return await this.resolveWindows(pid);
       return null;
     } catch {
       return null;
@@ -235,7 +238,7 @@ export class ImagePathProbe {
   private async resolveLinux(pid: number): Promise<string | null> {
     try {
       const target = await readlink(`/proc/${pid}/exe`);
-      return this.toBasename(this.stripDeletedSuffix(target));
+      return toExecutableBasename(this.stripDeletedSuffix(target));
     } catch {
       return null;
     }
@@ -258,30 +261,6 @@ export class ImagePathProbe {
     }
   }
 
-  private async resolveWindows(pid: number): Promise<string | null> {
-    try {
-      const { stdout } = await execFileAsync(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ExecutablePath`,
-        ],
-        {
-          encoding: "utf8",
-          shell: false,
-          signal: AbortSignal.timeout(IMAGE_PATH_PROBE_TIMEOUT_MS),
-        }
-      );
-      const trimmed = stdout.trim();
-      if (!trimmed) return null;
-      return this.toBasename(trimmed);
-    } catch {
-      return null;
-    }
-  }
-
   private parseLsofOutput(stdout: string): string | null {
     // `lsof -Fn` emits per-fd records. Each record's `n`-prefixed line is the
     // mapped path. We may see several `n` lines (the executable plus every
@@ -295,9 +274,9 @@ export class ImagePathProbe {
       if (!filePath.startsWith("/")) continue;
       if (!fallback) fallback = filePath;
       if (this.isMacOSLibraryPath(filePath)) continue;
-      return this.toBasename(filePath);
+      return toExecutableBasename(filePath);
     }
-    return fallback ? this.toBasename(fallback) : null;
+    return fallback ? toExecutableBasename(fallback) : null;
   }
 
   private isMacOSLibraryPath(filePath: string): boolean {
@@ -318,20 +297,5 @@ export class ImagePathProbe {
     // procfs readlink appends ` (deleted)` when the original file has been
     // unlinked while the process is still running (e.g. upgrade-in-place).
     return target.replace(/\s+\(deleted\)\s*$/u, "");
-  }
-
-  private toBasename(fullPath: string): string | null {
-    const trimmed = fullPath.trim();
-    if (!trimmed) return null;
-    // Split on both POSIX and Windows separators so a Windows-style path
-    // resolves correctly when this code runs on macOS/Linux (tests, dev
-    // boxes). path.basename respects the running platform's separator only.
-    const baseRaw = trimmed.split(/[\\/]/).pop() || trimmed;
-    const lower = baseRaw.toLowerCase();
-    // Strip Windows executable extensions so the basename lines up with the
-    // lowercase keys the candidate builder uses for AGENT_CLI_NAMES /
-    // getProcessIconMap() lookups.
-    const stripped = lower.replace(/\.(exe|cmd|bat|com|ps1)$/u, "");
-    return stripped || null;
   }
 }
