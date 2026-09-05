@@ -290,6 +290,22 @@ export class PluginDevWorkerMainBridge {
     this.pendingRegistrations.clear();
     this.activationPhase = "failed";
     this.rejectActivation(new Error(`Plugin dev worker "${this.pluginId}" disposed`));
+    // Disposal drops the activate-time registrations too (#12275). Everything
+    // else here is torn down by hand, but `clearPriorRegistrations` was reachable
+    // only through retirement — so a disposed bridge still left its actions and
+    // IPC handlers bound to a worker that no longer exists. Not routed through
+    // `retireGeneration`: no replacement is coming, so this must not re-open the
+    // activation phase or mark a successor awaited.
+    // ...unless retirement already did it. `awaitingReplacement` means this
+    // generation was retired, which clears them; clearing twice would double-fire
+    // the owner's deregistration.
+    if (!this.awaitingReplacement) {
+      try {
+        this.clearPriorRegistrations();
+      } catch {
+        // best-effort — teardown is already complete either way
+      }
+    }
   }
 
   /** Abort every in-flight host call (worker is going away — cancel the I/O). */
@@ -349,6 +365,18 @@ export class PluginDevWorkerMainBridge {
    * from its own module realm, so anything left behind is a duplicate the new
    * generation cannot address.
    */
+  /**
+   * Retire this generation from outside (#12275).
+   *
+   * The owner's activation deadline blew, so no worker message is coming to do
+   * it — the plugin is wedged mid-`activate()`, which is exactly when its
+   * half-made registrations most need dropping.
+   */
+  retire(reason: string): void {
+    if (this.disposed) return;
+    this.retireGeneration(reason);
+  }
+
   private retireGeneration(reason: string): void {
     this.reloadGeneration++;
     // Before the fallible steps: aborting the outgoing generation's host calls
