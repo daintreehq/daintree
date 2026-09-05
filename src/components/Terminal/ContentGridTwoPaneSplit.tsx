@@ -1,3 +1,4 @@
+import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
 import { cn } from "@/lib/utils";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
@@ -36,6 +37,7 @@ export function ContentGridTwoPaneSplit({
       )}
     >
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+      <ProjectPluginTrustBanner />
       <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
       <GridShell ctx={ctx}>
         <div

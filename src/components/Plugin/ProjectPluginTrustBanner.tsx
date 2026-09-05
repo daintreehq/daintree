@@ -1,42 +1,18 @@
-import { ShieldAlert } from "lucide-react";
-import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
+import { Puzzle } from "lucide-react";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginTrustDecision } from "@shared/types/plugin";
 
 /**
- * The one consent gate for a project's own `.daintree/plugins/` folder.
- *
- * It appears on `plugin:project-trust-prompt` and on nothing else. Main emits
- * that push only when the folder holds at least one valid manifest and no
- * decision is on record, so this cannot appear for a project the user has
- * already answered for — not on a branch switch, not on a pull, not when an
- * agent rewrites a plugin's source. Contents changing is not consent changing.
- *
- * **A banner, not a modal.** This used to be a dialog, which meant a security
- * question stole focus from the terminal an agent was mid-keystroke in, and
- * re-stole it on every switch back into a project that was still undecided
- * (#12212). VS Code answers the same question with a Restricted Mode banner
- * plus a persistent status badge, and that split is what makes dismissal safe
- * here too: closing this decides nothing, and `ProjectPluginIndicator` keeps
- * carrying the offer in the sidebar for as long as the plugins stay off. The
- * store remembers the dismissal for this view, because main re-emits the prompt
- * from every watcher settle while a project is undecided.
- *
- * The three answers are unchanged. **Deliberately no per-capability choices:**
- * there is no sandbox behind them, so offering to deny filesystem access would
- * claim an enforcement Daintree does not have. Capabilities are disclosed in
- * the plugin manager instead, which is the commitment `docs/plugins/trust-model.md`
- * already makes.
+ * A neutral consent card at the top of the panel grid. Only main's trust
+ * prompt opens it; dismissal is remembered for this view, and the sidebar
+ * indicator keeps the choice discoverable without interrupting terminal input.
  */
 export function ProjectPluginTrustBanner() {
   const prompt = useProjectPluginStore((s) => s.prompt);
 
-  // The dialog this replaced was wrapped twice over — by `ModalHostLayer` and
-  // by itself. No global banner carries its own boundary, but none of the
-  // others is built from a payload that started life as JSON in a folder an
-  // agent writes to, and this one sits in the app's top chrome rather than in
-  // a modal that can be closed. A throw here would take the chrome with it.
   return (
     <ErrorBoundary
       variant="component"
@@ -50,6 +26,7 @@ export function ProjectPluginTrustBanner() {
 
 function TrustBannerBody() {
   const prompt = useProjectPluginStore((s) => s.prompt);
+  const error = useProjectPluginStore((s) => s.error);
   const deciding = useProjectPluginStore((s) => s.deciding);
   const decide = useProjectPluginStore((s) => s.decide);
   const dismissPrompt = useProjectPluginStore((s) => s.dismissPrompt);
@@ -64,57 +41,51 @@ function TrustBannerBody() {
     void decide(decision);
   };
 
-  // A decision already on the wire owns the gate until it settles. `loading`
-  // rather than `disabled` for the pressed button, so focus is not dropped to
-  // `document.body` mid-answer.
-  //
-  // The fill sits on `Keep disabled`, exactly as it did on the dialog: it marks
-  // the DEFAULT answer, not a recommended one, because the thing being offered
-  // is running unreviewed code from a folder agents can write to. `primary`
-  // here is the neutral filled treatment, not an accent — the warning tint is
-  // already the one load-bearing signal on this surface.
+  // Keep focus on the pending answer; other choices wait for it to settle.
   const busy = deciding !== null;
-  const actions: BannerAction[] = [
-    {
-      id: "session",
-      label: "Enable for this session",
-      variant: "dismiss",
-      onClick: answer("session"),
-      loading: busy && deciding === "session",
-    },
-    {
-      id: "enabled",
-      label: "Always enable",
-      variant: "dismiss",
-      onClick: answer("enabled"),
-      loading: busy && deciding === "enabled",
-    },
-    {
-      id: "disabled",
-      label: "Keep disabled",
-      variant: "primary",
-      onClick: answer("disabled"),
-      loading: busy && deciding === "disabled",
-    },
+  const choices: { decision: ProjectPluginTrustDecision; label: string }[] = [
+    { decision: "session", label: "Enable for this session" },
+    { decision: "enabled", label: "Always enable" },
+    { decision: "disabled", label: "Keep disabled" },
   ];
 
   return (
-    <InlineStatusBanner
-      icon={ShieldAlert}
-      title={
-        plugins.length === 1
-          ? "This project ships a Daintree plugin"
-          : `This project ships ${plugins.length} Daintree plugins`
-      }
-      // Names the plugins and says plainly that the code is unsandboxed, because
-      // an agent with write access to `.daintree/plugins/` is the threat the
-      // gate exists for — a human reviewing a diff is not.
-      description={`${names} — plugin code runs with your account and isn't sandboxed. Enable it only if you trust everyone who can write to this project, including the agents you run here.`}
-      severity="warning"
-      role="status"
-      onClose={busy ? undefined : dismissPrompt}
-      closeAriaLabel="Decide later"
-      actions={actions}
-    />
+    <div className="shrink-0 px-2 pt-2">
+      <InlineStatusBanner
+        icon={Puzzle}
+        title={
+          plugins.length === 1 ? "Enable this project's plugin?" : "Enable this project's plugins?"
+        }
+        description={`${names} — plugin code runs with your account and isn't sandboxed. Only enable it if you trust this project's contributors, including its agents.`}
+        descriptionExtras={
+          <>
+            {error && (
+              <p role="alert" className="mt-2 text-xs text-status-error">
+                {error}
+              </p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {choices.map(({ decision, label }) => (
+                <Button
+                  key={decision}
+                  size="sm"
+                  variant={decision === "disabled" ? "secondary" : "ghost"}
+                  onClick={answer(decision)}
+                  loading={deciding === decision}
+                  disabled={busy && deciding !== decision}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </>
+        }
+        severity="neutral"
+        role="status"
+        className="mx-auto w-full max-w-2xl rounded-lg border border-border-default bg-surface-panel"
+        onClose={busy ? undefined : dismissPrompt}
+        closeAriaLabel="Decide later"
+      />
+    </div>
   );
 }

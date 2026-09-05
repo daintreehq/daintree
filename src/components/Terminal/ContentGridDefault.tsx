@@ -1,3 +1,4 @@
+import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
 import React, { useCallback } from "react";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
@@ -80,6 +81,7 @@ export function ContentGridDefault({
         )}
       >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+        <ProjectPluginTrustBanner />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
         <div className="relative flex-1 min-h-0">

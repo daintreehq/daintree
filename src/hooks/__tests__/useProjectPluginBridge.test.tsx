@@ -167,7 +167,7 @@ describe("useProjectPluginBridge", () => {
     expect(payload?.context?.eventKind).toBe("settings");
   });
 
-  it("routes the inbox row a suppressible global owes, so an outranked banner is recoverable", () => {
+  it("keeps the trust choice discoverable in the inbox without a duplicate toast", () => {
     render(<Harness />);
     emit("plugin:project-trust-prompt", {
       projectId: "proj-a",
@@ -176,8 +176,7 @@ describe("useProjectPluginBridge", () => {
 
     expect(notify).toHaveBeenCalledTimes(1);
     const payload = notify.mock.calls[0]?.[0];
-    // Inbox only. The banner is the timely surface; this is the backstop for
-    // when a host crash or safe-mode notice wins the single global slot.
+    // Inbox only; the grid card already presents the choice.
     expect(payload?.priority).toBe("low");
     expect(payload?.supersedeKey).toBe("project-plugin-trust:proj-a");
     expect(payload?.action?.label).toBe("Open plugin manager");

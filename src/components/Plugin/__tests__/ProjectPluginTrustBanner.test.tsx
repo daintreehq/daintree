@@ -62,7 +62,7 @@ describe("ProjectPluginTrustBanner", () => {
     expect(container.textContent).toBe("");
 
     openPrompt();
-    expect(document.body.textContent).toContain("Daintree plugins");
+    expect(document.body.textContent).toContain("Enable this project's plugins?");
   });
 
   it("names every plugin it is asking about rather than counting them", () => {
@@ -126,6 +126,56 @@ describe("ProjectPluginTrustBanner", () => {
     expect(setProjectPluginTrust).not.toHaveBeenCalled();
     expect(useProjectPluginStore.getState().prompt).toBeNull();
     expect(container.textContent).toBe("");
+  });
+
+  it("leaves terminal focus alone when the prompt arrives", () => {
+    render(
+      <>
+        <input aria-label="Terminal input" />
+        <ProjectPluginTrustBanner />
+      </>
+    );
+    const terminal = screen.getByRole("textbox");
+    terminal.focus();
+    openPrompt();
+    expect(document.activeElement).toBe(terminal);
+  });
+
+  it("keeps a failed decision visible and lets the user retry", async () => {
+    setProjectPluginTrust.mockRejectedValueOnce(new Error("Couldn't save plugin trust"));
+    render(<ProjectPluginTrustBanner />);
+    openPrompt();
+
+    await act(async () => button("Always enable").click());
+
+    expect(screen.getByRole("alert").textContent).toContain("Couldn't save plugin trust");
+    expect(useProjectPluginStore.getState().prompt).not.toBeNull();
+    await act(async () => button("Always enable").click());
+    expect(setProjectPluginTrust).toHaveBeenCalledTimes(2);
+    expect(useProjectPluginStore.getState().prompt).toBeNull();
+  });
+
+  it("holds the pending choice until it settles", async () => {
+    let resolve!: () => void;
+    setProjectPluginTrust.mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        })
+    );
+    render(<ProjectPluginTrustBanner />);
+    openPrompt();
+    const enable = button("Always enable");
+    enable.focus();
+    act(() => enable.click());
+
+    expect(document.activeElement).toBe(enable);
+    expect(enable.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Decide later" })).toBeNull();
+    act(() => button("Keep disabled").click());
+    expect(setProjectPluginTrust).toHaveBeenCalledTimes(1);
+    await act(async () => resolve());
+    expect(useProjectPluginStore.getState().prompt).toBeNull();
   });
 
   it("does not block: it renders as a status region, never a dialog", () => {

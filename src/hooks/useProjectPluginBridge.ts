@@ -14,10 +14,8 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  *   thing in the renderer that may, and main emits it only when the folder holds
  *   a valid manifest and no decision is on record — so a project the user has
  *   already answered for never asks again, whatever its contents do afterwards.
- *   The gate renders in the one global banner slot, which a host crash or a
- *   safe-mode notice outranks, so it also routes the inbox row every
- *   suppressible global owes: `priority: "low"`, superseded per project, so a
- *   question the banner never got to ask is still answerable.
+ *   The gate renders as a neutral card in the panel grid. An inbox entry
+ *   keeps the choice discoverable after dismissal, alongside the sidebar.
  * - `plugin:project-plugins-changed` is a full snapshot, pushed on every open,
  *   trust change and staged activation. The manager renders from it rather than
  *   refetching, which is why nothing here polls. A manifest the host refused
@@ -60,13 +58,12 @@ export function useProjectPluginBridge(): void {
       // folder the user is not looking at.
       if (useProjectPluginStore.getState().prompt !== payload) return;
       notify({
-        type: "warning",
-        title: "This project ships plugins",
+        type: "info",
+        title: "Project plugins available",
         message:
           "They haven't been run. Decide whether to enable this project's plugins in the plugin manager.",
-        // Inbox only: the banner is the timely surface, and this exists for the
-        // case where something outranked it. A toast as well would be the same
-        // question twice.
+        // The grid card is the timely surface; the inbox keeps a route back
+        // to the choice after dismissal without adding a duplicate toast.
         priority: "low",
         action: {
           label: "Open plugin manager",
