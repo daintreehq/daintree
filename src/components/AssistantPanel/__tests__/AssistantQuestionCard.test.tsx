@@ -55,6 +55,63 @@ function mount(q: AssistantQuestion) {
 const settle = () => act(async () => {});
 
 /**
+ * While an answer is in flight the sheet is READ-ONLY, and read-only is not the same
+ * thing as inescapable.
+ *
+ * The submitted-state handler suppresses keys so that a second answer cannot be sent
+ * over the first, and it used to do that by cancelling every unmodified key that was not
+ * Escape — which took Tab and Shift+Tab with it and held a keyboard user inside the
+ * sheet until the engine acknowledged. An acknowledgement that is slow to arrive made
+ * that a trap of unbounded length.
+ *
+ * The rule, and what this asserts, is the DISTINCTION rather than any particular key
+ * list: a key that would change the answer is suppressed, and a key that only moves
+ * focus somewhere else is not a decision and is never suppressed. Written this way it
+ * survives the sheet growing new shortcuts, because a new shortcut is a new answer key
+ * and belongs on the suppressed side by construction.
+ */
+describe("a submitted answer freezes the sheet without trapping focus", () => {
+  /**
+   * The sheet mid-flight: an answer sent, the engine not yet back.
+   *
+   * The answer handler returns a promise that never settles, which is the only way to
+   * hold the submitted state open long enough to press a key into it — with `mount`'s
+   * synchronous `true` the state exists for less than a tick.
+   */
+  function inFlight() {
+    const view = render(
+      <div data-assistant-surface="">
+        <button type="button" autoFocus>
+          composer
+        </button>
+        <AssistantQuestionCard
+          question={question(3)}
+          onAnswer={vi.fn().mockReturnValue(new Promise<boolean>(() => {}))}
+        />
+      </div>
+    );
+    const scope = within(view.container);
+    const card = scope.getByRole("group", { name: "Question" });
+    fireEvent.click(scope.getAllByRole("option")[0]!);
+    return { card, scope };
+  }
+
+  it("suppresses keys that would change the answer", () => {
+    const { card } = inFlight();
+    // `fireEvent` returns false when a handler called preventDefault.
+    expect(fireEvent.keyDown(card, { key: "ArrowDown" })).toBe(false);
+    expect(fireEvent.keyDown(card, { key: "2" })).toBe(false);
+  });
+
+  it("lets focus-navigation keys through", () => {
+    const { card } = inFlight();
+    for (const event of [{ key: "Tab" }, { key: "Tab", shiftKey: true }]) {
+      expect(fireEvent.keyDown(card, event), `${JSON.stringify(event)} was swallowed`).toBe(true);
+    }
+  });
+});
+
+/**
  * The status line while a CHOICE is being applied, rendered in isolation.
  *
  * Exists so the dismissal test can assert the two decisions read DIFFERENTLY without
