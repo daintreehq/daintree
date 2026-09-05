@@ -217,10 +217,11 @@ describe("PluginUIPromptDispatcher", () => {
     d.cancelForPlugin("mine");
 
     await expect(mine).resolves.toBe(false);
-    expect(wc.send).toHaveBeenCalledWith(
-      CHANNELS.PLUGIN_UI_PROMPT_CANCEL,
-      expect.objectContaining({ pluginId: "mine" })
-    );
+    // Deliberately unscoped: the bulk drain dismisses every prompt for the
+    // plugin, so an accidental `promptId` here would narrow it to one.
+    expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+      pluginId: "mine",
+    });
 
     // The other plugin's prompt is untouched until it answers.
     const otherId = (
@@ -282,6 +283,18 @@ describe("PluginUIPromptDispatcher", () => {
       pluginId: "mine",
       promptId,
     });
+
+    // The abort must release the per-plugin cap, not just settle the promise —
+    // otherwise the successor generation's first prompt is answered for it.
+    const next = d.requestPrompt("mine", CONFIRM);
+    const nextId = lastPromptId(wc);
+    expect(nextId).not.toBe(promptId);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: nextId, result: true }
+    );
+    await expect(next).resolves.toBe(true);
   });
 
   it("a late abort cannot dismiss a replacement prompt (#12279)", async () => {
@@ -308,12 +321,14 @@ describe("PluginUIPromptDispatcher", () => {
 
     // The stale signal must not reach the successor's dialog.
     expect(wc.send).not.toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, expect.anything());
+    // Answer affirmatively: `false` would also be the value a wrongly-delivered
+    // cancellation produces, so it could not tell the two apart.
     ipcMainMock._emit(
       CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
       { sender: { id: 7 } },
-      { promptId: secondId, result: false }
+      { promptId: secondId, result: true }
     );
-    await expect(second).resolves.toBe(false);
+    await expect(second).resolves.toBe(true);
   });
 
   it("cancelForPlugin dismisses on the ORIGINAL window even after focus switches", async () => {

@@ -251,13 +251,9 @@ export class PluginDevWorkerHostProxy {
     if (signal?.aborted) {
       return Promise.resolve(graceValue);
     }
-    return this.call<T>(method, params, signal, { value: graceValue }).catch((err: unknown) => {
-      // A cancelled prompt is a dismissal, not a failure (#12279): settle the
-      // grace value so the never-throws contract holds. Only an abort of THIS
-      // call's signal is swallowed — validation and transport errors still throw.
-      if (signal?.aborted) return graceValue;
-      throw err;
-    });
+    // Cancellation settles the grace value inside `call`'s abort branch, so a
+    // real validation or transport error is never rewritten into a dismissal.
+    return this.call<T>(method, params, signal, { value: graceValue });
   }
 
   private call<T>(
@@ -291,9 +287,23 @@ export class PluginDevWorkerHostProxy {
           if (!pending) return;
           this.pendingCalls.delete(requestId);
           cleanup();
-          // Tell main to abort the in-flight host call (AbortSignal itself is not
-          // structured-clone-safe, so the requestId is the cancellation handle).
-          this.post({ type: "host-cancel", requestId });
+          try {
+            // Tell main to abort the in-flight host call (AbortSignal itself is not
+            // structured-clone-safe, so the requestId is the cancellation handle).
+            this.post({ type: "host-cancel", requestId });
+          } catch {
+            // best-effort — the entry is already claimed, so a failed cancel
+            // post must not leave the caller's promise unsettled forever
+          }
+          // A grace-bearing call (the imperative prompts) treats cancellation as
+          // a dismissal rather than a failure. Settling it HERE is what makes
+          // that safe: this branch only runs when the abort actually claimed the
+          // pending entry, so a genuine error that already settled the call can
+          // never be rewritten into a dismissal (#12279).
+          if (grace) {
+            resolve(grace.value as T);
+            return;
+          }
           reject(abortError(signal));
         };
         signal.addEventListener("abort", onAbort, { once: true });

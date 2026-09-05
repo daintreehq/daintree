@@ -226,11 +226,19 @@ export class PluginDevWorkerHost extends EventEmitter {
   /** Re-arm the ready promise and fork a new worker. */
   private startFresh(): void {
     if (this.isDisposed) return;
-    this.readyPromise = new Promise((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
-    this.readyPromise.catch(() => undefined);
+    // Only re-arm once the previous wait has settled. A rebuild landing before
+    // the first `ready` retires that worker with the original `start()` caller
+    // still pending — re-arming here would orphan its resolver forever, and
+    // PluginService reads a `start()` rejection as a hard fork failure and
+    // disposes the very replacement being forked (#12279). Reusing the pending
+    // resolver lets the replacement satisfy the original waiter.
+    if (!this.readyResolve) {
+      this.readyPromise = new Promise((resolve, reject) => {
+        this.readyResolve = resolve;
+        this.readyReject = reject;
+      });
+      this.readyPromise.catch(() => undefined);
+    }
     this.startWorker();
   }
 
@@ -528,9 +536,15 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.expectingExit = false;
     this.child = null;
 
-    if (this.readyReject) {
+    // A reload's deliberate kill is not an activation failure — a replacement
+    // fork is already on its way and settles this same waiter. Rejecting here
+    // would fail an activation that is about to succeed (#12279). A crash still
+    // rejects: a worker that dies on load has genuinely failed to activate.
+    const replacementComing = wasExpected && !this.isDisposed;
+    if (this.readyReject && !replacementComing) {
       this.readyReject(new Error(`Plugin dev worker exited (code ${code ?? "unknown"})`));
       this.readyReject = null;
+      this.readyResolve = null;
     }
 
     if (this.isDisposed) {

@@ -618,6 +618,57 @@ describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy prompt cancellation (#12279)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("resolves the dismiss value and posts host-cancel when the signal aborts", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+
+    const promise = proxy.host.showConfirm({ title: "Sure?" }, { signal: controller.signal });
+    const call = sent.find((m) => m.type === "host-call");
+    expect(call.method).toBe("showConfirm");
+
+    controller.abort();
+
+    // A cancelled prompt is a dismissal, not a failure.
+    await expect(promise).resolves.toBe(false);
+    expect(sent).toContainEqual({ type: "host-cancel", requestId: call.requestId });
+  });
+
+  it("never sends an already-aborted prompt", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      proxy.host.showQuickPick([{ id: "a", label: "A" }], {}, { signal: controller.signal })
+    ).resolves.toBeUndefined();
+    expect(sent.filter((m) => m.type === "host-call")).toHaveLength(0);
+  });
+
+  it("still throws a genuine error when the signal aborts after it (#12279)", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+
+    const promise = proxy.host.showConfirm({ title: "Sure?" }, { signal: controller.signal });
+    const call = sent.find((m) => m.type === "host-call");
+
+    // The host rejects for a real reason, and only then does the caller give up.
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "options.title must be a string",
+    } as any);
+    controller.abort();
+
+    // Settling the grace value on signal state alone would rewrite this real
+    // validation failure into a silent dismissal.
+    await expect(promise).rejects.toThrow(/options.title must be a string/);
+  });
+});
+
 describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never throws (#10617)", () => {
   beforeEach(() => vi.clearAllMocks());
 

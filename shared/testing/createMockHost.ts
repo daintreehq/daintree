@@ -45,6 +45,7 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginHostCallOptions,
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
@@ -1192,19 +1193,29 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     // production parity, records the call for assertions, then resolves the
     // configured `simulate*Response` value (default = the user-cancel dismiss
     // value). A shape the real host rejects now fails the mock too.
-    showQuickPick: (async (items: PluginQuickPickItem[], options?: PluginQuickPickOptions) => {
+    // An already-aborted signal dismisses without recording a call, matching
+    // production — a plugin test must not get a configured answer to a question
+    // the real host would never have asked (#12279).
+    showQuickPick: (async (
+      items: PluginQuickPickItem[],
+      options?: PluginQuickPickOptions,
+      callOptions?: PluginHostCallOptions
+    ) => {
       const validItems = validateQuickPickItems(items);
+      if (callOptions?.signal?.aborted) return undefined;
       showQuickPickCalls.push({ items: validItems, options });
       return quickPickResponse;
     }) as PluginHostApi["showQuickPick"],
-    async showInputBox(options) {
+    async showInputBox(options, callOptions) {
+      if (callOptions?.signal?.aborted) return undefined;
       showInputBoxCalls.push({ options });
       return inputBoxResponse;
     },
-    async showConfirm(options) {
+    async showConfirm(options, callOptions) {
       if (!options || typeof options !== "object" || typeof options.title !== "string") {
         throw new Error("showConfirm: options.title must be a string");
       }
+      if (callOptions?.signal?.aborted) return false;
       showConfirmCalls.push({ options });
       return confirmResponse;
     },

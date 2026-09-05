@@ -452,6 +452,33 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  it("lets the replacement satisfy a start() that a rebuild interrupted (#12279)", async () => {
+    vi.useFakeTimers();
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    const started = host.start();
+    let rejected: unknown = null;
+    started.catch((e) => (rejected = e));
+
+    // A rebuild lands before the first worker ever reported ready.
+    const oldChild = mockChildren[0] as MockUtilityChild;
+    watchCalls[0].cb("change", "index.js");
+    vi.advanceTimersByTime(250);
+    // Its late `ready` is correctly ignored — that generation is retired.
+    oldChild.emit("message", { type: "ready" });
+    oldChild.emit("exit", 0);
+    await vi.runOnlyPendingTimersAsync();
+
+    // The deliberate kill must NOT fail the activation: PluginService reads a
+    // start() rejection as a hard fork failure and disposes the replacement.
+    expect(rejected).toBeNull();
+
+    const newChild = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+    newChild.emit("message", { type: "ready" });
+    await expect(started).resolves.toBeUndefined();
+    host.dispose();
+  });
+
   it("ignores a superseded child once its replacement takes over (#12279)", async () => {
     vi.useFakeTimers();
     const { PluginDevWorkerHost } = await loadModule();
