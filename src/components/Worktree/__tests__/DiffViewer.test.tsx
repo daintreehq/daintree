@@ -800,9 +800,12 @@ describe("DiffViewer gutter side ownership (#12255)", () => {
     const hunks = capturedDiffProps.hunks as HunkData[];
     const ins = hunks[1]!.changes.find((c) => c.type === "insert")!;
 
-    const { markers, movedLabels } = renderGutterPair(renderGutter, ins, { new: "19" });
+    const { markers, markerCounts, movedLabels } = renderGutterPair(renderGutter, ins, {
+      new: "19",
+    });
 
     expect(markers).toEqual(["", "+"]);
+    expect(markerCounts).toEqual([1, 1]);
     expect(movedLabels).toEqual([[], ["moved"]]);
   });
 
@@ -811,9 +814,12 @@ describe("DiffViewer gutter side ownership (#12255)", () => {
     const hunks = capturedDiffProps.hunks as HunkData[];
     const del = hunks[0]!.changes.find((c) => c.type === "delete")!;
 
-    const { markers, movedLabels } = renderGutterPair(renderGutter, del, { old: "2" });
+    const { markers, markerCounts, movedLabels } = renderGutterPair(renderGutter, del, {
+      old: "2",
+    });
 
     expect(markers).toEqual(["-", ""]);
+    expect(markerCounts).toEqual([1, 1]);
     expect(movedLabels).toEqual([["moved"], []]);
   });
 
@@ -826,9 +832,12 @@ describe("DiffViewer gutter side ownership (#12255)", () => {
       isInsert: true,
     };
 
-    const { markers, movedLabels } = renderGutterPair(renderGutter, change, { new: "9999" });
+    const { markers, markerCounts, movedLabels } = renderGutterPair(renderGutter, change, {
+      new: "9999",
+    });
 
     expect(markers).toEqual(["", "+"]);
+    expect(markerCounts).toEqual([1, 1]);
     expect(movedLabels).toEqual([[], []]);
   });
 });
@@ -921,6 +930,10 @@ describe("DiffViewer real gutter rows (#12255)", () => {
     ]);
     expect(labelsFollowMarkers(rows)).toBe(true);
     expect(rows.every((row) => row.markers.length <= 1)).toBe(true);
+    // Guards labelsFollowMarkers against passing vacuously on a row with no
+    // gutter cells at all.
+    expect(rows.every((row) => row.cells.length === 2)).toBe(true);
+    expect(rows.every((row) => row.cells.every((cell) => cell.markerSpans === 1))).toBe(true);
   });
 
   it("leaves split gutters marking only the owning side", () => {
@@ -931,6 +944,10 @@ describe("DiffViewer real gutter rows (#12255)", () => {
     const moved = renderRealDiff(MOVED_DIFF, "split");
     expect(moved.flatMap((row) => row.movedLabels)).toHaveLength(6);
     expect(labelsFollowMarkers(moved)).toBe(true);
+    expect(moved.every((row) => row.cells.length === 2)).toBe(true);
+    // <=1 not ===1: the non-owning side is the library's own empty placeholder,
+    // which our renderer never touches.
+    expect(moved.every((row) => row.cells.every((cell) => cell.markerSpans <= 1))).toBe(true);
   });
 
   it("keeps both markers when a split row pairs a delete with an insert", () => {
