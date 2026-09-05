@@ -1879,6 +1879,26 @@ export class ProjectStore {
           continue;
         }
 
+        // `seenFilenames` only knows about recipes the reader returned, so a
+        // file it dropped whole — every terminal of a type this build doesn't
+        // know — records no owner and would be promoted straight over (#12261).
+        // That is the worst case of all: it needs no user action, since an
+        // ordinary project load runs reconciliation. Unlike the write paths this
+        // one cannot throw, so keep the local recipe in the mirror and leave the
+        // file alone; both survive, and neither is silently dropped.
+        const loss = await this.identityFiles.inspectInRepoRecipeForwardCompat(
+          projectPath,
+          recipe.name
+        );
+        if (loss) {
+          console.warn(
+            `[ProjectStore] Not promoting recipe "${recipe.name}" — ${filename} holds content ` +
+              `this build does not support: ${describeRecipeForwardIncompat(loss)}`
+          );
+          keptLocal.push(recipe);
+          continue;
+        }
+
         await this.writeInRepoRecipe(projectPath, recipe);
         inRepoById.set(recipe.id, recipe);
         seenFilenames.set(filename, recipe.id);

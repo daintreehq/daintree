@@ -55,12 +55,12 @@ function RecipeConflictDialogInner() {
       <AppDialog.Body className="space-y-3">
         <AppDialog.Description>
           {isForwardCompat
-            ? "This recipe's file holds content this version of Daintree doesn't understand — most likely written by a newer build or a plugin that isn't loaded. It was read without those parts, so saving would delete them from the file. Your unsaved edit hasn't been written."
+            ? "This recipe's file holds content this version of Daintree can't represent — most likely written by a newer build. It was read without those parts, so saving would delete them from the file. Your unsaved edit hasn't been written."
             : "Another tool changed this recipe's file since it was loaded — usually a git pull, branch switch, or stash pop. Your unsaved edit hasn't been written. Choose how to reconcile."}
         </AppDialog.Description>
         {isForwardCompat && pendingConflict.detail && (
           <pre
-            className="max-h-32 overflow-auto whitespace-pre-wrap rounded border border-border-default bg-surface-canvas p-2 font-mono text-xs text-text-secondary"
+            className="max-h-32 overflow-auto whitespace-pre-wrap rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-2 font-mono text-xs text-text-secondary"
             data-testid="recipe-conflict-detail"
           >
             {pendingConflict.detail}

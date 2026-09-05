@@ -134,6 +134,37 @@ describe("detectRecipeForwardIncompat", () => {
     ).toBeNull();
   });
 
+  it("reports valid terminals the per-recipe cap would discard on write-back", () => {
+    // The cap is a spawn-safety limit, but the reader applies it before the
+    // recipe reaches memory — so saving deletes the overflow from the file too.
+    const terminals = Array.from({ length: 12 }, (_, i) => ({
+      type: "terminal",
+      command: `echo ${i}`,
+    }));
+    const loss = detectRecipeForwardIncompat({ ...cleanRecipe(), terminals });
+    expect(loss?.cappedTerminalCount).toBe(2);
+    expect(loss?.unknownRecipeKeys).toEqual([]);
+    expect(loss?.unsupportedTerminals).toEqual([]);
+  });
+
+  it("counts only terminals the cap discards, not ones the sanitizer rejects", () => {
+    // 11 entries, but one is rejected for a control-char command — 10 survive,
+    // which is exactly the cap, so nothing is lost to it.
+    const terminals = [
+      ...Array.from({ length: 10 }, (_, i) => ({ type: "terminal", command: `echo ${i}` })),
+      { type: "terminal", command: "echo\nrm -rf /" },
+    ];
+    expect(detectRecipeForwardIncompat({ ...cleanRecipe(), terminals })).toBeNull();
+  });
+
+  it("reports nothing for a recipe exactly at the cap", () => {
+    const terminals = Array.from({ length: 10 }, (_, i) => ({
+      type: "terminal",
+      command: `echo ${i}`,
+    }));
+    expect(detectRecipeForwardIncompat({ ...cleanRecipe(), terminals })).toBeNull();
+  });
+
   it("leaves the inspected object untouched", () => {
     const recipe = { ...cleanRecipe(), mystery: 1 };
     const snapshot = JSON.stringify(recipe);
@@ -161,6 +192,14 @@ describe("describeRecipeForwardIncompat", () => {
     expect(described).toContain('terminal #1 (type "future-agent")');
     expect(described).toContain("unknown terminal fields — #2: retryPolicy");
     expect(described).toContain("unknown recipe fields — ritual");
+  });
+
+  it("names the cap overflow", () => {
+    const loss = detectRecipeForwardIncompat({
+      ...cleanRecipe(),
+      terminals: Array.from({ length: 11 }, () => ({ type: "terminal", command: "x" })),
+    })!;
+    expect(describeRecipeForwardIncompat(loss)).toBe("1 terminal(s) past the 10-terminal limit");
   });
 
   it("never reveals values, only shape", () => {

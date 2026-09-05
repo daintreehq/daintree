@@ -18,7 +18,12 @@
  * and let a crafted file permanently block saves.
  */
 import type { RecipeTerminal, TerminalRecipe } from "../types/project.js";
-import { isAllowedRecipeType, type RecipeSanitizeOptions } from "./recipeSanitizer.js";
+import {
+  isAllowedRecipeType,
+  sanitizeRecipeTerminals,
+  MAX_TERMINALS_PER_RECIPE,
+  type RecipeSanitizeOptions,
+} from "./recipeSanitizer.js";
 
 /**
  * Every field this build knows on a `RecipeTerminal`, including the three that
@@ -92,6 +97,13 @@ export interface RecipeForwardIncompat {
   unknownTerminalKeys: UnsupportedTerminalKeys[];
   /** Terminals whose `type` is well-formed but unknown, so the whole entry drops. */
   unsupportedTerminals: UnsupportedTerminal[];
+  /**
+   * Terminals this build considers entirely valid but discards anyway, because
+   * the file holds more than {@link MAX_TERMINALS_PER_RECIPE}. The cap is a
+   * spawn-safety limit, but the reader applies it before the recipe reaches
+   * memory, so a write-back deletes the overflow from the file too.
+   */
+  cappedTerminalCount: number;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -125,6 +137,13 @@ export function detectRecipeForwardIncompat(
   const unknownRecipeKeys = unknownKeysOf(parsed, KNOWN_RECIPE_KEYS);
   const unknownTerminalKeys: UnsupportedTerminalKeys[] = [];
   const unsupportedTerminals: UnsupportedTerminal[] = [];
+  // The sanitizer is used here only to COUNT survivors, never to report what it
+  // rejected — a terminal dropped for a control-char command is a security drop
+  // and deliberately stays out of this result. What remains is the number of
+  // entries this build considers entirely valid, so anything past the cap is
+  // content it simply refuses to carry back to disk.
+  const survivingTerminals = sanitizeRecipeTerminals(parsed.terminals, options).length;
+  const cappedTerminalCount = Math.max(0, survivingTerminals - MAX_TERMINALS_PER_RECIPE);
 
   if (Array.isArray(parsed.terminals)) {
     parsed.terminals.forEach((raw, index) => {
@@ -143,11 +162,12 @@ export function detectRecipeForwardIncompat(
   if (
     unknownRecipeKeys.length === 0 &&
     unknownTerminalKeys.length === 0 &&
-    unsupportedTerminals.length === 0
+    unsupportedTerminals.length === 0 &&
+    cappedTerminalCount === 0
   ) {
     return null;
   }
-  return { unknownRecipeKeys, unknownTerminalKeys, unsupportedTerminals };
+  return { unknownRecipeKeys, unknownTerminalKeys, unsupportedTerminals, cappedTerminalCount };
 }
 
 /**
@@ -161,9 +181,7 @@ export function describeRecipeForwardIncompat(loss: RecipeForwardIncompat): stri
     const described = loss.unsupportedTerminals
       .map((t) => `#${t.index + 1} (type "${t.type}")`)
       .join(", ");
-    parts.push(
-      `${loss.unsupportedTerminals.length === 1 ? "terminal" : "terminals"} ${described}`
-    );
+    parts.push(`${loss.unsupportedTerminals.length === 1 ? "terminal" : "terminals"} ${described}`);
   }
   if (loss.unknownTerminalKeys.length > 0) {
     const described = loss.unknownTerminalKeys
@@ -173,6 +191,11 @@ export function describeRecipeForwardIncompat(loss: RecipeForwardIncompat): stri
   }
   if (loss.unknownRecipeKeys.length > 0) {
     parts.push(`unknown recipe fields — ${loss.unknownRecipeKeys.join(", ")}`);
+  }
+  if (loss.cappedTerminalCount > 0) {
+    parts.push(
+      `${loss.cappedTerminalCount} terminal(s) past the ${MAX_TERMINALS_PER_RECIPE}-terminal limit`
+    );
   }
   return parts.join("; ");
 }

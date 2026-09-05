@@ -2937,7 +2937,11 @@ describe("recipeStore", () => {
 
       async function importConflictStore() {
         const mod = await import("../recipeConflictStore");
-        mod.useRecipeConflictStore.setState({ pendingConflict: null });
+        // Release rather than drop: clearing the field alone would leave an
+        // earlier failed test's awaiter hanging forever.
+        if (mod.useRecipeConflictStore.getState().pendingConflict) {
+          mod.useRecipeConflictStore.getState().resolveConflict("cancel");
+        }
         return mod.useRecipeConflictStore;
       }
 

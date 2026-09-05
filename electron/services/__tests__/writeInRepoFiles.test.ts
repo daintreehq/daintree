@@ -628,7 +628,9 @@ describe("readInRepoRecipesWithHashes", () => {
     await identityFiles.readInRepoRecipesWithHashes(tmpDir);
 
     expect(
-      warnSpy.mock.calls.map((call) => String(call[0])).filter((m) => m.includes("does not support"))
+      warnSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((m) => m.includes("does not support"))
     ).toEqual([]);
     warnSpy.mockRestore();
   });
