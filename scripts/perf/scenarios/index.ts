@@ -35,6 +35,7 @@ import { copyTreeScenarios } from "./copyTree";
 import { cliAvailabilityScenarios } from "./cliAvailability";
 import { sidebarFilterScenarios } from "./sidebarFilters";
 import { switcherSearchScenarios } from "./switcherSearch";
+import { imagePathProbeScenarios } from "./imagePathProbe";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -73,6 +74,7 @@ export const allScenarios: PerfScenario[] = [
   ...cliAvailabilityScenarios,
   ...sidebarFilterScenarios,
   ...switcherSearchScenarios,
+  ...imagePathProbeScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -246,6 +248,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-402",
   "PERF-403",
   "PERF-404",
+  "PERF-405",
 ]);
 
 /**

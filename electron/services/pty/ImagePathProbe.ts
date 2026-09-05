@@ -11,6 +11,17 @@ const IMAGE_PATH_PROBE_TIMEOUT_MS = 750;
 // evicts disappeared child PIDs proactively so PID reuse cannot return a
 // stale prior-process basename.
 const IMAGE_PATH_EVICTION_TTL_MS = 30_000;
+// Negative-result backoff. A probe that resolves nothing is not retried until
+// the delay has passed, and the delay doubles on each consecutive failure from
+// 3s to a 48s ceiling. ProcessDetector reads every shallow PID on every
+// ProcessTreeCache poll, so without this a PID the probe can never read costs
+// one `lsof`/PowerShell start per poll for as long as the process lives.
+// Every step is a whole multiple of the 1500ms poll interval rather than a
+// value near it, so a retry cannot land between two polls and slip a whole
+// interval (#8794). The resulting ladder — probes at 0s, 3s, 9s, 21s, 45s —
+// is 5 starts a minute against the 40 a 1.5s poll used to produce.
+export const IMAGE_PATH_RETRY_BASE_MS = 3_000;
+export const IMAGE_PATH_RETRY_MAX_MS = 48_000;
 
 // `lsof -Fn` on macOS lists every memory-mapped text segment for the process —
 // the actual executable, plus dylibs/frameworks/system libs that share the
@@ -24,10 +35,25 @@ const MACOS_LIBRARY_SUFFIXES = [".dylib", ".framework", ".bundle"];
 
 interface CacheEntry {
   basename: string | null;
+  /** When the last probe SETTLED. Paired with `retryDelayMs` it gates retries. */
   updatedAt: number;
   lastReadAt: number;
   refreshing: boolean;
   checkId: number;
+  /**
+   * How long after `updatedAt` the next probe of a null result may run. Zero
+   * until a probe has failed, so a fresh entry probes immediately, and back to
+   * zero on success. Lives on the entry rather than beside the map so
+   * `evict()` — which deletes the whole object — resets it for free, and a
+   * recycled PID starts from an unthrottled probe.
+   */
+  retryDelayMs: number;
+}
+
+/** Doubling backoff, capped. `0` is the unthrottled state a fresh entry is in. */
+function nextRetryDelayMs(currentMs: number): number {
+  if (currentMs <= 0) return IMAGE_PATH_RETRY_BASE_MS;
+  return Math.min(currentMs * 2, IMAGE_PATH_RETRY_MAX_MS);
 }
 
 /**
@@ -39,10 +65,10 @@ interface CacheEntry {
  *
  * Async-fill per PID so the synchronous `detectAgent()` contract stays
  * synchronous — the first call schedules an async resolution and returns
- * null; once a probe succeeds the basename is returned permanently (a
- * running process's executable image is immutable), with failed probes
- * retried until one succeeds. `evict()` drops exited PIDs so PID reuse
- * cannot serve a stale prior-process basename.
+ * null; once a probe succeeds the basename is returned permanently, with
+ * failed probes retried on a doubling backoff until one succeeds.
+ * `evict()` drops exited PIDs so PID reuse cannot serve a stale
+ * prior-process basename.
  *
  * Platform dispatch:
  *  - Linux: `readlink /proc/<pid>/exe` (pure Node, ~instant)
@@ -65,9 +91,10 @@ export class ImagePathProbe {
 
   /**
    * Sync read against the per-PID cache. Returns the cached executable
-   * basename (lowercased, extension stripped) or null when unknown / past
-   * the hard-max age. Schedules an async refresh when the entry is missing
-   * or past soft-stale. Eviction TTL: unreferenced entries drop after 30s.
+   * basename (lowercased, extension stripped), or null while the PID is
+   * unresolved. Schedules an async refresh when the entry is missing, and
+   * when a previous probe resolved nothing and its backoff has elapsed.
+   * Eviction TTL: unreferenced entries drop after 30s.
    */
   readBasename(pid: number): string | null {
     if (this.disposed) return null;
@@ -84,6 +111,7 @@ export class ImagePathProbe {
         lastReadAt: now,
         refreshing: false,
         checkId: this.nextCheckId,
+        retryDelayMs: 0,
       };
       this.entries.set(pid, entry);
       this.scheduleRefresh(pid, entry);
@@ -91,24 +119,25 @@ export class ImagePathProbe {
       return null;
     }
 
+    // Read-time bookkeeping, kept independent of the retry gate: a read whose
+    // retry is suppressed still counts as a reference, so a PID being polled
+    // every 1.5s is never swept by the eviction TTL just because it is failing.
     entry.lastReadAt = now;
 
-    const hasEverProbed = entry.updatedAt > 0;
-
-    // A running process's executable image is immutable for its lifetime —
-    // the kernel does not allow exec() to replace the image of an already-
-    // running process. Once we have a successful (non-null) result for a PID
-    // we can return it unconditionally without re-probing; evict() is called
-    // by ProcessDetector when a child exits, so PID-reuse cannot return a
-    // stale prior-process basename. Only schedule refreshes until we get a
-    // non-null result, or while the result is null (failed probe to retry).
-    if (!hasEverProbed || (!entry.refreshing && entry.basename === null)) {
-      if (!entry.refreshing) {
-        this.scheduleRefresh(pid, entry);
-      }
+    // Once a probe has returned a non-null result for a PID we serve it
+    // unconditionally: a process that has exec'd a different image is a
+    // different program under the same number, and ProcessDetector evicts a
+    // PID the moment it leaves probe range, so the entry cannot outlive the
+    // process it describes. A null result is retried, but only once the
+    // backoff earned by the previous failures has elapsed — `retryDelayMs` is
+    // 0 on a fresh entry, so the first probe of a PID is never delayed.
+    if (
+      entry.basename === null &&
+      !entry.refreshing &&
+      now >= entry.updatedAt + entry.retryDelayMs
+    ) {
+      this.scheduleRefresh(pid, entry);
     }
-
-    if (!hasEverProbed) return null;
 
     return entry.basename;
   }
@@ -148,27 +177,34 @@ export class ImagePathProbe {
     entry.refreshing = true;
     const checkId = ++this.nextCheckId;
     entry.checkId = checkId;
-    void this.refresh(pid)
-      .then((basename) => {
-        if (this.disposed) return;
-        const current = this.entries.get(pid);
-        // Stale-write guard: another refresh may have superseded this one if
-        // the entry was evicted and recreated in the meantime.
-        if (!current || current.checkId !== checkId) return;
-        current.basename = basename;
-        current.updatedAt = Date.now();
-        current.refreshing = false;
-      })
-      .catch(() => {
-        if (this.disposed) return;
-        const current = this.entries.get(pid);
-        if (!current || current.checkId !== checkId) return;
-        // Persisting null with a fresh timestamp matches ForegroundProcessGroupProbe:
-        // prevents tight-retry while the underlying failure is still active.
-        current.basename = null;
-        current.updatedAt = Date.now();
-        current.refreshing = false;
-      });
+    // Two-argument `then` rather than `.then().catch()`: `refresh()` already
+    // swallows every resolver error into a null result, so the rejection arm
+    // is only reachable if the probe itself breaks — and chaining a `.catch()`
+    // after the fulfilment arm would also route a bug in `settle()` there.
+    void this.refresh(pid).then(
+      (basename) => this.settle(pid, checkId, basename),
+      () => this.settle(pid, checkId, null)
+    );
+  }
+
+  /**
+   * Write one probe's outcome back into the cache and set the next retry gate.
+   *
+   * Both completion arms land here so the backoff cannot be advanced on one
+   * path and skipped on the other. A null result is the ordinary failure
+   * shape, not the exceptional one: every platform resolver catches its own
+   * errors and returns null, and an empty `lsof`/CIM answer is null too.
+   */
+  private settle(pid: number, checkId: number, basename: string | null): void {
+    if (this.disposed) return;
+    const current = this.entries.get(pid);
+    // Stale-write guard: another refresh may have superseded this one if
+    // the entry was evicted and recreated in the meantime.
+    if (!current || current.checkId !== checkId) return;
+    current.basename = basename;
+    current.updatedAt = Date.now();
+    current.refreshing = false;
+    current.retryDelayMs = basename === null ? nextRetryDelayMs(current.retryDelayMs) : 0;
   }
 
   private async refresh(pid: number): Promise<string | null> {
