@@ -36,13 +36,15 @@ describe("PERF-247 renderer benchmark", () => {
   });
 
   it("reports a selection miss when the marker does not move", async () => {
-    // The negative control for `selectionMisses`. Selecting the row that is
-    // ALREADY current is a no-op re-render, so the marker never moves onto a
-    // new row — the same DOM a component that ignored `focusedIndex` entirely
-    // would produce, and the shape that makes a selection change look free.
-    const sample = await measureWorkingTreeList(300, true, { selectionIndex: -1 });
+    // The negative control for `selectionMisses`, shaped so the OLD oracle
+    // would have passed it: the update is applied but lands on no row, which is
+    // what a component that ignored `focusedIndex` produces. The rows the
+    // oracle asks about are still mounted — existence alone proves nothing.
+    const sample = await measureWorkingTreeList(300, true, { suppressSelection: true });
     expect(sample.mountedRows).toBeLessThan(300);
-    expect(sample.selectionMisses).toBeGreaterThan(0);
+    // The queried rows were mounted before the update and still are, so the
+    // existence half of the oracle passes; only the marker check can fail here.
+    expect(sample.selectionMisses).toBe(2);
   });
 
   it("windows the diff shelf and keeps the current file mounted", async () => {

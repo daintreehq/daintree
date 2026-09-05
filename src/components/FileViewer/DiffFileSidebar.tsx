@@ -310,6 +310,16 @@ export function DiffFileSidebar({
     ]
   );
 
+  // Bumped the first time the virtualizer reports a rendered range, which is
+  // the first moment it has measured anything. The reveal below needs it: on
+  // the mount commit Virtuoso knows no item sizes, so its scroll is a no-op —
+  // and measurement, on its own, re-runs no effect. Without this a diff opened
+  // on the four-hundredth file comes up at the top of the shelf.
+  const [measuredGeneration, setMeasuredGeneration] = useState(0);
+  const handleRangeChanged = useCallback(() => {
+    setMeasuredGeneration((current) => (current === 0 ? 1 : current));
+  }, []);
+
   // Keep the open file's row in view while stepping with the keyboard.
   // `groups` is a dependency so the row is re-revealed when a filter that hid
   // it is cleared. Windowed, the row may not exist to be queried, so the
@@ -328,7 +338,7 @@ export function DiffFileSidebar({
     if (typeof row?.scrollIntoView === "function") {
       row.scrollIntoView({ behavior: "instant", block: "nearest" });
     }
-  }, [currentIndex, groups, windowed, flat]);
+  }, [currentIndex, groups, windowed, flat, measuredGeneration]);
 
   // self-stretch (not h-full): a percentage height against the dialog's
   // content-sized row collapses to content height and lets the dialog
@@ -422,6 +432,7 @@ export function DiffFileSidebar({
             ref={virtuosoRef}
             groupCounts={flat.counts}
             style={{ height: "100%" }}
+            rangeChanged={handleRangeChanged}
             groupContent={(groupIndex) => (
               <DiffShelfGroupHeader dir={flat.dirs[groupIndex] ?? ""} />
             )}

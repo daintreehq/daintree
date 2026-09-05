@@ -165,8 +165,14 @@ const noop = () => {};
 export async function measureWorkingTreeList(
   fileCount: number,
   windowed = true,
-  /** Overridden only by the oracle's negative control. */
-  options: { selectionIndex?: number } = {}
+  /**
+   * `suppressSelection` renders the second pass with NO row selected while the
+   * oracle still asks about the row that should have been. That is the shape a
+   * component which ignored the update produces: both queried rows are still
+   * mounted — so the old existence-only check passed it — and no row carries
+   * the marker. Used by the oracle's negative control, nothing else.
+   */
+  options: { suppressSelection?: boolean } = {}
 ): Promise<ReviewListSample> {
   const files = buildStagingFixture(fileCount);
   const harness = mountHarness();
@@ -222,10 +228,10 @@ export async function measureWorkingTreeList(
   // and jsdom cannot honestly measure it: Virtuoso's scroll path needs a
   // scroller with a real height, and jsdom gives every element zero. The
   // component tests cover reveal against a mocked virtualizer instead.
-  const selectionIndex = Math.min(options.selectionIndex ?? SELECTION_TARGET_INDEX, fileCount - 1);
+  const selectionIndex = Math.min(SELECTION_TARGET_INDEX, fileCount - 1);
   const selectionStart = performance.now();
   await act(async () => {
-    harness.root.render(render(selectionIndex));
+    harness.root.render(render(options.suppressSelection ? -1 : selectionIndex));
   });
   const selectionChangeMs = performance.now() - selectionStart;
 

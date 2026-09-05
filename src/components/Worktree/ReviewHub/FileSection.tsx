@@ -1,5 +1,5 @@
 import type React from "react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { Dispatch, Ref, RefObject, SetStateAction } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitStatus, StagingFileEntry } from "@shared/types";
@@ -310,7 +310,15 @@ export function FileSection({
     ]
   );
 
+  // Retract the range when this section stops windowing — a threshold crossing,
+  // a collapse, a worktree switch. Without it the hub keeps describing rows a
+  // virtualizer that no longer exists once had, and the NEXT windowed instance
+  // is judged against its predecessor's window until it first reports.
   const reportRange = onRenderedRangeChange;
+  useEffect(() => {
+    if (!windowed) return;
+    return () => reportRange?.(null);
+  }, [windowed, reportRange]);
 
   // A plain callback, not a `useEffectEvent`: Virtuoso takes this as a prop,
   // and an effect event cannot be passed down. Identity is stable as long as

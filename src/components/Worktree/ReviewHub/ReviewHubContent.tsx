@@ -309,6 +309,16 @@ export function ReviewHubContent({
   // than dropping the key.
   const [pendingMenu, setPendingMenu] = useState<{ index: number; key: string } | null>(null);
   const focusedItemKeyRef = useRef<string | null>(null);
+  // The same `section:path` value as the ref above, mirrored into state so it
+  // can drive the reveal effect — a ref cannot. The ref stays the source of
+  // truth because the reconciler reads it synchronously, before the render that
+  // would publish new state. `writeCursorKey` keeps the two in step; nothing
+  // may write one without the other.
+  const [focusedCursorKey, setFocusedCursorKey] = useState<string | null>(null);
+  const writeCursorKey = useCallback((key: string | null) => {
+    focusedItemKeyRef.current = key;
+    setFocusedCursorKey(key);
+  }, []);
   const refreshIdRef = useRef(0);
   const bgRefreshIdRef = useRef(0);
   const baseBranchRequestRef = useRef(0);
@@ -400,7 +410,7 @@ export function ReviewHubContent({
   // list, clamp to the nearest valid index so focus never points off the end.
   useEffect(() => {
     if (navigableItems.length === 0) {
-      focusedItemKeyRef.current = null;
+      writeCursorKey(null);
       setFocusedIndex((prev) => (prev === -1 ? prev : -1));
       return;
     }
@@ -410,14 +420,12 @@ export function ReviewHubContent({
     if (nextIdx === -1) {
       const clamped = Math.min(focusedIndex < 0 ? 0 : focusedIndex, navigableItems.length - 1);
       const clampedItem = navigableItems[clamped];
-      focusedItemKeyRef.current = clampedItem
-        ? `${clampedItem.section}:${clampedItem.file.path}`
-        : null;
+      writeCursorKey(clampedItem ? `${clampedItem.section}:${clampedItem.file.path}` : null);
       setFocusedIndex(clamped);
     } else if (nextIdx !== focusedIndex) {
       setFocusedIndex(nextIdx);
     }
-  }, [navigableItems, focusedIndex]);
+  }, [navigableItems, focusedIndex, writeCursorKey]);
 
   // Whether the working-tree list windows. Decided across BOTH sections: they
   // share one scroll container and one cursor, so windowing one and not the
@@ -437,6 +445,8 @@ export function ReviewHubContent({
   // An ABSENT row only the virtualizer can place, and `scrollToIndex` is the
   // right call there precisely because it skips that visibility check — the
   // destination it computes is in parent coordinates and is correct.
+  const revealCursor = useEffectEvent(() => revealRow(focusedIndex));
+
   const revealRow = useEffectEvent((index: number) => {
     const row = fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${index}"]`);
     if (row) {
@@ -448,41 +458,34 @@ export function ReviewHubContent({
     const handle = index < stagedCount ? stagedListRef.current : unstagedListRef.current;
     handle?.scrollToIndex({
       index: index < stagedCount ? index : index - stagedCount,
-      align: "center",
+      // `start`, never `center`: centring subtracts half the viewport height,
+      // and the viewport height a `customScrollParent` list is given is
+      // `parentHeight - max(0, listTop - parentTop)` — which goes NEGATIVE for a
+      // section far below the fold and sends the scroll past the row entirely.
+      // Aligning to the top needs no viewport arithmetic at all.
+      align: "start",
       behavior: "auto",
     });
   });
 
-  // Reveal the focused row when the CURSOR moves, not whenever its index
-  // changes. Reconciliation renumbers every row below a stage, an unstage or a
-  // re-sort, so a stationary cursor takes a new index constantly; scrolling for
-  // that would drag the view off whatever the user was looking at (#11684).
-  // Keyed on the `section:path` identity the cursor already tracks, plus the
-  // "had no row, now has one" case — a restored cursor on the first commit.
-  const previousFocusKeyRef = useRef<{ key: string | null; found: boolean }>({
-    key: null,
-    found: false,
-  });
+  // Reveal when the cursor lands on a DIFFERENT FILE — never merely because its
+  // index moved. Reconciliation renumbers every row below a stage, an unstage
+  // or a re-sort, so a stationary cursor takes a new index constantly, and
+  // scrolling for that drags the view off whatever the user was looking at
+  // (#11684).
+  //
+  // `focusedCursorKey` is the same `section:path` value `focusedItemKeyRef`
+  // holds, mirrored into state because a ref cannot drive an effect. Keying on
+  // it rather than on `focusedIndex` + `navigableItems` also settles the
+  // ordering: a refresh swaps the list one commit before the reconcile effect
+  // below moves the index to follow the file, and an effect that read the new
+  // list at the old index would see a different file, reveal it, and reveal
+  // again on the way back. Both writers below set the key and the index
+  // together, so this only ever fires on a settled cursor.
   useLayoutEffect(() => {
-    const item = focusedIndex >= 0 ? navigableItems[focusedIndex] : undefined;
-    const key = item ? `${item.section}:${item.file.path}` : null;
-
-    // A refresh replaces `navigableItems` one commit BEFORE the reconcile
-    // effect below moves `focusedIndex` to follow the file. On that commit the
-    // old index names a DIFFERENT file, which reads as a cursor move and
-    // scrolls — twice, once on the way in and once on the way back. So the
-    // reveal only trusts an index the cursor's own identity agrees with, and
-    // records nothing until it does: overwriting the baseline mid-reconcile
-    // would make the settled commit look like a move as well.
-    const intended = focusedItemKeyRef.current;
-    if (item && intended !== null && key !== intended) return;
-
-    const previous = previousFocusKeyRef.current;
-    previousFocusKeyRef.current = { key, found: item !== undefined };
-    if (!item) return;
-    if (key === previous.key && previous.found) return;
-    revealRow(focusedIndex);
-  }, [focusedIndex, navigableItems]);
+    if (focusedCursorKey === null) return;
+    revealCursor();
+  }, [focusedCursorKey]);
 
   // A row menu requested on a row the window had scrolled past. `revealRow`
   // above has already asked for it; this fires on the commit that mounts it.
@@ -999,7 +1002,7 @@ export function ReviewHubContent({
       setSelectionSection(null);
       selectionAnchorRef.current = null;
       setFocusedIndex(-1);
-      focusedItemKeyRef.current = null;
+      writeCursorKey(null);
       hasAutoStagedRef.current = false;
       // Filter state lives in `stagedView`/`changesView` rather than refs, so the
       // modal-shell path (which unmounts on close) never noticed leftover
@@ -1011,7 +1014,7 @@ export function ReviewHubContent({
       setStagedView(DEFAULT_SECTION_STATE);
       setChangesView(DEFAULT_SECTION_STATE);
     }
-  }, [isOpen, refresh]);
+  }, [isOpen, refresh, writeCursorKey]);
 
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
@@ -1693,7 +1696,7 @@ export function ReviewHubContent({
       const item = navigableItems[index];
       if (!item) return;
       setFocusedIndex(index);
-      focusedItemKeyRef.current = `${item.section}:${item.file.path}`;
+      writeCursorKey(`${item.section}:${item.file.path}`);
       // Move DOM focus to the listbox so assistive tech announces the active
       // option via aria-activedescendant. Scroll is handled by the layout effect.
       fileListRef.current?.focus({ preventScroll: true });
