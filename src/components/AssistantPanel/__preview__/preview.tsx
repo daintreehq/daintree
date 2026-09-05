@@ -3,11 +3,13 @@ import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
 import { installPreviewShims } from "./previewShims";
-import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
+import { useAppThemeStore } from "@/store/appThemeStore";
+import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { AssistantPanelView } from "../AssistantPanelView";
 import type { AssistantSessionState } from "@/store/assistantStore";
 import { CAPTURED_STATES, type CapturedStateName } from "./capturedStates";
 import { PROSE_SPECIMEN } from "./proseSpecimen";
+import { OPERATIONS_SPECIMEN } from "./operationsSpecimen";
 import "@/index.css";
 
 // As early as this module's own body runs, which is AFTER every static import above has
@@ -34,8 +36,9 @@ installPreviewShims();
 const STATES = {
   ...CAPTURED_STATES,
   prose: PROSE_SPECIMEN,
+  operations: OPERATIONS_SPECIMEN,
 } satisfies Record<string, AssistantSessionState>;
-type StateName = CapturedStateName | "prose";
+type StateName = CapturedStateName | "prose" | "operations";
 
 /**
  * A type PREDICATE, not an assertion. `Object.keys` widens to `string[]` and a query
@@ -57,17 +60,20 @@ const STATE_NAMES = Object.keys(STATES).filter(isStateName);
  * state, in a chosen theme, at the panel's real width, so a screenshot pass can
  * compare them deliberately.
  *
- * The theme is applied through the app's OWN `applyAppThemeToRoot`, not a hand-copied
+ * The theme is applied through the app's own theme store, not a hand-copied
  * palette: a preview that approximates the tokens would validate a design that does
  * not exist in the product.
  *
  * Query parameters (so a screenshot script can drive it):
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?fixture=streaming        render one fixture full-height instead of the grid
+ *   width and fontSize       review a sidebar width and terminal font size
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
+const width = Math.max(320, Math.min(960, Number(params.get("width")) || 380));
+const fontSize = Math.max(11, Math.min(24, Number(params.get("fontSize")) || 12));
 const fixtureParam = params.get("fixture");
 const single: StateName | null = fixtureParam && isStateName(fixtureParam) ? fixtureParam : null;
 
@@ -82,10 +88,26 @@ const single: StateName | null = fixtureParam && isStateName(fixtureParam) ? fix
 const noopRoute = () => {};
 
 function Panel({ name }: { name: StateName }) {
-  const state = STATES[name]!;
+  const state = useMemo(() => {
+    const captured = STATES[name]!;
+    if (captured.turnStartedAt === null) return captured;
+    // Rebase the live clock so an old capture does not appear to have run for weeks.
+    const offset = Date.now() - (captured.lastActivityAt ?? captured.turnStartedAt);
+    return {
+      ...captured,
+      turnStartedAt: captured.turnStartedAt + offset,
+      lastActivityAt: captured.lastActivityAt === null ? null : captured.lastActivityAt + offset,
+    };
+  }, [name]);
+  const [operationsOpen, setOperationsOpen] = useState(name === "operations");
   return (
     <AssistantPanelView
       state={state}
+      composerId={`assistant-preview-${name}`}
+      operationsOpen={operationsOpen}
+      onOperationsOpenChange={setOperationsOpen}
+      onRequestOperations={noopRoute}
+      onRequestTimers={noopRoute}
       onSubmit={() => true}
       onInterrupt={() => {}}
       onDecideApproval={() => {}}
@@ -108,7 +130,8 @@ function App() {
   const scheme = useMemo(() => resolveAppTheme(themeId), []);
 
   useEffect(() => {
-    applyAppThemeToRoot(document.documentElement, scheme);
+    useAppThemeStore.getState().setSelectedSchemeIdSilent(scheme.id, { crossfade: false });
+    useTerminalFontStore.getState().setFontSize(fontSize);
     // The panel paints its own surface, but the page behind it must be the theme's
     // canvas — otherwise a screenshot shows the panel floating on browser white and
     // every contrast judgement made from it is wrong.
@@ -121,7 +144,7 @@ function App() {
 
   if (single) {
     return (
-      <div style={{ height: "100vh", width: "420px" }}>
+      <div style={{ height: "100vh", width: `${width}px` }}>
         <Panel name={single} />
       </div>
     );
@@ -132,7 +155,7 @@ function App() {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: `repeat(${names.length}, 420px)`,
+        gridTemplateColumns: `repeat(${names.length}, ${width}px)`,
         gap: "16px",
         padding: "16px",
         height: "100vh",
@@ -147,14 +170,14 @@ function App() {
             flexDirection: "column",
             minHeight: 0,
             border: "1px solid var(--color-border-default)",
-            borderRadius: "8px",
+            borderRadius: "var(--radius-sm)",
             overflow: "hidden",
           }}
         >
           <div
             style={{
               padding: "6px 10px",
-              fontSize: "11px",
+              fontSize: "var(--text-2xs)",
               fontFamily: "ui-monospace, monospace",
               letterSpacing: "0.06em",
               textTransform: "uppercase",

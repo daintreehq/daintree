@@ -23,6 +23,151 @@
      itself. Deliberately unitless: it scales with whatever font-size an element ends up
      at, where a `20px` would not. */
   line-height: 1.45;
+  font-variant-ligatures: none;
+}
+
+.assistant-transcript {
+  scrollbar-gutter: stable;
+}
+
+.assistant-prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65em;
+  padding: 0.8em;
+  border-block: 1px solid var(--assistant-border);
+  background: var(--assistant-raised);
+  color: var(--assistant-fg);
+}
+
+.assistant-prompt-mark {
+  flex-shrink: 0;
+  margin-top: 0.2em;
+  color: var(--assistant-fg-secondary);
+}
+
+.assistant-prompt-fade {
+  position: absolute;
+  inset: auto 0 0;
+  height: 2.5em;
+  pointer-events: none;
+  background: linear-gradient(transparent, var(--assistant-raised));
+}
+
+.assistant-text-control {
+  min-height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--assistant-fg-secondary);
+  cursor: pointer;
+}
+
+.assistant-text-control:hover {
+  color: var(--assistant-fg);
+  background: var(--assistant-hover);
+}
+
+.assistant-text-control:focus-visible,
+.assistant-session-trigger:focus-visible {
+  outline: 2px solid var(--assistant-focus);
+  outline-offset: 2px;
+}
+
+.assistant-text-control:disabled {
+  cursor: default;
+  background: transparent;
+}
+
+.assistant-session {
+  border-bottom: 1px solid var(--assistant-border);
+  color: var(--assistant-fg-secondary);
+}
+
+.assistant-session-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  min-height: 28px;
+  padding: 0.25em 0.5em;
+  cursor: pointer;
+  list-style: none;
+}
+
+.assistant-session-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.assistant-session-trigger:hover {
+  color: var(--assistant-fg);
+  background: var(--assistant-hover);
+}
+
+.assistant-session details[open] .assistant-session-chevron {
+  transform: rotate(90deg);
+}
+
+.assistant-session-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5em 1em;
+  padding: 0.75em;
+}
+
+.assistant-session-facts dd {
+  color: var(--assistant-fg);
+  overflow-wrap: anywhere;
+}
+
+.assistant-welcome {
+  max-width: 42ch;
+  margin: 1.5em auto;
+  padding: 1em 0.5em;
+}
+
+.assistant-starter {
+  display: flex;
+  align-items: center;
+  gap: 0.65em;
+  padding: 0.5em;
+  text-align: left;
+}
+
+.assistant-tool-list {
+  margin: 0.5em 0 0 1em;
+  border-left: 1px solid var(--assistant-border-strong);
+  padding-left: 0.5em;
+}
+
+.assistant-tool-row + .assistant-tool-row {
+  border-top: 1px solid var(--assistant-border);
+}
+
+.assistant-tool-header {
+  min-height: 28px;
+}
+
+.assistant-live-status {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65em;
+  padding: 0.5em 0;
+  color: var(--assistant-fg-secondary);
+}
+
+.assistant-live-status.is-stalled {
+  color: var(--assistant-warning);
+}
+
+.assistant-composer {
+  border-top: 1px solid var(--assistant-border);
+}
+
+.assistant-jump {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  margin: 0.25em 1em;
 }
 
 /* The panel's own type steps, in em.
