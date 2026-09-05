@@ -156,6 +156,7 @@ function makeBridge(
   overrides?: Partial<{
     capabilities: string[];
     clear: () => void;
+    pluginId: string;
     onActivationResult: (r: { ok: true } | { ok: false; error: string; stack?: string }) => void;
   }>
 ) {
@@ -163,15 +164,17 @@ function makeBridge(
   const workerHost = new FakeWorkerHost();
   const clear = overrides?.clear ?? vi.fn();
   const onActivationResult = overrides?.onActivationResult ?? vi.fn();
+  const onTerminalFailure = vi.fn();
   const bridge = new PluginDevWorkerMainBridge({
-    pluginId: "acme.demo",
+    pluginId: overrides?.pluginId ?? "acme.demo",
     host: host as any,
     workerHost: workerHost as any,
     getCapabilities: () => overrides?.capabilities ?? [],
     clearPriorRegistrations: clear,
     onActivationResult,
+    onTerminalFailure,
   });
-  return { host, workerHost, bridge, clear, onActivationResult };
+  return { host, workerHost, bridge, clear, onActivationResult, onTerminalFailure };
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -1623,21 +1626,35 @@ describe("PluginDevWorkerMainBridge", () => {
       return failure?.error;
     }
 
-    it("contains a malformed worker message instead of letting it throw", () => {
-      const { workerHost, onActivationResult } = makeBridge();
-      for (const raw of [null, 42, "host-call", { type: "not-a-type" }]) {
-        expect(() => workerHost.emit("worker-message", raw)).not.toThrow();
+    it("contains every malformed worker message instead of letting it throw", () => {
+      // One bridge per input: the first violation disposes the bridge and drops
+      // the listener, so a shared one would only ever test the first case.
+      for (const raw of [
+        null,
+        42,
+        "host-call",
+        { type: "not-a-type" },
+        { type: "host-call", requestId: "c1", method: "fs.unlink" },
+        { type: "invoke-result", requestId: "i1", ok: "maybe" },
+      ]) {
+        const { host, workerHost, onActivationResult, onTerminalFailure } = makeBridge();
+        const label = JSON.stringify(raw) ?? "null";
+        expect(() => workerHost.emit("worker-message", raw), label).not.toThrow();
+        expect(recordedError(onActivationResult), label).toContain("acme.demo");
+        expect(workerHost.dispose, label).toHaveBeenCalledTimes(1);
+        expect(onTerminalFailure, label).toHaveBeenCalledTimes(1);
+        expect(host.getWorktrees, label).not.toHaveBeenCalled();
       }
-      expect(recordedError(onActivationResult)).toContain("malformed message");
-      expect(workerHost.dispose).toHaveBeenCalled();
     });
 
-    it("reports a violation the host detected and stops that worker", () => {
-      const { workerHost, onActivationResult, bridge } = makeBridge();
-      bridge.waitForActivation().catch(() => undefined);
+    it("reports a violation the host detected and stops that worker", async () => {
+      const { workerHost, onActivationResult, onTerminalFailure, bridge } = makeBridge();
+      const activation = bridge.waitForActivation();
       workerHost.emit("protocol-violation", "worker sent a malformed message");
+      await expect(activation).rejects.toThrow(/worker sent a malformed message/);
       expect(recordedError(onActivationResult)).toContain("worker sent a malformed message");
       expect(workerHost.dispose).toHaveBeenCalledTimes(1);
+      expect(onTerminalFailure).toHaveBeenCalledTimes(1);
     });
 
     it("still records provenance for a violation after a successful activation", () => {
@@ -1665,15 +1682,22 @@ describe("PluginDevWorkerMainBridge", () => {
     });
 
     it("fails the instance when the worker reuses an outstanding request id", async () => {
-      const { host, workerHost, onActivationResult } = makeBridge();
+      const { host, workerHost, onActivationResult, bridge } = makeBridge();
       host.getWorktrees.mockImplementation(() => new Promise(() => {}));
       const call = { type: "host-call", requestId: "c1", method: "getWorktrees" };
       workerHost.emit("worker-message", { ...call });
+      await flush();
+      expect(bridge.pendingHostCallCount).toBe(1);
+
       workerHost.emit("worker-message", { ...call });
       await flush();
       expect(host.getWorktrees).toHaveBeenCalledTimes(1);
       expect(recordedError(onActivationResult)).toContain("outstanding request id");
       expect(workerHost.dispose).toHaveBeenCalled();
+      // The first call was released rather than left dangling, and its late
+      // result can no longer be delivered under the contested id.
+      expect(bridge.pendingHostCallCount).toBe(0);
+      expect(workerHost.sent.filter((m) => m.type === "host-result")).toHaveLength(0);
     });
 
     it("lets a request id be reused once its call has settled", async () => {
@@ -1691,6 +1715,7 @@ describe("PluginDevWorkerMainBridge", () => {
       });
       await flush();
       expect(host.getWorktrees).toHaveBeenCalledTimes(2);
+      expect(workerHost.sent.filter((m) => m.type === "host-result" && m.ok)).toHaveLength(2);
       expect((onActivationResult as any).mock.calls.every(([r]: any[]) => r.ok)).toBe(true);
       expect(workerHost.dispose).not.toHaveBeenCalled();
     });
@@ -1698,34 +1723,68 @@ describe("PluginDevWorkerMainBridge", () => {
     it("retires the generation's registrations and subscriptions", async () => {
       const { host, workerHost, clear } = makeBridge();
       const unsubscribe = vi.fn();
-      host.onDidChangeWorktrees.mockReturnValue(unsubscribe);
+      let pushEvent: ((payload: unknown) => void) | undefined;
+      host.onDidChangeWorktrees.mockImplementation((cb: any) => {
+        pushEvent = cb;
+        return unsubscribe;
+      });
       workerHost.emit("worker-message", {
         type: "subscribe",
         subscriptionId: "s1",
         kind: "worktrees",
       });
       await flush();
+      // Witness the before state, so an eager teardown during setup cannot pass.
+      expect(unsubscribe).not.toHaveBeenCalled();
+      expect(clear).not.toHaveBeenCalled();
+
       workerHost.emit("worker-message", {
         type: "host-call",
         requestId: "",
         method: "getWorktrees",
       });
-      expect(clear).toHaveBeenCalled();
-      expect(unsubscribe).toHaveBeenCalled();
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      // The retired subscription can no longer push to the dead worker.
+      const before = workerHost.sent.length;
+      pushEvent?.([{ id: "w2" }]);
+      expect(workerHost.sent).toHaveLength(before);
     });
 
-    it("reports and tears down only once however many bad messages arrive", () => {
-      const { workerHost, onActivationResult } = makeBridge();
+    it("reports and tears down once even when teardown re-enters the ingress", () => {
+      // The re-entrant message is delivered from INSIDE the failure report, so
+      // the listener is still attached — this is what the latch is for.
+      let reentered = false;
+      const onActivationResult = vi.fn((result: any) => {
+        if (result.ok || reentered) return;
+        reentered = true;
+        workerHost.emit("worker-message", 7);
+        workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      });
+      const { workerHost, onTerminalFailure } = makeBridge({ onActivationResult });
       workerHost.emit("worker-message", null);
-      workerHost.emit("worker-message", 7);
-      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
-      expect((onActivationResult as any).mock.calls.filter(([r]: any[]) => !r.ok)).toHaveLength(1);
+
+      expect(reentered).toBe(true);
+      expect(onActivationResult.mock.calls.filter(([r]: any[]) => !r.ok)).toHaveLength(1);
+      // A late `activated` must not overwrite the failure as the last word.
+      expect(onActivationResult.mock.calls.filter(([r]: any[]) => r.ok)).toHaveLength(0);
       expect(workerHost.dispose).toHaveBeenCalledTimes(1);
+      expect(onTerminalFailure).toHaveBeenCalledTimes(1);
+    });
+
+    it("still stops the worker when the failure report itself throws", () => {
+      const onActivationResult = vi.fn(() => {
+        throw new Error("provenance write blew up");
+      });
+      const { workerHost, onTerminalFailure } = makeBridge({ onActivationResult });
+      expect(() => workerHost.emit("worker-message", null)).not.toThrow();
+      expect(workerHost.dispose).toHaveBeenCalledTimes(1);
+      expect(onTerminalFailure).toHaveBeenCalledTimes(1);
     });
 
     it("keeps a healthy plugin serving while another one violates the protocol", async () => {
-      const bad = makeBridge();
-      const good = makeBridge();
+      const bad = makeBridge({ pluginId: "acme.broken" });
+      const good = makeBridge({ pluginId: "acme.healthy" });
       bad.workerHost.emit("worker-message", null);
       good.workerHost.emit("worker-message", {
         type: "host-call",
@@ -1733,8 +1792,17 @@ describe("PluginDevWorkerMainBridge", () => {
         method: "getWorktrees",
       });
       await flush();
+
+      expect(recordedError(bad.onActivationResult)).toContain("acme.broken");
+      expect(bad.workerHost.dispose).toHaveBeenCalled();
+      // The healthy instance completes its round trip, reply included.
       expect(good.host.getWorktrees).toHaveBeenCalled();
+      expect(good.workerHost.sent).toContainEqual(
+        expect.objectContaining({ type: "host-result", requestId: "c1", ok: true })
+      );
       expect(good.workerHost.dispose).not.toHaveBeenCalled();
+      expect(good.onTerminalFailure).not.toHaveBeenCalled();
+      expect(good.clear).not.toHaveBeenCalled();
     });
   });
 });

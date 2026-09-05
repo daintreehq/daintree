@@ -110,6 +110,14 @@ export interface PluginDevWorkerMainBridgeDeps {
   onActivationResult?: (
     result: { ok: true } | { ok: false; error: string; stack?: string }
   ) => void;
+  /**
+   * Fires once when this worker breaks the protocol and the instance is
+   * terminated (#12276). Distinct from `onActivationResult`, which only records
+   * provenance: the owner also has to release the runtime state it holds — the
+   * worker entry, the activation cache, and any prompt this plugin left on
+   * screen — or the plugin is stuck dead with no path back.
+   */
+  onTerminalFailure?: () => void;
 }
 
 interface PendingInvoke {
@@ -148,6 +156,7 @@ export class PluginDevWorkerMainBridge {
   private readonly onActivationResult?: (
     result: { ok: true } | { ok: false; error: string; stack?: string }
   ) => void;
+  private readonly onTerminalFailure?: () => void;
 
   private disposed = false;
   /**
@@ -227,6 +236,7 @@ export class PluginDevWorkerMainBridge {
     this.getCapabilities = deps.getCapabilities;
     this.clearPriorRegistrations = deps.clearPriorRegistrations;
     this.onActivationResult = deps.onActivationResult;
+    this.onTerminalFailure = deps.onTerminalFailure;
 
     this.activationPromise = new Promise<void>((resolve, reject) => {
       this.activationResolve = resolve;
@@ -452,30 +462,33 @@ export class PluginDevWorkerMainBridge {
     if (this.protocolViolated || this.disposed) return;
     this.protocolViolated = true;
     const error = `Plugin "${this.pluginId}" dev worker stopped: ${reason}`;
-    logger.error(`[${this.pluginId}] ${error}`);
+    // Every step below is contained on its own, and the worker teardown sits in
+    // a `finally`: a throw anywhere in the reporting must not be what leaves the
+    // misbehaving worker running — or, worse, escape into `uncaughtException`
+    // and cause the very fatal recovery this whole path exists to prevent.
+    const contain = (what: string, step: () => void): void => {
+      try {
+        step();
+      } catch (err) {
+        try {
+          logger.error(`[${this.pluginId}] ${what} threw during protocol teardown`, err);
+        } catch {
+          // swallowed
+        }
+      }
+    };
     try {
-      this.onActivationResult?.({ ok: false, error });
-    } catch (err) {
-      logger.error(`[${this.pluginId}] activation-result listener threw`, {
-        error: formatErrorMessage(err, "listener threw"),
-      });
+      contain("failure log", () => logger.error(`[${this.pluginId}] ${error}`));
+      contain("activation-result listener", () => this.onActivationResult?.({ ok: false, error }));
+      contain("activation rejection", () => this.rejectActivation(new Error(error)));
+      contain("generation retire", () => this.retireGeneration(error));
+      contain("bridge dispose", () => this.dispose());
+    } finally {
+      contain("worker dispose", () => this.workerHost.dispose());
+      // Owner-level teardown last: it re-enters `dispose()` on both sides, which
+      // is inert by now, and it is the step that lets the plugin be retried.
+      contain("owner teardown", () => this.onTerminalFailure?.());
     }
-    this.rejectActivation(new Error(error));
-    try {
-      this.retireGeneration(error);
-    } catch (err) {
-      logger.error(`[${this.pluginId}] generation retire threw`, {
-        error: formatErrorMessage(err, "retire threw"),
-      });
-    }
-    try {
-      this.dispose();
-    } catch (err) {
-      logger.error(`[${this.pluginId}] bridge dispose threw`, {
-        error: formatErrorMessage(err, "dispose threw"),
-      });
-    }
-    this.workerHost.dispose();
   }
 
   private onWorkerMessage = (raw: unknown): void => {
@@ -485,7 +498,7 @@ export class PluginDevWorkerMainBridge {
     // trusting that every emitter upstream already did.
     const parsed = parseWorkerToHostMessage(raw);
     if (!parsed.ok) {
-      logger.error(`[${this.pluginId}] worker message violates the protocol`, {
+      logger.error(`[${this.pluginId}] worker message violates the protocol`, undefined, {
         issues: parsed.issues,
       });
       this.failProtocolViolation("worker sent a malformed message");
@@ -494,9 +507,11 @@ export class PluginDevWorkerMainBridge {
     try {
       this.dispatchWorkerMessage(parsed.message);
     } catch (err) {
-      logger.error(`[${this.pluginId}] worker message handling threw`, {
-        error: formatErrorMessage(err, "handler threw"),
-      });
+      try {
+        logger.error(`[${this.pluginId}] worker message handling threw`, err);
+      } catch {
+        // swallowed: the teardown below is what matters
+      }
       this.failProtocolViolation("worker message handling failed");
     }
   };
@@ -529,7 +544,7 @@ export class PluginDevWorkerMainBridge {
         this.failActivation(msg.error);
         return;
       case "host-call":
-        void this.handleHostCall(msg);
+        void this.handleHostCall(msg).catch(() => undefined);
         return;
       case "host-cancel": {
         const controller = this.hostCallAborts.get(msg.requestId);
@@ -546,11 +561,11 @@ export class PluginDevWorkerMainBridge {
             ? { registrationKey: msg.registrationKey }
             : undefined;
         if (registration) this.pendingRegistrations.add(registration);
-        void this.handleHostNotify(msg, registration);
+        void this.handleHostNotify(msg, registration).catch(() => undefined);
         return;
       }
       case "subscribe":
-        void this.handleSubscribe(msg);
+        void this.handleSubscribe(msg).catch(() => undefined);
         return;
       case "unsubscribe": {
         const dispose = this.subscriptionDisposers.get(msg.subscriptionId);

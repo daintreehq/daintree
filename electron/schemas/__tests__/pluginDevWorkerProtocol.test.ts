@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  MAX_WORKER_MESSAGE_BYTES,
-  PluginWorkerToHostMessageSchema,
-  measureWorkerMessageBytes,
-  parseWorkerToHostMessage,
-} from "../pluginDevWorker.js";
+import { parseWorkerToHostMessage } from "../pluginDevWorker.js";
 import type { PluginWorkerToHostMessage } from "../../../shared/types/pluginDevWorker.js";
 
 const VALID: PluginWorkerToHostMessage[] = [
@@ -44,10 +39,27 @@ function parsed(raw: unknown): unknown {
 }
 
 describe("PluginWorkerToHostMessageSchema", () => {
-  it("accepts every message shape the protocol defines", () => {
+  it("round-trips every message shape the protocol defines", () => {
     for (const msg of VALID) {
-      expect(PluginWorkerToHostMessageSchema.safeParse(msg).success, msg.type).toBe(true);
+      // Equality, not just acceptance: stripping a declared field (`debounceMs`,
+      // `registrationKey`, `permission`) would still "parse" but would silently
+      // drop what the bridge reads.
+      expect(parsed(msg), JSON.stringify(msg)).toEqual(msg);
     }
+  });
+
+  it("tolerates the numbers Zod v4 rejects but the host normalizes", () => {
+    // `z.number()` rejects NaN and infinities; the host coerces a nonsense
+    // debounce to zero, so rejecting one here would kill a working plugin.
+    for (const debounceMs of [Number.NaN, Number.POSITIVE_INFINITY, 0, 1000]) {
+      expect(
+        parsed({ type: "subscribe", subscriptionId: "s1", kind: "worktrees", debounceMs }),
+        String(debounceMs)
+      ).not.toBeNull();
+    }
+    expect(
+      parsed({ type: "subscribe", subscriptionId: "s1", kind: "worktrees", debounceMs: "50" })
+    ).toBeNull();
   });
 
   it("rejects the non-object messages that used to throw at ingress", () => {
@@ -127,27 +139,28 @@ describe("PluginWorkerToHostMessageSchema", () => {
   });
 
   it("keeps the offending values out of the rejection summary", () => {
+    // The sentinel sits in the INVALID field, so a summary built from Zod's own
+    // error text (which can inline the offending value) would fail this.
     const result = parseWorkerToHostMessage({
-      type: "host-call",
-      requestId: 42,
-      method: "getWorktrees",
-      params: { token: "s3cret-value" },
+      type: "activate-error",
+      error: { leaked: "s3cret-value" },
+      stack: "s3cret-stack",
     });
     expect(result.ok).toBe(false);
     const issues = result.ok ? "" : result.issues;
-    expect(issues).not.toContain("s3cret-value");
-    expect(issues).not.toContain("42");
-    expect(issues.length).toBeGreaterThan(0);
+    expect(issues).not.toContain("s3cret");
+    // Paths and codes only.
+    expect(issues).toMatch(/^[\w.()]+: [\w-]+(; [\w.()]+: [\w-]+)*$/);
   });
 
-  it("measures a message, and reports the unmeasurable as such", () => {
-    expect(measureWorkerMessageBytes({ type: "ready" })).toBeGreaterThan(0);
-    expect(measureWorkerMessageBytes(Symbol("nope"))).toBeNull();
-  });
-
-  it("caps a single message well above the largest legitimate payload", () => {
-    // Clipboard images are the biggest thing the protocol carries; the ceiling
-    // has to clear one with envelope overhead to spare.
-    expect(MAX_WORKER_MESSAGE_BYTES).toBeGreaterThan(20 * 1024 * 1024);
+  it("names the field that was wrong rather than collapsing to the union", () => {
+    // The top-level union would otherwise report every rejection as
+    // "(root): invalid_union", which tells a plugin author nothing.
+    const result = parseWorkerToHostMessage({
+      type: "activated",
+      hasCleanup: "yes",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.issues).toContain("hasCleanup");
   });
 });

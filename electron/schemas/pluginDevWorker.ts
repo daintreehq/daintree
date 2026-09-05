@@ -18,7 +18,6 @@
 // `z.discriminatedUnion` on the envelope tag, which fails closed on `null`,
 // primitives and a missing/unknown tag without ever throwing.
 
-import v8 from "node:v8";
 import { z } from "zod";
 import type {
   PluginHostCallMethod,
@@ -26,15 +25,6 @@ import type {
   PluginWorkerSubscriptionKind,
   PluginWorkerToHostMessage,
 } from "../../shared/types/pluginDevWorker.js";
-
-/**
- * Admission ceiling on a single inbound worker message, measured as its
- * V8-serialized size. Generous enough to clear the largest legitimate payload
- * the protocol carries (a clipboard image plus envelope) while still bounding
- * what one message can cost main. This is an admission bound, not a transport
- * bound: Electron has already decoded the message by the time we see it.
- */
-export const MAX_WORKER_MESSAGE_BYTES = 32 * 1024 * 1024;
 
 /**
  * Finite allowlists for the two method vocabularies. Written as records keyed
@@ -135,6 +125,14 @@ const CorrelationId = z.string().min(1);
 const SubscriptionScopeSchema = z.enum(["user", "project", "local", "worktree"]);
 
 /**
+ * Any number, `NaN` and infinities included. Zod v4's `z.number()` rejects
+ * those, but the host already normalizes a nonsense `debounceMs` to zero — so
+ * treating one as a terminal violation would kill a plugin whose call the
+ * pre-schema path served without complaint.
+ */
+const AnyNumber = z.custom<number>((value) => typeof value === "number");
+
+/**
  * Opaque method payloads and invoke results. Explicitly `.optional()`: Zod v4
  * (unlike v3) treats a bare `z.unknown()` as a REQUIRED key, and a worker that
  * omits `params` for a no-argument call is not committing a protocol violation
@@ -198,7 +196,7 @@ export const PluginWorkerToHostMessageSchema = z.union([
       kind: SubscriptionKindSchema,
       key: z.string().optional(),
       scope: SubscriptionScopeSchema.optional(),
-      debounceMs: z.number().optional(),
+      debounceMs: AnyNumber.optional(),
       processId: z.string().optional(),
     }),
     z.object({ type: z.literal("unsubscribe"), subscriptionId: CorrelationId }),
@@ -207,16 +205,36 @@ export const PluginWorkerToHostMessageSchema = z.union([
 ]);
 
 /**
- * Compile-time proof the schema still accepts every shape the protocol defines.
- * Drop a field or tighten a type past what `PluginWorkerToHostMessage` allows
- * and this stops resolving to `true`, so assigning `true` to it fails the
- * build — the drift that would otherwise show up as a working plugin being
- * killed for a protocol violation it did not commit.
+ * The protocol with its two opaque payload fields relaxed to optional — the one
+ * intentional gap between what the schema infers and what the shared types
+ * declare, since Zod v4 has no "required unknown".
  */
-type _SchemaAcceptsProtocol =
-  PluginWorkerToHostMessage extends z.infer<typeof PluginWorkerToHostMessageSchema> ? true : never;
-const _schemaAcceptsProtocol: _SchemaAcceptsProtocol = true;
-void _schemaAcceptsProtocol;
+type WireMessage<T = PluginWorkerToHostMessage> = T extends { params: unknown }
+  ? Omit<T, "params"> & { params?: unknown }
+  : T extends { result: unknown }
+    ? Omit<T, "result"> & { result?: unknown }
+    : T;
+
+/**
+ * Compile-time proof the schema and the protocol describe the same messages,
+ * checked in BOTH directions because each catches a different drift.
+ *
+ * Protocol → schema catches a field the schema tightened past what a real
+ * worker sends, which would kill a working plugin for a violation it did not
+ * commit. Schema → protocol catches a field the schema DROPPED: structurally an
+ * object with an extra property still extends one without it, so the first
+ * direction alone would let the schema silently strip (say) `requestId` while
+ * {@link parseWorkerToHostMessage} keeps advertising it.
+ *
+ * Neither direction sees runtime refinements (`.min(1)`, the method enums) —
+ * those are pinned by the fixtures in the schema's test.
+ */
+type _SchemaMatchesProtocol = (WireMessage extends z.infer<typeof PluginWorkerToHostMessageSchema>
+  ? true
+  : never) &
+  (z.infer<typeof PluginWorkerToHostMessageSchema> extends WireMessage ? true : never);
+const _schemaMatchesProtocol: _SchemaMatchesProtocol = true;
+void _schemaMatchesProtocol;
 
 /**
  * Field paths and Zod issue codes for a rejected message — never the offending
@@ -226,10 +244,20 @@ void _schemaAcceptsProtocol;
  */
 function summarizeIssues(error: z.ZodError): string {
   const seen = new Set<string>();
-  for (const issue of error.issues) {
-    seen.add(`${issue.path.join(".") || "(root)"}: ${issue.code}`);
-  }
-  return [...seen].slice(0, 8).join("; ");
+  const walk = (issues: readonly z.core.$ZodIssue[]): void => {
+    for (const issue of issues) {
+      // A union issue's own path is the root, so descend — otherwise every
+      // rejection reads "(root): invalid_union" and says nothing.
+      const nested = (issue as { errors?: (readonly z.core.$ZodIssue[])[] }).errors;
+      if (nested) {
+        for (const group of nested) walk(group);
+        continue;
+      }
+      seen.add(`${issue.path.join(".") || "(root)"}: ${issue.code}`);
+    }
+  };
+  walk(error.issues);
+  return [...seen].slice(0, 8).join("; ") || "(root): invalid_union";
 }
 
 export type WorkerMessageParseResult =
@@ -239,22 +267,8 @@ export type WorkerMessageParseResult =
 export function parseWorkerToHostMessage(raw: unknown): WorkerMessageParseResult {
   const parsed = PluginWorkerToHostMessageSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, issues: summarizeIssues(parsed.error) };
-  // Safe by `_SchemaAcceptsProtocol` above: the schema is a strict subset of
+  // Safe by `_SchemaMatchesProtocol` above: the schema is a strict subset of
   // the protocol union, modulo `z.unknown()` fields that Zod infers as optional
   // and the protocol declares required.
   return { ok: true, message: parsed.data as PluginWorkerToHostMessage };
-}
-
-/**
- * V8-serialized size of one inbound message, or `null` when it cannot be
- * measured (a symbol, or anything else outside the clone algorithm). Callers
- * treat `null` as a violation: a message main cannot size is not one it should
- * hand onward.
- */
-export function measureWorkerMessageBytes(raw: unknown): number | null {
-  try {
-    return v8.serialize(raw as Parameters<typeof v8.serialize>[0]).byteLength;
-  } catch {
-    return null;
-  }
 }

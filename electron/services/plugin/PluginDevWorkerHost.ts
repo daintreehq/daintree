@@ -14,11 +14,7 @@ import {
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginIdentity } from "../../../shared/types/plugin.js";
 import type { PluginHostToWorkerMessage } from "../../../shared/types/pluginDevWorker.js";
-import {
-  MAX_WORKER_MESSAGE_BYTES,
-  measureWorkerMessageBytes,
-  parseWorkerToHostMessage,
-} from "../../schemas/pluginDevWorker.js";
+import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 
 const logger = createLogger("main:PluginDevWorker");
 
@@ -491,9 +487,13 @@ export class PluginDevWorkerHost extends EventEmitter {
       try {
         this.handleWorkerMessage(raw);
       } catch (error) {
-        logger.error(`[${this.serviceName}] Worker message handling threw`, {
-          error: formatErrorMessage(error, "handler threw"),
-        });
+        // The report is best-effort — a logger that itself throws must not be
+        // the thing that escapes into `uncaughtException`.
+        try {
+          logger.error(`[${this.serviceName}] Worker message handling threw`, error);
+        } catch {
+          // swallowed: stopping the worker below is what matters
+        }
         this.failProtocolViolation("worker message handling failed");
       }
     });
@@ -527,23 +527,15 @@ export class PluginDevWorkerHost extends EventEmitter {
   private handleWorkerMessage(raw: unknown): void {
     if (this.isDisposed || this.protocolViolated) return;
 
-    const bytes = measureWorkerMessageBytes(raw);
-    if (bytes === null || bytes > MAX_WORKER_MESSAGE_BYTES) {
-      logger.error(`[${this.serviceName}] Worker message rejected on size`, {
-        bytes: bytes ?? "unmeasurable",
-        limit: MAX_WORKER_MESSAGE_BYTES,
-      });
-      this.failProtocolViolation("worker message exceeded the size limit");
-      return;
-    }
-
     const parsed = parseWorkerToHostMessage(raw);
     if (!parsed.ok) {
       // Field paths and issue codes only — the offending values stay out of
       // the log, and the reason handed onward becomes user-visible provenance.
-      logger.error(`[${this.serviceName}] Worker sent a message that violates the protocol`, {
-        issues: parsed.issues,
-      });
+      logger.error(
+        `[${this.serviceName}] Worker sent a message that violates the protocol`,
+        undefined,
+        { issues: parsed.issues }
+      );
       this.failProtocolViolation("worker sent a malformed message");
       return;
     }
@@ -613,25 +605,38 @@ export class PluginDevWorkerHost extends EventEmitter {
    * triggers is never counted or respawned.
    */
   private failProtocolViolation(reason: string): void {
-    if (this.protocolViolated || this.isDisposed) return;
+    if (this.isDisposed) return;
+    // Re-entry after the latch still disposes: a first pass whose reporting
+    // threw must not leave the misbehaving worker running.
+    if (this.protocolViolated) {
+      this.dispose();
+      return;
+    }
     this.protocolViolated = true;
-    logger.error(`[${this.serviceName}] Protocol violation: ${reason}; stopping the worker`);
-    if (this.readyReject) {
-      this.readyReject(new Error(`Plugin dev worker "${this.pluginId}": ${reason}`));
-      this.readyReject = null;
-      this.readyResolve = null;
+    try {
+      logger.error(`[${this.serviceName}] Protocol violation: ${reason}; stopping the worker`);
+    } catch {
+      // reporting is best-effort; stopping the worker is not
     }
     try {
+      if (this.readyReject) {
+        this.readyReject(new Error(`Plugin dev worker "${this.pluginId}": ${reason}`));
+        this.readyReject = null;
+        this.readyResolve = null;
+      }
       // The bridge turns this into the plugin's `loadError` and tears its own
       // side down. Emitted before `dispose()`, which drops every listener.
       this.emit("protocol-violation", reason);
     } catch (error) {
-      logger.error(`[${this.serviceName}] protocol-violation listener threw`, {
-        error: formatErrorMessage(error, "listener threw"),
-      });
+      try {
+        logger.error(`[${this.serviceName}] protocol-violation listener threw`, error);
+      } catch {
+        // swallowed
+      }
+    } finally {
+      // Runs with no bridge attached, and however the reporting above went.
+      this.dispose();
     }
-    // Runs even with no bridge attached, and even if a listener threw above.
-    this.dispose();
   }
 
   private handleExit(code: number | undefined): void {

@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 import { Readable } from "node:stream";
-import { MAX_WORKER_MESSAGE_BYTES } from "../../../schemas/pluginDevWorker.js";
 
 const { forkMock, mockChildren, appMock, watchMock, watchCalls, loggerMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -565,7 +564,7 @@ describe("PluginDevWorkerHost", () => {
       host.on("worker-message", (m) => forwarded.push(m));
       host.on("protocol-violation", (reason: string) => violations.push(reason));
       void host.start();
-      const child = mockChildren[0] as MockUtilityChild;
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
       child.emit("message", { type: "ready" });
       return { host, child, forwarded, violations };
     }
@@ -585,37 +584,58 @@ describe("PluginDevWorkerHost", () => {
         "host-call",
         { type: "nope" },
         { type: "host-call", requestId: "c1", method: "fs.unlink" },
+        { type: "host-notify", method: "fs.readFile" },
+        { type: "subscribe", subscriptionId: "s1", kind: "everything" },
+        { type: "invoke-result", requestId: "i1", ok: "maybe" },
       ]) {
-        const { child, forwarded, violations } = await startedHost();
-        expect(() => child.emit("message", raw)).not.toThrow();
-        expect(forwarded).toHaveLength(0);
-        expect(violations).toHaveLength(1);
-        mockChildren.length = 0;
+        const { host, child, forwarded, violations } = await startedHost();
+        expect(() => child.emit("message", raw), JSON.stringify(raw)).not.toThrow();
+        expect(forwarded, JSON.stringify(raw)).toHaveLength(0);
+        expect(violations, JSON.stringify(raw)).toEqual(["worker sent a malformed message"]);
+        host.dispose();
       }
     });
 
-    it("rejects a message over the size ceiling before forwarding it", async () => {
+    it("admits a large but legitimate payload", async () => {
+      // No blanket size ceiling: a plugin writing a big file or putting a large
+      // image on the clipboard is doing something the host allows, and killing
+      // it would be a worse bug than the one this validation fixes.
       const { child, forwarded, violations } = await startedHost();
       child.emit("message", {
         type: "host-call",
         requestId: "c1",
         method: "clipboard.writeImage",
-        params: { pngData: new Uint8Array(MAX_WORKER_MESSAGE_BYTES + 1024) },
+        params: { pngData: new Uint8Array(4 * 1024 * 1024) },
       });
-      expect(forwarded).toHaveLength(0);
-      expect(violations).toEqual(["worker message exceeded the size limit"]);
+      expect(violations).toHaveLength(0);
+      expect(forwarded).toHaveLength(1);
     });
 
     it("does not count a protocol violation as a crash or respawn the worker", async () => {
-      const { child, violations } = await startedHost();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
       const crashLoop = vi.fn();
+      const exits = vi.fn();
+      const violations: string[] = [];
+      host.on("crash-loop", crashLoop);
+      host.on("exit", exits);
+      host.on("protocol-violation", (reason: string) => violations.push(reason));
+      host.start().catch(() => undefined);
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+
+      // Three violations in a row is what the crash window would trip on, if a
+      // live-but-misbehaving worker were (wrongly) accounted for as a crash.
       child.emit("message", null);
-      expect(violations).toHaveLength(1);
-      // dispose() ran, so the exit it triggers is neither counted nor respawned.
       child.emit("exit", 0);
       await flush();
-      expect(forkMock).toHaveBeenCalledTimes(1);
+
+      expect(violations).toEqual(["worker sent a malformed message"]);
       expect(crashLoop).not.toHaveBeenCalled();
+      // No respawn: the worker is stopped, not restarted under a fresh fork.
+      expect(forkMock).toHaveBeenCalledTimes(1);
+      // dispose() already ran, so the exit is swallowed rather than reported.
+      expect(exits).not.toHaveBeenCalled();
     });
 
     it("contains a throwing worker-message listener", async () => {
@@ -627,12 +647,26 @@ describe("PluginDevWorkerHost", () => {
       });
       host.on("protocol-violation", (reason: string) => violations.push(reason));
       void host.start();
-      const child = mockChildren[0] as MockUtilityChild;
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
       child.emit("message", { type: "ready" });
       expect(() =>
         child.emit("message", { type: "host-call", requestId: "c1", method: "getWorktrees" })
       ).not.toThrow();
       expect(violations).toEqual(["worker message handling failed"]);
+      expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    });
+
+    it("stops the worker even when the violation listener throws", async () => {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.start().catch(() => undefined);
+      host.on("protocol-violation", () => {
+        throw new Error("bridge teardown blew up");
+      });
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      expect(() => child.emit("message", null)).not.toThrow();
+      expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
     });
 
     it("stops the worker even with no bridge listening", async () => {
@@ -640,7 +674,7 @@ describe("PluginDevWorkerHost", () => {
       const host = new PluginDevWorkerHost(OPTS);
       const ready = host.start();
       ready.catch(() => undefined);
-      const child = mockChildren[0] as MockUtilityChild;
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
       expect(() => child.emit("message", null)).not.toThrow();
       await expect(ready).rejects.toThrow(/malformed message/);
       expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
@@ -659,6 +693,11 @@ describe("PluginDevWorkerHost", () => {
     it("stops forwarding worker output once torn down", async () => {
       const { host, child } = await startedHost();
       loggerMock.info.mockClear();
+      // Positive control: while the worker is live, its stdout is forwarded.
+      child.stdout.push(Buffer.from("still running"));
+      await flush();
+      expect(loggerMock.info).toHaveBeenCalledWith(expect.stringContaining("still running"));
+
       host.dispose();
       child.stdout.push(Buffer.from("noise on the way out"));
       await flush();
