@@ -29,10 +29,16 @@ import {
  *     the product does;
  *   - the BASELINE arm is a fresh probe per read. A first read on a fresh
  *     instance takes the same path the old gate took on EVERY read of an
- *     unresolved PID, so its start count is the old rule's start count —
- *     subject to the one condition the old gate also carried, `!refreshing`,
- *     which `baselineFidelityMisses` checks by requiring one start per read.
- *     Same PID, same machine, same session, same minute.
+ *     unresolved PID. Same PID, same machine, same session, same minute.
+ *
+ *     Its equivalence is CONDITIONAL and the condition is not free: the old
+ *     gate also carried `!refreshing`, so it launched once per read only while
+ *     each probe settled inside a poll. A fresh instance has no in-flight
+ *     predecessor and so launches unconditionally — it cannot demonstrate that
+ *     condition, and `baselineFidelityMisses` does not claim to. What does
+ *     demonstrate it is the SUSTAINED arm: its later starts are proof that its
+ *     earlier probes settled, because the gate refuses a second start while
+ *     one is in flight.
  *
  * So `baselineToSustainedSpawnRatio` is a measured before/after rather than
  * arithmetic over a remembered number, and it stays honest if the curve is
@@ -111,6 +117,7 @@ const CORRECTNESS = [
   "probeLivenessMisses",
   "faultQualificationMisses",
   "absentPidResolutionMisses",
+  "doubleStartMisses",
   "retryLivenessMisses",
   "baselineFidelityMisses",
   "cadenceMisses",
@@ -190,7 +197,12 @@ export const imagePathProbeScenarios: PerfScenario[] = [
     correctness: [...CORRECTNESS],
     platforms: { linux: "unsupported", win32: "diagnostic" },
     async run(): Promise<ScenarioSample> {
-      const { ImagePathProbe } = await loadImagePathProbeModule();
+      const { ImagePathProbe, IMAGE_PATH_RETRY_MAX_MS } = await loadImagePathProbeModule();
+      // The longest a healthy probe may go between retries: the published
+      // ceiling, plus the poll a retry that becomes eligible mid-interval has
+      // to wait for. Derived rather than fixed, so retuning the curve retunes
+      // the predicate instead of breaking it.
+      const maxHealthyGapMs = IMAGE_PATH_RETRY_MAX_MS + POLL_INTERVAL_MS;
 
       installGitSpawnCounter();
       // Before any measurement window: the observer's self-validation starts a
@@ -248,10 +260,12 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           );
         }
 
+        let sustainedSpawns = 0;
         let baselineSpawns = 0;
         let cadenceMisses = 0;
         let absentPidResolutionMisses = 0;
-        /** Offset of every start the sustained arm made, for the liveness read. */
+        let doubleStartMisses = 0;
+        /** Offset of each read that started something, for the liveness read. */
         const sustainedLaunchOffsets: number[] = [];
 
         const start = performance.now();
@@ -271,9 +285,15 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           // synchronously, so the bracket needs no await to be complete.
           const sustainedMark = allSpawnMark();
           const served = sustained.readBasename(ABSENT_PID);
-          if (probeSpawnCount(allSpawnsSince(sustainedMark)) > 0) {
-            sustainedLaunchOffsets.push(offset);
-          }
+          // Two separate readings from the same bracket, and they must stay
+          // separate: the SUM is the cost being reported, the offsets are only
+          // for the liveness gap. Counting reads-that-started instead of
+          // starts would let a read that spawned twice report as one and
+          // understate the very number this scenario exists to publish.
+          const started = probeSpawnCount(allSpawnsSince(sustainedMark));
+          sustainedSpawns += started;
+          if (started > 0) sustainedLaunchOffsets.push(offset);
+          if (started > 1) doubleStartMisses += 1;
           // A PID that does not exist must never acquire a basename. This is
           // the direction a cache bug would break in silently.
           if (served !== null) absentPidResolutionMisses += 1;
@@ -290,28 +310,49 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           fresh.dispose();
         }
         const windowMs = performance.now() - start;
-        const sustainedSpawns = sustainedLaunchOffsets.length;
-        const lastLaunchOffset = sustainedLaunchOffsets[sustainedSpawns - 1] ?? 0;
+        const lastLaunchOffset = sustainedLaunchOffsets[sustainedLaunchOffsets.length - 1] ?? 0;
 
-        // Let the last arm's children finish rather than returning over the top
-        // of them: `dispose()` clears cache state and cancels nothing, and the
-        // smoke driver exits the process on return.
+        // Give the last arm's children room to finish rather than returning
+        // over the top of them: `dispose()` clears cache state and cancels
+        // nothing, and the smoke driver exits the process on return. It is a
+        // grace period, not proof — nothing here observes child exit — but it
+        // comfortably clears the 750ms probe timeout for a lookup against a
+        // PID that does not exist.
         await sleep(QUALIFY_SETTLE_MS);
 
         // THE predicate this scenario cannot be trusted without. A probe whose
-        // retries stopped after the first failure reports one start against a
-        // forty-start reference and scores better than a working one. Two
-        // readings, both of which a dead retry path fails: it must have
-        // retried at all, and it must still have been retrying in the back
-        // half of the window. It doubles as proof that the probes COMPLETE —
-        // the gate refuses to start a second one while the first is in flight,
-        // so a second start cannot happen unless the first settled.
+        // retries stopped reports one start against a forty-start reference
+        // and scores better than a working one, with every other term at zero.
+        //
+        // Two readings. It must have retried at all, and no gap between
+        // retries — including the gap from the last one to the end of the
+        // window — may exceed what the published ceiling allows. The gap rule
+        // is derived from the constants rather than fixed at a fraction of the
+        // window, so a retune of the curve retargets it instead of failing it.
+        //
+        // It doubles as proof that the lookups COMPLETE: the gate refuses to
+        // start a second probe while the first is in flight, so a second start
+        // cannot happen unless the first settled.
+        //
+        // The limit worth knowing: a window barely longer than the ceiling
+        // cannot tell "stopped after the last ceiling-length wait" from "still
+        // waiting out the ceiling". The unit suite closes that under fake
+        // timers, where running past several ceilings is free.
+        const launchGaps = sustainedLaunchOffsets.map(
+          (offset, index) => offset - (sustainedLaunchOffsets[index - 1] ?? 0)
+        );
         const retryLivenessMisses =
-          sustainedSpawns >= 2 && lastLaunchOffset >= windowMs / 2 ? 0 : 1;
+          sustainedLaunchOffsets.length >= 2 &&
+          launchGaps.every((gap) => gap <= maxHealthyGapMs) &&
+          windowMs - lastLaunchOffset <= maxHealthyGapMs
+            ? 0
+            : 1;
 
-        // The reference has to be the workload it claims. One start per read is
-        // the pre-fix rule; anything less means its probes were not settling
-        // between polls and it is understating what the old code cost.
+        // The reference achieved the workload it claims: one start per read.
+        // This grades the reference ARM, not the equivalence — a fresh
+        // instance has no in-flight predecessor to suppress it, so it cannot
+        // itself demonstrate the `!refreshing` condition the old gate carried.
+        // The sustained arm is what demonstrates settling between polls.
         const baselineFidelityMisses = baselineSpawns === WINDOW_READS ? 0 : 1;
 
         const backoffMisses =
@@ -326,6 +367,7 @@ export const imagePathProbeScenarios: PerfScenario[] = [
           readCalls: WINDOW_READS,
           windowMs,
           absentPidResolutionMisses,
+          doubleStartMisses,
           retryLivenessMisses,
           baselineFidelityMisses,
           backoffMisses,

@@ -113,8 +113,13 @@ async function readAndFail(
 
 /**
  * Drive a PID that has already failed once all the way to the backoff ceiling,
- * one failure per step. Asserts each step launched exactly one probe, so a
- * caller that reaches the ceiling has proved the climb as well as arriving.
+ * one failure per step.
+ *
+ * This is SETUP, and its assertions say only that each scheduled step landed —
+ * a constant short delay would satisfy every one of them. What proves the
+ * climb is the boundary assertion each caller makes afterwards. The step is
+ * named in the assertion message so a setup failure is never mistaken for the
+ * case under test.
  */
 async function climbToCeiling(
   probe: InstanceType<typeof ImagePathProbe>,
@@ -123,7 +128,7 @@ async function climbToCeiling(
   let delay = IMAGE_PATH_RETRY_BASE_MS;
   while (delay < IMAGE_PATH_RETRY_MAX_MS) {
     vi.advanceTimersByTime(delay);
-    expect(await readAndFail(probe, pid)).toBe(1);
+    expect(await readAndFail(probe, pid), `climb setup: pid ${pid} at ${delay}ms`).toBe(1);
     delay = Math.min(delay * 2, IMAGE_PATH_RETRY_MAX_MS);
   }
 }
@@ -134,9 +139,13 @@ async function climbToCeiling(
  *
  * Derived from the exported constants and the doubling rule rather than
  * written out, so retuning the curve retargets the expectation instead of
- * forcing a matching edit — while a change to the SHAPE (dropping the
- * doubling, dropping the cap, charging the cooldown from launch instead of
- * settle) still fails the assertion.
+ * forcing a matching edit — while dropping the doubling still fails it.
+ *
+ * What it does NOT catch, so that the claim stays the size of the check: a
+ * missing cap is invisible inside one minute (the first launch the cap moves
+ * is at 141s), and launch-charged versus settle-charged cooldowns coincide
+ * here because a mock-settled probe advances no fake time. Those two belong to
+ * the dedicated ceiling and settlement tests below.
  */
 function expectedLaunchOffsets(reads: number, intervalMs: number): number[] {
   const offsets: number[] = [];
@@ -432,14 +441,12 @@ describe("ImagePathProbe", () => {
         // curve rather than a copy of it. Catches a missing cap, a missing
         // doubling, and a cooldown charged from launch instead of settle.
         expect(launchOffsets).toEqual(expectedLaunchOffsets(POLL_READS, POLL_INTERVAL_MS));
-        // The bar the issue sets for shipping this at all.
+        // The bar the issue sets for shipping this at all. Note which way the
+        // ratio can be gamed: a probe that stopped retrying scores BETTER
+        // here. The exact-ladder assertion above is what refuses that — a
+        // stopped implementation produces a shorter array — and the ceiling
+        // test is what proves retries continue past the ceiling indefinitely.
         expect(baselineLaunches / launchOffsets.length).toBeGreaterThanOrEqual(5);
-        // Retries were still happening late in the window, not just early —
-        // the reading that separates "backed off" from "stopped retrying",
-        // which the ratio above rewards.
-        expect(launchOffsets[launchOffsets.length - 1]).toBeGreaterThan(
-          (POLL_READS * POLL_INTERVAL_MS) / 2
-        );
       } finally {
         vi.useRealTimers();
       }
@@ -757,13 +764,20 @@ describe("ImagePathProbe", () => {
         readlinkMock.queue[1]!.reject(new Error("EACCES"));
         await flush();
 
+        // Time moves between the two completions on purpose: with identical
+        // timestamps a stale write that only re-stamped `updatedAt` would be
+        // invisible, and that write alone is enough to push the retry out.
+        const gapMs = 500;
+        vi.advanceTimersByTime(gapMs);
+
         // Now the superseded refresh fails. Its checkId no longer matches, so
         // it must not touch the live entry's basename or advance its cooldown.
         readlinkMock.queue[0]!.reject(new Error("EACCES"));
         await flush();
 
-        // Still on the BASE delay, not doubled by the stale completion.
-        vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS - 1);
+        // Still on the BASE delay measured from the LIVE entry's own
+        // completion — neither doubled nor re-stamped by the stale one.
+        vi.advanceTimersByTime(IMAGE_PATH_RETRY_BASE_MS - gapMs - 1);
         expect(await readAndFail(probe, 123)).toBe(0);
         vi.advanceTimersByTime(1);
         expect(await readAndFail(probe, 123)).toBe(1);
