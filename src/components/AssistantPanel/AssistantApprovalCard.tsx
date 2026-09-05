@@ -320,7 +320,14 @@ export function AssistantApprovalCard({
           tabIndex={0}
           aria-label="Action arguments"
           className={cn(
-            "mt-2 max-h-40 overflow-y-auto rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-2 py-2",
+            // Square, like every other fenced literal in the panel. This block sits
+            // outside `.assistant-prose`, so the stylesheet's rule does not reach it —
+            // and it is the same object as a transcript fence: a literal payload on the
+            // inset ground inside a hairline. The card AROUND it keeps its radius,
+            // because that shape is identifying an interaction container rather than
+            // code. `rounded-none` is a shape decision and an explicitly legal member of
+            // the radius scale (docs/themes/component-contract.md).
+            "mt-2 max-h-40 overflow-y-auto rounded-none border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-2 py-2",
             // WRAP rather than scroll sideways. A summary that clips mid-token
             // ("…,\"forc") hides the part of the argument someone is being asked
             // to approve, and gives no cue that anything is hidden.
