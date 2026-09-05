@@ -196,8 +196,11 @@ async function playToFirstFrame(
         document.body.appendChild(el);
         // A rejected play() is recorded, not swallowed — autoplay policy is a
         // plausible reason for a confusing result and should be visible.
+        // `String(err)` rather than the shared formatErrorMessage helper: this
+        // closure is serialized and evaluated in the renderer, so it cannot
+        // reference an import. A DOMException stringifies to "Name: message".
         void el.play().catch((err: unknown) => {
-          playRejection = err instanceof Error ? err.message : String(err);
+          playRejection = String(err);
         });
       }),
     [url, tag] as const
