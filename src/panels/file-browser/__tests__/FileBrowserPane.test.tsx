@@ -122,11 +122,19 @@ const {
     // change tick rather than only what renders.
     treeArgs: {
       changeTick: undefined as number | undefined,
+      changedDirs: undefined as
+        { at: number; previousAt: number | null; dirs: readonly string[] | null } | undefined,
+      gitChangeTick: undefined as number | undefined,
       sort: undefined as { key: string; direction: string } | undefined,
       selectedPath: undefined as string | null | undefined,
     },
     // Ticks the worktree store reports for wt-1; both default to "never moved".
-    worktreeTicks: { git: undefined as number | undefined, fs: undefined as number | undefined },
+    worktreeTicks: {
+      git: undefined as number | undefined,
+      fs: undefined as number | undefined,
+      // Directories the fs tick's burst touched, or null for "unknown" (#12244).
+      dirs: null as readonly string[] | null,
+    },
     // The rest of what the store reports for wt-1. `changes` stays null by
     // default so the bulk of this suite keeps the lastUpdated-only snapshot
     // shape it was written against — which is also a real runtime state (the
@@ -229,6 +237,24 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
       workingTreeChangedAtById: new Map<string, number>(
         worktreeTicks.fs === undefined ? [] : [["wt-1", worktreeTicks.fs]]
       ),
+      // And the affected-directory record that rides the same stamp (#12244) —
+      // absent for a worktree that has seen no burst, which is the "re-read
+      // everything" answer the tree already took before scoping existed.
+      workingTreeChangedDirsById: new Map(
+        worktreeTicks.fs === undefined
+          ? []
+          : [
+              [
+                "wt-1",
+                {
+                  at: worktreeTicks.fs,
+                  previousAt: null,
+                  dirs: worktreeTicks.dirs,
+                  run: "test-run",
+                },
+              ],
+            ]
+      ),
     }),
 }));
 
@@ -238,10 +264,14 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("../useFileBrowserTree", () => ({
   useFileBrowserTree: (args: {
     changeTick?: number;
+    changedDirs?: { at: number; previousAt: number | null; dirs: readonly string[] | null };
+    gitChangeTick?: number;
     sort?: { key: string; direction: string };
     selectedPath?: string | null;
   }) => {
     treeArgs.changeTick = args.changeTick;
+    treeArgs.changedDirs = args.changedDirs;
+    treeArgs.gitChangeTick = args.gitChangeTick;
     treeArgs.sort = args.sort;
     treeArgs.selectedPath = args.selectedPath;
     // The real hook resolves this against its listings map; here the stubbed
@@ -588,6 +618,8 @@ beforeEach(() => {
   mockPanel.browserWorkspaceRooted = undefined;
   mockPanel.browserExpandedPaths = undefined;
   treeArgs.changeTick = undefined;
+  treeArgs.changedDirs = undefined;
+  treeArgs.gitChangeTick = undefined;
   treeProps.onActivate = undefined;
   treeProps.onInsertFileReference = undefined;
   treeProps.canInsertFileReference = undefined;
@@ -603,6 +635,7 @@ beforeEach(() => {
   dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
   worktreeTicks.fs = undefined;
+  worktreeTicks.dirs = null;
   worktreeMock.path = "/repo";
   worktreeMock.changes = null;
   worktreeMock.changesRootPath = "/repo";
@@ -1651,6 +1684,55 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     renderPane({ worktreeId: "wt-1" });
 
     expect(treeArgs.changeTick).toBe(300);
+  });
+
+  it("hands the tree the affected directories behind its own filesystem tick", () => {
+    worktreeTicks.fs = 300;
+    worktreeTicks.dirs = ["src/panels"];
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(300);
+    expect(treeArgs.changedDirs).toEqual({
+      at: 300,
+      previousAt: null,
+      dirs: ["src/panels"],
+      run: "test-run",
+    });
+  });
+
+  it("hands over an unclassifiable burst as-is rather than dropping the record", () => {
+    // `null` dirs and no record at all both end in a full refresh, but they are
+    // different states and the pane is not the layer that decides between them.
+    worktreeTicks.fs = 300;
+    worktreeTicks.dirs = null;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changedDirs).toEqual({
+      at: 300,
+      previousAt: null,
+      dirs: null,
+      run: "test-run",
+    });
+  });
+
+  it("hands over nothing when the worktree has seen no filesystem write", () => {
+    worktreeTicks.git = 450;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(450);
+    expect(treeArgs.changedDirs).toBeUndefined();
+  });
+
+  it("hands the git half of the tick over separately", () => {
+    // `changeTick` is the max of the two, which hides a git-status pass a later
+    // filesystem burst outran inside one React batch — the tree needs the git
+    // stamp itself to notice one it never acted on.
+    worktreeTicks.git = 150;
+    worktreeTicks.fs = 300;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(300);
+    expect(treeArgs.gitChangeTick).toBe(150);
   });
 
   it("ignores the placement worktree's change ticks once workspace-rooted", () => {

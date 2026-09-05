@@ -849,22 +849,39 @@ export function listingsFromSnapshot(
  * survives its directory being deleted. Without this filter a browser restored
  * onto a changed worktree would re-request every folder the user ever opened,
  * including ones that no longer exist, on every single refresh tick.
+ *
+ * `affectedDirs` narrows that answer to the directories a change actually
+ * touched (#12244). It filters what is emitted, never where the walk goes: an
+ * affected directory is only reachable through its unaffected ancestors, and
+ * reachability is exactly what this function exists to establish. Omit it (or
+ * pass `null`) for the full sweep — that is what a manual refresh, an identity
+ * reset, and any change the watcher could not describe all take.
  */
 export function refreshTargets(
   listings: DirectoryListings,
   expandedPaths: ReadonlySet<string>,
   rootPath = "",
   isVisible?: (name: string) => boolean,
-  keepPath: string | null = null
+  keepPath: string | null = null,
+  affectedDirs: ReadonlySet<string> | null = null
 ): string[] {
-  const targets = [rootPath];
+  const wanted = (dirPath: string): boolean => affectedDirs === null || affectedDirs.has(dirPath);
+  const targets: string[] = [];
+  // The root is unconditional for a full sweep, and only when a top-level entry
+  // changed for a scoped one — the affected set names a *parent*, so "" appears
+  // in it exactly when something directly inside the root moved.
+  if (wanted(rootPath)) targets.push(rootPath);
   // The folder the viewer is listing is re-read like an expanded one even when
   // it is collapsed in the tree (#11620) — it is on screen, so leaving it out
   // would let it go stale while the tree beside it updates. Added up front and
   // guarded below so the walk can't list it twice.
-  if (keepPath !== null && keepPath !== rootPath && !expandedPaths.has(keepPath)) {
+  if (
+    keepPath !== null &&
+    keepPath !== rootPath &&
+    !expandedPaths.has(keepPath) &&
+    wanted(keepPath)
+  )
     targets.push(keepPath);
-  }
   const walk = (dirPath: string, depth: number): void => {
     if (depth > MAX_TREE_DEPTH) return;
     const children = listings.get(dirPath);
@@ -874,7 +891,7 @@ export function refreshTargets(
       // A hidden directory has no row, so re-listing it (and its subtree) every
       // tick is pure waste — skip it and everything beneath it.
       if (isVisible && !isVisible(node.name)) continue;
-      targets.push(node.path);
+      if (wanted(node.path)) targets.push(node.path);
       walk(node.path, depth + 1);
     }
   };

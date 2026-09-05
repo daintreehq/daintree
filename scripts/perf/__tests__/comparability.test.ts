@@ -62,6 +62,8 @@ describe("classifyMetric", () => {
   const REAL_COUNTS = [
     "executedJobs",
     "postedJobs",
+    "directoryRequests",
+    "listingsMapCopies",
     "supersededPosted",
     "gitSpawns",
     "agentCount",

@@ -1040,6 +1040,91 @@ describe("GitFileWatcher", () => {
       expect(onWorktreeFilesChanged).not.toHaveBeenCalled();
       expect(onChange).not.toHaveBeenCalled();
     });
+
+    // ---- The burst's affected directories (#12244) ----
+
+    function watcherWithPaths() {
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged = vi.fn<(dirs: readonly string[] | null) => void>();
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        onWorktreeFilesChanged,
+        watchWorktree: true,
+        worktreeMinDebounceMs: 500,
+        worktreeMaxDebounceMs: 500,
+        worktreeMaxWaitMs: 2000,
+      });
+      return { gitWatcher, onChange, onWorktreeFilesChanged, mock };
+    }
+
+    /** The directories one flush reported, order-independent. */
+    function reportedDirs(fn: ReturnType<typeof vi.fn>, call = 0): string[] | null {
+      const dirs = fn.mock.calls[call]?.[0] as readonly string[] | null | undefined;
+      return dirs == null ? null : [...dirs].sort();
+    }
+
+    it("reports the parent directory of every path in the burst, deduped", async () => {
+      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [
+        { type: "update", path: pathJoin("/repo", "src", "panels", "a.ts") },
+        { type: "update", path: pathJoin("/repo", "src", "panels", "b.ts") },
+        { type: "create", path: pathJoin("/repo", "package.json") },
+      ]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Two writes in one directory plus one at the top level: two targets, not
+      // three — which is the whole point of deduping to parents.
+      expect(reportedDirs(onWorktreeFilesChanged)).toEqual(["", "src/panels"]);
+      gitWatcher.dispose();
+    });
+
+    it("reports unknown for a burst carrying an event it cannot place", async () => {
+      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [
+        { type: "update", path: pathJoin("/repo", "src", "a.ts") },
+        // No path: an event shape the watcher cannot reason about, which makes
+        // the whole burst unscopeable rather than partially known.
+        { type: "update" },
+      ]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      // Explicitly null, not merely absent: the callback has to SAY "unknown"
+      // rather than leave the consumer to infer it from a missing argument.
+      expect(onWorktreeFilesChanged.mock.calls[0]).toHaveLength(1);
+      expect(onWorktreeFilesChanged.mock.calls[0][0]).toBeNull();
+      gitWatcher.dispose();
+    });
+
+    it("gives each flush its own burst rather than accumulating across them", async () => {
+      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [{ type: "update", path: pathJoin("/repo", "src", "a.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+      fireEvents(cb, [{ type: "update", path: pathJoin("/repo", "electron", "b.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(reportedDirs(onWorktreeFilesChanged, 0)).toEqual(["src"]);
+      // The second flush must not still be carrying `src`: a scope that grows
+      // forever converges on the full sweep it exists to avoid.
+      expect(reportedDirs(onWorktreeFilesChanged, 1)).toEqual(["electron"]);
+      gitWatcher.dispose();
+    });
   });
 
   // ---- Error handling tests (adapted to async Promise rejection) ----
@@ -1718,7 +1803,7 @@ describe("GitFileWatcher", () => {
     /** Start a watcher whose worktree bursts are eligible for classification. */
     async function startClassifyingWatcher(overrides: {
       onChange: () => void;
-      onWorktreeFilesChanged?: () => void;
+      onWorktreeFilesChanged?: (affectedDirs: readonly string[] | null) => void;
     }) {
       const mock = setupSubscribeMock();
       const gitWatcher = new GitFileWatcher({
@@ -1755,6 +1840,10 @@ describe("GitFileWatcher", () => {
       await flushClassification();
       expect(onChange).not.toHaveBeenCalled();
       expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      // And it carries the directories, so a build writing only into an ignored
+      // folder tells the file browser exactly where to look even though the
+      // status pass is skipped entirely (#12244 riding on #11330).
+      expect(onWorktreeFilesChanged.mock.calls[0]?.[0]).toEqual([".output"]);
 
       expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
       const [cwd, paths] = vi.mocked(checkIgnoredPaths).mock.calls[0];

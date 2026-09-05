@@ -219,6 +219,23 @@ export interface WorktreeSnapshot {
    */
   workingTreeChangedAt?: number;
 
+  /**
+   * The worktree-relative parent directories of every path in the burst behind
+   * `workingTreeChangedAt` — `""` is the worktree root. Lets the file browser
+   * re-list only what changed instead of every expanded directory (#12244).
+   *
+   * Three distinct answers, and a consumer must keep them apart: absent means
+   * no burst has been described (an older host, or a stamp retained before the
+   * first snapshot), `null` means the burst could not be classified and
+   * everything must be re-read (the pre-#12244 behaviour), and `[]` means a
+   * real burst that resolved to no directory at all.
+   *
+   * Excluded from snapshot dedup and carried in the store's side map, for the
+   * same reason `workingTreeChangedAt` is: it advances on events that change
+   * nothing else in the snapshot.
+   */
+  workingTreeChangedDirs?: readonly string[] | null;
+
   /** True when this worktree's repo is in an auth-failed fetch state. */
   fetchAuthFailed?: boolean;
 

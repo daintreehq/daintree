@@ -184,6 +184,11 @@ export class WorktreeMonitor {
   // snapshot dedup and carried through the store's side map like the
   // git-status-checked timestamp.
   private _workingTreeChangedAt: number = 0;
+  /**
+   * Directories the burst behind `_workingTreeChangedAt` touched, or `null`
+   * when it could not be described. `undefined` until the first flush.
+   */
+  private _workingTreeChangedDirs: readonly string[] | null | undefined = undefined;
   // Stamped by the watcher's onTriggerUpdate hook before a forced refresh
   // fires. The stat pre-check compares against `lastStatBaselineAt` to know
   // whether an event arrived since the baseline was captured — if so, the
@@ -424,7 +429,7 @@ export class WorktreeMonitor {
         monitor.callbacks.onEmfileLimitReached?.(worktreeId),
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
       onGitConfigChanged: () => monitor.callbacks.onGitConfigChanged?.(monitor.id),
-      onWorktreeFilesChanged: () => monitor.handleWorktreeFilesChanged(),
+      onWorktreeFilesChanged: (affectedDirs) => monitor.handleWorktreeFilesChanged(affectedDirs),
     };
     this.watcherController = new WatcherController(watcherHost);
 
@@ -587,6 +592,9 @@ export class WorktreeMonitor {
       },
       get workingTreeChangedAt() {
         return monitor._workingTreeChangedAt;
+      },
+      get workingTreeChangedDirs() {
+        return monitor._workingTreeChangedDirs;
       },
       get fetchAuthFailed() {
         return monitor._fetchAuthFailed;
@@ -1916,11 +1924,21 @@ export class WorktreeMonitor {
    * clock adjustment) still strictly increase, so each registers downstream.
    * Before the first status resolves there is no snapshot to emit — the stamp
    * is retained and the first normal snapshot carries it.
+   *
+   * `affectedDirs` rides the same stamp so a subscriber can scope its re-read
+   * to the directories that actually changed (#12244). A retained stamp cannot
+   * carry them: a second flush before the first status would overwrite the
+   * first burst's directories with the second's, and nothing would ever re-read
+   * the difference — so the retained case reports `null` (refresh everything)
+   * rather than a set it cannot prove is complete.
    */
-  private handleWorktreeFilesChanged(): void {
+  private handleWorktreeFilesChanged(affectedDirs: readonly string[] | null): void {
     this._workingTreeChangedAt = Math.max(Date.now(), this._workingTreeChangedAt + 1);
     if (this._hasInitialStatus) {
+      this._workingTreeChangedDirs = affectedDirs;
       this.emitUpdate();
+    } else {
+      this._workingTreeChangedDirs = null;
     }
   }
 

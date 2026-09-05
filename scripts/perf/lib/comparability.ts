@@ -156,6 +156,12 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
   // Tallies. Plain word matching is safe here: it runs last, so anything a
   // stronger rule wanted has already been claimed.
   //
+  // `Requests` and `Copies` joined the list with PERF-242's scoped-refresh arms
+  // (#12244): a directory listing request and a listings-map copy are both
+  // deterministic tallies of work the panel does, and without a token here they
+  // fell through to `unknown` and lost their cross-machine comparison — which
+  // is the whole point of counting them rather than only timing the sweep.
+  //
   // `Reloads` is spelled out rather than folded into a shared `[Ll]oads` token:
   // a bare "loads" finds itself inside "payload", which would take a
   // deterministic `payloadBytesPerMessage` away from `size` for the same reason
@@ -163,7 +169,7 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
   {
     cls: "count",
     pattern:
-      /[Cc]ount|[Rr]ows|[Ss]pawns|[Ss]tarts|[Ll]aunches|[Ii]nvocations|[Rr]etries|[Cc]alls|[Hh]its|[Mm]isses|[Ee]vents|[Ff]lushes|[Rr]enders|[Mm]essages|[Tt]asks|[Hh]andles|[Dd]escriptors|[Ww]rites|[Rr]eads|[Pp]asses|[Aa]ttempts|[Cc]allbacks|[Kk]eystrokes|[Rr]oundTrips|[Ll]ines|[Pp]anels|[Gg]roups|[Hh]unks|[Tt]argets|[Ff]rames|[Ff]iles|[Tt]okens|[Dd]ecorations|[Cc]hanges|[Bb]atches|[Ii]tems|[Rr]esolved|[Rr]eloads|[Jj]obs|[Pp]osted/,
+      /[Cc]ount|[Rr]ows|[Ss]pawns|[Ss]tarts|[Ll]aunches|[Ii]nvocations|[Rr]etries|[Cc]alls|[Hh]its|[Mm]isses|[Ee]vents|[Ff]lushes|[Rr]enders|[Mm]essages|[Tt]asks|[Hh]andles|[Dd]escriptors|[Ww]rites|[Rr]eads|[Pp]asses|[Aa]ttempts|[Cc]allbacks|[Kk]eystrokes|[Rr]oundTrips|[Ll]ines|[Pp]anels|[Gg]roups|[Hh]unks|[Tt]argets|[Ff]rames|[Ff]iles|[Tt]okens|[Dd]ecorations|[Cc]hanges|[Bb]atches|[Ii]tems|[Rr]esolved|[Rr]eloads|[Jj]obs|[Pp]osted|[Rr]equests|[Cc]opies/,
   },
 ];
 
