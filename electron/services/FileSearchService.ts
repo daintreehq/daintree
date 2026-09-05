@@ -3,6 +3,7 @@ import * as path from "path";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { Cache } from "../utils/cache.js";
 import { logWarn } from "../utils/logger.js";
+import { isPathInside } from "../../shared/utils/path.js";
 import type { Dirent } from "fs";
 
 interface FileListCacheEntry {
@@ -14,12 +15,86 @@ interface FileListCacheEntry {
   lastSearchCandidates?: number[];
 }
 
+/**
+ * How long an index stays usable without a filesystem signal.
+ *
+ * Freshness is driven by the watcher now: `FileSearchCacheInvalidator` drops a
+ * worktree's index on every debounced files-changed flush the workspace host
+ * reports, so this clock is a fallback rather than the primary mechanism. It
+ * still has to exist, because `WatcherController` arms the recursive worktree
+ * watch only for ELEVATED worktrees (`_isCurrent || _agentActive`) — a
+ * background worktree stays on the cheap `.git/`-only watch and never emits the
+ * signal, so its entry has nothing but this clock.
+ *
+ * Five minutes keeps a whole picker session warm (the ten seconds this replaced
+ * lapsed mid-session, and every lapse cost a `git ls-files` plus a synchronous
+ * index build on the process that also serves every terminal's IPC) while
+ * bounding how stale an unwatched listing can get.
+ */
+const FILE_LIST_TTL_MS = 300_000;
+
+/**
+ * How often expired indexes are swept out.
+ *
+ * `Cache.get` only drops the one key it was asked for and `set` only evicts by
+ * LRU past `maxSize`, so without a sweep an expired entry — `files`,
+ * `normalizedFiles`, `basenameStarts`, the optional sorted copy, megabytes on a
+ * large repo — stays resident until something reads that exact cwd again.
+ *
+ * A minute rather than a multiple of the TTL: the sweep is a walk of at most
+ * `maxSize` numeric comparisons, so its cost is not worth amortising, and
+ * pacing it off the TTL would put worst-case residency at TTL + minutes when
+ * the whole point is to stop holding indexes nobody is going to read.
+ */
+const FILE_LIST_SWEEP_INTERVAL_MS = 60_000;
+
 const FILE_LIST_CACHE = new Cache<string, FileListCacheEntry>({
   maxSize: 30,
-  defaultTTL: 10_000, // 10 seconds (reduced from 30s for faster worktree updates)
+  defaultTTL: FILE_LIST_TTL_MS,
 });
 const FILE_LIST_IN_FLIGHT = new Map<string, Promise<FileListCacheEntry>>();
 const FILE_LIST_EPOCHS = new Map<string, number>();
+
+let fileListSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Armed by the first cached index and disarmed once the cache drains, so an
+ * app that never opens the picker never runs it and an idle one stops within a
+ * sweep of its last entry expiring. Nothing arms it at import or construction
+ * time — a test or perf fixture that loads this module inherits no timer — and
+ * `unref()` keeps it from holding the process open either way.
+ */
+function armFileListSweep(): void {
+  if (fileListSweepTimer !== null) return;
+  fileListSweepTimer = setInterval(sweepFileListCache, FILE_LIST_SWEEP_INTERVAL_MS);
+  fileListSweepTimer.unref?.();
+}
+
+function disarmFileListSweep(): void {
+  if (fileListSweepTimer === null) return;
+  clearInterval(fileListSweepTimer);
+  fileListSweepTimer = null;
+}
+
+function sweepFileListCache(): void {
+  FILE_LIST_CACHE.cleanup();
+  if (FILE_LIST_CACHE.size() === 0) disarmFileListSweep();
+}
+
+/**
+ * Drop one already-resolved cwd.
+ *
+ * The epoch is bumped even when nothing was cached: a load already in flight
+ * captured the previous value and `getFiles` refuses to commit a result whose
+ * captured epoch has moved. Epochs are deliberately never pruned — deleting one
+ * would let a fenced load's captured value compare equal again through the
+ * `?? 0` default and reseed the cache with a listing from before the change.
+ */
+function invalidateResolvedCwd(resolvedCwd: string): void {
+  FILE_LIST_CACHE.invalidate(resolvedCwd);
+  FILE_LIST_IN_FLIGHT.delete(resolvedCwd);
+  FILE_LIST_EPOCHS.set(resolvedCwd, (FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) + 1);
+}
 
 const MAX_RESULTS_DEFAULT = 50;
 const MAX_QUERY_LENGTH = 256;
@@ -396,10 +471,65 @@ export class FileSearchService {
   }
 
   invalidate(cwd: string): void {
-    const resolvedCwd = path.resolve(cwd);
-    FILE_LIST_CACHE.invalidate(resolvedCwd);
-    FILE_LIST_IN_FLIGHT.delete(resolvedCwd);
-    FILE_LIST_EPOCHS.set(resolvedCwd, (FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) + 1);
+    invalidateResolvedCwd(path.resolve(cwd));
+    if (FILE_LIST_CACHE.size() === 0) disarmFileListSweep();
+  }
+
+  /**
+   * Drop `root`'s index and every cached index beneath it.
+   *
+   * The watcher reports a change against a worktree root, but the cache is
+   * keyed by whatever cwd a caller searched, and `files.search` is an
+   * ActionService action — so it is also an MCP tool, whose `cwd` is supplied by
+   * the caller (`systemActions.ts`). An agent that searches a subdirectory
+   * caches an entry under that subpath, and a root-scoped drop would leave it
+   * to outlive every change made to it.
+   */
+  invalidateUnder(root: string): void {
+    const resolvedRoot = path.resolve(root);
+    // The root itself always, cached or not, so this keeps `invalidate`'s
+    // fencing contract for a load in flight against the root.
+    const targets = new Set<string>([resolvedRoot]);
+
+    // `Cache.forEach` skips expired entries without deleting them, so sweep
+    // first: an expired descendant would otherwise be invisible here and
+    // survive the invalidation that was supposed to remove it.
+    FILE_LIST_CACHE.cleanup();
+    FILE_LIST_CACHE.forEach((_entry, key) => {
+      if (isPathInside(key, resolvedRoot)) targets.add(key);
+    });
+    for (const key of FILE_LIST_IN_FLIGHT.keys()) {
+      if (isPathInside(key, resolvedRoot)) targets.add(key);
+    }
+
+    for (const target of targets) invalidateResolvedCwd(target);
+    if (FILE_LIST_CACHE.size() === 0) disarmFileListSweep();
+  }
+
+  /**
+   * Run the expiry sweep now. The timer's own body, exposed so tests and the
+   * retention benchmark exercise the shipped path rather than a copy of it.
+   */
+  sweep(): void {
+    sweepFileListCache();
+  }
+
+  getCacheStats(): ReturnType<Cache<string, FileListCacheEntry>["getStats"]> {
+    return FILE_LIST_CACHE.getStats();
+  }
+
+  /**
+   * Drop every index and stop the sweep.
+   *
+   * For tests and perf fixtures. The app has no need of it: the timer is
+   * `unref()`'d and disarms itself once the cache drains. In-flight keys are
+   * fenced rather than merely forgotten, so a load still settling cannot reseed
+   * the cache after teardown.
+   */
+  dispose(): void {
+    for (const key of [...FILE_LIST_IN_FLIGHT.keys()]) invalidateResolvedCwd(key);
+    FILE_LIST_CACHE.clear();
+    disarmFileListSweep();
   }
 
   private async loadFileList(cwd: string): Promise<string[]> {
@@ -446,6 +576,7 @@ export class FileSearchService {
         };
         if ((FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) === epoch) {
           FILE_LIST_CACHE.set(resolvedCwd, entry);
+          armFileListSweep();
         }
         return entry;
       })

@@ -5,6 +5,7 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
+import { fileSearchCacheInvalidator } from "./fileSearchCacheInvalidation.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
@@ -67,6 +68,13 @@ export class WorkspaceHostEventRouter {
         if (worktree.path) {
           this.worktreePathToProject.set(path.resolve(worktree.path), entry.projectPath);
         }
+        // Watcher-driven file-search invalidation (#12240). Runs here, on the
+        // raw event, rather than off `queueSysWorktreeUpdate`'s 50ms window:
+        // the whole point is that a keystroke arriving in the same tick sees
+        // the dropped index instead of the stale one, and the invalidator's own
+        // timestamp check is what keeps unrelated snapshots from costing a
+        // rebuild.
+        fileSearchCacheInvalidator.handleWorktreeUpdate(worktree);
         // No renderer relay: the host already fans every worktree-update
         // directly to each per-view worktree MessagePort
         // (DIRECT_RENDERER_EVENTS in electron/workspace-host.ts), and the
@@ -146,6 +154,10 @@ export class WorkspaceHostEventRouter {
         // WORKTREE_DELETE IPC handler's eviction does not.
         gitServiceCache.delete(event.worktreeId);
         gitServiceCache.delete(path.resolve(event.worktreeId));
+        // Same reasoning as the GitService eviction above: this event covers
+        // external removals too, which the WORKTREE_DELETE handler's own
+        // `fileSearchService.invalidate` never sees.
+        fileSearchCacheInvalidator.handleWorktreeRemoved(event.worktreeId);
         // Prune cloud-teardown failure-toast dedup keys for the removed
         // worktree. Keys are `${worktreeId}:${startedAt}`, so a prefix scan
         // covers every teardown attempt; otherwise the Set only grows until

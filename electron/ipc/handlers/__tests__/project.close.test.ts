@@ -56,6 +56,16 @@ const pluginLifecycleMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
+const fileSearchCacheInvalidatorMock = vi.hoisted(() => ({
+  handleWorktreeUpdate: vi.fn(),
+  handleWorktreeRemoved: vi.fn(),
+  handleProjectClosed: vi.fn(),
+  reset: vi.fn(),
+}));
+vi.mock("../../../services/workspace-client/fileSearchCacheInvalidation.js", () => ({
+  fileSearchCacheInvalidator: fileSearchCacheInvalidatorMock,
+}));
+
 const teardownMock = vi.hoisted(() => ({
   gracefulTeardownAndJournalProject:
     vi.fn<(...args: unknown[]) => Promise<{ confirmed: boolean; terminalsKilled: number }>>(),
@@ -570,6 +580,96 @@ describe("project:close handler", () => {
       expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("file-search cache disposal (#12240)", () => {
+    function makeCloseHandler(deps: HandlerDependencies) {
+      registerProjectCrudHandlers(deps);
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const closeCall = calls.find((c) => c[0] === CHANNELS.PROJECT_CLOSE);
+      return closeCall?.[1] as unknown as (
+        event: unknown,
+        projectId: string,
+        options?: { killTerminals?: boolean }
+      ) => Promise<{ terminalsKilled: number; processesKilled: number }>;
+    }
+
+    it("drops the project's file indexes on a close", async () => {
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-active",
+        name: "Active Project",
+        status: "active",
+        path: "/test/project-active",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+      projectStoreMock.clearProjectState.mockResolvedValue(undefined);
+      teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+        confirmed: true,
+        terminalsKilled: 0,
+      });
+
+      const handler = makeCloseHandler({
+        mainWindow: {} as unknown,
+        ptyClient: {
+          getProjectStats: vi.fn(async () => ({
+            terminalCount: 0,
+            processIds: [],
+            terminalTypes: {},
+          })),
+          onProjectSwitch: vi.fn(),
+          setActiveProject: vi.fn(),
+        },
+      } as unknown as HandlerDependencies);
+
+      await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-active", {
+        killTerminals: true,
+      });
+
+      expect(fileSearchCacheInvalidatorMock.handleProjectClosed).toHaveBeenCalledWith(
+        "/test/project-active"
+      );
+    });
+
+    it("drops them when the project is only backgrounded", async () => {
+      // Backgrounding pauses the workspace host, so the watcher stops reporting
+      // for this project: a retained index could only go stale while holding
+      // memory, which is worse than no index at all.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-bg",
+        name: "Background Project",
+        status: "active",
+        path: "/test/project-bg",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+
+      const handler = makeCloseHandler({
+        mainWindow: {} as unknown,
+        ptyClient: {
+          getProjectStats: vi.fn(async () => ({
+            terminalCount: 1,
+            processIds: [333],
+            terminalTypes: { terminal: 1 },
+          })),
+          onProjectSwitch: vi.fn(),
+          setActiveProject: vi.fn(),
+        },
+        worktreeService: {
+          pauseProject: vi.fn(),
+          resumeProject: vi.fn(),
+          loadProject: vi.fn(),
+          attachDirectPort: vi.fn(),
+        },
+      } as unknown as HandlerDependencies);
+
+      await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-bg", {
+        killTerminals: false,
+      });
+
+      expect(fileSearchCacheInvalidatorMock.handleProjectClosed).toHaveBeenCalledWith(
+        "/test/project-bg"
+      );
     });
   });
 

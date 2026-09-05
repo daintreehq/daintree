@@ -538,6 +538,20 @@
       "maxMetricValues": {
         "msPerKLine": 6
       }
+    },
+    "PERF-197": {
+      "p95Ms": 900,
+      "maxMetricValues": {
+        "coldReloads": 0,
+        "returnKeystrokeMs": 2
+      }
+    },
+    "PERF-198": {
+      "p95Ms": 6000,
+      "maxMetricValues": {
+        "cachedIndexCountAfterSweep": 0,
+        "retainedHeapMb": 4
+      }
     }
   }
 }

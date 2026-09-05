@@ -8,11 +8,16 @@ import {
   spawnObserverMisses,
 } from "../lib/gitPipelineFixture";
 import {
+  addTrackedPath,
   getFileSearchFixture,
+  getFileSearchRetentionRepos,
   GIT_ONLY_SENTINEL,
+  loadFileSearchInvalidationModule,
   loadFileSearchModule,
   NO_MATCH_QUERY,
+  RETENTION_REPO_COUNT,
   TYPED_FILE_QUERIES,
+  withClockOffsetAsync,
   type FileSearchRepo,
 } from "../lib/fileSearchFixture";
 
@@ -22,12 +27,19 @@ import {
 //
 //   * COLD (PERF-192): with no cached path list, the first keystroke pays for
 //     `git ls-files` plus the directory-set build and sort. Nothing renders
-//     until it resolves, so this IS the picker's open latency. The list is
-//     rebuilt whenever its 10s TTL lapses, and dropped outright when a worktree
-//     is created or deleted, so a working session pays it repeatedly.
+//     until it resolves, so this IS the picker's open latency.
 //   * WARM (PERF-190/191): every subsequent keystroke re-scans the whole cached
 //     list through `scorePath` and re-heaps the top 50. This is the typing
 //     latency, and it scales linearly with repo size.
+//
+// Which of the two a keystroke pays is a LIFECYCLE question, and PERF-197/198
+// are about that half. The list used to be dropped by a 10s TTL alone, so a
+// pause in the picker put the next keystroke back on the cold path and the
+// dropped indexes were never actually freed. Freshness now comes from the
+// worktree watcher (`FileSearchCacheInvalidator`) with a 5-minute fallback
+// clock, and a sweep reclaims what expires: PERF-197 measures whether an
+// unchanged worktree still reloads, PERF-198 whether an expired index is
+// still held.
 //
 // `FileSearchService.search` swallows every error and returns `[]`, and
 // `loadFileList` silently falls back to a filesystem walk when git fails — both
@@ -103,6 +115,57 @@ async function primeCache(
   if (primed.length === 0) {
     throw new Error(`file search returned no results for ${repo.path} — fixture or service broken`);
   }
+}
+
+/**
+ * A pause longer than the TTL this change replaced. The point of the arm is
+ * "the user came back after the old clock would have lapsed", so it is pinned
+ * just past 10s rather than to the current TTL — retuning the fallback must not
+ * quietly retune the question.
+ */
+const OLD_TTL_PAUSE_MS = 11_000;
+
+/** Past the 5-minute fallback TTL, so a swept entry is genuinely expired. */
+const PAST_TTL_OFFSET_MS = 360_000;
+
+/**
+ * Strictly increasing stand-in for `WorktreeMonitor._workingTreeChangedAt`,
+ * which stamps `Math.max(Date.now(), prev + 1)` per flush. The invalidator
+ * ignores a repeated value on purpose, so two iterations landing in the same
+ * millisecond must not look like one flush.
+ */
+let filesChangedStamp = Date.now();
+function nextFilesChangedStamp(): number {
+  filesChangedStamp += 1;
+  return filesChangedStamp;
+}
+
+function memoryUsedBytes(): number {
+  return process.memoryUsage().heapUsed;
+}
+
+function arrayBufferBytes(): number {
+  return process.memoryUsage().arrayBuffers;
+}
+
+/**
+ * Mirrors `scenarios/soak.ts`. The harness spawns benchmarks with
+ * `--expose-gc`, so a missing hook means the measurement is not the one being
+ * claimed — the scenarios below report that as a miss rather than quietly
+ * comparing two un-collected heaps.
+ */
+function maybeRunGc(): void {
+  const gcFn = (globalThis as { gc?: () => void }).gc;
+  if (typeof gcFn === "function") gcFn();
+}
+
+function gcAvailable(): boolean {
+  return typeof (globalThis as { gc?: () => void }).gc === "function";
+}
+
+/** Let pending microtasks and one macrotask drain before a heap reading. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 export const fileSearchScenarios: PerfScenario[] = [
@@ -272,6 +335,199 @@ export const fileSearchScenarios: PerfScenario[] = [
         notes:
           gitPathListMisses > 0
             ? "the cold open was served warm or by the filesystem walker — these are not git ls-files timings"
+            : undefined,
+      };
+    },
+  },
+  {
+    id: "PERF-197",
+    name: "File Picker Return After Pause - Cache Lifecycle",
+    description:
+      "Does an idle picker session pay a second cold load? Primes the real FileSearchService, moves " +
+      "the cache's clock past the 10s TTL this replaced with no filesystem change, and searches " +
+      "again: coldReloads counts `git ls-files` spawns across that keystroke and must be 0. The " +
+      "second arm is the oracle in the other direction — a tracked path is added and the real " +
+      "FileSearchCacheInvalidator is driven with an advanced workingTreeChangedAt, after which the " +
+      "reload MUST happen and MUST surface the new path. Idle time is simulated by offsetting " +
+      "Date.now(), which is what the cache reads; every reported duration is real performance.now() " +
+      "elapsed. NOT in the bracket, and not claimable from it: the filesystem watch itself, its " +
+      "250-800ms debounce, and the utility-process hop that carries the snapshot to main.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 4, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: ["pauseMisses", "changeMisses", "spawnObserverMisses"],
+    async run() {
+      const fixture = getFileSearchFixture();
+      const { fileSearchService } = await loadFileSearchModule();
+      const { fileSearchCacheInvalidator } = await loadFileSearchInvalidationModule();
+      const search: SearchFn = (payload) => fileSearchService.search(payload);
+      const invalidate = (cwd: string): void => fileSearchService.invalidate(cwd);
+      const repo = fixture.representative;
+
+      installGitSpawnCounter();
+      const observerMisses = spawnObserverMisses();
+
+      const start = performance.now();
+
+      // Arm 1 — unchanged worktree, returned to after a pause.
+      await primeCache(search, invalidate, repo);
+      const pauseMark = gitSpawnMark();
+      const pauseStart = performance.now();
+      const pauseResults = await withClockOffsetAsync(OLD_TTL_PAUSE_MS, () =>
+        search({ cwd: repo.path, query: "terminal", limit: 50 })
+      );
+      const returnKeystrokeMs = performance.now() - pauseStart;
+      const coldReloads = gitSpawnsSince(pauseMark).bySubcommand["ls-files"] ?? 0;
+
+      // Arm 2 — the same pause, but the worktree actually changed. A unique
+      // path per iteration, so "found it" cannot be satisfied by a leftover.
+      await primeCache(search, invalidate, repo);
+      const addedPath = addTrackedPath(
+        repo,
+        `src/services/PerfReturnProbe${nextFilesChangedStamp()}.ts`
+      );
+      fileSearchCacheInvalidator.handleWorktreeUpdate({
+        path: repo.path,
+        workingTreeChangedAt: nextFilesChangedStamp(),
+      });
+      const changedMark = gitSpawnMark();
+      const changedStart = performance.now();
+      const changedResults = await search({ cwd: repo.path, query: addedPath, limit: 50 });
+      const changedKeystrokeMs = performance.now() - changedStart;
+      const changedColdReloads = gitSpawnsSince(changedMark).bySubcommand["ls-files"] ?? 0;
+
+      const durationMs = performance.now() - start;
+
+      // The unchanged arm must be genuinely warm AND genuinely answering: zero
+      // reloads on a search that returned nothing is what a broken service and
+      // a perfect cache look like alike.
+      const pauseMisses = (coldReloads === 0 ? 0 : 1) + (pauseResults.length > 0 ? 0 : 1);
+      // The changed arm is the other direction — a cache that never invalidates
+      // scores 0 on the arm above, so this is what stops that from reading as
+      // success.
+      const changeMisses =
+        (changedColdReloads === 1 ? 0 : 1) + (changedResults.includes(addedPath) ? 0 : 1);
+
+      return {
+        durationMs,
+        metrics: {
+          coldReloads,
+          returnKeystrokeMs,
+          changedColdReloads,
+          changedKeystrokeMs,
+          pausedMs: OLD_TTL_PAUSE_MS,
+          fileCount: repo.fileCount,
+          pauseMisses,
+          changeMisses,
+          spawnObserverMisses: observerMisses,
+        },
+        notes:
+          changeMisses > 0
+            ? "the changed worktree did not reload or did not surface the new path — the unchanged arm's 0 proves nothing"
+            : undefined,
+      };
+    },
+  },
+  {
+    id: "PERF-198",
+    name: "File Search Expired Index Retention",
+    description:
+      "Holds a full cache — 30 distinct worktrees, ~3,200 tracked paths each — then expires it and " +
+      "sweeps, reporting the heap the indexes were still holding. `Cache.get` only drops the key it " +
+      "was asked for and `set` only evicts past maxSize, so before the sweep existed an expired " +
+      "entry's files, normalizedFiles, basenameStarts and sorted copy stayed resident until " +
+      "something happened to read that exact cwd again. Expiry is simulated by offsetting Date.now() " +
+      "past the TTL; the sweep is the shipped timer body, not a copy. Heap readings are " +
+      "machine-dependent and taken after a forced GC — a signal about what the cache releases, never " +
+      "a claim about the app's total footprint.",
+    tier: "heavy",
+    modes: ["ci", "nightly"],
+    iterations: { ci: 3, nightly: 5 },
+    warmups: 0,
+    correctness: ["retentionMisses"],
+    async run() {
+      const repos = getFileSearchRetentionRepos();
+      const { fileSearchService } = await loadFileSearchModule();
+
+      // Start from an empty cache so the control reading is a real floor and
+      // not last iteration's fleet.
+      fileSearchService.dispose();
+
+      const start = performance.now();
+
+      await settle();
+      maybeRunGc();
+      const controlHeapBytes = memoryUsedBytes();
+      const controlArrayBufferBytes = arrayBufferBytes();
+
+      let emptyResultCount = 0;
+      for (const repo of repos) {
+        // Two shapes per worktree so the optional allocations an entry can grow
+        // — the sorted copy behind an empty query, the candidate index list —
+        // are represented in what is being held.
+        const listed = await fileSearchService.search({ cwd: repo.path, query: "", limit: 50 });
+        const matched = await fileSearchService.search({
+          cwd: repo.path,
+          query: "terminal",
+          limit: 50,
+        });
+        if (listed.length === 0 || matched.length === 0) emptyResultCount += 1;
+      }
+
+      const cachedIndexCountBeforeSweep = fileSearchService.getCacheStats().size;
+
+      await settle();
+      maybeRunGc();
+      const primedHeapBytes = memoryUsedBytes() - controlHeapBytes;
+      const primedArrayBufferBytes = arrayBufferBytes() - controlArrayBufferBytes;
+
+      // Past the TTL, then the shipped sweep body. Both inside the offset: the
+      // sweep's own expiry test reads the same clock.
+      await withClockOffsetAsync(PAST_TTL_OFFSET_MS, async () => {
+        fileSearchService.sweep();
+        await settle();
+      });
+
+      const cachedIndexCountAfterSweep = fileSearchService.getCacheStats().size;
+
+      await settle();
+      maybeRunGc();
+      const retainedHeapBytes = memoryUsedBytes() - controlHeapBytes;
+      const retainedArrayBufferBytes = arrayBufferBytes() - controlArrayBufferBytes;
+
+      const durationMs = performance.now() - start;
+
+      // Every way this measurement can be vacuous, counted: a fleet that never
+      // filled, a listing that came back empty, a sweep that left entries
+      // behind, and a run with no GC hook (where two uncollected heaps would
+      // difference to a flattering number).
+      const retentionMisses =
+        (cachedIndexCountBeforeSweep === RETENTION_REPO_COUNT ? 0 : 1) +
+        (cachedIndexCountAfterSweep === 0 ? 0 : 1) +
+        emptyResultCount +
+        (gcAvailable() ? 0 : 1);
+
+      return {
+        durationMs,
+        metrics: {
+          primedWorktreeCount: repos.length,
+          cachedIndexCountBeforeSweep,
+          cachedIndexCountAfterSweep,
+          primedHeapMb: primedHeapBytes / (1024 * 1024),
+          retainedHeapMb: retainedHeapBytes / (1024 * 1024),
+          freedHeapMb: (primedHeapBytes - retainedHeapBytes) / (1024 * 1024),
+          // basenameStarts is an Int32Array, so its backing store lives outside
+          // heapUsed. Reported separately rather than folded in, because a
+          // reader comparing only heapUsed would under-count what an entry
+          // actually holds.
+          primedArrayBufferMb: primedArrayBufferBytes / (1024 * 1024),
+          retainedArrayBufferMb: retainedArrayBufferBytes / (1024 * 1024),
+          retentionMisses,
+        },
+        notes:
+          retentionMisses > 0
+            ? "the fleet never filled, a listing came back empty, the sweep left entries, or no GC hook was available — these heap deltas are not a retention reading"
             : undefined,
       };
     },
