@@ -90,6 +90,7 @@ function makeBroadcaster(): PluginContributionBroadcaster {
     isDisposed: () => false,
     listPluginActions: () => actions,
     initPromise: Promise.resolve(),
+    listPluginDevStatuses: () => [],
   });
 }
 
@@ -514,6 +515,7 @@ describe("pushSnapshotTo", () => {
       isDisposed: () => true,
       listPluginActions: () => actions,
       initPromise: Promise.resolve(),
+      listPluginDevStatuses: () => [],
     });
     await disposed.pushSnapshotTo(wc as unknown as Electron.WebContents);
     expect(wc.send).not.toHaveBeenCalled();

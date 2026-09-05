@@ -3516,3 +3516,52 @@ export interface ProjectPluginStagedEvent {
   pluginId: string;
   displayName: string;
 }
+
+/**
+ * Health of the artifact watcher behind a `daintree-plugin dev` session.
+ *
+ * - `watching` — armed on the plugin root; rebuilds reload the plugin.
+ * - `waiting` — the plugin directory is not there yet (a session started before
+ *   the first build landed). Rebuilds are not observed, but the session is
+ *   healthy and will arm itself when the directory appears.
+ * - `degraded` — the watch stopped reporting and could not be re-armed. Hot
+ *   reload is off until the session restarts; this is the state that has to be
+ *   visible, because the symptom is otherwise indistinguishable from "my
+ *   rebuild changed nothing".
+ */
+export type PluginDevWatcherState = "watching" | "waiting" | "degraded";
+
+/**
+ * Live state of one `daintree-plugin dev` session (#12277).
+ *
+ * Deliberately a per-plugin snapshot rather than a reload notification: the
+ * point is that whatever reads it — a panel, a worker diagnostic — agrees on
+ * which generation is live, which a fire-and-forget "reloaded" event cannot
+ * give you. New facets of a session's health belong here as additional fields
+ * on the same channel (#12278's worker health is the next one), not as a
+ * second channel.
+ */
+export interface PluginDevStatus {
+  /** Plugin instance id — the key every contribution carries. */
+  pluginId: string;
+  /**
+   * The view generation this plugin's panel kinds are currently published
+   * under, i.e. the `__dtv-N` segment in their `componentPath`. `null` while
+   * the plugin is not loaded (a reload whose manifest did not parse).
+   */
+  viewGeneration: number | null;
+  /** Completed artifact reloads this session, for the "did my save land?" read. */
+  reloadCount: number;
+  watcher: PluginDevWatcherState;
+  /** Why the watcher is in a non-`watching` state, or the last reload error. */
+  detail: string | null;
+}
+
+/**
+ * `plugin:dev-status-changed` — one session's current state, replacing any
+ * prior state for that plugin. A `null` status means the session ended.
+ */
+export interface PluginDevStatusChangedEvent {
+  pluginId: string;
+  status: PluginDevStatus | null;
+}

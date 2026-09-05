@@ -209,6 +209,8 @@ interface PluginContributionBroadcasterDeps {
   listPluginActions: () => PluginActionDescriptor[];
   /** Resolves once startup load + activation has settled (or dispose ran). */
   initPromise: Promise<void>;
+  /** Live `daintree-plugin dev` sessions, for the cold-start replay (#12277). */
+  listPluginDevStatuses: () => import("../../../shared/types/plugin.js").PluginDevStatus[];
 }
 
 /**
@@ -594,6 +596,13 @@ export class PluginContributionBroadcaster {
         name: "plugin:recipes-changed",
         payload: { recipes: getPluginRecipes(), complete: false },
       },
+      // Not project-scoped: a dev session is a global plugin by construction,
+      // and a view that missed the live event has no other way to learn which
+      // generation is running.
+      ...this.deps.listPluginDevStatuses().map((status) => ({
+        name: "plugin:dev-status-changed",
+        payload: { pluginId: status.pluginId, status },
+      })),
     ];
     for (const event of events) {
       try {

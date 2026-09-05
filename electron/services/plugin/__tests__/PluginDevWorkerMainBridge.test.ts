@@ -567,15 +567,13 @@ describe("PluginDevWorkerMainBridge", () => {
     await expect(badPromise).rejects.toThrow("nope");
   });
 
-  it("reports every activation outcome, including post-reload, via onActivationResult", async () => {
+  it("reports every activation outcome, not just the first, via onActivationResult", async () => {
     const onActivationResult = vi.fn();
     const { workerHost, bridge } = makeBridge({ onActivationResult });
     bridge.waitForActivation().catch(() => {});
 
-    // Initial activation succeeds.
+    // Initial activation succeeds; a later one (crash respawn) fails.
     workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
-    // Reload, then the reloaded generation fails to activate.
-    workerHost.emit("reloading");
     workerHost.emit("worker-message", { type: "activate-error", error: "broke on reload" });
 
     expect(onActivationResult).toHaveBeenNthCalledWith(1, { ok: true });
@@ -1065,14 +1063,14 @@ describe("PluginDevWorkerMainBridge", () => {
       method: "registerFileDecorationProvider",
       params: { descriptor: { id: "acme.demo.deco" } },
     });
-    // Let the async registration record its disposer before reload tears it down
-    // (the register message and the reload event are distinct tasks in prod).
+    // Let the async registration record its disposer before the generation is
+    // retired (the register message and the exit are distinct tasks in prod).
     await flush();
-    workerHost.emit("reloading");
+    workerHost.emit("exit", 1, false);
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("clears prior registrations and fails pending invokes on reload", async () => {
+  it("clears prior registrations and fails pending invokes when a generation is retired", async () => {
     const { host, workerHost, bridge, clear } = makeBridge();
     bridge.waitForActivation().catch(() => {});
     // Register an action and start an invocation that never gets a reply.
@@ -1094,9 +1092,9 @@ describe("PluginDevWorkerMainBridge", () => {
     const pending = wrapper({});
     pending.catch(() => {});
 
-    workerHost.emit("reloading");
+    workerHost.emit("exit", 1, false);
     expect(clear).toHaveBeenCalled();
-    await expect(pending).rejects.toThrow(/reloaded/);
+    await expect(pending).rejects.toThrow(/crashed/);
   });
 
   it("fails pending invokes when the worker crashes (#12216)", async () => {
@@ -1340,8 +1338,8 @@ describe("PluginDevWorkerMainBridge", () => {
       kind: "active-worktree",
     });
     await flush();
-    // A reload bumps the generation and tears the old subscription down.
-    workerHost.emit("reloading");
+    // Retiring the generation tears the old subscription down.
+    workerHost.emit("exit", 1, false);
     workerHost.sent.length = 0;
     // A late event from the now-dead subscription must NOT reach the new worker
     // (its proxy resets subscriptionIds and could collide on "s1").
@@ -1588,11 +1586,11 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(handle.kill).toHaveBeenCalled();
     });
 
-    it("kills spawned processes on reload", async () => {
+    it("kills spawned processes when a generation is retired", async () => {
       const { host, workerHost, bridge } = makeBridge();
       bridge.waitForActivation().catch(() => {});
       const handle = await spawn(workerHost, host);
-      workerHost.emit("reloading");
+      workerHost.emit("exit", 1, false);
       expect(handle.kill).toHaveBeenCalled();
     });
   });

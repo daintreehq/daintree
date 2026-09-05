@@ -1976,6 +1976,12 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // Live state of a `daintree-plugin dev` session (main → renderer, #12277).
+  // Carries the whole per-plugin snapshot, so the receiver never has to
+  // reconstruct which generation is live from a sequence of notifications; a
+  // `null` status means the session ended.
+  "plugin:dev-status-changed": import("../plugin.js").PluginDevStatusChangedEvent;
+
   // A project's `.daintree/plugins/` folder holds valid manifests and has no
   // trust decision on record (main → renderer, project-scoped). The ONLY signal
   // that may open the project-plugin trust dialog: the controller alone knows
@@ -2148,6 +2154,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // `daintree-plugin dev` session state (global broadcast)
+  | "plugin:dev-status-changed"
   // Project-local plugin trust + inventory (project-scoped send)
   | "plugin:project-trust-prompt"
   | "plugin:project-plugins-changed"

@@ -1346,20 +1346,22 @@ async function makePluginAdapter(): Promise<LadderAdapter> {
   const { PluginDevWorkerHost } =
     await import("../../../electron/services/plugin/PluginDevWorkerHost");
   let gaveUp = false;
-  const host = new PluginDevWorkerHost({
-    pluginId: PERF_PLUGIN_ID,
-    identity: PERF_PLUGIN_IDENTITY,
-    pluginDir: PERF_PLUGIN_DIR,
-    bundlePath: PERF_PLUGIN_BUNDLE,
-    // Production mode: no bundle watcher, identical crash supervision. The
-    // watcher would put a real inotify/FSEvents handle on a directory this
-    // probe never writes to.
-    mode: "prod",
-  });
-  host.on("crash-loop", () => {
-    gaveUp = true;
-  });
-  host.start().catch(() => undefined);
+  const makeHost = (): InstanceType<typeof PluginDevWorkerHost> => {
+    const created = new PluginDevWorkerHost({
+      pluginId: PERF_PLUGIN_ID,
+      identity: PERF_PLUGIN_IDENTITY,
+      pluginDir: PERF_PLUGIN_DIR,
+      bundlePath: PERF_PLUGIN_BUNDLE,
+      // Production mode: the prod worker kind, identical crash supervision.
+      mode: "prod",
+    });
+    created.on("crash-loop", () => {
+      gaveUp = true;
+    });
+    created.start().catch(() => undefined);
+    return created;
+  };
+  let host = makeHost();
 
   return {
     name: "PluginDevWorkerHost",
@@ -1383,7 +1385,11 @@ async function makePluginAdapter(): Promise<LadderAdapter> {
     gaveUp: () => gaveUp,
     manualRecover: () => {
       gaveUp = false;
-      host.reload();
+      // Manual recovery for a plugin worker is a full replacement: a rebuild
+      // reconciles the whole plugin, which disposes this host and forks a fresh
+      // one with an empty crash window (#12277).
+      host.dispose();
+      host = makeHost();
     },
     dispose: () => host.dispose(),
   };

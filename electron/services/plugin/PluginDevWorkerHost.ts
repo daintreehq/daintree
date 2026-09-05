@@ -1,7 +1,6 @@
 import { utilityProcess, UtilityProcess, app } from "electron";
 import { EventEmitter } from "events";
 import { createHash } from "crypto";
-import fs, { existsSync } from "fs";
 import path from "path";
 import os from "os";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -21,10 +20,6 @@ const logger = createLogger("main:PluginDevWorker");
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Debounce for `dist/index.js` change events. Vite emits a write (and often a
- * rename) per rebuild; coalesce them so one rebuild triggers one reload. */
-const RELOAD_DEBOUNCE_MS = 200;
-
 /** Graceful-dispose grace period before SIGKILL, matching WorkspaceHostProcess. */
 const DISPOSE_TIMEOUT_MS = 1000;
 
@@ -35,10 +30,11 @@ const DISPOSE_TIMEOUT_MS = 1000;
 // imported because the guards operate at independent layers. The alignment test
 // (`crashGuardAlignment.test.ts`) asserts the values stay in lockstep.
 //
-// Crucially, an intentional reload (mtime change → kill → respawn) is NOT a
-// crash: `reload()` clears the crash window before killing, so a developer
-// doing rapid saves can never trip the cap. Only an unintended worker exit
-// (plugin bootstrap throw, segfault) accumulates toward it.
+// Crucially, a rebuild is NOT a crash. A dev rebuild is reconciled by
+// PluginService replacing the whole plugin — this host is disposed and a fresh
+// one forked with an empty window — so rapid saves can never trip the cap. Only
+// an unintended worker exit (plugin bootstrap throw, segfault) accumulates
+// toward it.
 const CRASH_THRESHOLD = 3;
 export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
@@ -56,10 +52,9 @@ export interface PluginDevWorkerHostOptions {
   /** Absolute path to the built bundle (`dist/index.js`) the worker imports. */
   bundlePath: string;
   /**
-   * `"dev"` (default) hot-reloads the worker on every `bundlePath` rebuild;
-   * `"prod"` runs the same worker without the file watcher (production bundles
-   * never rebuild in place, so there is nothing to watch). Crash supervision,
-   * fork lifecycle, and graceful dispose are identical in both modes.
+   * Distinguishes the two worker kinds for the service name and the
+   * utility-process kind label only. Crash supervision, fork lifecycle, and
+   * graceful dispose are identical in both modes.
    */
   mode?: "dev" | "prod";
   /**
@@ -73,11 +68,12 @@ export interface PluginDevWorkerHostOptions {
 }
 
 /**
- * Owns the `utilityProcess.fork` lifecycle for one plugin: fork the worker,
- * hand it the bundle to import, and (in `"dev"` mode only) watch `bundlePath`
- * for rebuilds, killing + respawning on each change. Production plugins reuse
- * the same host with `mode: "prod"` and no file watcher. Crash supervision
- * mirrors
+ * Owns the `utilityProcess.fork` lifecycle for one plugin: fork the worker and
+ * hand it the bundle to import. Rebuild detection is deliberately NOT here —
+ * a rebuild changes the manifest and the views as well as the backend, so it is
+ * reconciled one layer up by {@link PluginDevArtifactWatcher} driving the
+ * ordinary dev-load path, which replaces this host along with everything else
+ * the plugin contributes (#12277). Crash supervision mirrors
  * {@link WorkspaceHostProcess} (sliding crash window, `child-process-gone`
  * filtering, exit/gone ordering defer).
  *
@@ -86,13 +82,12 @@ export interface PluginDevWorkerHostOptions {
  * Messages are validated against the protocol schema before they are forwarded;
  * anything that fails is a terminal, plugin-scoped failure (#12276).
  *
- * Lifecycle signals are emitted as `ready`, `reloading`, `exit`, `crash-loop`,
- * and `protocol-violation`.
+ * Lifecycle signals are emitted as `ready`, `exit`, `crash-loop`, and
+ * `protocol-violation`.
  */
 export class PluginDevWorkerHost extends EventEmitter {
   private child: UtilityProcess | null = null;
   private isDisposed = false;
-  private isReloading = false;
   readonly pluginId: string;
   private readonly identity: PluginIdentity;
   private readonly pluginDir: string;
@@ -103,14 +98,12 @@ export class PluginDevWorkerHost extends EventEmitter {
   /** Spike #10890: permission-model execArgv flags appended at fork time. */
   private readonly permissionExecArgv: readonly string[];
 
-  private watcher: fs.FSWatcher | null = null;
-  private reloadTimer: NodeJS.Timeout | null = null;
   private disposeTimer: NodeJS.Timeout | null = null;
 
   /**
    * Sliding window of recent UNINTENTIONAL crash timestamps. Lazy-pruned to
-   * entries within `CRASH_WINDOW_MS` on each crash. Reload-driven exits clear
-   * it (see {@link reload}) so deliberate kills never count toward the cap.
+   * entries within `CRASH_WINDOW_MS` on each crash. A deliberate kill sets
+   * {@link expectingExit} and is never recorded.
    */
   private crashTimestamps: number[] = [];
   /** Set true around an intentional kill so the exit handler skips crash accounting. */
@@ -169,9 +162,6 @@ export class PluginDevWorkerHost extends EventEmitter {
    * never throw synchronously, so awaiting callers still observe rejections. */
   start(): Promise<void> {
     this.startWorker();
-    // Production workers never rebuild their bundle in place, so there is
-    // nothing to hot-reload — skip the file watcher entirely.
-    if (this.mode === "dev") this.startWatching();
     return this.readyPromise;
   }
 
@@ -201,36 +191,6 @@ export class PluginDevWorkerHost extends EventEmitter {
     }
   }
 
-  /**
-   * Reload the worker: clear the crash window (this is an intentional restart,
-   * not a crash), kill the current child, and fork a fresh one once it exits.
-   * The new worker re-imports the rebuilt bundle and re-runs `activate`.
-   */
-  reload(): void {
-    if (this.isDisposed) return;
-    if (this.isReloading) return;
-    this.isReloading = true;
-
-    // Deliberate restart — give future crashes a fresh budget so rapid saves
-    // can't trip the crash-loop cap (#7917 manualRestart parallel).
-    this.crashTimestamps = [];
-
-    this.emit("reloading");
-
-    if (!this.child) {
-      // No live child (e.g. a prior crash gave up); just fork a new one.
-      this.isReloading = false;
-      this.startFresh();
-      return;
-    }
-
-    this.killChild(() => {
-      if (this.isDisposed) return;
-      this.isReloading = false;
-      this.startFresh();
-    });
-  }
-
   /** Re-arm the ready promise and fork a new worker. */
   private startFresh(): void {
     if (this.isDisposed) return;
@@ -250,7 +210,7 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.startWorker();
   }
 
-  /** Promise that resolves on the next `ready` after a reload. */
+  /** Promise that resolves on the next `ready` after a crash respawn. */
   waitForReady(): Promise<void> {
     return this.readyPromise;
   }
@@ -259,18 +219,6 @@ export class PluginDevWorkerHost extends EventEmitter {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
-    if (this.watcher) {
-      try {
-        this.watcher.close();
-      } catch {
-        // ignore — watcher may already be closed
-      }
-      this.watcher = null;
-    }
-    if (this.reloadTimer) {
-      clearTimeout(this.reloadTimer);
-      this.reloadTimer = null;
-    }
     if (this.childProcessGoneHandler) {
       app.off("child-process-gone", this.childProcessGoneHandler);
       this.childProcessGoneHandler = null;
@@ -310,113 +258,6 @@ export class PluginDevWorkerHost extends EventEmitter {
     }
 
     this.removeAllListeners();
-  }
-
-  /** Kill the current child, invoking `onExit` once it's gone. */
-  private killChild(onExit: () => void): void {
-    const child = this.child;
-    if (!child) {
-      onExit();
-      return;
-    }
-    this.expectingExit = true;
-
-    let settled = false;
-    const finish = (): void => {
-      if (settled) return;
-      settled = true;
-      if (this.disposeTimer) {
-        clearTimeout(this.disposeTimer);
-        this.disposeTimer = null;
-      }
-      onExit();
-    };
-
-    // Prefer a cooperative dispose, fall back to kill after the grace period.
-    this.send({ type: "dispose" });
-    this.disposeTimer = setTimeout(() => {
-      this.disposeTimer = null;
-      if (this.child === child) {
-        try {
-          child.kill();
-        } catch {
-          // already gone
-        }
-      }
-    }, DISPOSE_TIMEOUT_MS);
-    this.disposeTimer.unref?.();
-
-    child.once("exit", () => finish());
-  }
-
-  private startWatching(): void {
-    if (this.watcher || this.isDisposed) return;
-    const dir = path.dirname(this.bundlePath);
-    const base = path.basename(this.bundlePath);
-
-    // `fs.watch` on the `dist/` dir is preferred — watching the file directly
-    // would go stale when Vite replaces it via rename, and filtering by
-    // filename coalesces rename+write. But `dist/` may not exist yet when
-    // Daintree loads the plugin (Vite hasn't produced the first build). In that
-    // case watch the plugin root for `dist/` appearing, then re-arm the real
-    // watcher. A single-dir watch is one fd — no recursive-watch fd leak.
-    if (existsSync(dir)) {
-      try {
-        this.watcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
-          if (filename && filename !== base) return;
-          this.scheduleReload();
-        });
-        this.watcher.on("error", (error) => {
-          logger.warn(`[${this.serviceName}] Bundle watcher error`, {
-            error: formatErrorMessage(error, "watch failed"),
-          });
-        });
-      } catch (error) {
-        logger.warn(`[${this.serviceName}] Failed to watch bundle dir ${dir}`, {
-          error: formatErrorMessage(error, "watch failed"),
-        });
-      }
-      return;
-    }
-
-    const distName = path.basename(dir);
-    try {
-      this.watcher = fs.watch(this.pluginDir, { persistent: false }, (_event, filename) => {
-        if (filename && filename !== distName) return;
-        if (!existsSync(dir)) return;
-        // `dist/` now exists — swap to watching it for real, then reload to pick
-        // up the freshly-built bundle.
-        if (this.watcher) {
-          try {
-            this.watcher.close();
-          } catch {
-            // ignore
-          }
-          this.watcher = null;
-        }
-        this.startWatching();
-        this.scheduleReload();
-      });
-      this.watcher.on("error", (error) => {
-        logger.warn(`[${this.serviceName}] Plugin-dir watcher error`, {
-          error: formatErrorMessage(error, "watch failed"),
-        });
-      });
-    } catch (error) {
-      logger.warn(`[${this.serviceName}] Failed to watch plugin dir ${this.pluginDir}`, {
-        error: formatErrorMessage(error, "watch failed"),
-      });
-    }
-  }
-
-  private scheduleReload(): void {
-    if (this.isDisposed) return;
-    if (this.reloadTimer) clearTimeout(this.reloadTimer);
-    this.reloadTimer = setTimeout(() => {
-      this.reloadTimer = null;
-      this.reload();
-    }, RELOAD_DEBOUNCE_MS);
-    this.reloadTimer.unref?.();
   }
 
   private startWorker(): void {
@@ -660,7 +501,7 @@ export class PluginDevWorkerHost extends EventEmitter {
       return;
     }
 
-    // An intentional kill (reload/dispose) is not a crash — emit exit and stop.
+    // An intentional kill (dispose) is not a crash — emit exit and stop.
     if (wasExpected) {
       this.pendingChildProcessGoneReason = null;
       this.emit("exit", code ?? 0, /* expected */ true);

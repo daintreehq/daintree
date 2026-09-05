@@ -372,10 +372,7 @@ export async function startPluginCliServer(): Promise<void> {
       },
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
       devStart: ({ pluginId }) => pluginService.loadDevPlugin(pluginId),
-      devStop: ({ pluginId }) => {
-        pluginService.unloadPlugin(pluginId);
-        return Promise.resolve();
-      },
+      devStop: ({ pluginId }) => pluginService.stopDevSession(pluginId),
       projectStatus: async ({ projectRoot }) => {
         const { projectStore } = await import("./ProjectStore.js");
         const normalized = path.resolve(projectRoot);
