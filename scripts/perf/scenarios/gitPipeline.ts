@@ -565,7 +565,12 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
-    correctness: ["browserSignalMisses", "trackedRefreshMisses", "ignoreEditRefreshMisses", "spawnObserverMisses"],
+    correctness: [
+      "browserSignalMisses",
+      "trackedRefreshMisses",
+      "ignoreEditRefreshMisses",
+      "spawnObserverMisses",
+    ],
     async run() {
       const fixture = getGitPipelineFixture();
       const recorder = new EmitRecorder();

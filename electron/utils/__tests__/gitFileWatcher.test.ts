@@ -1739,9 +1739,7 @@ describe("GitFileWatcher", () => {
     it("skips the status recompute when every path in the burst is ignored and untracked", async () => {
       const onChange = vi.fn();
       const onWorktreeFilesChanged = vi.fn();
-      vi.mocked(checkIgnoredPaths).mockResolvedValue(
-        new Set([IGNORED_A, IGNORED_B])
-      );
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A, IGNORED_B]));
 
       const { cb } = await startClassifyingWatcher({ onChange, onWorktreeFilesChanged });
       fireEvents(cb, [
@@ -1786,9 +1784,9 @@ describe("GitFileWatcher", () => {
       // tracked-but-matching file is simply absent from the result set — the
       // whole reason no separate index lookup is needed.
       vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set());
-    // No tracked file matches an ignore rule — the state of essentially every
-    // repo, and the precondition that makes check-ignore's answer trustworthy.
-    vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(false);
+      // No tracked file matches an ignore rule — the state of essentially every
+      // repo, and the precondition that makes check-ignore's answer trustworthy.
+      vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(false);
 
       const { cb } = await startClassifyingWatcher({ onChange });
       fireEvents(cb, [{ type: "update", path: p(".output", "tracked.log") }]);
@@ -1867,9 +1865,7 @@ describe("GitFileWatcher", () => {
       mock.resolve();
       await flushParcelWatcherCallbacks();
 
-      fireEvents(mock.getCallback(), [
-        { type: "create", path: ALIASED_A },
-      ]);
+      fireEvents(mock.getCallback(), [{ type: "create", path: ALIASED_A }]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
       expect(onChange).not.toHaveBeenCalled();

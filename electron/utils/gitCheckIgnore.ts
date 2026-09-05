@@ -135,9 +135,7 @@ function runGitTokens(cwd: string, gitArgs: string[], options: RunOptions): Prom
       // partial stdout already written, so the output is discarded rather than
       // trusted. Gated on the caller's empty-result list, never `code === 128`.
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
-      settle(() =>
-        reject(new Error(`git ${gitArgs[0]} failed: exit ${code}: ${stderr.trim()}`))
-      );
+      settle(() => reject(new Error(`git ${gitArgs[0]} failed: exit ${code}: ${stderr.trim()}`)));
     });
 
     if (options.input === undefined) {
