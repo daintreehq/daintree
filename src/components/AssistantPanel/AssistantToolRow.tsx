@@ -166,7 +166,7 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
   const status = duration ?? (statusRestatesVerb ? null : label);
 
   return (
-    <li className="assistant-tool-row flex items-start gap-2 px-2 py-2 assistant-text-base">
+    <li className="assistant-tool-row assistant-mark-row flex items-start py-1 assistant-text-base">
       <Icon
         aria-hidden="true"
         className={cn("mt-px size-3.5 shrink-0", glyph, spin && "animate-spin-slow")}
@@ -506,6 +506,13 @@ export function AssistantToolGroupHeader({
         <span className="shrink-0 text-[var(--assistant-fg-secondary)]">
           · {queuedCount} queued
         </span>
+      )}
+      {/* "Handed off" existed only in the accessible name, so a sighted reader saw a
+          static dashed circle, "1 tool call" and nothing else — formatted identically to
+          a finished group, with the leading glyph at 14px carrying the entire difference
+          between "done" and "an agent is still working on this somewhere else". */}
+      {state === "handedOff" && (
+        <span className="shrink-0 text-[var(--assistant-fg-secondary)]">· handed off</span>
       )}
 
       {/* The metadata slot, in the same place and the same tier the expanded rows put it
