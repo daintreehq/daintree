@@ -1,3 +1,4 @@
+import { ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AssistantTimersSection } from "./AssistantTimersSection";
 import { useTimerClock } from "./useTimerClock";
@@ -52,9 +53,10 @@ export interface AssistantOperationsDeckProps {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="mb-3">
-      <h3 className="mb-1 assistant-text-sm font-medium tracking-wide text-[var(--assistant-fg-secondary)]">
+    <section className="assistant-operations-section mb-5">
+      <h3 className="mb-2 flex items-center gap-2 assistant-text-sm font-medium text-[var(--assistant-fg-secondary)]">
         {title}
+        <span aria-hidden="true" className="h-px flex-1 bg-[var(--assistant-border)]" />
       </h3>
       <div className="space-y-1">{children}</div>
     </section>
@@ -109,20 +111,22 @@ export function AssistantOperationsDeck({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--assistant-border)] px-3 py-1.5">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Back to conversation"
+          title="Back to conversation"
+          className="assistant-text-control flex size-7 items-center justify-center"
+        >
+          <ChevronLeft aria-hidden="true" className="size-3.5" />
+        </button>
         <span className="assistant-text-base font-medium">Operations</span>
         <button
           type="button"
           onClick={onRefresh}
-          className="rounded-sm px-1.5 py-0.5 assistant-text-sm text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
+          className="assistant-text-control ml-auto px-2 assistant-text-sm"
         >
           Refresh
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="ml-auto rounded-sm px-1.5 py-0.5 assistant-text-sm text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
-        >
-          Close
         </button>
       </div>
 
@@ -133,7 +137,7 @@ export function AssistantOperationsDeck({
           <>
             {/* NOW: the one-line rollup the cockpit led with, so the deck answers
                 "is anything happening" before it answers "what". */}
-            <Section title="NOW">
+            <Section title="Now">
               <Row tone={attention > 0 ? "warning" : undefined}>
                 {running === 0 && attention === 0
                   ? "Nothing running, nothing waiting on you."
@@ -159,7 +163,7 @@ export function AssistantOperationsDeck({
             </Section>
 
             {ops.inbox.length > 0 && (
-              <Section title="NEEDS ATTENTION">
+              <Section title="Needs attention">
                 {ops.inbox.map((row) => (
                   <Row key={row.id} tone={row.severity === "urgent" ? "danger" : "warning"}>
                     <span className="text-[var(--assistant-fg-secondary)]">{row.source} · </span>
@@ -173,7 +177,7 @@ export function AssistantOperationsDeck({
             )}
 
             {ops.workflows.length > 0 && (
-              <Section title="WORKFLOWS">
+              <Section title="Workflows">
                 {ops.workflows.map((row) => (
                   <Row key={row.id} tone={row.blocked ? "warning" : undefined}>
                     <div className="truncate">{row.goal}</div>
@@ -187,7 +191,7 @@ export function AssistantOperationsDeck({
             )}
 
             {ops.agents.length > 0 && (
-              <Section title="AGENTS">
+              <Section title="Agents">
                 {ops.agents.map((row) => (
                   <Row key={row.id} tone={row.needsAttention ? "warning" : undefined}>
                     <div className="truncate">
@@ -219,7 +223,7 @@ export function AssistantOperationsDeck({
             )}
 
             {ops.async.length > 0 && (
-              <Section title="ASYNC">
+              <Section title="Background work">
                 {ops.async.map((row) => (
                   <Row key={row.id}>
                     <span className="truncate">{row.title || row.tool}</span>
@@ -236,7 +240,7 @@ export function AssistantOperationsDeck({
                 scheduled", and that is a claim a user acts on by walking away from
                 work that is still queued. */}
             {(timerRows.length > 0 || timers?.readFailed) && (
-              <Section title="SCHEDULED">
+              <Section title="Scheduled">
                 {timers?.readFailed ? (
                   <Row tone="warning">
                     Couldn&apos;t read the scheduled timers, so this list may be incomplete. Refresh
@@ -258,7 +262,7 @@ export function AssistantOperationsDeck({
                 deck can only ever show what has not happened yet, which is how a timer
                 could fire, fail, and leave the panel showing nothing at all. */}
             {outcomes.length > 0 && (
-              <Section title="FIRED">
+              <Section title="Fired">
                 {outcomes.map((row) => (
                   <Row key={row.eventId} tone={row.severity === "error" ? "danger" : undefined}>
                     <div className="truncate">
@@ -284,7 +288,7 @@ export function AssistantOperationsDeck({
             )}
 
             {ops.audit.length > 0 && (
-              <Section title="RECENT">
+              <Section title="Recent">
                 {ops.audit.map((row, i) => (
                   <Row
                     key={`${row.tool}-${row.at}-${i}`}

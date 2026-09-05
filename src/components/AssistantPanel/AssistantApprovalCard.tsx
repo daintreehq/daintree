@@ -39,15 +39,7 @@ export interface AssistantApprovalCardProps {
    * actions never are, and the panel does not get to decide otherwise.
    */
   onGrant?: (approval: AssistantApproval, uses: number) => void;
-  /**
-   * Whether this card's panel is on screen.
-   *
-   * The card takes the keyboard on sight, and a hidden element cannot be focused — so a
-   * card that mounts in a background parallel session (#12108) silently fails to claim
-   * the keys and never tries again, leaving Y/N/A/F dead on a sheet that looks live once
-   * the user switches to that tab. Defaults to true so a caller that does not know is
-   * treated as visible, which is the behaviour that shipped.
-   */
+  /** Focus may move only within a visible assistant surface, without interrupting typing. */
   visible?: boolean;
 }
 
@@ -72,7 +64,7 @@ export interface AssistantApprovalCardProps {
  *              never be the easiest button on the card.
  */
 const APPROVAL_BUTTON = cn(
-  "h-auto rounded-md px-3 py-1 assistant-text-sm font-medium select-none",
+  "min-h-7 rounded-sm px-3 py-1 assistant-text-sm font-medium select-none",
   "cursor-pointer transition-colors duration-150 ease-out",
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]",
   "disabled:pointer-events-none disabled:opacity-50",
@@ -86,26 +78,26 @@ const APPROVAL_WEIGHTED = cn(
   // weakens the very contrast the weight exists to carry.
   "bg-[var(--assistant-fg)] text-[var(--assistant-surface)]",
   "hover:bg-[color-mix(in_oklab,var(--assistant-fg)_88%,var(--assistant-focus))]",
-  // A multi-word authorisation label must not wrap in a narrow rail.
-  "inline-flex items-center justify-center whitespace-nowrap"
+  // Labels may wrap at large terminal sizes without leaving the decision surface.
+  "inline-flex max-w-full items-center justify-center whitespace-normal text-center"
 );
 const APPROVAL_OUTLINE = cn(
   APPROVAL_BUTTON,
   "border border-[var(--assistant-border-strong)] text-[var(--assistant-fg)]",
   "hover:bg-[var(--assistant-hover)]",
-  "inline-flex items-center justify-center whitespace-nowrap"
+  "inline-flex max-w-full items-center justify-center whitespace-normal text-center"
 );
 const APPROVAL_GHOST = cn(
   APPROVAL_BUTTON,
   "text-[var(--assistant-fg-secondary)] hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]",
-  "inline-flex items-center justify-center whitespace-nowrap"
+  "inline-flex max-w-full items-center justify-center whitespace-normal text-center"
 );
 /** A typed confirm's go button. Danger reads in the terminal's own red. */
 const APPROVAL_DANGER = cn(
   APPROVAL_BUTTON,
   "bg-[var(--assistant-danger)] text-[var(--assistant-surface)]",
   "hover:bg-[color-mix(in_oklab,var(--assistant-danger)_88%,var(--assistant-fg))]",
-  "inline-flex items-center justify-center whitespace-nowrap"
+  "inline-flex max-w-full items-center justify-center whitespace-normal text-center"
 );
 
 const BOUNDED_GRANT_USES = 5;
@@ -187,21 +179,13 @@ export function AssistantApprovalCard({
   );
 
   useEffect(() => {
-    // Nothing under a hidden ancestor is focusable, so a background lane's card would
-    // spend its one attempt on a no-op. Re-run on reveal instead of trying now.
     if (!visible) return;
-    // Focus the field the decision actually depends on. Without this the keyboard
-    // lands on the first button, where Enter would approve — the opposite of the
-    // friction a typed confirmation exists to add.
-    if (approval.needsTypedConfirm) {
-      inputRef.current?.focus();
-      return;
-    }
-    // The sheet takes the keys, as the cockpit's did — hints.go describes the composer
-    // going unfocused because "an approval sheet is rendered above it and takes the
-    // keys, where Escape DECLINES THE TOOL". Single-key controls that only work after
-    // you happen to click the card are controls most people never find.
-    cardRef.current?.focus();
+    const surface = cardRef.current?.closest("[data-assistant-surface]");
+    // Arriving decisions cannot capture a keystroke intended for another pane.
+    if (!surface || !surface.contains(document.activeElement)) return;
+    if (document.activeElement?.closest("input, textarea, [contenteditable='true']")) return;
+    if (approval.needsTypedConfirm) inputRef.current?.focus();
+    else cardRef.current?.focus();
   }, [approval.needsTypedConfirm, approval.approvalId, visible]);
 
   /**
@@ -266,10 +250,7 @@ export function AssistantApprovalCard({
   return (
     <div
       ref={cardRef}
-      // Focusable so the single-key controls have somewhere to land. Not focused
-      // automatically unless it is the typed-confirm variant, which focuses its input:
-      // stealing focus mid-sentence from someone typing in the composer would be worse
-      // than making them reach for the card.
+      // Focusable so the scoped single-key controls have somewhere to land.
       tabIndex={-1}
       onKeyDown={onKeyDown}
       role="group"
@@ -278,8 +259,8 @@ export function AssistantApprovalCard({
       // the marker Escape declined the tool and hid the panel in one keystroke.
       data-escape-owner="approval"
       className={cn(
-        "rounded-lg border border-[var(--assistant-warning-graphic)]/40 bg-[var(--assistant-warning-surface)]",
-        "px-3 py-2.5",
+        "assistant-decision border border-[var(--assistant-border-strong)] border-l-2 border-l-[var(--assistant-warning-graphic)]",
+        "rounded-sm bg-[var(--assistant-surface)] px-3 py-3",
         // Focus is taken programmatically, so :focus-visible never fires — the ring has
         // to hang off plain :focus or the card would hold every key with nothing on
         // screen saying so.
@@ -296,6 +277,9 @@ export function AssistantApprovalCard({
           className="mt-0.5 size-4 shrink-0 text-[var(--assistant-warning-graphic)]"
         />
         <div className="min-w-0 flex-1">
+          <p className="mb-2 assistant-text-sm text-[var(--assistant-warning)]">
+            Approval required
+          </p>
           <p className="assistant-text-base font-medium text-[var(--assistant-fg)]">
             {approval.summary}
           </p>
@@ -327,13 +311,16 @@ export function AssistantApprovalCard({
 
           {approval.argsSummary && (
             <pre
+              tabIndex={0}
+              aria-label="Action arguments"
               className={cn(
-                "mt-2 max-h-28 overflow-y-auto rounded-md bg-[var(--assistant-inset)] px-2 py-1.5",
+                "mt-2 max-h-40 overflow-y-auto rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-2 py-2",
                 // WRAP rather than scroll sideways. A summary that clips mid-token
                 // ("…,\"forc") hides the part of the argument someone is being asked
                 // to approve, and gives no cue that anything is hidden.
                 "whitespace-pre-wrap break-all",
-                "assistant-text-sm text-[var(--assistant-fg-secondary)]"
+                "assistant-text-sm text-[var(--assistant-fg-secondary)]",
+                "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
               )}
             >
               {approval.argsSummary}
@@ -351,7 +338,7 @@ export function AssistantApprovalCard({
                 This can&rsquo;t be undone. Type{" "}
                 <span className="text-[var(--assistant-fg)]">{CONFIRM_PHRASE}</span> to continue.
               </label>
-              <div className="mt-1.5 flex items-center gap-2">
+              <div className="mt-1.5 flex flex-wrap justify-end gap-2">
                 <input
                   id={`confirm-${approval.approvalId}`}
                   ref={inputRef}
@@ -365,7 +352,7 @@ export function AssistantApprovalCard({
                   autoComplete="off"
                   spellCheck={false}
                   className={cn(
-                    "min-w-0 flex-1 rounded-md border border-[var(--assistant-border)] bg-[var(--assistant-inset)]",
+                    "min-h-7 w-full min-w-0 rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)]",
                     "px-2 py-1 assistant-text-base text-[var(--assistant-fg)]",
                     "placeholder:text-[var(--assistant-fg-dim)]",
                     "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
@@ -427,6 +414,7 @@ export function AssistantApprovalCard({
                   <button
                     type="button"
                     className={APPROVAL_GHOST}
+                    title={`Allow ${approval.toolId} up to ${BOUNDED_GRANT_USES} times`}
                     onClick={() => grantOnce(BOUNDED_GRANT_USES)}
                   >
                     Allow {BOUNDED_GRANT_USES}×
@@ -434,9 +422,10 @@ export function AssistantApprovalCard({
                   <button
                     type="button"
                     className={APPROVAL_GHOST}
+                    title={`Allow ${approval.toolId} for the rest of this session`}
                     onClick={() => grantOnce(Number.POSITIVE_INFINITY)}
                   >
-                    Always allow
+                    Allow this session
                   </button>
                 </>
               )}
@@ -454,7 +443,7 @@ export function AssistantApprovalCard({
                 <>
                   {" · "}
                   <span className="text-[var(--assistant-fg)]">A</span> allow {BOUNDED_GRANT_USES}×
-                  · <span className="text-[var(--assistant-fg)]">F</span> always
+                  · <span className="text-[var(--assistant-fg)]">F</span> this session
                 </>
               )}{" "}
               · <span className="text-[var(--assistant-fg)]">Esc</span> decline

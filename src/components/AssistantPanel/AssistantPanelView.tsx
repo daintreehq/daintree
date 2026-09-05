@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { ChevronDown, Info, Square, TriangleAlert, ZapOff } from "lucide-react";
+import {
+  ArrowDown,
+  ChevronDown,
+  ChevronRight,
+  Info,
+  Square,
+  TriangleAlert,
+  ZapOff,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AssistantMessage, type AssistantReference } from "./AssistantMessage";
@@ -200,6 +208,47 @@ function formatDuration(ms: number): string {
   return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
+function LiveStatus({
+  label,
+  phase,
+  startedAt,
+  lastActivityAt,
+  visible,
+}: {
+  label: string;
+  phase: string | null;
+  startedAt: number | null;
+  lastActivityAt: number | null;
+  visible: boolean;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!visible || startedAt === null) return;
+    const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
+    return () => clearInterval(timer);
+  }, [visible, startedAt]);
+  const elapsed = startedAt === null ? 0 : Math.max(0, now - startedAt);
+  const stalled =
+    !PHASES_WAITING_ON_THE_USER.has(phase ?? "") &&
+    lastActivityAt !== null &&
+    now - lastActivityAt > STALL_THRESHOLD_MS;
+
+  return (
+    <div className={cn("assistant-live-status mt-3 assistant-text-sm", stalled && "is-stalled")}>
+      <span aria-hidden="true" className="assistant-spinner" />
+      <span role="status">
+        {label}
+        {stalled && " · still working"}
+      </span>
+      {elapsed >= 300 && (
+        <span aria-hidden="true" className="ml-auto shrink-0 tabular-nums">
+          {formatDuration(elapsed)}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /**
  * A notice — most often the output of a slash command the engine ran.
  *
@@ -264,116 +313,55 @@ const USER_MSG_MAX_HEIGHT = "13em";
 function UserTurn({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
-  // Latched, never cleared. Expanding removes the cap, so the same measurement then
-  // says the content fits — and reading it again would delete the control that got the
-  // reader here, leaving no way back. It only ever needs answering while folded.
   const [foldable, setFoldable] = useState(false);
 
   useLayoutEffect(() => {
-    if (expanded) return undefined;
+    if (expanded) return;
     const el = bodyRef.current;
-    if (!el) return undefined;
-    // 2px of slack: sub-pixel line heights make `scrollHeight` exceed `clientHeight` by
-    // a fraction on content that visibly fits, which would offer "Show more" on a
-    // message with nothing more to show.
+    if (!el) return;
     const measure = () => setFoldable(el.scrollHeight - el.clientHeight > 2);
     measure();
-    // The panel is resizable, so the same text folds at one width and not at another.
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, [text, expanded]);
 
   return (
-    // A COLUMN, so the copy button below the bubble occupies a row of its own.
-    //
-    // It hung out of the box on an `absolute top-full` first, to spend no vertical
-    // space on something invisible almost all of the time — and that put it 2-22px
-    // below the turn, straight through anything rendered under it. A notice attributed
-    // to a turn sits 4px below (`space-y-1`), which is where every slash command's
-    // result lands: `/login` and `/account` are the ordinary case, not the corner. An
-    // `opacity-0` button is still hit-testable, so it covered the top of that notice
-    // and took the clicks aimed at it.
-    <div className="group/msg flex flex-col items-end">
-      <div
-        className={cn(
-          // Narrower than the answer it asks for, and that asymmetry is the point: the
-          // agent gets the full rail, the prompt gets what it needs. A prompt is
-          // already known to whoever typed it.
-          "max-w-[85%] overflow-hidden rounded-lg rounded-br-sm",
-          "bg-[var(--assistant-raised)] assistant-text-base text-[var(--assistant-fg)]"
-        )}
-      >
+    <div className="assistant-prompt group/msg">
+      <ChevronRight aria-hidden="true" className="assistant-prompt-mark size-3.5" />
+      <div className="min-w-0 flex-1">
+        <span className="sr-only">You: </span>
         <div className="relative">
           <div
             ref={bodyRef}
             className={cn(
-              "px-3 py-2 whitespace-pre-wrap break-words",
-              // Capped even when EXPANDED, just far more generously. "Show more" on a
-              // thousand-line paste otherwise pushes the conversation off screen and
-              // hands back no way to bring it into view — the fold stops a long paste
-              // burying the transcript, and this stops expanding it doing the same.
+              "whitespace-pre-wrap break-words assistant-text-base",
               expanded ? "overflow-y-auto overscroll-contain" : "overflow-hidden"
             )}
-            // `max()` because the two caps are in different units and can cross. The
-            // collapsed cap is ~9 lines of the TERMINAL font and the expanded one is
-            // half the viewport: at a 24px terminal size in a 600px-tall window that is
-            // 312px against 300px, so "Show more" made the message SHORTER. Whatever
-            // else expanding does, it may not shrink the thing being expanded.
             style={{
               maxHeight: expanded ? `max(50vh, ${USER_MSG_MAX_HEIGHT})` : USER_MSG_MAX_HEIGHT,
             }}
           >
             {text}
           </div>
-          {/* The fade is the signal that there IS more, and it does the job the old
-              "N lines hidden" label did — without claiming a number that was only ever
-              true for unwrapped text. Sits INSIDE the padding so the last visible line
-              dissolves rather than ending on a hard edge. */}
-          {!expanded && foldable && (
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-[var(--assistant-raised)]"
-            />
-          )}
+          {!expanded && foldable && <div aria-hidden="true" className="assistant-prompt-fade" />}
         </div>
         {foldable && (
           <button
             type="button"
             onClick={() => setExpanded((open) => !open)}
             aria-expanded={expanded}
-            className={cn(
-              "flex w-full items-center gap-1 px-3 pt-0.5 pb-2 text-left",
-              "assistant-text-sm text-[var(--assistant-fg-secondary)]",
-              "transition-colors duration-150 ease-out hover:text-[var(--assistant-fg)]",
-              "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--assistant-focus)]"
-            )}
+            className="assistant-text-control mt-1 flex items-center gap-1 assistant-text-sm"
           >
             {expanded ? "Show less" : "Show more"}
-            <ChevronDown
-              aria-hidden="true"
-              className={cn(
-                "size-3.5 transition-transform duration-150 ease-out",
-                expanded && "rotate-180"
-              )}
-            />
+            <ChevronDown aria-hidden="true" className={cn("size-3", expanded && "rotate-180")} />
           </button>
         )}
       </div>
-      {/* Copies the WHOLE message, not the folded excerpt. A long paste is exactly the
-          message someone wants back, and it is also the one the bubble is only showing
-          nine lines of — a copy that handed over what happens to be on screen would be
-          silently lossy in the one case that matters.
-
-          The row is reserved whether or not anything follows the turn, rather than only
-          when a notice does. Reserving it conditionally would give some messages 22px
-          more air under them than others for reasons the reader cannot see, and an
-          uneven rhythm down a transcript reads as a layout bug — which costs more than
-          the space does. */}
       <AssistantCopyButton
         text={text}
         label="Copy message"
-        className="mt-0.5 group-hover/msg:opacity-100"
+        className="shrink-0 group-hover/msg:opacity-100"
       />
     </div>
   );
@@ -399,7 +387,7 @@ function TurnBlock({
     // panel is a sidebar — an avatar column costs ~26px of every line of an answer, and
     // in a rail that is the difference between a path wrapping and not.
     //
-    // Nothing is lost by dropping it: the user's own turns are right-aligned bubbles at
+    // Nothing is lost by dropping it: the user's own turns are marked prompts at
     // 85% width, so which side of the conversation a block belongs to is legible from
     // its shape alone, without spending horizontal space per line to say so.
     <div className="w-full">
@@ -519,7 +507,7 @@ function TurnBlock({
  * A wake and a stop are different: both are facts the engine states outright.
  */
 function TurnEndcap({ turn }: { turn: AssistantTurn }) {
-  // Assistant turns only. A user's turn is a right-aligned bubble whose shape already
+  // Assistant turns only. A user's turn is a marked prompt whose shape already
   // bounds it, and it is rendered by the same loop — so the guard lives here rather
   // than being implied by the call site.
   if (turn.role !== "assistant") return null;
@@ -706,7 +694,7 @@ export function ToolSegment({
           that it expands something without saying what. `hidden` takes it out of the
           accessibility tree and out of layout, so nothing is announced or measured while
           it is closed. */}
-      <ul id={panelId} hidden={!open} className="mt-1 space-y-1">
+      <ul id={panelId} hidden={!open} className="assistant-tool-list">
         {calls.map((call) => (
           <AssistantToolRow key={call.toolCallId} call={call} />
         ))}
@@ -715,97 +703,59 @@ export function ToolSegment({
   );
 }
 
-/**
- * The session masthead, ported from the CLI cockpit's. That renderer is gone at the
- * pinned SHA; the facts it showed are now assembled engine-side in
- * internal/host/masthead.go, which is where the reasoning below lives on.
- *
- * Mostly the same facts, deliberately not in the same order: the tier and what it
- * permits; the backend endpoint; a non-default routing policy; the build; then the
- * auto-approve warning on its own row — never appended to the tier line, because
- * appending puts the safety text where truncation eats it first. Below the rule sits the
- * debug-log badge. Identity and project are dropped because the panel's own chrome
- * already says both, and the build moves last because it is the least urgent.
- *
- * The backend row is named on every session whose endpoint renders safely, deployed
- * default included (internal/host/masthead.go): it is the only passive readout of which
- * endpoint answers a turn now that Daintree's own Settings picker and the sign-in beside
- * it are gone. `/backend` reports it on demand. An ABSENT backend is not the default —
- * the engine omits one it could not sanitize, and it means unknown.
- *
- * Every value is resolved by the ENGINE and arrives on `host:ready`, so this component
- * decides layout only and cannot disagree with the engine about what is default.
- */
+/** Engine-owned session facts stay inspectable without repeating them above every turn. */
 function Masthead({ state, live }: { state: AssistantSessionState; live: boolean }) {
-  // An approval is outstanding exactly when a mutating call has been parked for an
-  // answer — the engine only raises one for the always-confirm risk classes.
-  const destructive = state.approvals.length > 0;
-  const hasAny = state.engineVersion || state.tier || state.backend || state.routing;
-  if (!hasAny) return null;
-
-  // The cockpit drew every line but the identity in Dim(). `text-[var(--assistant-fg-secondary)]` is
-  // that: the theme's own second tier, with a contrast floor behind it. The panel used
-  // `opacity-50` over the primary colour instead, which is not a token, drifts with
-  // whatever it sits on, and lands under the floor in the darker themes.
-  const dim = "truncate text-[var(--assistant-fg-secondary)]";
+  if (!state.engineVersion && !state.tier && !state.backend && !state.routing) return null;
 
   return (
-    <div className="mb-3 select-text assistant-text-base">
-      {/* No "Daintree Assistant" line, and no project name: the panel's own header bar
-          already carries both, directly above this. The cockpit needed the identity
-          line because it was drawing into a bare terminal with no chrome of its own —
-          here it is the same words twice in the space of two rows, and what a masthead
-          is FOR is the facts you cannot get anywhere else. Those are the three below:
-          what this session may do, which backend answers it, and under what routing. */}
-      {state.tier ? (
-        // Quiet at rest for every tier, and DANGEROUS only while a destructive action
-        // waits on an answer — the cockpit's own rule, carried over. The tier
-        // names what this session is allowed to do; the one moment that matters is when
-        // it is about to be exercised. The gloss stays dim throughout: it describes the
-        // tier, it is not a live state.
-        <div className="truncate">
-          <span
-            className={
-              destructive
-                ? "font-medium text-[var(--assistant-danger)]"
-                : "text-[var(--assistant-fg-secondary)]"
-            }
-          >
-            tier {state.tier}
-          </span>
-          {state.tierGloss ? (
-            <span className="text-[var(--assistant-fg-secondary)]"> · {state.tierGloss}</span>
-          ) : null}
-        </div>
-      ) : null}
-      {state.backend ? <div className={dim}>backend {state.backend}</div> : null}
-      {state.routing ? <div className={dim}>routing {state.routing}</div> : null}
-      {/* The build, last and quietest: it matters when reading a pasted transcript, not
-          while working. */}
-      {state.engineVersion ? (
-        <div className={dim}>
-          {/^\d/.test(state.engineVersion) ? `v${state.engineVersion}` : state.engineVersion}
-        </div>
-      ) : null}
-      {state.autoApprove ? (
-        <div className="text-[var(--assistant-danger)]">
-          {/* Its own row, carrying the full sentence, left-anchored so it is the last
-              thing a narrow panel cuts.
-
-              Deliberately NOT cleared when the session stops, unlike the footer's live
-              indicator. The masthead is the permanent record of how this session ran,
-              and a transcript that stops saying it was unattended the moment the
-              engine exits is a transcript that hides the fact.
-
-              Past tense once stopped: "will not ask first" over a dead engine states a
-              capability that no longer exists. */}
+    <div className="assistant-session mb-5 select-text">
+      <details>
+        <summary className="assistant-session-trigger assistant-text-sm">
+          <ChevronRight aria-hidden="true" className="assistant-session-chevron size-3" />
+          <span>Session details</span>
+          {state.engineVersion && (
+            <span className="ml-auto truncate tabular-nums">
+              {/^\d/.test(state.engineVersion) ? `v${state.engineVersion}` : state.engineVersion}
+            </span>
+          )}
+        </summary>
+        <dl className="assistant-session-facts assistant-text-sm">
+          {state.tier && (
+            <>
+              <dt>Permissions</dt>
+              <dd>
+                {state.tier}
+                {state.tierGloss ? ` · ${state.tierGloss}` : ""}
+              </dd>
+            </>
+          )}
+          {state.backend && (
+            <>
+              <dt>Backend</dt>
+              <dd>{state.backend}</dd>
+            </>
+          )}
+          {state.routing && (
+            <>
+              <dt>Routing</dt>
+              <dd>{state.routing}</dd>
+            </>
+          )}
+        </dl>
+        {state.logFile && (
+          <div className="px-2 pb-2 assistant-text-sm">
+            <LogBadge path={state.logFile} />
+          </div>
+        )}
+      </details>
+      {state.autoApprove && (
+        <p className="mt-2 flex items-start gap-2 assistant-text-sm text-[var(--assistant-danger)]">
+          <TriangleAlert aria-hidden="true" className="mt-px size-3.5 shrink-0" />
           {live
-            ? "⚠ AUTO-APPROVE — mutating actions will not ask first"
-            : "⚠ AUTO-APPROVE — this session ran without confirmations"}
-        </div>
-      ) : null}
-      <div aria-hidden="true" className="my-1.5 border-t border-[var(--assistant-border)]" />
-      {state.logFile ? <LogBadge path={state.logFile} /> : null}
+            ? "Auto-approve · actions won't ask first"
+            : "This session ran without confirmations"}
+        </p>
+      )}
     </div>
   );
 }
@@ -896,8 +846,27 @@ export function AssistantPanelView({
   className,
 }: AssistantPanelViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const operationsButtonRef = useRef<HTMLButtonElement>(null);
   const composerRef = useRef<HybridInputBarHandle>(null);
   const pinnedRef = useRef(true);
+  const [pinned, setPinned] = useState(true);
+
+  // The deck replaces the transcript rather than sitting beside it: the panel is a
+  // sidebar, and two scrolling regions in that width makes both unreadable. The cockpit
+  // did the same — its deck took the screen.
+  //
+  // Controlled when an owner above the panel supplies the state — the header's overflow
+  // menu is the way in, and it cannot reach a `useState` down here. Uncontrolled
+  // otherwise, so the preview harness and any bare render still get a working deck.
+  const [ownDeckOpen, setOwnDeckOpen] = useState(false);
+  const deckOpen = operationsOpen ?? ownDeckOpen;
+  const setDeckOpen = useCallback(
+    (open: boolean) => {
+      if (onOperationsOpenChange) onOperationsOpenChange(open);
+      else setOwnDeckOpen(open);
+    },
+    [onOperationsOpenChange]
+  );
 
   const openTurn = state.turns.find((t) => t.role === "assistant" && !t.complete);
   const streaming = openTurn !== undefined;
@@ -924,6 +893,7 @@ export function AssistantPanelView({
     const el = scrollRef.current;
     if (!el) return;
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    setPinned(pinnedRef.current);
   }, []);
 
   useLayoutEffect(() => {
@@ -945,7 +915,7 @@ export function AssistantPanelView({
     // `toolCalls` included: a progress line or a settling row changes the transcript's
     // height without touching turns, so leaving it out lets content grow below a
     // reader who is pinned to the bottom and expects to stay there.
-  }, [visible, state.turns, state.approvals, state.notices, state.toolCalls]);
+  }, [visible, state.turns, state.approvals, state.notices, state.toolCalls, deckOpen]);
 
   // A follow-up the engine handed back lands in the composer for editing. Taken once
   // and cleared at the source, so a later render cannot re-fill the box over whatever
@@ -958,23 +928,6 @@ export function AssistantPanelView({
     composerRef.current?.focus();
     onRetractedDraftConsumed?.();
   }, [state.retractedDraft, onRetractedDraftConsumed, composerId]);
-
-  // The deck replaces the transcript rather than sitting beside it: the panel is a
-  // sidebar, and two scrolling regions in that width makes both unreadable. The cockpit
-  // did the same — its deck took the screen.
-  //
-  // Controlled when an owner above the panel supplies the state — the header's overflow
-  // menu is the way in, and it cannot reach a `useState` down here. Uncontrolled
-  // otherwise, so the preview harness and any bare render still get a working deck.
-  const [ownDeckOpen, setOwnDeckOpen] = useState(false);
-  const deckOpen = operationsOpen ?? ownDeckOpen;
-  const setDeckOpen = useCallback(
-    (open: boolean) => {
-      if (onOperationsOpenChange) onOperationsOpenChange(open);
-      else setOwnDeckOpen(open);
-    },
-    [onOperationsOpenChange]
-  );
 
   /**
    * ^O opens the operations deck, as it did in the cockpit.
@@ -1030,31 +983,6 @@ export function AssistantPanelView({
   // null for the phases whose activity rows already explain themselves.
   const liveLabel = liveStatusLabel(state.phase);
 
-  // A clock, ticking only while a turn is running.
-  //
-  // `now` is real state that the rendered output reads, not a bare counter: under the
-  // React Compiler a `setTick` whose value nothing consumes is optimised away and the
-  // readout silently freezes in production while passing in tests.
-  const [now, setNow] = useState(() => Date.now());
-  const running = state.turnStartedAt !== null && !state.turns.every((t) => t.complete);
-  useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
-    return () => clearInterval(id);
-  }, [running]);
-
-  // Cumulative over the TURN, not the current phase, so it does not reset to zero on
-  // every transition. Held back below 300ms to avoid a 0ms flicker.
-  const elapsedMs = running && state.turnStartedAt ? now - state.turnStartedAt : 0;
-  const elapsed = elapsedMs >= 300 ? formatDuration(elapsedMs) : null;
-  // Quiet for a while is normal — a slow model, a long tool — but indistinguishable
-  // from a hang unless the panel says which it thinks it is. Except when the quiet is
-  // the user's own: see PHASES_WAITING_ON_THE_USER.
-  const stalled =
-    running &&
-    !PHASES_WAITING_ON_THE_USER.has(state.phase ?? "") &&
-    state.lastActivityAt !== null &&
-    now - state.lastActivityAt > STALL_THRESHOLD_MS;
   const empty = state.turns.length === 0;
 
   // The splash belongs to a SESSION, not to this component.
@@ -1291,7 +1219,8 @@ export function AssistantPanelView({
     // right-click on a selection loses the selection it was aimed at.
     if (e.button !== 0) return;
     const el = e.target instanceof HTMLElement ? e.target : null;
-    if (el?.closest("button, a, input, textarea, [role='button'], [contenteditable]")) return;
+    if (el?.closest("button, a, input, textarea, summary, [role='button'], [contenteditable]"))
+      return;
     // A sheet that OWNS Escape owns the keyboard. Its question text, its heading and its
     // own background are none of them buttons, so a click on any of them fell through to
     // here and pushed the caret into the composer — which, while a question is pending,
@@ -1397,7 +1326,7 @@ export function AssistantPanelView({
       // masthead, the activity rows, the notices — not just the prose. A pane that is
       // mono in its message body and sans in its chrome reads as two things stitched
       // together; the terminal beside it is one typeface throughout.
-      className={cn("assistant-panel flex h-full min-h-0 cursor-text flex-col", className)}
+      className={cn("assistant-panel flex h-full min-h-0 flex-col", className)}
       // Marks the panel's own subtree, so the question sheet can ask whether focus was
       // ALREADY in the assistant before it takes the keyboard. See AssistantQuestionCard.
       data-assistant-surface=""
@@ -1437,23 +1366,23 @@ export function AssistantPanelView({
           timerCancelErrors={state.timerCancelErrors}
           onCancelTimer={onCancelTimer ?? noopCancelTimer}
           onRefresh={refreshDeck}
-          onClose={() => setDeckOpen(false)}
+          onClose={() => {
+            setDeckOpen(false);
+            operationsButtonRef.current?.focus({ preventScroll: true });
+          }}
         />
       ) : (
         <div
           ref={scrollRef}
           onScroll={onScroll}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3"
+          className="assistant-transcript min-h-0 flex-1 cursor-text overflow-y-auto overscroll-contain px-3 py-3"
         >
           {!booting && <Masthead state={state} live={live} />}
           {/* HEADS the transcript. See `leadingNotices` — a notice with no turn behind
             it arrived before everything below, and `/clear` is the case that made the
             old placement obviously wrong.
 
-            Held for the boot state along with the masthead and the composer: the splash
-            draws ALONE, and a notice above a still-drawing mark is exactly the "two
-            things happening on top of each other" that holding them back exists to
-            prevent. Nothing is lost — `booting` clears the moment the reveal finishes
+            Held with the masthead while the mark draws in the transcript. Nothing is lost — `booting` clears the moment the reveal finishes
             and the notice is still there. `/clear` never lands in this state: the
             splash is keyed on a boot generation that only a NEW engine bumps, so an
             emptied transcript mid-session is not a boot. */}
@@ -1465,10 +1394,7 @@ export function AssistantPanelView({
             </div>
           )}
           {booting ? (
-            // The boot state: the mark draws itself while the engine connects, ALONE —
-            // masthead and composer wait for `onDone` rather than arriving underneath a
-            // still-drawing mark, so the reveal reads as one deliberate sequence
-            // (splash, then panel) instead of two animations landing at once.
+            // The reveal occupies only the transcript; the ready editor stays usable.
             <div className="flex h-full flex-col items-center justify-center">
               <AssistantBootSplash
                 // Keyed on the boot generation so a NEW session replays the reveal from
@@ -1485,22 +1411,45 @@ export function AssistantPanelView({
             // is to someone who has just been using it, and its `h-full` centring
             // pushed the notice into a scroller that had one line in it.
             leadingNotices.length > 0 ? null : (
-              <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-                <DaintreeIcon
-                  aria-hidden="true"
-                  className="size-6 text-[var(--assistant-fg-dim)]"
-                />
-                {/* Names what the assistant DOES. "Ask about this project" framed it as a
-                question box, which is the one thing it is not: it plans work, spawns
-                visible agents in worktrees and supervises them. It never edits files
-                itself, and it can run several at once. Written as plain sentences with
-                no dash: the em dash read as an aside, and driving OTHER agents rather
-                than editing anything is the whole point, not a footnote. */}
-                <p className="assistant-text-base text-[var(--assistant-fg)]">Put agents to work</p>
-                <p className="max-w-[26rem] assistant-text-base text-[var(--assistant-fg-secondary)]">
-                  Plan a change and it spawns agents across your worktrees, as many as the job
-                  needs, then keeps watch on the runs. It doesn&rsquo;t edit files itself. Every
-                  agent it starts is one you can see and take over.
+              <div className="assistant-welcome">
+                <div className="flex items-center gap-2 text-[var(--assistant-fg)]">
+                  <DaintreeIcon aria-hidden="true" className="size-4" />
+                  <p className="font-medium">Put agents to work</p>
+                </div>
+                <p className="mt-3 text-[var(--assistant-fg-secondary)]">
+                  Plan the work. Launch visible agents. Keep watch on the results.
+                </p>
+                <div className="mt-5 flex flex-col gap-1" aria-label="Start a request">
+                  {(
+                    [
+                      ["Plan a change", "Help me plan a change to this project"],
+                      [
+                        "Check the agents",
+                        "Check the agents in this project and tell me what needs attention",
+                      ],
+                      [
+                        "Review the worktrees",
+                        "Review this project's worktrees and summarize the work in progress",
+                      ],
+                    ] as const
+                  ).map(([label, prompt]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      disabled={!live}
+                      className="assistant-starter assistant-text-control"
+                      onClick={() => {
+                        useTerminalInputStore.getState().setDraftInput(composerId, prompt);
+                        composerRef.current?.focus();
+                      }}
+                    >
+                      <ChevronRight aria-hidden="true" className="size-3" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-5 assistant-text-sm text-[var(--assistant-fg-secondary)]">
+                  Type <kbd>/</kbd> for commands. Agents make the edits; you stay in control.
                 </p>
               </div>
             )
@@ -1552,23 +1501,13 @@ export function AssistantPanelView({
             Shown only for the silent phases: while tools run, the activity rows
             above are a better answer than a label repeating them. */}
           {liveLabel && (
-            <div
-              // aria-live so a screen reader hears the turn progressing; "polite"
-              // because it must never cut across the prose being streamed above it.
-              aria-live="polite"
-              className={cn(
-                "mt-3 flex items-baseline gap-1.5 assistant-text-base tabular-nums",
-                // A slow model and a hung one look identical without this.
-                stalled ? "text-[var(--assistant-warning)]" : "text-[var(--assistant-fg-secondary)]"
-              )}
-            >
-              <span aria-hidden="true" className="assistant-spinner" />
-              <span>
-                {liveLabel}
-                {stalled && " · still working"}
-                {elapsed && ` · ${elapsed}`}
-              </span>
-            </div>
+            <LiveStatus
+              label={liveLabel}
+              phase={state.phase}
+              startedAt={state.turnStartedAt}
+              lastActivityAt={state.lastActivityAt}
+              visible={visible}
+            />
           )}
 
           {state.queuedInterjections.map((queued, i) => (
@@ -1595,8 +1534,7 @@ export function AssistantPanelView({
                   onDecide={onDecideApproval}
                   onGrant={onGrantTool}
                   // A card that mounts in a background parallel session cannot take the
-                  // keys — nothing under a hidden ancestor is focusable — so it waits
-                  // for the tab to be selected and claims them then.
+                  // keys. A visible card also preserves focus in an active editor.
                   visible={visible}
                 />
               ))}
@@ -1619,20 +1557,40 @@ export function AssistantPanelView({
         </div>
       )}
 
-      {/* No horizontal padding here: HybridInputBar carries its own, and doubling it
-          is what made the assistant's input sit visibly further inset than the one in
-          every terminal pane.
-
-          Held back for the whole boot state, composer and status row alike: showing
-          either underneath a still-drawing splash read as two things happening on top
-          of each other rather than one boot finishing before the panel does. */}
-      {!booting && (
-        // NOT `shrink-0`. That protected the whole strip, sheet included, so below about
-        // 300px the composer and the sheet's own footer were simply pushed out of the
-        // pane. `shrink-0` belongs on the parts that must survive — the input bar and
-        // the status row below — leaving the question sheet as the one thing that gives
-        // way, which is what it is built to do.
-        <div className="flex min-h-0 flex-col pb-2.5 pt-2.5">
+      {/* The editor stays in place while the mark draws. Readiness, not animation,
+          decides when it can accept a request. HybridInputBar owns its own padding. */}
+      <>
+        {!deckOpen && !pinned && state.turns.length > 0 && (
+          <button
+            type="button"
+            className="assistant-jump assistant-text-control assistant-text-sm"
+            onClick={() => {
+              const el = scrollRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+              pinnedRef.current = true;
+              setPinned(true);
+            }}
+          >
+            <ArrowDown aria-hidden="true" className="size-3" />
+            Jump to latest
+          </button>
+        )}
+        {deckOpen && state.approvals.length > 0 && (
+          <button
+            type="button"
+            className="assistant-jump assistant-text-control assistant-text-sm"
+            onClick={() => {
+              pinnedRef.current = true;
+              setPinned(true);
+              setDeckOpen(false);
+            }}
+          >
+            <TriangleAlert aria-hidden="true" className="size-3 text-[var(--assistant-warning)]" />
+            Review approval ({state.approvals.length})
+          </button>
+        )}
+        {/* The question sheet can shrink; the editor and status row cannot. */}
+        <div className="assistant-composer flex min-h-0 flex-col pb-2.5 pt-2.5">
           {/* The question sheet sits ABOVE the composer and the composer stays, disabled.
 
             It used to take the composer's place. That kept the right invariant — the
@@ -1735,42 +1693,12 @@ export function AssistantPanelView({
             />
           </div>
 
-          {/* The status row under the composer.
-
-          The cockpit put its adaptive key hints here (internal/ui/composer/keymap.go
-          hintRow). Those hints now belong to the input bar, which owns the editor and
-          teaches its own bindings — duplicating them here would state the composer's
-          contract in a second place, free to drift from it.
-
-          This is the narrowest row in the app, and it had grown to hold the phase, the
-          stall warning, the clock, the standing approval, the context meter, the cost
-          and an overflow button — at a sidebar's width that wrapped to two lines. What
-          is left is one reading the transcript cannot give (the connection), the one
-          control that has to be reachable mid-turn (stop), and the session readouts.
-
-          The PHASE is gone from here on purpose. It was being drawn twice: once at the
-          tail of the running turn, where the next output will appear and where anyone
-          waiting is already looking, and again down here below the input. Two labels
-          for one fact, and this was the copy with no room for it — "Inspecting
-          project… · still working · 41s" is the longest string the phase vocabulary
-          can produce and it is unbounded from here, since a future phase label is
-          whatever the engine names it.
-
-          The CLOCK is gone from here too, for the same reason and one more: it was
-          also drawn at the tail of the running turn, and down here it sat right next
-          to "Connected" — reading as how long the session had been connected, not how
-          long the current turn had been running.
-
-          The COST is gone and is not coming back. Per-turn spend was a readout from
-          when the assistant billed by usage; it bills by subscription now, so the
-          figure answered a question nobody is being asked and implied a meter that
-          isn't running. The engine still reports `cost` on the wire and the store
-          still holds it — this is a decision about what to SHOW, not a wire change —
-          so re-adding a span here is all it would take to bring it back. Don't. */}
+          {/* Connection, turn control and session state. Wrap at narrow widths so
+              standing permissions and Stop remain readable at large terminal sizes. */}
 
           <div
             data-testid="assistant-status-row"
-            className="mt-1.5 flex shrink-0 items-center gap-2 px-3.5 assistant-text-sm text-[var(--assistant-fg-secondary)]"
+            className="mt-1.5 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-3.5 assistant-text-sm text-[var(--assistant-fg-secondary)]"
           >
             {/* A DOT, then the word, as the cockpit drew it. The word
               alone made the one line that is true for the whole session read as body
@@ -1822,7 +1750,7 @@ export function AssistantPanelView({
                     : "Stop this turn (Esc)"
                 }
                 className={cn(
-                  "flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5",
+                  "assistant-text-control flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5",
                   // Colour, not transparency, for the resting state. `opacity` scales the
                   // element toward whatever is behind it and drags its contrast floor
                   // down with it — and stop is a control someone reaches for mid-turn,
@@ -1837,7 +1765,19 @@ export function AssistantPanelView({
               </button>
             )}
 
-            <span className="ml-auto flex shrink-0 items-center gap-2 tabular-nums">
+            <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 tabular-nums">
+              {onRequestOperations && (
+                <button
+                  type="button"
+                  className="assistant-text-control"
+                  ref={operationsButtonRef}
+                  aria-pressed={deckOpen}
+                  title="Show operations (Ctrl+O)"
+                  onClick={() => setDeckOpen(!deckOpen)}
+                >
+                  Operations
+                </button>
+              )}
               {/* Both describe a LIVE session, so neither survives it stopping:
                 "Auto-approve on" over a dead engine states a standing permission that
                 no longer applies to anything, and "Rate limited" a condition nothing
@@ -1865,7 +1805,7 @@ export function AssistantPanelView({
             </span>
           </div>
         </div>
-      )}
+      </>
     </div>
   );
 }
