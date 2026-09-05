@@ -518,6 +518,35 @@ describe("createHost dispatch, catalog and prompts", () => {
     for (const call of h.requestPrompt.mock.calls) expect(call[2]).toBe(PROJECT_A);
   });
 
+  it("forwards each prompt's cancellation signal to the dispatcher (#12279)", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const controller = new AbortController();
+
+    await host.showQuickPick([{ id: "a", label: "A" }], {}, { signal: controller.signal });
+    await host.showInputBox({ title: "name" }, { signal: controller.signal });
+    await host.showConfirm({ title: "sure?" }, { signal: controller.signal });
+
+    // This is the link that ties a prompt to the lifetime of whatever asked for
+    // it — without it the dev worker's retired generation cannot dismiss its own
+    // question, and the signal is silently dropped at the factory boundary.
+    expect(h.requestPrompt.mock.calls).toHaveLength(3);
+    for (const call of h.requestPrompt.mock.calls) {
+      expect(call[3]).toBe(controller.signal);
+      // The binding must survive alongside the new trailing argument.
+      expect(call[2]).toBe(PROJECT_A);
+    }
+  });
+
+  it("leaves the signal undefined when a plugin passes no call options (#12279)", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.showConfirm({ title: "sure?" });
+
+    expect(h.requestPrompt.mock.calls[0][3]).toBeUndefined();
+  });
+
   it("passes null through when unbound so the dispatchers stay ambient", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);

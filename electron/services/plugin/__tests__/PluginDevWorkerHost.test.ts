@@ -418,4 +418,97 @@ describe("PluginDevWorkerHost", () => {
     expect(seen).toContainEqual({ type: "host-call", requestId: "c1", method: "getWorktrees" });
     host.dispose();
   });
+
+  // #12279: a reload asks the worker to dispose cooperatively and only
+  // force-kills it after a grace period, so the outgoing worker stays alive and
+  // connected after `reloading` has already retired its generation. Anything it
+  // says in that window would be stamped with the INCOMING generation and pass
+  // every downstream staleness check.
+  it("drops messages from a worker that is being retired (#12279)", async () => {
+    vi.useFakeTimers();
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    const seen: any[] = [];
+    host.on("worker-message", (m) => seen.push(m));
+    void host.start();
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    watchCalls[0].cb("change", "index.js");
+    vi.advanceTimersByTime(250);
+
+    // The dying worker's cleanup runs before the process exits and can still
+    // call the host — a settings write here must not be forwarded.
+    child.emit("message", {
+      type: "host-call",
+      requestId: "late",
+      method: "settings.set",
+      params: { key: "k", value: "v" },
+    });
+
+    expect(seen).toHaveLength(0);
+    // The cooperative dispose must still reach it — gating receives, not sends.
+    expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    host.dispose();
+  });
+
+  it("lets the replacement satisfy a start() that a rebuild interrupted (#12279)", async () => {
+    vi.useFakeTimers();
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    const started = host.start();
+    let rejected: unknown = null;
+    started.catch((e) => (rejected = e));
+
+    // A rebuild lands before the first worker ever reported ready.
+    const oldChild = mockChildren[0] as MockUtilityChild;
+    watchCalls[0].cb("change", "index.js");
+    vi.advanceTimersByTime(250);
+    // Its late `ready` is correctly ignored — that generation is retired.
+    oldChild.emit("message", { type: "ready" });
+    oldChild.emit("exit", 0);
+    await vi.runOnlyPendingTimersAsync();
+
+    // The deliberate kill must NOT fail the activation: PluginService reads a
+    // start() rejection as a hard fork failure and disposes the replacement.
+    expect(rejected).toBeNull();
+
+    const newChild = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+    newChild.emit("message", { type: "ready" });
+    await expect(started).resolves.toBeUndefined();
+    host.dispose();
+  });
+
+  it("ignores a superseded child once its replacement takes over (#12279)", async () => {
+    vi.useFakeTimers();
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    const seen: any[] = [];
+    host.on("worker-message", (m) => seen.push(m));
+    void host.start();
+    const oldChild = mockChildren[0] as MockUtilityChild;
+    oldChild.emit("message", { type: "ready" });
+
+    watchCalls[0].cb("change", "index.js");
+    vi.advanceTimersByTime(250);
+    oldChild.emit("exit", 0);
+    await vi.runOnlyPendingTimersAsync();
+
+    const newChild = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+    expect(newChild).not.toBe(oldChild);
+
+    oldChild.emit("message", { type: "host-call", requestId: "ghost", method: "getWorktrees" });
+    expect(seen).toHaveLength(0);
+
+    // The replacement is served immediately — including the host calls its
+    // activate() makes, so the guard cannot deadlock activation.
+    newChild.emit("message", { type: "ready" });
+    newChild.emit("message", { type: "host-call", requestId: "live", method: "getWorktrees" });
+    expect(seen).toContainEqual({
+      type: "host-call",
+      requestId: "live",
+      method: "getWorktrees",
+    });
+    host.dispose();
+  });
 });

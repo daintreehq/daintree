@@ -278,7 +278,15 @@ export class PluginDevWorkerMainBridge {
    */
   private retireGeneration(reason: string): void {
     this.reloadGeneration++;
-    this.clearPriorRegistrations();
+    // Before the fallible steps: aborting the outgoing generation's host calls
+    // is what takes its open prompts off the user's screen, and a throw from
+    // plugin-supplied registration cleanup must not strand a visible dialog.
+    this.abortAllHostCalls();
+    try {
+      this.clearPriorRegistrations();
+    } catch {
+      // best-effort — one failed step must not skip the rest of the teardown
+    }
     for (const dispose of this.subscriptionDisposers.values()) {
       try {
         dispose();
@@ -289,7 +297,6 @@ export class PluginDevWorkerMainBridge {
     this.subscriptionDisposers.clear();
     this.disposeProviders();
     this.disposeProcessHandles();
-    this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error(reason));
     }
@@ -491,18 +498,20 @@ export class PluginDevWorkerMainBridge {
       }
       case "showQuickPick": {
         // Reuse the real host so validation/provenance/cancellation all match
-        // the installed-plugin path. On reload the dialog auto-resolves when the
-        // user dismisses or the plugin unloads (promptDispatcher.cancelForPlugin).
+        // the installed-plugin path. `signal` is what ties the dialog to this
+        // generation: retiring one aborts every in-flight host call, which
+        // dismisses the question rather than leaving it on screen owned by a
+        // worker that no longer exists (#12279).
         const p = params as ShowQuickPickParams;
-        return this.host.showQuickPick(p.items, p.options ?? {});
+        return this.host.showQuickPick(p.items, p.options ?? {}, { signal });
       }
       case "showInputBox": {
         const p = params as ShowInputBoxParams;
-        return this.host.showInputBox(p.options);
+        return this.host.showInputBox(p.options, { signal });
       }
       case "showConfirm": {
         const p = params as ShowConfirmParams;
-        return this.host.showConfirm(p.options);
+        return this.host.showConfirm(p.options, { signal });
       }
       case "settings.get": {
         const p = params as SettingsGetParams;

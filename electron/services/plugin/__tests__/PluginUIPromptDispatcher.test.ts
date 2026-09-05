@@ -217,10 +217,11 @@ describe("PluginUIPromptDispatcher", () => {
     d.cancelForPlugin("mine");
 
     await expect(mine).resolves.toBe(false);
-    expect(wc.send).toHaveBeenCalledWith(
-      CHANNELS.PLUGIN_UI_PROMPT_CANCEL,
-      expect.objectContaining({ pluginId: "mine" })
-    );
+    // Deliberately unscoped: the bulk drain dismisses every prompt for the
+    // plugin, so an accidental `promptId` here would narrow it to one.
+    expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+      pluginId: "mine",
+    });
 
     // The other plugin's prompt is untouched until it answers.
     const otherId = (
@@ -239,6 +240,95 @@ describe("PluginUIPromptDispatcher", () => {
       }
     );
     await expect(other).resolves.toEqual({ id: "k", label: "Kept" });
+  });
+
+  it("never opens a prompt whose signal is already aborted (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(d.requestPrompt("mine", CONFIRM, undefined, controller.signal)).resolves.toBe(
+      false
+    );
+
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+    ).toHaveLength(0);
+    // The one-prompt-per-plugin cap must not have been spent on a dialog that
+    // was never shown — the next request still gets through.
+    const next = d.requestPrompt("mine", CONFIRM);
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+    ).toHaveLength(1);
+    d.cancelForPlugin("mine");
+    await expect(next).resolves.toBe(false);
+  });
+
+  it("aborting a prompt dismisses that one request and settles it (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+
+    const promise = d.requestPrompt("mine", CONFIRM, undefined, controller.signal);
+    const promptId = lastPromptId(wc);
+
+    controller.abort();
+
+    await expect(promise).resolves.toBe(false);
+    // Scoped by promptId so the renderer drops exactly this dialog.
+    expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+      pluginId: "mine",
+      promptId,
+    });
+
+    // The abort must release the per-plugin cap, not just settle the promise —
+    // otherwise the successor generation's first prompt is answered for it.
+    const next = d.requestPrompt("mine", CONFIRM);
+    const nextId = lastPromptId(wc);
+    expect(nextId).not.toBe(promptId);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: nextId, result: true }
+    );
+    await expect(next).resolves.toBe(true);
+  });
+
+  it("a late abort cannot dismiss a replacement prompt (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+
+    const first = d.requestPrompt("mine", CONFIRM, undefined, controller.signal);
+    const firstId = lastPromptId(wc);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: firstId, result: true }
+    );
+    await expect(first).resolves.toBe(true);
+
+    // Same plugin asks again; the earlier caller only now gives up.
+    const second = d.requestPrompt("mine", CONFIRM);
+    const secondId = lastPromptId(wc);
+    expect(secondId).not.toBe(firstId);
+
+    controller.abort();
+
+    // The stale signal must not reach the successor's dialog.
+    expect(wc.send).not.toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, expect.anything());
+    // Answer affirmatively: `false` would also be the value a wrongly-delivered
+    // cancellation produces, so it could not tell the two apart.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: secondId, result: true }
+    );
+    await expect(second).resolves.toBe(true);
   });
 
   it("cancelForPlugin dismisses on the ORIGINAL window even after focus switches", async () => {

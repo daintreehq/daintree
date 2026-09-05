@@ -70,6 +70,7 @@ import type {
   ActionHandler,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginHostCallOptions,
   PluginInputBoxOptions,
   PluginConfirmOptions,
   BuiltInPluginCapability,
@@ -1399,7 +1400,8 @@ export function createHost(
     // so authoring mistakes surface loudly (mirrors showToast).
     showQuickPick: (async (
       items: PluginQuickPickItem[],
-      options?: PluginQuickPickOptions
+      options?: PluginQuickPickOptions,
+      callOptions?: PluginHostCallOptions
     ): Promise<PluginQuickPickItem | PluginQuickPickItem[] | undefined> => {
       if (!deps.plugins.has(pluginId)) return undefined;
       const validItems = validateQuickPickItems(pluginId, items);
@@ -1415,20 +1417,22 @@ export function createHost(
           items: validItems,
           options: sanitizeQuickPickOptions(options),
         },
-        boundProjectId
+        boundProjectId,
+        callOptions?.signal
       );
       return value as PluginQuickPickItem | PluginQuickPickItem[] | undefined;
     }) as PluginHostApi["showQuickPick"],
-    showInputBox: async (options) => {
+    showInputBox: async (options, callOptions) => {
       if (!deps.plugins.has(pluginId)) return undefined;
       const value = await deps.promptDispatcher.requestPrompt(
         pluginId,
         { kind: "inputBox", options: sanitizeInputBoxOptions(options) },
-        boundProjectId
+        boundProjectId,
+        callOptions?.signal
       );
       return value as string | undefined;
     },
-    showConfirm: async (options) => {
+    showConfirm: async (options, callOptions) => {
       if (!deps.plugins.has(pluginId)) return false;
       if (!options || typeof options !== "object" || typeof options.title !== "string") {
         throw new Error(`Plugin "${pluginId}" showConfirm: options.title must be a string`);
@@ -1436,7 +1440,8 @@ export function createHost(
       const value = await deps.promptDispatcher.requestPrompt(
         pluginId,
         { kind: "confirm", options: sanitizeConfirmOptions(options) },
-        boundProjectId
+        boundProjectId,
+        callOptions?.signal
       );
       return value === true;
     },

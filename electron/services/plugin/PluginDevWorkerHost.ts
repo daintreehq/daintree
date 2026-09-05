@@ -226,11 +226,19 @@ export class PluginDevWorkerHost extends EventEmitter {
   /** Re-arm the ready promise and fork a new worker. */
   private startFresh(): void {
     if (this.isDisposed) return;
-    this.readyPromise = new Promise((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
-    this.readyPromise.catch(() => undefined);
+    // Only re-arm once the previous wait has settled. A rebuild landing before
+    // the first `ready` retires that worker with the original `start()` caller
+    // still pending — re-arming here would orphan its resolver forever, and
+    // PluginService reads a `start()` rejection as a hard fork failure and
+    // disposes the very replacement being forked (#12279). Reusing the pending
+    // resolver lets the replacement satisfy the original waiter.
+    if (!this.readyResolve) {
+      this.readyPromise = new Promise((resolve, reject) => {
+        this.readyResolve = resolve;
+        this.readyReject = reject;
+      });
+      this.readyPromise.catch(() => undefined);
+    }
     this.startWorker();
   }
 
@@ -453,13 +461,39 @@ export class PluginDevWorkerHost extends EventEmitter {
 
     this.installLogForwarding();
 
-    this.child.on("message", (msg: PluginWorkerToHostMessage) => {
+    // Bind both listeners to THIS child so a superseded or retiring worker can
+    // never speak for the host (#12279).
+    const child = this.child;
+
+    child.on("message", (msg: PluginWorkerToHostMessage) => {
+      if (!this.hasAuthority(child)) return;
       this.handleWorkerMessage(msg);
     });
 
-    this.child.on("exit", (code) => {
+    child.on("exit", (code) => {
+      if (this.child !== child) return;
       this.handleExit(code);
     });
+  }
+
+  /**
+   * Whether messages from `child` still carry authority.
+   *
+   * A reload asks the worker to dispose cooperatively and only force-kills it
+   * after a grace period, so the outgoing worker stays alive and connected well
+   * after `reloading` announced its retirement — and its `dispose` handler runs
+   * the plugin's cleanup, which can itself call the host. Those calls must not
+   * be forwarded: the bridge stamps every host call with the CURRENT generation,
+   * which by then is the incoming one, so a late prompt, settings/storage write
+   * or delegated action from the dead generation would pass every downstream
+   * staleness check and commit with full authority.
+   *
+   * Gating on child identity is self-clearing — the replacement becomes
+   * `this.child` and is served immediately, including the host calls its
+   * `activate()` makes, so this cannot deadlock activation.
+   */
+  private hasAuthority(child: UtilityProcess): boolean {
+    return !this.isDisposed && !this.isReloading && this.child === child;
   }
 
   private handleWorkerMessage(msg: PluginWorkerToHostMessage): void {
@@ -502,9 +536,15 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.expectingExit = false;
     this.child = null;
 
-    if (this.readyReject) {
+    // A reload's deliberate kill is not an activation failure — a replacement
+    // fork is already on its way and settles this same waiter. Rejecting here
+    // would fail an activation that is about to succeed (#12279). A crash still
+    // rejects: a worker that dies on load has genuinely failed to activate.
+    const replacementComing = wasExpected && !this.isDisposed;
+    if (this.readyReject && !replacementComing) {
       this.readyReject(new Error(`Plugin dev worker exited (code ${code ?? "unknown"})`));
       this.readyReject = null;
+      this.readyResolve = null;
     }
 
     if (this.isDisposed) {

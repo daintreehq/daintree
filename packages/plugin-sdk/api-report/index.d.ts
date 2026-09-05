@@ -3883,11 +3883,16 @@ interface PluginHostApi extends PluginActivationApi {
      * plugin is unloaded while the palette is open the pending call resolves
      * `undefined` (it never throws). Invalid items reject so authoring mistakes
      * surface loudly.
+     *
+     * Aborting `callOptions.signal` dismisses the open palette and resolves
+     * `undefined` rather than rejecting — a cancelled prompt is a dismissal, not a
+     * failure, so the never-throws contract above still holds (#12279). This is
+     * the one place {@link PluginHostCallOptions} settles instead of rejecting.
      */
     showQuickPick(items: PluginQuickPickItem[], options: PluginQuickPickOptions & {
         canSelectMany: true;
-    }): Promise<PluginQuickPickItem[] | undefined>;
-    showQuickPick(items: PluginQuickPickItem[], options?: PluginQuickPickOptions): Promise<PluginQuickPickItem | undefined>;
+    }, callOptions?: PluginHostCallOptions): Promise<PluginQuickPickItem[] | undefined>;
+    showQuickPick(items: PluginQuickPickItem[], options?: PluginQuickPickOptions, callOptions?: PluginHostCallOptions): Promise<PluginQuickPickItem | undefined>;
     /**
      * Imperatively prompt the user for a line of text, rendered through the app's
      * dialog surface. Resolves with the entered string, or `undefined` if the user
@@ -3895,19 +3900,21 @@ interface PluginHostApi extends PluginActivationApi {
      * is enforced client-side at submit time.
      *
      * Async and NOT revoke-guarded for the same reason as {@link showQuickPick};
-     * resolves `undefined` if the plugin is unloaded while the dialog is open.
+     * resolves `undefined` if the plugin is unloaded while the dialog is open, and
+     * aborting `callOptions.signal` dismisses it and resolves `undefined` too.
      */
-    showInputBox(options?: PluginInputBoxOptions): Promise<string | undefined>;
+    showInputBox(options?: PluginInputBoxOptions, callOptions?: PluginHostCallOptions): Promise<string | undefined>;
     /**
      * Imperatively ask the user to confirm an action, rendered through the app's
      * `ConfirmDialog`. Resolves `true` if confirmed, `false` if cancelled,
      * dismissed, or the plugin is unloaded while the dialog is open.
      *
      * Async and NOT revoke-guarded for the same reason as {@link showQuickPick}.
+     * Aborting `callOptions.signal` dismisses the dialog and resolves `false`.
      * For an irreversible action set {@link PluginConfirmOptions.destructive} and
      * use a verb-noun `confirmLabel`.
      */
-    showConfirm(options: PluginConfirmOptions): Promise<boolean>;
+    showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
     /**
      * Persistent, plugin-scoped key/value settings. Plaintext JSON storage with
      * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.

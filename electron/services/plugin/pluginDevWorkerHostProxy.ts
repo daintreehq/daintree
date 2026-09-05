@@ -26,6 +26,7 @@ import type {
   PluginToastOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginHostCallOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
@@ -241,12 +242,18 @@ export class PluginDevWorkerHostProxy {
   private callWithGrace<T>(
     method: PluginHostCallMethod,
     params: unknown,
-    graceValue: T
+    graceValue: T,
+    signal?: AbortSignal
   ): Promise<T> {
     if (this.disposed) {
       return Promise.resolve(graceValue);
     }
-    return this.call<T>(method, params, undefined, { value: graceValue });
+    if (signal?.aborted) {
+      return Promise.resolve(graceValue);
+    }
+    // Cancellation settles the grace value inside `call`'s abort branch, so a
+    // real validation or transport error is never rewritten into a dismissal.
+    return this.call<T>(method, params, signal, { value: graceValue });
   }
 
   private call<T>(
@@ -280,9 +287,23 @@ export class PluginDevWorkerHostProxy {
           if (!pending) return;
           this.pendingCalls.delete(requestId);
           cleanup();
-          // Tell main to abort the in-flight host call (AbortSignal itself is not
-          // structured-clone-safe, so the requestId is the cancellation handle).
-          this.post({ type: "host-cancel", requestId });
+          try {
+            // Tell main to abort the in-flight host call (AbortSignal itself is not
+            // structured-clone-safe, so the requestId is the cancellation handle).
+            this.post({ type: "host-cancel", requestId });
+          } catch {
+            // best-effort — the entry is already claimed, so a failed cancel
+            // post must not leave the caller's promise unsettled forever
+          }
+          // A grace-bearing call (the imperative prompts) treats cancellation as
+          // a dismissal rather than a failure. Settling it HERE is what makes
+          // that safe: this branch only runs when the abort actually claimed the
+          // pending entry, so a genuine error that already settled the call can
+          // never be rewritten into a dismissal (#12279).
+          if (grace) {
+            resolve(grace.value as T);
+            return;
+          }
           reject(abortError(signal));
         };
         signal.addEventListener("abort", onAbort, { once: true });
@@ -663,15 +684,26 @@ export class PluginDevWorkerHostProxy {
       // assertActivationOpen): plugins prompt from command handlers. They use
       // callWithGrace so a plugin unload mid-prompt resolves the dismiss value
       // (undefined / false) instead of rejecting — matching the host contract.
-      showQuickPick: ((items: PluginQuickPickItem[], options?: PluginQuickPickOptions) =>
+      showQuickPick: ((
+        items: PluginQuickPickItem[],
+        options?: PluginQuickPickOptions,
+        callOptions?: PluginHostCallOptions
+      ) =>
         this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
           "showQuickPick",
           { items, options },
-          undefined
+          undefined,
+          callOptions?.signal
         )) as PluginHostApi["showQuickPick"],
-      showInputBox: (options) =>
-        this.callWithGrace<string | undefined>("showInputBox", { options }, undefined),
-      showConfirm: (options) => this.callWithGrace<boolean>("showConfirm", { options }, false),
+      showInputBox: (options, callOptions) =>
+        this.callWithGrace<string | undefined>(
+          "showInputBox",
+          { options },
+          undefined,
+          callOptions?.signal
+        ),
+      showConfirm: (options, callOptions) =>
+        this.callWithGrace<boolean>("showConfirm", { options }, false, callOptions?.signal),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),
