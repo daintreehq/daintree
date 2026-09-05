@@ -305,6 +305,14 @@ const FAMILIES: readonly Family[] = [
       "Real SerializeAddon output across a real headless fleet — the teardown cost paid on every quit. Capture only: nothing here says what the payload costs to read back, and no disk write is in the bracket.",
   },
   {
+    label: "session snapshot scheduling",
+    ids: ["PERF-408"],
+    kind: "mechanism",
+    fidelity: withFidelity({ renderer: "headless" }),
+    claim:
+      "The real snapshot coordinator, its real timers and the real session writer against a temporary user-data directory: how many serializes and disk writes an agent turn actually pays for. The triggers are called directly, so nothing here says the pty-host and agent FSM fire them at the right moment, and the write latency is outside the duration.",
+  },
+  {
     label: "session restore parser floor",
     ids: ["PERF-196"],
     kind: "diagnostic",

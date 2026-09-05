@@ -27,7 +27,7 @@ export const REPRESENTATIVE_FLEET = 12;
  * runs — a snapshot that changed size run to run would make the byte metrics
  * unreadable.
  */
-function colourize(corpus: string): string {
+export function colourize(corpus: string): string {
   return corpus
     .split("\r\n")
     .map((line, index) => {
@@ -77,9 +77,18 @@ const fleetCache = new Map<string, Promise<SnapshotFleet>>();
 /**
  * Build a fleet of seeded terminals once per process. `serialize()` does not
  * mutate the buffer, so the same fleet is safe to re-snapshot every iteration.
+ *
+ * `cacheTag` separates callers that DO mutate their fleet. PERF-408 writes fresh
+ * turn output into its terminals, and sharing PERF-195/196's cached sources
+ * would silently move their byte counts — a fixture changing under two
+ * benchmarks depending on which id ran first in the process.
  */
-export function getSnapshotFleet(scrollbackLines: number, size: number): Promise<SnapshotFleet> {
-  const key = `${scrollbackLines}:${size}`;
+export function getSnapshotFleet(
+  scrollbackLines: number,
+  size: number,
+  cacheTag = "shared"
+): Promise<SnapshotFleet> {
+  const key = `${scrollbackLines}:${size}:${cacheTag}`;
   let existing = fleetCache.get(key);
   if (!existing) {
     existing = (async () => {

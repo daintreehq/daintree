@@ -44,6 +44,12 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+// A capture that completes can hand a deferred follow-up straight back into the
+// same path, so the chain is longer than one flush drains.
+async function drainFollowUp(): Promise<void> {
+  for (let i = 0; i < 12; i += 1) await Promise.resolve();
+}
+
 function createHost(overrides: Partial<MutableHost> = {}): MutableHost {
   // Allow tests to install a deferred async serializer when they need to
   // observe in-flight behavior.
@@ -397,7 +403,7 @@ describe("SessionSnapshotter", () => {
       expect(persistAsyncMock).not.toHaveBeenCalled();
     });
 
-    it("drops a re-entrant flush while one is already in flight", async () => {
+    it("defers a re-entrant flush while one is already in flight", async () => {
       const host = createHost();
       host.asyncResolved = false;
       const serializeSpy = vi.spyOn(host, "getSerializedStateAsync");
@@ -408,7 +414,7 @@ describe("SessionSnapshotter", () => {
 
       // Advance past the throttle window and change content so the second call
       // clears the epoch + throttle gates and actually reaches the in-flight
-      // guard — which must drop it (no second serialize starts).
+      // guard — which must not start a second serialize alongside the first.
       vi.advanceTimersByTime(2001);
       host.contentEpoch = 2;
       snap.flushEventDriven();
@@ -416,10 +422,13 @@ describe("SessionSnapshotter", () => {
 
       expect(serializeSpy).toHaveBeenCalledTimes(1);
 
+      // The deferred request is remembered, not dropped: the changed content it
+      // asked for is written once the in-flight capture releases.
       host.asyncResolve();
-      await flushMicrotasks();
+      await drainFollowUp();
 
-      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+      expect(serializeSpy).toHaveBeenCalledTimes(2);
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
     });
 
     it("does not mark the epoch flushed when persist fails (retries after throttle)", async () => {
@@ -545,6 +554,166 @@ describe("SessionSnapshotter", () => {
       snap.flushSyncOnDispose();
       snap.flushSyncOnDispose();
 
+      expect(persistSyncMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The two triggers used to keep entirely separate state, so the end of an
+  // agent turn — last output chunk arms the debounce, FSM settle fires the
+  // event flush — serialized and wrote the same buffer twice, in either order
+  // (#12237). These pin the coalescing without loosening the cases that must
+  // still produce two writes.
+  describe("unified periodic + event-driven scheduling", () => {
+    it("persists once when an event flush covers a scheduled periodic snapshot", async () => {
+      const host = createHost();
+      const serializeSpy = vi.spyOn(host, "getSerializedStateAsync");
+      const snap = new SessionSnapshotter(host);
+
+      // Output burst arms the 5s debounce; the agent settles 2s later.
+      snap.schedule();
+      vi.advanceTimersByTime(2000);
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(serializeSpy).toHaveBeenCalledTimes(1);
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // The debounce still expires, on content already on disk.
+      vi.advanceTimersByTime(3001);
+      await flushMicrotasks();
+
+      expect(serializeSpy).toHaveBeenCalledTimes(1);
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("persists once when a debounced snapshot covers a later event flush", async () => {
+      const host = createHost();
+      const serializeSpy = vi.spyOn(host, "getSerializedStateAsync");
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      vi.advanceTimersByTime(5000);
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // The mirror direction: the periodic write now stamps the shared epoch,
+      // so a settle on unchanged content has nothing left to write.
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(serializeSpy).toHaveBeenCalledTimes(1);
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("persists twice when output arrives after the event flush", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      vi.advanceTimersByTime(2000);
+      snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // A different buffer, so the debounce that follows is real work.
+      host.contentEpoch = 2;
+      snap.schedule();
+      vi.advanceTimersByTime(5001);
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("persists twice when output arrives after the debounced snapshot", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      vi.advanceTimersByTime(5000);
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // The 2s throttle stays event-driven only: a periodic write does not
+      // stamp it, so a settle on changed content is eligible immediately.
+      host.contentEpoch = 2;
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("starts no second serialize when the debounce expires mid-capture", async () => {
+      const host = createHost();
+      host.asyncResolved = false;
+      const serializeSpy = vi.spyOn(host, "getSerializedStateAsync");
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      snap.flushEventDriven();
+      await Promise.resolve(); // the event capture reaches its stalled serialize
+
+      // The debounce expires while that capture is still serializing. One
+      // in-flight flag covers both triggers, so nothing starts alongside it.
+      vi.advanceTimersByTime(5001);
+      expect(serializeSpy).toHaveBeenCalledTimes(1);
+
+      host.asyncResolve();
+      await drainFollowUp();
+
+      expect(serializeSpy).toHaveBeenCalledTimes(1);
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("still persists content that changed while a capture was serializing", async () => {
+      const host = createHost();
+      host.asyncResolved = false;
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+
+      // Output lands mid-serialize. Coverage is stamped with the ENTRY epoch,
+      // so it cannot claim the newer buffer.
+      host.contentEpoch = 2;
+      snap.schedule();
+      host.asyncResolve();
+      await drainFollowUp();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5001);
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("clears pending debounced work once an event flush persisted the same buffer", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // Teardown must not rewrite bytes the event flush already wrote.
+      snap.flushSyncOnDispose();
+      expect(persistSyncMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves debounced work pending for teardown when the event flush failed", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+      persistAsyncMock.mockRejectedValueOnce(new Error("disk full"));
+
+      snap.schedule();
+      snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // A failed write covers nothing, so the last-chance sync flush still runs.
+      snap.flushSyncOnDispose();
       expect(persistSyncMock).toHaveBeenCalledTimes(1);
     });
   });
