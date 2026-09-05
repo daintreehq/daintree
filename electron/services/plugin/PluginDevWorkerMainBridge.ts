@@ -193,6 +193,19 @@ export class PluginDevWorkerMainBridge {
    */
   private readonly pendingRegistrations = new Set<PendingRegistration>();
   private activationPhase: ActivationPhase = "activating";
+  /**
+   * True between retiring a generation and the replacement child's boot `ready`.
+   *
+   * The generation counter alone cannot attribute these: a message the outgoing
+   * child posted before it was killed is delivered AFTER `reloadGeneration` was
+   * bumped, so it reads as belonging to the incoming one. That is harmless for
+   * a late `host-result` (the id is simply dropped) but not for an activation
+   * outcome — a dying worker's `activate-error` would otherwise latch a failure
+   * onto its replacement and veto the replacement's own success. `ready` is
+   * posted by the new child at boot, so it is the first message that provably
+   * belongs to the incoming generation.
+   */
+  private awaitingReplacement = false;
 
   /** First-activation gate. Resolved on `activated`, rejected on activate/crash
    * errors. Subsequent reload activations don't re-await this. */
@@ -221,6 +234,7 @@ export class PluginDevWorkerMainBridge {
     this.activationPromise.catch(() => undefined);
 
     this.workerHost.on("worker-message", this.onWorkerMessage);
+    this.workerHost.on("ready", this.onWorkerReady);
     this.workerHost.on("reloading", this.onReloading);
     this.workerHost.on("exit", this.onWorkerExit);
     this.workerHost.on("crash-loop", this.onCrashLoop);
@@ -235,6 +249,7 @@ export class PluginDevWorkerMainBridge {
     if (this.disposed) return;
     this.disposed = true;
     this.workerHost.off("worker-message", this.onWorkerMessage);
+    this.workerHost.off("ready", this.onWorkerReady);
     this.workerHost.off("reloading", this.onReloading);
     this.workerHost.off("exit", this.onWorkerExit);
     this.workerHost.off("crash-loop", this.onCrashLoop);
@@ -297,6 +312,11 @@ export class PluginDevWorkerMainBridge {
     this.processHandles.clear();
   }
 
+  /** The replacement child booted — everything from here belongs to it. */
+  private onWorkerReady = (): void => {
+    this.awaitingReplacement = false;
+  };
+
   private onReloading = (): void => {
     this.retireGeneration("Plugin reloaded before invocation completed");
   };
@@ -328,6 +348,7 @@ export class PluginDevWorkerMainBridge {
     // verdict both start over (#12282).
     this.pendingRegistrations.clear();
     this.activationPhase = "activating";
+    this.awaitingReplacement = true;
     for (const dispose of this.subscriptionDisposers.values()) {
       try {
         dispose();
@@ -399,6 +420,11 @@ export class PluginDevWorkerMainBridge {
 
   private onWorkerMessage = (msg: PluginWorkerToHostMessage): void => {
     if (this.disposed) return;
+    // An `activated` from a child that has already been retired describes the
+    // outgoing generation. Committing on it would close the incoming
+    // generation's registration gate before that worker has proposed anything
+    // (#12282). Its failure counterparts still report — see `failActivation`.
+    if (this.awaitingReplacement && msg.type === "activated") return;
     switch (msg.type) {
       case "activated":
         // The worker posts this the moment activate() returns, which says
@@ -433,9 +459,10 @@ export class PluginDevWorkerMainBridge {
         // plugin believes it made. Enlist it synchronously, before dispatch, so
         // an `activated` arriving behind it (FIFO port, so it always does) finds
         // it pending rather than racing it (#12282).
-        const registration = msg.registrationKey
-          ? { registrationKey: msg.registrationKey }
-          : undefined;
+        const registration =
+          msg.registrationKey && !this.awaitingReplacement
+            ? { registrationKey: msg.registrationKey }
+            : undefined;
         if (registration) this.pendingRegistrations.add(registration);
         void this.handleHostNotify(msg, registration);
         return;
@@ -717,23 +744,27 @@ export class PluginDevWorkerMainBridge {
     } catch (err) {
       const error = formatErrorMessage(err, "registration failed");
       if (this.disposed || generation !== this.reloadGeneration) return;
-      if (msg.registrationKey) {
-        // The proxy call already returned success to the plugin, so this is the
-        // only channel for a deep-validation rejection.
-        this.workerHost.send({
-          type: "register-error",
-          registrationKey: msg.registrationKey,
-          error,
-        });
-        // ...and the log line the author wasn't watching is not a report. A
-        // rejected required registration means the plugin is live but missing a
-        // contribution it thinks it has, so it fails activation by name (#12282).
+      if (!msg.registrationKey) {
+        logger.warn(`[${this.pluginId}] host-notify "${msg.method}" threw: ${error}`);
+        return;
+      }
+      // The proxy call already returned success to the plugin, so this is the
+      // only channel for a deep-validation rejection.
+      this.workerHost.send({
+        type: "register-error",
+        registrationKey: msg.registrationKey,
+        error,
+      });
+      // ...and the log line the author wasn't watching is not a report. A
+      // rejected required registration means the plugin is live but missing a
+      // contribution it thinks it has, so it fails activation by name (#12282).
+      // Only for one this generation actually enlisted: a straggler from a
+      // retired child must not veto the replacement that is booting.
+      if (registration) {
         this.failActivation(
           `Plugin "${this.pluginId}" registration "${msg.registrationKey}" was rejected: ${error}`,
           err instanceof Error ? err.stack : undefined
         );
-      } else {
-        logger.warn(`[${this.pluginId}] host-notify "${msg.method}" threw: ${error}`);
       }
     } finally {
       if (registration) {
@@ -770,9 +801,15 @@ export class PluginDevWorkerMainBridge {
    * crash-loop precedent).
    */
   private failActivation(error: string, stack?: string): void {
-    if (this.activationPhase === "failed") return;
-    this.activationPhase = "failed";
-    this.pendingRegistrations.clear();
+    // Latch the failure onto the CURRENT generation — unless it came from a
+    // child already retired, whose outcome should still reach provenance but
+    // must not veto the replacement now booting, whose own `activated` has to
+    // stay able to clear the loadError (#12282).
+    if (!this.awaitingReplacement) {
+      if (this.activationPhase === "failed") return;
+      this.activationPhase = "failed";
+      this.pendingRegistrations.clear();
+    }
     this.onActivationResult?.({ ok: false, error, stack });
     this.rejectActivation(new Error(error));
   }
