@@ -223,16 +223,14 @@ describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
     const before = store.getState().workingTreeChangedDirsById;
 
     // A git-status pass re-emits the same stamp; nothing new happened.
-    store
-      .getState()
-      .applyUpdate(
-        makeSnapshot("wt-1", {
-          workingTreeChangedAt: 1_000,
-          workingTreeChangedDirs: ["src"],
-          modifiedCount: 3,
-        }),
-        nextV()
-      );
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        workingTreeChangedAt: 1_000,
+        workingTreeChangedDirs: ["src"],
+        modifiedCount: 3,
+      }),
+      nextV()
+    );
 
     expect(store.getState().workingTreeChangedDirsById).toBe(before);
   });
@@ -249,12 +247,15 @@ describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
         makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
         nextV()
       );
-    store
-      .getState()
-      .applySnapshot(
-        [makeSnapshot("wt-1", { workingTreeChangedAt: 3_000, workingTreeChangedDirs: ["electron"] })],
-        nextV()
-      );
+    store.getState().applySnapshot(
+      [
+        makeSnapshot("wt-1", {
+          workingTreeChangedAt: 3_000,
+          workingTreeChangedDirs: ["electron"],
+        }),
+      ],
+      nextV()
+    );
 
     expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
       at: 3_000,

@@ -1101,7 +1101,10 @@ describe("GitFileWatcher", () => {
       await vi.advanceTimersByTimeAsync(500);
 
       expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
-      expect(reportedDirs(onWorktreeFilesChanged)).toBeNull();
+      // Explicitly null, not merely absent: the callback has to SAY "unknown"
+      // rather than leave the consumer to infer it from a missing argument.
+      expect(onWorktreeFilesChanged.mock.calls[0]).toHaveLength(1);
+      expect(onWorktreeFilesChanged.mock.calls[0][0]).toBeNull();
       gitWatcher.dispose();
     });
 
@@ -1120,22 +1123,6 @@ describe("GitFileWatcher", () => {
       // The second flush must not still be carrying `src`: a scope that grows
       // forever converges on the full sweep it exists to avoid.
       expect(reportedDirs(onWorktreeFilesChanged, 1)).toEqual(["electron"]);
-      gitWatcher.dispose();
-    });
-
-    it("still reports directories for a burst the ignore classifier will skip", async () => {
-      // The raw-filesystem signal fires before (and independently of) the
-      // decision to skip the git status pass, so a build writing only into an
-      // ignored folder still tells the file browser exactly where to look.
-      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
-      await expect(gitWatcher.start()).resolves.toBe(true);
-      mock.resolve();
-      const cb = mock.getCallback();
-
-      fireEvents(cb, [{ type: "update", path: pathJoin("/repo", "dist", "bundle.js") }]);
-      await vi.advanceTimersByTimeAsync(500);
-
-      expect(reportedDirs(onWorktreeFilesChanged)).toEqual(["dist"]);
       gitWatcher.dispose();
     });
   });
@@ -1816,7 +1803,7 @@ describe("GitFileWatcher", () => {
     /** Start a watcher whose worktree bursts are eligible for classification. */
     async function startClassifyingWatcher(overrides: {
       onChange: () => void;
-      onWorktreeFilesChanged?: () => void;
+      onWorktreeFilesChanged?: (affectedDirs: readonly string[] | null) => void;
     }) {
       const mock = setupSubscribeMock();
       const gitWatcher = new GitFileWatcher({
@@ -1853,6 +1840,10 @@ describe("GitFileWatcher", () => {
       await flushClassification();
       expect(onChange).not.toHaveBeenCalled();
       expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      // And it carries the directories, so a build writing only into an ignored
+      // folder tells the file browser exactly where to look even though the
+      // status pass is skipped entirely (#12244 riding on #11330).
+      expect(onWorktreeFilesChanged.mock.calls[0]?.[0]).toEqual([".output"]);
 
       expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
       const [cwd, paths] = vi.mocked(checkIgnoredPaths).mock.calls[0];

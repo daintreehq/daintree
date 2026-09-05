@@ -123,8 +123,8 @@ const {
     treeArgs: {
       changeTick: undefined as number | undefined,
       changedDirs: undefined as
-        | { at: number; previousAt: number | null; dirs: readonly string[] | null }
-        | undefined,
+        { at: number; previousAt: number | null; dirs: readonly string[] | null } | undefined,
+      gitChangeTick: undefined as number | undefined,
       sort: undefined as { key: string; direction: string } | undefined,
       selectedPath: undefined as string | null | undefined,
     },
@@ -254,11 +254,14 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("../useFileBrowserTree", () => ({
   useFileBrowserTree: (args: {
     changeTick?: number;
+    changedDirs?: { at: number; previousAt: number | null; dirs: readonly string[] | null };
+    gitChangeTick?: number;
     sort?: { key: string; direction: string };
     selectedPath?: string | null;
   }) => {
     treeArgs.changeTick = args.changeTick;
     treeArgs.changedDirs = args.changedDirs;
+    treeArgs.gitChangeTick = args.gitChangeTick;
     treeArgs.sort = args.sort;
     treeArgs.selectedPath = args.selectedPath;
     // The real hook resolves this against its listings map; here the stubbed
@@ -606,6 +609,7 @@ beforeEach(() => {
   mockPanel.browserExpandedPaths = undefined;
   treeArgs.changeTick = undefined;
   treeArgs.changedDirs = undefined;
+  treeArgs.gitChangeTick = undefined;
   treeProps.onActivate = undefined;
   treeProps.onInsertFileReference = undefined;
   treeProps.canInsertFileReference = undefined;
@@ -1697,6 +1701,18 @@ describe("promoted workspace-rooted browser (#11489)", () => {
 
     expect(treeArgs.changeTick).toBe(450);
     expect(treeArgs.changedDirs).toBeUndefined();
+  });
+
+  it("hands the git half of the tick over separately", () => {
+    // `changeTick` is the max of the two, which hides a git-status pass a later
+    // filesystem burst outran inside one React batch — the tree needs the git
+    // stamp itself to notice one it never acted on.
+    worktreeTicks.git = 150;
+    worktreeTicks.fs = 300;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(300);
+    expect(treeArgs.gitChangeTick).toBe(150);
   });
 
   it("ignores the placement worktree's change ticks once workspace-rooted", () => {

@@ -875,7 +875,12 @@ export function refreshTargets(
   // it is collapsed in the tree (#11620) — it is on screen, so leaving it out
   // would let it go stale while the tree beside it updates. Added up front and
   // guarded below so the walk can't list it twice.
-  if (keepPath !== null && keepPath !== rootPath && !expandedPaths.has(keepPath) && wanted(keepPath))
+  if (
+    keepPath !== null &&
+    keepPath !== rootPath &&
+    !expandedPaths.has(keepPath) &&
+    wanted(keepPath)
+  )
     targets.push(keepPath);
   const walk = (dirPath: string, depth: number): void => {
     if (depth > MAX_TREE_DEPTH) return;

@@ -409,9 +409,18 @@ export const panelScenarios: PerfScenario[] = [
        * sweep, or null for the unscoped sweep the panel took before #12244.
        *
        * Each returned listing is merged under its own fresh Map, never swapped
-       * in wholesale: that is one copy per accepted response, which is what the
-       * panel's `setListings` actually does — and a wholesale swap would also
-       * discard every directory a scoped sweep deliberately did not re-read.
+       * in wholesale. MERGING is what a scoped sweep requires — a wholesale
+       * swap would discard every directory it deliberately did not re-read —
+       * and ONE COPY PER RESPONSE is the fidelity choice on top of that: it is
+       * what the panel's `setListings` does, where a single merged copy would
+       * price a batching layer the panel does not have.
+       *
+       * That second half moves the three unscoped arms' durations: they now
+       * carry per-response copies they previously did not. `sweepMs`,
+       * `ignoredOnlySweepMs` and `inPlaceEditSweepMs` are therefore not
+       * comparable across this change, and neither is `durationMs` (three arms
+       * became six). Compare implementations under this harness, not against
+       * readings taken before it.
        */
       const sweep = async (affectedDirs: ReadonlySet<string> | null = null) => {
         const startedAt = performance.now();
@@ -453,6 +462,22 @@ export const panelScenarios: PerfScenario[] = [
           hiddenJunk: hidden.alwaysHidden,
           touchedSize: listedSizeOf(listings, mutation.touchedPath),
         };
+      };
+
+      /**
+       * Pick `count` directories no two of which contain each other, so a
+       * multi-directory burst really does land in separate subtrees.
+       */
+      const disjointDirs = (candidates: readonly string[], count: number): string[] => {
+        const picked: string[] = [];
+        for (const candidate of candidates) {
+          if (picked.length === count) break;
+          const nested = picked.some(
+            (chosen) => candidate.startsWith(`${chosen}/`) || chosen.startsWith(`${candidate}/`)
+          );
+          if (!nested) picked.push(candidate);
+        }
+        return picked;
       };
 
       /**
@@ -515,11 +540,10 @@ export const panelScenarios: PerfScenario[] = [
 
         const subtreeSweep = await runScopedArm([targetDirs[4] ?? ""], 1, "s");
         const rootSweep = await runScopedArm([""], 1, "r");
-        const multiSweep = await runScopedArm(
-          [targetDirs[5] ?? "", targetDirs[6] ?? "", targetDirs[7] ?? ""],
-          20,
-          "m"
-        );
+        // Three subtrees that are genuinely disjoint, not a parent and two of
+        // its children: nesting still yields three targets, but it would not
+        // demonstrate what the arm claims to.
+        const multiSweep = await runScopedArm(disjointDirs(targetDirs, 3), 20, "m");
 
         const refreshMisses =
           unscopedMisses +
@@ -529,10 +553,16 @@ export const panelScenarios: PerfScenario[] = [
           (visibleSweep.touchedSize === mutation.touchedBytesBefore ? 0 : 1) +
           (ignoredOnlySweep.touchedSize === mutation.touchedBytesBefore ? 0 : 1) +
           (editSweep.touchedSize === mutation.touchedBytesAfter ? 0 : 1) +
-          // Each scoped arm against the rows expected at its own point.
+          // Each scoped arm against the rows expected at its own point, and
+          // against the hidden tally as well: a scoped response that dropped
+          // only the hidden entries would leave every visible row, request
+          // count and file size intact and score zero on rows alone.
           subtreeSweep.misses +
           rootSweep.misses +
           multiSweep.misses +
+          Math.abs(subtreeSweep.hiddenJunk - (baseHiddenJunk + 1)) +
+          Math.abs(rootSweep.hiddenJunk - (baseHiddenJunk + 1)) +
+          Math.abs(multiSweep.hiddenJunk - (baseHiddenJunk + 1)) +
           // The edited file's size has to survive the scoped arms untouched:
           // they never re-read its directory, so a stale value here means a
           // scoped sweep discarded a listing it was right not to re-request.

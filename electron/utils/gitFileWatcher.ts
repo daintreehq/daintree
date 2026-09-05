@@ -195,8 +195,7 @@ export class GitFileWatcher {
   private readonly onChange: () => void;
   private readonly onGitConfigChanged: (() => void) | undefined;
   private readonly onWorktreeFilesChanged:
-    | ((affectedDirs: readonly string[] | null) => void)
-    | undefined;
+    ((affectedDirs: readonly string[] | null) => void) | undefined;
   /** Set when the current (unflushed) burst touched `.git/config`. */
   private gitConfigChangePending = false;
   /**

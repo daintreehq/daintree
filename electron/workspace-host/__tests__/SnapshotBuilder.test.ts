@@ -219,7 +219,10 @@ describe("SnapshotBuilder", () => {
     const unstamped = makeHost({ workingTreeChangedDirs: ["src"] });
     expect(new SnapshotBuilder(unstamped).build().workingTreeChangedDirs).toBeUndefined();
 
-    const uncertain = makeHost({ workingTreeChangedAt: 1_725_000_000_000, workingTreeChangedDirs: null });
+    const uncertain = makeHost({
+      workingTreeChangedAt: 1_725_000_000_000,
+      workingTreeChangedDirs: null,
+    });
     expect(new SnapshotBuilder(uncertain).build().workingTreeChangedDirs).toBeNull();
 
     const empty = makeHost({ workingTreeChangedAt: 1_725_000_000_000, workingTreeChangedDirs: [] });

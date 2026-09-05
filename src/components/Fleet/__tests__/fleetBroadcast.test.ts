@@ -83,7 +83,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
     worktrees,
     statusCheckedAt: new Map(),
     workingTreeChangedAtById: new Map(),
-      workingTreeChangedDirsById: new Map(),
+    workingTreeChangedDirsById: new Map(),
     manualAssociations: new Map(),
     version: { epoch: "", seq: 0 },
     tombstones: new Map(),

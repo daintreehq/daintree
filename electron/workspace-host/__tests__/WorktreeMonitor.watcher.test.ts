@@ -924,8 +924,7 @@ describe("WorktreeMonitor", () => {
       const emitsBefore = vi.mocked(callbacks.onUpdate).mock.calls.length;
 
       const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-        | ((affectedDirs: readonly string[] | null) => void)
-        | undefined;
+        ((affectedDirs: readonly string[] | null) => void) | undefined;
       expect(fireWorktreeFilesChanged).toBeDefined();
       fireWorktreeFilesChanged?.(null);
 
@@ -994,9 +993,7 @@ describe("WorktreeMonitor", () => {
       // first status would have overwritten them, and nothing would ever
       // re-read the difference — so a retained stamp reports "unknown" rather
       // than a set it cannot prove is complete (#12244).
-      expect(
-        vi.mocked(callbacks.onUpdate).mock.calls[0]?.[0]?.workingTreeChangedDirs
-      ).toBeNull();
+      expect(vi.mocked(callbacks.onUpdate).mock.calls[0]?.[0]?.workingTreeChangedDirs).toBeNull();
 
       monitor.stop();
     });

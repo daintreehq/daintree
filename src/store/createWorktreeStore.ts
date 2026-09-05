@@ -311,6 +311,13 @@ function mergeChangedDirs(
   if (at === undefined) return current;
   const existing = current.get(snapshot.id);
   if (existing?.at === at) return current;
+  // A strictly older stamp is never a new burst — it is a stale one being
+  // replayed. Renderer-built PR/issue overlays spread the CACHED snapshot,
+  // whose fs stamp goes stale the moment a timestamp-only update takes the
+  // `snapshotsEqual` fast path and leaves that object in place. Letting one
+  // walk the record backwards would reconnect the continuity chain across a
+  // burst that was never seen, and the consumer would scope past it.
+  if (existing !== undefined && at < existing.at) return current;
   const next = new Map(current);
   next.set(snapshot.id, {
     at,
@@ -607,7 +614,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       {
         let rebuilt = new Map<string, WorktreeChangedDirs>();
         for (const s of merged) {
-          const carried = prev.workingTreeChangedDirsById.get(s.id);
+          const carried = epochChanged ? undefined : prev.workingTreeChangedDirsById.get(s.id);
+          // Carried by identity only within one host run: across an epoch the
+          // record's `previousAt` describes a chain the new host knows nothing
+          // about, and repeating the stamp would preserve it.
           if (carried !== undefined && carried.at === s.workingTreeChangedAt) {
             rebuilt.set(s.id, carried);
             continue;
@@ -761,11 +771,14 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         workingTreeChangedAtById !== prevState.workingTreeChangedAtById;
 
       // Per-event, so continuity holds: the store sees every host update in
-      // order and each record can name the stamp it superseded (#12244).
+      // order and each record can name the stamp it superseded (#12244) — but
+      // only within one host run. An epoch transition means the host restarted,
+      // and whatever changed on disk while it was down reached nobody, so the
+      // first event of the new epoch must not chain off the old one's stamp.
       const workingTreeChangedDirsById = mergeChangedDirs(
         prevState.workingTreeChangedDirsById,
         merged,
-        true
+        !epochChanged
       );
       const workingTreeChangedDirsChanged =
         workingTreeChangedDirsById !== prevState.workingTreeChangedDirsById;

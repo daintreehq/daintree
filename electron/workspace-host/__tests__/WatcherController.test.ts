@@ -605,8 +605,7 @@ describe("WatcherController", () => {
     await settle();
 
     const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-      | ((affectedDirs: readonly string[] | null) => void)
-      | undefined;
+      ((affectedDirs: readonly string[] | null) => void) | undefined;
     expect(fireWorktreeFilesChanged).toBeDefined();
 
     fireWorktreeFilesChanged?.(["src/panels"]);
@@ -627,8 +626,7 @@ describe("WatcherController", () => {
     await settle();
 
     const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-      | ((affectedDirs: readonly string[] | null) => void)
-      | undefined;
+      ((affectedDirs: readonly string[] | null) => void) | undefined;
 
     // A watcher rotated out (or a stopped controller) can still fire its
     // debounced flush; the controller-level guard must not stamp the host

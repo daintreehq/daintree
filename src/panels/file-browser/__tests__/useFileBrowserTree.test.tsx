@@ -2201,6 +2201,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
     interface TickProps {
       changeTick: number | undefined;
       changedDirs: ReturnType<typeof burst> | undefined;
+      gitChangeTick?: number;
       rootPath?: string;
       selectedPath?: string | null;
     }
@@ -2215,6 +2216,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
             alwaysHiddenPatterns: [],
             changeTick: props.changeTick,
             changedDirs: props.changedDirs,
+            gitChangeTick: props.gitChangeTick,
             rootPath: props.rootPath,
             selectedPath: props.selectedPath ?? null,
           }),
@@ -2432,9 +2434,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       await primeCursor(harness.rerender, base);
 
       const from = listDirectory.mock.calls.length;
-      rerender_ancestor: {
-        harness.rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, [""]) });
-      }
+      harness.rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, [""]) });
       await act(() => settle());
 
       expect(requested(from).sort()).toEqual(["a", "a/deep"]);
@@ -2520,6 +2520,66 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       expect(requested(from).sort()).toEqual(["a/deep", "b"]);
     });
 
+    it("unions successive deferred scopes rather than keeping only the last", async () => {
+      // Two directories held open at once, each collided by its own tick. If
+      // the merge kept only the newest scope, the first collision's directory
+      // would never be re-read — the exact "mutations arrive while a refresh is
+      // in flight get dropped" failure.
+      const deepGate = deferred<FileTreeNode[]>();
+      const bGate = deferred<FileTreeNode[]>();
+      let holdDeep = false;
+      let holdB = false;
+      listDirectory.mockImplementation(async (payload) => {
+        if (payload.dirPath === "a/deep" && holdDeep) return deepGate.promise;
+        if (payload.dirPath === "b" && holdB) return bGate.promise;
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      // Open a read of "a/deep" and hold it.
+      holdDeep = true;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a/deep"]) });
+      await act(() => settle());
+
+      // Open a read of "b" and hold that too.
+      holdB = true;
+      rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["b"]) });
+      await act(() => settle());
+
+      // Now collide with BOTH, one tick at a time, so two separate deferrals
+      // accumulate.
+      rerender({ ...base, changeTick: 400, changedDirs: burst(400, 300, ["a/deep"]) });
+      await act(() => settle());
+      rerender({ ...base, changeTick: 500, changedDirs: burst(500, 400, ["b"]) });
+      await act(() => settle());
+
+      // Boundary taken immediately before the gates release, so the replay's
+      // requests are the only thing measured.
+      const from = listDirectory.mock.calls.length;
+      holdDeep = false;
+      holdB = false;
+      await act(async () => {
+        deepGate.resolve([file("a/deep/two.ts")]);
+        bGate.resolve([file("b/three.ts")]);
+        await settle();
+      });
+
+      expect(requested(from).sort()).toEqual(["a/deep", "b"]);
+    });
+
     it("widens a deferred scope to the whole tree when a manual refresh collides", async () => {
       const gate = deferred<FileTreeNode[]>();
       let holdDeep = false;
@@ -2545,23 +2605,307 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       holdDeep = true;
       rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a/deep"]) });
       await act(() => settle());
-      const from = listDirectory.mock.calls.length;
 
       await act(async () => {
         result.current.refresh({ manual: true });
         await settle();
       });
 
+      // The boundary goes AFTER the manual press: the press issues its own
+      // requests for every idle target, and counting those would let a replay
+      // of the single deferred directory masquerade as a full sweep.
+      const from = listDirectory.mock.calls.length;
       holdDeep = false;
       await act(async () => {
         gate.resolve([file("a/deep/two.ts")]);
         await settle();
       });
 
-      // The manual press promoted the deferred scope, so the replay is the full
-      // sweep rather than the one directory the tick had asked for.
-      expect(requested(from)).toContain("a/deep");
-      expect(new Set(requested(from))).toEqual(new Set(["", "a", "a/deep", "b"]));
+      // The manual press promoted the deferred scope, so the replay itself is
+      // the full sweep rather than the one directory the tick asked for.
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+    });
+
+    it("re-reads a directory that was replaced in place, and cascades down it", async () => {
+      // `rm -rf b && mv b.tmp b`: the name survives, so re-reading the parent
+      // shows `b` exactly as before and the stale cache underneath would stay
+      // on screen. The directory's own mtime is what gives the swap away.
+      let bMtime = 1_000;
+      const deepMtime = 5_000;
+      let swapped = false;
+      listDirectory.mockImplementation(async (payload) => {
+        switch (payload.dirPath) {
+          case undefined:
+            return [
+              { name: "a", path: "a", isDirectory: true, mtimeMs: 100 },
+              { name: "b", path: "b", isDirectory: true, mtimeMs: bMtime },
+              file("top.txt"),
+            ];
+          case "a":
+            return [{ name: "deep", path: "a/deep", isDirectory: true, mtimeMs: deepMtime }];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file(swapped ? "b/replaced.ts" : "b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const harness = renderHook(
+        (props: TickProps) =>
+          useFileBrowserTree({
+            source: wtSource("wt-1"),
+            expandedPaths: EXPANDED,
+            hideDotfiles: false,
+            alwaysHiddenPatterns: [],
+            changeTick: props.changeTick,
+            changedDirs: props.changedDirs,
+          }),
+        { initialProps: base }
+      );
+      await waitFor(() => expect(listDirectory.mock.calls.length).toBe(4));
+      await act(() => settle());
+      await primeCursor(harness.rerender, base);
+
+      // The swap. The watcher saw only the directory itself move, so the burst
+      // names its PARENT — the root — and nothing below.
+      swapped = true;
+      bMtime = 2_000;
+      const from = listDirectory.mock.calls.length;
+      harness.rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, [""]) });
+      await act(() => settle());
+
+      // The root re-read plus `b`, which the mtime comparison caught.
+      expect(requested(from).sort()).toEqual(["", "b"]);
+      await waitFor(() =>
+        expect(harness.result.current.rows.map((row) => row.path)).toContain("b/replaced.ts")
+      );
+      expect(harness.result.current.rows.map((row) => row.path)).not.toContain("b/three.ts");
+    });
+
+    it("leaves an unchanged sibling alone when one directory was replaced", async () => {
+      // The cascade must be driven by the mtime, not by "the parent was read".
+      listDirectory.mockImplementation(async (payload) => {
+        switch (payload.dirPath) {
+          case undefined:
+            return [
+              { name: "a", path: "a", isDirectory: true, mtimeMs: 100 },
+              { name: "b", path: "b", isDirectory: true, mtimeMs: 200 },
+              file("top.txt"),
+            ];
+          case "a":
+            return [{ name: "deep", path: "a/deep", isDirectory: true, mtimeMs: 300 }];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const harness = renderHook(
+        (props: TickProps) =>
+          useFileBrowserTree({
+            source: wtSource("wt-1"),
+            expandedPaths: EXPANDED,
+            hideDotfiles: false,
+            alwaysHiddenPatterns: [],
+            changeTick: props.changeTick,
+            changedDirs: props.changedDirs,
+          }),
+        { initialProps: base }
+      );
+      await waitFor(() => expect(listDirectory.mock.calls.length).toBe(4));
+      await act(() => settle());
+      await primeCursor(harness.rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      harness.rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, [""]) });
+      await act(() => settle());
+
+      expect(requested(from)).toEqual([""]);
+    });
+
+    it("retries a root whose backoff budget is spent, on a tick that named something else", async () => {
+      // A root failure is deliberately kept out of `failedListings`, so once the
+      // backoff is spent the panel sits on an error banner. The full sweep
+      // re-read the root every tick and cleared it; a scoped pass naming a
+      // descendant must not lose that.
+      let failRoot = false;
+      listDirectory.mockImplementation(async (payload) => {
+        if (payload.dirPath === undefined && failRoot) throw new Error("unreadable");
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { result, rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      // Spend the whole retry schedule on a failing root.
+      failRoot = true;
+      await act(async () => {
+        result.current.refresh({ manual: true });
+        await settle();
+      });
+      await waitFor(() => expect(result.current.rootError).not.toBeNull(), { timeout: 4000 });
+
+      failRoot = false;
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
+      await act(() => settle());
+
+      expect(requested(from)).toContain("");
+      await waitFor(() => expect(result.current.rootError).toBeNull());
+    });
+
+    it("takes the full sweep while a directory symlink is on screen", async () => {
+      // The alias is cached under the path the tree renders; the watcher
+      // reports writes under the link's target. A scoped pass would leave the
+      // alias stale, so its mere presence disables scoping (#11939).
+      listDirectory.mockImplementation(async (payload) => {
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [
+              {
+                name: "deep",
+                path: "a/deep",
+                isDirectory: true,
+                symlink: { target: "../generated", targetKind: "directory" as const },
+              },
+              file("a/one.ts"),
+            ];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+    });
+
+    it("takes the full sweep when a git-status pass was batched behind a newer burst", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined, gitChangeTick: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      // git 150 then fs 200 in one commit: `Math.max` reports 200 and the burst
+      // chain is intact, but git 150's own discovery was never re-read.
+      rerender({
+        ...base,
+        changeTick: 200,
+        gitChangeTick: 150,
+        changedDirs: burst(200, 100, ["b"]),
+      });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+
+      // And once that git tick has been accounted for, scoping resumes.
+      const next = listDirectory.mock.calls.length;
+      rerender({
+        ...base,
+        changeTick: 300,
+        gitChangeTick: 150,
+        changedDirs: burst(300, 200, ["b"]),
+      });
+      await act(() => settle());
+      expect(requested(next)).toEqual(["b"]);
+    });
+
+    it("asks for nothing on a burst that resolved to no directory", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      // Known-empty is a real answer and must not be read as "unknown".
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, []) });
+      await act(() => settle());
+
+      expect(requested(from)).toEqual([]);
+
+      // The cursor still advanced, so the next burst scopes.
+      const next = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["b"]) });
+      await act(() => settle());
+      expect(requested(next)).toEqual(["b"]);
+    });
+
+    it("resets the cursor on a worktree switch so the new tree's first tick is full", async () => {
+      mockThreeBranches();
+      const harness = renderHook(
+        (props: TickProps & { worktreeId: string }) =>
+          useFileBrowserTree({
+            source: wtSource(props.worktreeId),
+            expandedPaths: EXPANDED,
+            hideDotfiles: false,
+            alwaysHiddenPatterns: [],
+            changeTick: props.changeTick,
+            changedDirs: props.changedDirs,
+          }),
+        {
+          initialProps: {
+            worktreeId: "wt-1",
+            changeTick: 1,
+            changedDirs: undefined,
+          } as TickProps & { worktreeId: string },
+        }
+      );
+      await waitFor(() => expect(listDirectory.mock.calls.length).toBe(4));
+      await act(() => settle());
+      harness.rerender({
+        worktreeId: "wt-1",
+        changeTick: 100,
+        changedDirs: burst(100, null, ["a"]),
+      });
+      await act(() => settle());
+
+      // Switch worktrees; the identity reset re-lists everything for wt-2.
+      harness.rerender({
+        worktreeId: "wt-2",
+        changeTick: 100,
+        changedDirs: burst(100, null, ["a"]),
+      });
+      await waitFor(() => expect(harness.result.current.rows).toHaveLength(7));
+      await act(() => settle());
+
+      // A continuous-looking burst under the NEW identity must still be full:
+      // the cursor it would chain off belonged to the tree we left.
+      const from = listDirectory.mock.calls.length;
+      harness.rerender({
+        worktreeId: "wt-2",
+        changeTick: 200,
+        changedDirs: burst(200, 100, ["b"]),
+      });
+      await act(() => settle());
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
     });
 
     it("leaves selection and expansion untouched across a scoped pass", async () => {
@@ -2627,5 +2971,4 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       expect(requested(next)).toEqual(["a"]);
     });
   });
-
 });

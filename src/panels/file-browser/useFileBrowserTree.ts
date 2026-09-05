@@ -85,23 +85,23 @@ type RefreshScope = { kind: "all" } | { kind: "dirs"; dirs: ReadonlySet<string> 
 const REFRESH_ALL: RefreshScope = { kind: "all" };
 
 /**
- * The set `refreshTargets` filters against, with the currently-failed listings
- * folded in.
+ * The set `refreshTargets` filters against, with the directories that need
+ * retrying folded in.
  *
- * Failed directories ride along on every scoped pass because the full sweep
- * retried them for free — a change anywhere re-requested the whole tree,
- * unreadable directories included. Scoping would silently end that and leave a
- * transiently-unreadable folder stuck until the user pressed Refresh, so the
- * retry is made explicit instead of lost.
+ * Those ride along on every scoped pass because the full sweep retried them for
+ * free — a change anywhere re-requested the whole tree, unreadable directories
+ * included. Scoping would silently end that and leave a transiently-unreadable
+ * folder stuck until the user pressed Refresh, so the retry is made explicit
+ * instead of lost.
  */
 function scopeFilter(
   scope: RefreshScope,
-  failedListings: ReadonlySet<string>
+  retryTargets: ReadonlySet<string>
 ): ReadonlySet<string> | null {
   if (scope.kind === "all") return null;
-  if (failedListings.size === 0) return scope.dirs;
+  if (retryTargets.size === 0) return scope.dirs;
   const dirs = new Set(scope.dirs);
-  for (const path of failedListings) dirs.add(path);
+  for (const path of retryTargets) dirs.add(path);
   return dirs;
 }
 
@@ -118,6 +118,9 @@ function scopeForTick(
   record: WorktreeChangedDirs | undefined,
   tick: number | undefined,
   lastConsumedAt: number | undefined,
+  gitTick: number | undefined,
+  lastConsumedGitTick: number | undefined,
+  hasSymlinkedDirectory: boolean,
   rootPath: string
 ): RefreshScope {
   // No signal at all (a source with no watcher, an older host), or a burst the
@@ -127,6 +130,18 @@ function scopeForTick(
   // this burst did not produce was produced by a git-status pass — which
   // describes no directories, and whose own writes this burst may predate.
   if (record.at !== tick) return REFRESH_ALL;
+  // And a git-status pass that moved while this burst outran it is invisible to
+  // `Math.max`: git 150 then fs 200, batched into one render, leaves the tick
+  // at 200 with a continuous burst chain while git 150's own discovery — the
+  // writes a watcher outage lost — was never re-read. The git tick needs its
+  // own cursor for the same reason the filesystem one does.
+  if (gitTick !== lastConsumedGitTick) return REFRESH_ALL;
+  // A directory symlink inside the worktree is cached under the ALIAS path the
+  // tree renders, while the watcher reports the change under the link's target.
+  // The two namespaces never meet, so a scoped pass would leave the alias's
+  // rows stale (#11939). Rare enough to answer with the full sweep rather than
+  // a canonical-identity map.
+  if (hasSymlinkedDirectory) return REFRESH_ALL;
   // A burst between the last one acted on and this one was never seen — the
   // store saw it, but React batched the render away. Its directories are gone,
   // so this scope is incomplete.
@@ -194,6 +209,13 @@ export interface UseFileBrowserTreeArgs {
    * falls back to the full refresh this hook has always done.
    */
   changedDirs?: WorktreeChangedDirs;
+  /**
+   * The git-status half of `changeTick`, so the tree can tell which source
+   * moved it. `changeTick` is the max of the two, which hides a git-status pass
+   * that a later filesystem burst outran inside one React batch — and that pass
+   * is the only signal for writes a watcher outage never saw.
+   */
+  gitChangeTick?: number;
   /**
    * Last-known tree structure from the panel record (#11367). When it matches
    * the current identity, the identity reset seeds the listings from it and
@@ -330,6 +352,7 @@ export function useFileBrowserTree({
   rootPath = "",
   changeTick,
   changedDirs,
+  gitChangeTick,
   treeSnapshot,
   sort = DEFAULT_FILE_SORT,
   selectedPath = null,
@@ -485,16 +508,56 @@ export function useFileBrowserTree({
     [listingPath, selectionParent]
   );
 
+  /**
+   * Directories a scoped refresh has to re-request whether or not the change
+   * touched them, because nothing else will ask again.
+   *
+   * The failed listings are the obvious half. The root is the half that is easy
+   * to miss: a root failure is deliberately kept out of `failedListings`
+   * (`fetchDirectory` records only non-root failures), and once its retry
+   * backoff is spent the panel sits on an error banner with `hasLoadedRoot`
+   * true. The full sweep re-requested the root on every tick, so the banner
+   * cleared itself the moment the worktree became readable again; a scoped pass
+   * naming some descendant never would.
+   */
+  const retryTargets = useMemo(() => {
+    const rootNeedsRetry = rootError !== null || !listings.has(rootPath);
+    if (failedListings.size === 0 && !rootNeedsRetry) return EMPTY_EXPANDED;
+    const targets = new Set(failedListings);
+    if (rootNeedsRetry) targets.add(rootPath);
+    return targets;
+  }, [failedListings, rootError, listings, rootPath]);
+
+  /**
+   * Whether anything the tree is showing is reached through a directory
+   * symlink (#11939).
+   *
+   * Such a directory is cached under the alias path the tree renders, while the
+   * watcher reports writes under the link's target — two namespaces that never
+   * meet, so a scoped pass would leave the alias stale. Walked over the
+   * expansions rather than every cached node: only a directory whose listing is
+   * on screen can go stale unnoticed.
+   */
+  const hasSymlinkedDirectory = useMemo(() => {
+    for (const path of expandedSet) {
+      if (findNodeInListings(listings, path)?.symlink !== undefined) return true;
+    }
+    for (const path of retainedPaths) {
+      if (findNodeInListings(listings, path)?.symlink !== undefined) return true;
+    }
+    return false;
+  }, [listings, expandedSet, retainedPaths]);
+
   // Read inside `fetchDirectory`'s completion guard and the prune, both of
   // which run outside the render that knows the current targets. Kept in sync
   // in the same layout effect as `expandedSetRef` so the two are never read at
   // different vintages.
   const listingPathRef = useRef(listingPath);
   const retainedPathsRef = useRef(retainedPaths);
-  // Read by a scoped refresh, which folds the failed directories back into its
-  // target set so a change tick still retries them — the full sweep retried
-  // them for free, and scoping must not quietly take that away.
-  const failedListingsRef = useRef(failedListings);
+  // Read by a scoped refresh, which folds these back into its target set so a
+  // change tick still retries them — the full sweep retried them for free, and
+  // scoping must not quietly take that away.
+  const retryTargetsRef = useRef<ReadonlySet<string>>(EMPTY_EXPANDED);
 
   // What a refresh could not run because its targets were already in flight,
   // and at what scope. Without it, a tick that arrives mid-flight is consumed
@@ -509,6 +572,8 @@ export function useFileBrowserTree({
   // first tick lands under this identity, which is why that first tick is
   // always a full refresh.
   const lastChangedDirsAtRef = useRef<number | undefined>(undefined);
+  /** The same cursor for the git-status half of the tick. */
+  const lastGitTickRef = useRef<number | undefined>(undefined);
 
   // `pump` and `fetchDirectory` call each other: a settled request pumps the
   // queue, and the queue starts requests. Routing one direction through a
@@ -579,6 +644,47 @@ export function useFileBrowserTree({
           !expandedSetRef.current.has(dirPath)
         )
           return;
+
+        // A child directory that is still called the same thing but is no
+        // longer the same directory (#12244).
+        //
+        // A scoped refresh only re-reads the burst's parent directories, and a
+        // parent re-read is normally enough: a child that was deleted or
+        // renamed stops appearing in it and its orphaned cache stops rendering
+        // with it. In-place replacement — `rm -rf dist && mv dist.tmp dist`, a
+        // generator swapping a prepared tree in — defeats that, because the
+        // name survives and the watcher may report only the directory's own
+        // path. The cached listing underneath would then stay on screen,
+        // wrong, until something unrelated refreshed it.
+        //
+        // A directory's mtime moves when its own entries change, so comparing
+        // it against the copy we are replacing catches exactly that, one level
+        // per pass — and the pass it triggers carries the test down the next
+        // level, as far as the stale subtree goes. Only children we actually
+        // hold a listing for: nothing else has anything to go stale.
+        const cachedChildren = listingsRef.current.get(dirPath);
+        if (cachedChildren !== undefined) {
+          const cachedMtimes = new Map<string, number | undefined>();
+          for (const node of cachedChildren) {
+            if (node.isDirectory) cachedMtimes.set(node.path, node.mtimeMs);
+          }
+          const replaced: string[] = [];
+          for (const node of nodes) {
+            if (!node.isDirectory || !listingsRef.current.has(node.path)) continue;
+            const before = cachedMtimes.get(node.path);
+            // Both sides have to be known for the comparison to mean anything,
+            // and an unknown one is NOT treated as suspicious: a live listing
+            // always carries `mtimeMs`, so the only source without it is a
+            // rehydrated snapshot — whose every listing the identity reset is
+            // already revalidating. Re-reading on unknown would turn each
+            // scoped pass into a cascade down the whole restored tree, which is
+            // the full sweep this exists to avoid.
+            if (before === undefined || node.mtimeMs === undefined) continue;
+            if (before === node.mtimeMs) continue;
+            replaced.push(node.path);
+          }
+          if (replaced.length > 0) enqueueTargets(replaced, generation);
+        }
 
         setListings((previous) => {
           const next = new Map(previous);
@@ -698,7 +804,7 @@ export function useFileBrowserTree({
         pumpRef.current();
       }
     },
-    [rootPath, clearRootRetryTimer, resetRootRetryState]
+    [rootPath, clearRootRetryTimer, resetRootRetryState, enqueueTargets]
   );
 
   const pump = useCallback((): void => {
@@ -733,7 +839,7 @@ export function useFileBrowserTree({
           rootPath,
           isVisibleRef.current,
           listingPathRef.current,
-          scopeFilter(pending, failedListingsRef.current)
+          scopeFilter(pending, retryTargetsRef.current)
         ),
         generation
       );
@@ -767,7 +873,7 @@ export function useFileBrowserTree({
     treeSnapshotRef.current = treeSnapshot;
     listingPathRef.current = listingPath;
     retainedPathsRef.current = retainedPaths;
-    failedListingsRef.current = failedListings;
+    retryTargetsRef.current = retryTargets;
   }, [
     listings,
     expandedSet,
@@ -776,7 +882,7 @@ export function useFileBrowserTree({
     treeSnapshot,
     listingPath,
     retainedPaths,
-    failedListings,
+    retryTargets,
   ]);
 
   // Cancel a pending root retry synchronously when the identity changes or the
@@ -824,7 +930,7 @@ export function useFileBrowserTree({
         rootPath,
         isVisibleRef.current,
         listingPathRef.current,
-        scopeFilter(scope, failedListingsRef.current)
+        scopeFilter(scope, retryTargetsRef.current)
       );
       // A user press should spin the toolbar icon until the re-list drains. Set
       // this before `pump` so the flag is up if fetches start synchronously; a
@@ -877,6 +983,7 @@ export function useFileBrowserTree({
     // The incoming identity has no consumed tick of its own yet, so its first
     // change tick cannot prove continuity and takes the full refresh.
     lastChangedDirsAtRef.current = undefined;
+    lastGitTickRef.current = undefined;
     // A worktree switch abandons any in-flight manual refresh; its drain will
     // never complete for this identity, so end the spin here rather than leave
     // the icon stuck.
@@ -1024,13 +1131,30 @@ export function useFileBrowserTree({
     // final. `hasLoadedRoot` is a dependency, so this re-runs when it lands.
     if (!hasLoadedRoot) return;
     lastTickRef.current = changeTick;
-    const scope = scopeForTick(changedDirs, changeTick, lastChangedDirsAtRef.current, rootPath);
-    // Advanced even when the scope came out "all": the point of the cursor is
+    const scope = scopeForTick(
+      changedDirs,
+      changeTick,
+      lastChangedDirsAtRef.current,
+      gitChangeTick,
+      lastGitTickRef.current,
+      hasSymlinkedDirectory,
+      rootPath
+    );
+    // Advanced even when the scope came out "all": the point of a cursor is
     // where the *next* tick continues from, and a full refresh has covered
     // everything up to here just as a scoped one covers its own directories.
     if (changedDirs !== undefined) lastChangedDirsAtRef.current = changedDirs.at;
+    lastGitTickRef.current = gitChangeTick;
     runRefresh(scope, false);
-  }, [changeTick, changedDirs, hasLoadedRoot, rootPath, runRefresh]);
+  }, [
+    changeTick,
+    changedDirs,
+    gitChangeTick,
+    hasLoadedRoot,
+    hasSymlinkedDirectory,
+    rootPath,
+    runRefresh,
+  ]);
 
   const rows = useMemo(
     () => flattenTree(listings, expandedSet, loadingPaths, rootPath, isVisible, sortKeyed),

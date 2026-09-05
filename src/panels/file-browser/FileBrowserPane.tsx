@@ -434,6 +434,7 @@ export function FileBrowserPane({
     rootPath,
     changeTick,
     changedDirs,
+    gitChangeTick,
     treeSnapshot,
     sort,
     selectedPath,
