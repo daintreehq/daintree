@@ -80,8 +80,21 @@ describe("checkIgnoredPaths", () => {
     };
     expect(options.cwd).toBe("/repo");
     expect(options.windowsHide).toBe(true);
-    expect(options.env.GIT_LITERAL_PATHSPECS).toBe("1");
     expect(options.env.GIT_OPTIONAL_LOCKS).toBe("0");
+  });
+
+  it("drops GIT_LITERAL_PATHSPECS, which check-ignore refuses to run under", async () => {
+    // The hardened env sets it, and check-ignore rejects pathspec magic
+    // outright: every call dies `fatal: pathspec magic not supported by this
+    // command: 'literal'` (exit 128) while it is present. Safe to drop only
+    // for this command — it selects no files, it matches the literal pathname
+    // it was handed against the repo's ignore patterns.
+    const child = nextChild();
+    const promise = checkIgnoredPaths("/repo", ["a.log"], { platform: "linux" });
+    child.emit("close", 1, null);
+    await promise;
+    const options = vi.mocked(spawn).mock.calls[0][2] as { env: NodeJS.ProcessEnv };
+    expect(options.env.GIT_LITERAL_PATHSPECS).toBeUndefined();
   });
 
   it("does not pass --no-index, so tracked paths stay out of the result", async () => {

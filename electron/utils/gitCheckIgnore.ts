@@ -46,6 +46,19 @@ export async function checkIgnoredPaths(
 
   const platform = options.platform ?? process.platform;
   const env = buildHardenedGitEnv(platform);
+  // `git check-ignore` is the one command that cannot run under the hardened
+  // env as-is: it refuses pathspec magic outright, so every call dies with
+  // `fatal: pathspec magic not supported by this command: 'literal'` (exit
+  // 128) while GIT_LITERAL_PATHSPECS is set. Dropping it here is safe because
+  // the risk that variable exists to close does not apply to this command.
+  // Elsewhere a wildmatch metacharacter in a legal filename makes git SELECT
+  // the wrong files (`pages/[...slug].tsx` resolving to `pages/s.tsx`);
+  // check-ignore selects nothing. It matches the literal pathname it was
+  // handed against the repo's ignore PATTERNS and echoes that same token back
+  // — verified: `a.tx?` reports nothing even when `a.txt` is ignored. A
+  // pathname git cannot parse at all (a literal leading `:`) still fails
+  // closed as exit 128, which the caller reads as "refresh".
+  delete env.GIT_LITERAL_PATHSPECS;
   const timeoutMs = Math.min(options.timeoutMs ?? GIT_BLOCK_TIMEOUT_MS, GIT_BLOCK_TIMEOUT_MS);
 
   // `git check-ignore -z` reads NUL-separated paths from stdin. A trailing NUL
