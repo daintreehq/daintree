@@ -605,11 +605,18 @@ describe("WatcherController", () => {
     await settle();
 
     const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-      (() => void) | undefined;
+      | ((affectedDirs: readonly string[] | null) => void)
+      | undefined;
     expect(fireWorktreeFilesChanged).toBeDefined();
 
-    fireWorktreeFilesChanged?.();
+    fireWorktreeFilesChanged?.(["src/panels"]);
     expect(host.onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+    // Forwarded verbatim: the controller is a disposal gate, not a place where
+    // the burst's directories get reinterpreted (#12244).
+    expect(host.onWorktreeFilesChanged).toHaveBeenCalledWith(["src/panels"]);
+
+    fireWorktreeFilesChanged?.(null);
+    expect(host.onWorktreeFilesChanged).toHaveBeenLastCalledWith(null);
   });
 
   it("drops a late onWorktreeFilesChanged once the host is no longer running", async () => {
@@ -620,14 +627,15 @@ describe("WatcherController", () => {
     await settle();
 
     const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-      (() => void) | undefined;
+      | ((affectedDirs: readonly string[] | null) => void)
+      | undefined;
 
     // A watcher rotated out (or a stopped controller) can still fire its
     // debounced flush; the controller-level guard must not stamp the host
     // after teardown.
     host.isRunning = false;
     ctrl.stop();
-    fireWorktreeFilesChanged?.();
+    fireWorktreeFilesChanged?.(["src"]);
 
     expect(host.onWorktreeFilesChanged).not.toHaveBeenCalled();
   });

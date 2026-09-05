@@ -266,6 +266,63 @@ function isConnectivityError(message: string): boolean {
   );
 }
 
+/**
+ * The directories behind one `workingTreeChangedAt` stamp, with enough
+ * continuity information for a consumer to tell whether it has seen every
+ * burst since the one it last acted on (#12244).
+ */
+export interface WorktreeChangedDirs {
+  /** The `workingTreeChangedAt` stamp these directories describe. */
+  readonly at: number;
+  /**
+   * The stamp this record superseded, or `null` when that is unknown — an
+   * authoritative snapshot catching up, or the first record for this worktree.
+   *
+   * This is the whole skipped-burst defence. The store sees every host event in
+   * order, but React can batch two of them into one render, and the consumer
+   * would then see only the newer record. Comparing this against the stamp it
+   * last consumed tells it a burst went by unseen, so it falls back to a full
+   * re-read instead of scoping to a set that is missing the older burst's
+   * directories.
+   */
+  readonly previousAt: number | null;
+  /**
+   * Worktree-relative directories (`""` = the worktree root), or `null` when
+   * the burst could not be described and everything must be re-read.
+   */
+  readonly dirs: readonly string[] | null;
+}
+
+/**
+ * Fold one snapshot's working-tree-change fields into the side map, chaining
+ * `previousAt` off whatever the map already held for this worktree. Returns the
+ * previous map identity unchanged when the stamp has not moved, so a quiet
+ * snapshot notifies no subscriber.
+ *
+ * `continuous` is false for the authoritative full-snapshot path, which can
+ * jump across host events the store never saw individually.
+ */
+function mergeChangedDirs(
+  current: Map<string, WorktreeChangedDirs>,
+  snapshot: WorktreeSnapshot,
+  continuous: boolean
+): Map<string, WorktreeChangedDirs> {
+  const { workingTreeChangedAt: at } = snapshot;
+  if (at === undefined) return current;
+  const existing = current.get(snapshot.id);
+  if (existing?.at === at) return current;
+  const next = new Map(current);
+  next.set(snapshot.id, {
+    at,
+    previousAt: continuous ? (existing?.at ?? null) : null,
+    // Absent on the wire means the host described no burst for this stamp,
+    // which is not the same as a burst that touched nothing — both must reach
+    // the consumer as "re-read everything".
+    dirs: snapshot.workingTreeChangedDirs ?? null,
+  });
+  return next;
+}
+
 export interface WorktreeViewState {
   worktrees: Map<string, WorktreeSnapshot>;
   /**
@@ -290,6 +347,13 @@ export interface WorktreeViewState {
    * that leave `git status` unmoved (#11330).
    */
   workingTreeChangedAtById: Map<string, number>;
+  /**
+   * `worktreeId → ` the directories behind the latest `workingTreeChangedAt`,
+   * so the file browser can re-list only what changed (#12244). A side map for
+   * the same reason as {@link workingTreeChangedAtById}, and updated in lockstep
+   * with it on both merge paths.
+   */
+  workingTreeChangedDirsById: Map<string, WorktreeChangedDirs>;
   manualAssociations: Map<string, ManualIssueAssociation>;
   /**
    * Host-minted `(epoch, seq)` stamp of the most recently applied event.
@@ -449,6 +513,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     worktrees: new Map(),
     statusCheckedAt: new Map(),
     workingTreeChangedAtById: new Map(),
+    workingTreeChangedDirsById: new Map(),
     manualAssociations: new Map(),
     version: { epoch: "", seq: 0 },
     tombstones: new Map(),
@@ -533,6 +598,30 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const workingTreeChangedAtChanged =
         nextWorkingTreeChangedAt !== prev.workingTreeChangedAtById;
 
+      // Same rebuild for the affected-directory side map. Continuity is
+      // deliberately not claimed here: a snapshot is the host's authoritative
+      // state and can jump across flushes the store never saw one by one, so
+      // every advanced stamp lands with `previousAt: null` and the file browser
+      // takes one full re-read before scoping resumes.
+      let nextWorkingTreeChangedDirs = prev.workingTreeChangedDirsById;
+      {
+        let rebuilt = new Map<string, WorktreeChangedDirs>();
+        for (const s of merged) {
+          const carried = prev.workingTreeChangedDirsById.get(s.id);
+          if (carried !== undefined && carried.at === s.workingTreeChangedAt) {
+            rebuilt.set(s.id, carried);
+            continue;
+          }
+          rebuilt = mergeChangedDirs(rebuilt, s, false);
+        }
+        const unchanged =
+          rebuilt.size === prev.workingTreeChangedDirsById.size &&
+          [...rebuilt].every(([id, record]) => prev.workingTreeChangedDirsById.get(id) === record);
+        if (!unchanged) nextWorkingTreeChangedDirs = rebuilt;
+      }
+      const workingTreeChangedDirsChanged =
+        nextWorkingTreeChangedDirs !== prev.workingTreeChangedDirsById;
+
       // Once hydrated, suppress redundant Map identity churn when every
       // incoming snapshot is value-equal to its existing counterpart. Cold
       // starts always rebuild so `isInitialized` flips correctly even when
@@ -556,6 +645,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ...(workingTreeChangedAtChanged
             ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
             : {}),
+          ...(workingTreeChangedDirsChanged
+            ? { workingTreeChangedDirsById: nextWorkingTreeChangedDirs }
+            : {}),
           ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
           ...(associationsChanged ? { manualAssociations: manual } : {}),
         });
@@ -573,6 +665,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ...(statusCheckedAtChanged ? { statusCheckedAt: nextStatusCheckedAt } : {}),
         ...(workingTreeChangedAtChanged
           ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
+          : {}),
+        ...(workingTreeChangedDirsChanged
+          ? { workingTreeChangedDirsById: nextWorkingTreeChangedDirs }
           : {}),
         ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
         ...(associationsChanged ? { manualAssociations: manual } : {}),
@@ -665,6 +760,16 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const workingTreeChangedAtChanged =
         workingTreeChangedAtById !== prevState.workingTreeChangedAtById;
 
+      // Per-event, so continuity holds: the store sees every host update in
+      // order and each record can name the stamp it superseded (#12244).
+      const workingTreeChangedDirsById = mergeChangedDirs(
+        prevState.workingTreeChangedDirsById,
+        merged,
+        true
+      );
+      const workingTreeChangedDirsChanged =
+        workingTreeChangedDirsById !== prevState.workingTreeChangedDirsById;
+
       // Replace with the complete state so Zustand does not merge into a second object.
       if (existing && snapshotsEqual(existing, merged)) {
         set(
@@ -673,6 +778,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
             version,
             ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
             ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
+            ...(workingTreeChangedDirsChanged ? { workingTreeChangedDirsById } : {}),
             ...(tombstonesChanged ? { tombstones } : {}),
           },
           true
@@ -688,6 +794,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           version,
           ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
           ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
+          ...(workingTreeChangedDirsChanged ? { workingTreeChangedDirsById } : {}),
           ...(tombstonesChanged ? { tombstones } : {}),
         },
         true
@@ -772,6 +879,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const hadWorktree = prevState.worktrees.has(worktreeId);
       const hadStatusCheckedAt = prevState.statusCheckedAt.has(worktreeId);
       const hadWorkingTreeChangedAt = prevState.workingTreeChangedAtById.has(worktreeId);
+      const hadWorkingTreeChangedDirs = prevState.workingTreeChangedDirsById.has(worktreeId);
       const hadDeletingId = prevState.deletingIds.has(worktreeId);
       const hadDeleteError = prevState.deleteErrors.has(worktreeId);
       const hadDeleteErrorArgs = prevState.deleteErrorArgs.has(worktreeId);
@@ -789,6 +897,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ? new Map(prevState.workingTreeChangedAtById)
         : prevState.workingTreeChangedAtById;
       if (hadWorkingTreeChangedAt) nextWorkingTreeChangedAt.delete(worktreeId);
+      const nextWorkingTreeChangedDirs = hadWorkingTreeChangedDirs
+        ? new Map(prevState.workingTreeChangedDirsById)
+        : prevState.workingTreeChangedDirsById;
+      if (hadWorkingTreeChangedDirs) nextWorkingTreeChangedDirs.delete(worktreeId);
       const nextDeletingIds = hadDeletingId
         ? new Set(prevState.deletingIds)
         : prevState.deletingIds;
@@ -825,6 +937,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         worktrees: nextWorktrees,
         statusCheckedAt: nextStatusCheckedAt,
         workingTreeChangedAtById: nextWorkingTreeChangedAt,
+        workingTreeChangedDirsById: nextWorkingTreeChangedDirs,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
@@ -1987,11 +2100,12 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.baseBehindCount === b.baseBehindCount &&
     a.baseMatchesUpstream === b.baseMatchesUpstream &&
     a.baseCompareRef === b.baseCompareRef &&
-    // lastGitStatusCheckedAt and workingTreeChangedAt are deliberately NOT
-    // compared (like `timestamp`): both advance on events that change nothing
-    // else in the snapshot, so comparing either here would force a new
-    // worktrees Map identity per quiet tick. They live in the store's
-    // `statusCheckedAt` / `workingTreeChangedAtById` side maps instead.
+    // lastGitStatusCheckedAt, workingTreeChangedAt and workingTreeChangedDirs
+    // are deliberately NOT compared (like `timestamp`): all advance on events
+    // that change nothing else in the snapshot, so comparing any of them here
+    // would force a new worktrees Map identity per quiet tick. They live in the
+    // store's `statusCheckedAt` / `workingTreeChangedAtById` /
+    // `workingTreeChangedDirsById` side maps instead.
     a.lastFetchedAt === b.lastFetchedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&

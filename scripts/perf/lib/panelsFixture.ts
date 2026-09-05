@@ -540,6 +540,28 @@ export function loadBrowserTreeModule(): Promise<BrowserTreeModule> {
   return browserTreePromise;
 }
 
+export type WorktreeAffectedDirsModule =
+  typeof import("../../../electron/utils/worktreeAffectedDirs");
+
+let affectedDirsPromise: Promise<WorktreeAffectedDirsModule> | null = null;
+
+/**
+ * The production absolute-path → worktree-relative-directory conversion
+ * (#12244), loaded rather than restated.
+ *
+ * The scoped-refresh arms feed it ABSOLUTE paths, exactly as the watcher
+ * reports them, so a shape mismatch between the two namespaces fails the arm
+ * instead of quietly degrading every scoped sweep to a full one — which would
+ * leave the benchmark measuring the old behaviour under the new name.
+ */
+export function loadAffectedDirsModule(): Promise<WorktreeAffectedDirsModule> {
+  if (!affectedDirsPromise) {
+    ensurePerfEnv();
+    affectedDirsPromise = import("../../../electron/utils/worktreeAffectedDirs");
+  }
+  return affectedDirsPromise;
+}
+
 let hiddenPatternsPromise: Promise<readonly string[]> | null = null;
 
 /**
@@ -625,6 +647,48 @@ export interface TreeMutation {
  * iteration cannot leak state into the next one or into another scenario
  * sharing the tree.
  */
+export interface TreeBurstMutation {
+  /** Worktree-relative paths of the files this burst adds. */
+  paths: string[];
+  /** The same paths as a watcher reports them — absolute, root-prefixed. */
+  absolutePaths: string[];
+  write: () => void;
+  revert: () => void;
+}
+
+/**
+ * Prepare a burst of `count` new files spread round-robin over `dirs`, for the
+ * arms that price a change confined to a known set of directories.
+ *
+ * Separate from {@link mutateTree} because that one models three DIFFERENT
+ * kinds of change, one per sweep; this models one kind of change landing many
+ * times before a single sweep — the shape an agent's edit pass or a build has.
+ */
+export function writeBurst(
+  tree: BrowseTree,
+  dirs: readonly string[],
+  count: number,
+  token: string
+): TreeBurstMutation {
+  const paths: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const dir = dirs[i % dirs.length] ?? "";
+    const name = `BurstService${token}_${i}.ts`;
+    paths.push(dir === "" ? name : `${dir}/${name}`);
+  }
+  const absolutePaths = paths.map((path) => join(tree.path, path));
+  return {
+    paths,
+    absolutePaths,
+    write: () => {
+      for (const path of absolutePaths) writeFileSync(path, ORDINARY_FILE_CONTENT);
+    },
+    revert: () => {
+      for (const path of absolutePaths) rmSync(path, { force: true });
+    },
+  };
+}
+
 export function mutateTree(
   tree: BrowseTree,
   target: { visibleDir: string; junkDir: string; touchDir: string },

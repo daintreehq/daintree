@@ -1040,6 +1040,104 @@ describe("GitFileWatcher", () => {
       expect(onWorktreeFilesChanged).not.toHaveBeenCalled();
       expect(onChange).not.toHaveBeenCalled();
     });
+
+    // ---- The burst's affected directories (#12244) ----
+
+    function watcherWithPaths() {
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged = vi.fn<(dirs: readonly string[] | null) => void>();
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        onWorktreeFilesChanged,
+        watchWorktree: true,
+        worktreeMinDebounceMs: 500,
+        worktreeMaxDebounceMs: 500,
+        worktreeMaxWaitMs: 2000,
+      });
+      return { gitWatcher, onChange, onWorktreeFilesChanged, mock };
+    }
+
+    /** The directories one flush reported, order-independent. */
+    function reportedDirs(fn: ReturnType<typeof vi.fn>, call = 0): string[] | null {
+      const dirs = fn.mock.calls[call]?.[0] as readonly string[] | null | undefined;
+      return dirs == null ? null : [...dirs].sort();
+    }
+
+    it("reports the parent directory of every path in the burst, deduped", async () => {
+      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [
+        { type: "update", path: pathJoin("/repo", "src", "panels", "a.ts") },
+        { type: "update", path: pathJoin("/repo", "src", "panels", "b.ts") },
+        { type: "create", path: pathJoin("/repo", "package.json") },
+      ]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Two writes in one directory plus one at the top level: two targets, not
+      // three — which is the whole point of deduping to parents.
+      expect(reportedDirs(onWorktreeFilesChanged)).toEqual(["", "src/panels"]);
+      gitWatcher.dispose();
+    });
+
+    it("reports unknown for a burst carrying an event it cannot place", async () => {
+      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [
+        { type: "update", path: pathJoin("/repo", "src", "a.ts") },
+        // No path: an event shape the watcher cannot reason about, which makes
+        // the whole burst unscopeable rather than partially known.
+        { type: "update" },
+      ]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      expect(reportedDirs(onWorktreeFilesChanged)).toBeNull();
+      gitWatcher.dispose();
+    });
+
+    it("gives each flush its own burst rather than accumulating across them", async () => {
+      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [{ type: "update", path: pathJoin("/repo", "src", "a.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+      fireEvents(cb, [{ type: "update", path: pathJoin("/repo", "electron", "b.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(reportedDirs(onWorktreeFilesChanged, 0)).toEqual(["src"]);
+      // The second flush must not still be carrying `src`: a scope that grows
+      // forever converges on the full sweep it exists to avoid.
+      expect(reportedDirs(onWorktreeFilesChanged, 1)).toEqual(["electron"]);
+      gitWatcher.dispose();
+    });
+
+    it("still reports directories for a burst the ignore classifier will skip", async () => {
+      // The raw-filesystem signal fires before (and independently of) the
+      // decision to skip the git status pass, so a build writing only into an
+      // ignored folder still tells the file browser exactly where to look.
+      const { gitWatcher, onWorktreeFilesChanged, mock } = watcherWithPaths();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [{ type: "update", path: pathJoin("/repo", "dist", "bundle.js") }]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(reportedDirs(onWorktreeFilesChanged)).toEqual(["dist"]);
+      gitWatcher.dispose();
+    });
   });
 
   // ---- Error handling tests (adapted to async Promise rejection) ----

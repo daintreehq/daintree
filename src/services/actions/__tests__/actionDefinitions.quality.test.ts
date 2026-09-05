@@ -1145,6 +1145,7 @@ describe("destructive-action danger metadata", () => {
       ]),
       statusCheckedAt: new Map(),
       workingTreeChangedAtById: new Map(),
+      workingTreeChangedDirsById: new Map(),
       manualAssociations: new Map(),
       version: { epoch: "test", seq: 1 },
       tombstones: new Map(),

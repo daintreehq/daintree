@@ -87,15 +87,49 @@ describe("panel scenarios (PERF-240..247)", () => {
       expect(metrics.refreshMisses).toBe(0);
       expect(metrics.refreshTargetCount).toBeGreaterThan(1);
       expect(metrics.relistedNodeCount).toBeGreaterThan(100);
-      // Three arms, each priced separately. The middle one is the scenario's
-      // point: a change with nothing to show still pays a full sweep, because
-      // refreshTargets is content-blind.
+      // Three unscoped arms, each priced separately. The middle one is the
+      // scenario's original point: a change with nothing to show still pays a
+      // full sweep, because refreshTargets is content-blind.
       expect(metrics.sweepMs).toBeGreaterThan(0);
       expect(metrics.ignoredOnlySweepMs).toBeGreaterThan(0);
       expect(metrics.inPlaceEditSweepMs).toBeGreaterThan(0);
       expect(sample.durationMs).toBeGreaterThanOrEqual(
         metrics.sweepMs! + metrics.ignoredOnlySweepMs! + metrics.inPlaceEditSweepMs!
       );
+      // An unscoped sweep re-lists the root plus every expanded directory, and
+      // commits one listings-map copy per response.
+      expect(metrics.fullDirectoryRequests).toBe(metrics.refreshTargetCount);
+      expect(metrics.fullDirectoryRequests).toBeGreaterThan(20);
+      expect(metrics.fullListingsMapCopies).toBe(metrics.fullDirectoryRequests);
+    }
+  );
+
+  it(
+    "PERF-242 scopes a sweep to the directories a burst actually touched",
+    { timeout: FIXTURE_TIMEOUT_MS },
+    async () => {
+      const sample = await scenarioFor("PERF-242").run(contextFor("smoke"));
+      const metrics = sample.metrics!;
+      // Exact, not "smaller than": the whole feature is that the count drops to
+      // the number of directories written to, and a near-miss here (an extra
+      // root request, or a conversion that fell back to the full sweep) is the
+      // regression the arm exists to name.
+      expect(metrics.scopedSubtreeDirectoryRequests).toBe(1);
+      expect(metrics.scopedRootDirectoryRequests).toBe(1);
+      expect(metrics.scopedMultiDirectoryRequests).toBe(3);
+      // Twenty writes over three directories cost three listings, not twenty:
+      // the affected set is deduped to parents before it reaches the tree.
+      expect(metrics.scopedMultiListingsMapCopies).toBe(3);
+      expect(metrics.scopedSubtreeListingsMapCopies).toBe(1);
+      expect(metrics.scopedRootListingsMapCopies).toBe(1);
+      // And the correctness oracle covers the scoped arms too: refreshMisses is
+      // asserted zero above over an expectation set that includes every burst
+      // file, so a scoped sweep that dropped the listings it did not re-read
+      // would score there rather than pass quietly here.
+      expect(metrics.refreshMisses).toBe(0);
+      expect(metrics.scopedSubtreeSweepMs).toBeGreaterThan(0);
+      expect(metrics.scopedRootSweepMs).toBeGreaterThan(0);
+      expect(metrics.scopedMultiSweepMs).toBeGreaterThan(0);
     }
   );
 

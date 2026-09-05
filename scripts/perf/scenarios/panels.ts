@@ -17,6 +17,7 @@ import {
   getViewerFixture,
   listDirectories,
   listedSizeOf,
+  loadAffectedDirsModule,
   loadAlwaysHiddenPatterns,
   loadBrowserTreeModule,
   loadReviewModules,
@@ -28,6 +29,7 @@ import {
   sequenceMismatchCount,
   setDifferenceCount,
   stagingStatusFor,
+  writeBurst,
 } from "../lib/panelsFixture";
 
 // Panel surfaces (PERF-240..246) — the file browser, the Review Hub and the
@@ -351,16 +353,21 @@ export const panelScenarios: PerfScenario[] = [
     id: "PERF-242",
     name: "File Browser Refresh Sweep After a Change",
     description:
-      "The incremental path, as three write→sweep arms over a fully-expanded tree: a new visible " +
-      "file then a sweep (sweepMs), a new file the junk list hides then a sweep " +
-      "(ignoredOnlySweepMs), an in-place edit then a sweep (inPlaceEditSweepMs). Each write lands " +
+      "The incremental path, as six write→sweep arms over a fully-expanded tree. Three price the " +
+      "UNSCOPED sweep — a new visible file (sweepMs), a new file the junk list hides " +
+      "(ignoredOnlySweepMs), an in-place edit (inPlaceEditSweepMs) — and report what one costs in " +
+      "fullDirectoryRequests and fullListingsMapCopies. Three price the SCOPED sweep the watcher's " +
+      "affected-directory signal makes possible (#12244): one write in one expanded subtree, one " +
+      "at the root, and twenty writes across three subtrees in a single burst. Each write lands " +
       "between the preceding sweep and its own, so every arm prices a refresh over a change that " +
       "had not yet happened when the last one ran. Each sweep is the real refreshTargets → " +
-      "re-list → flattenTree/countHiddenRows path. refreshTargets is content-blind, which is what " +
-      "makes the middle arm worth its own number: a junk-only write shows nothing and still pays " +
-      "a full sweep. refreshMisses proves each arm reconciled its own write — the visible file as " +
-      "a row, the junk file as a hidden tally and never a row, and the edit as the file's new " +
-      "byte length in the re-listed nodes, which a sweep that skipped the re-read cannot produce.",
+      "re-list → flattenTree/countHiddenRows path, committing one listings-map copy per accepted " +
+      "response exactly as the panel does. The scoped arms derive their directory set by feeding " +
+      "ABSOLUTE paths through the production conversion helper, so an absolute-vs-relative " +
+      "mismatch scores as a full sweep rather than passing silently. refreshMisses proves every " +
+      "arm reconciled its own write — the visible file as a row, the junk file as a hidden tally " +
+      "and never a row, the edit as the file's new byte length, and each burst file as a row in " +
+      "the directory it landed in — which a sweep that skipped the re-read cannot produce.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 10, nightly: 14 },
@@ -371,6 +378,7 @@ export const panelScenarios: PerfScenario[] = [
       const tree = fixture.mutable;
       const alwaysHiddenPatterns = await loadAlwaysHiddenPatterns();
       const browserTree = await loadBrowserTreeModule();
+      const { affectedDirsForBurst } = await loadAffectedDirsModule();
       const expanded = new Set(tree.directories);
       const isVisible = browserTree.createVisibilityFilter({
         hideDotfiles: false,
@@ -394,15 +402,35 @@ export const panelScenarios: PerfScenario[] = [
         token
       );
 
-      let refreshTargetCount = 0;
-      let relistedNodeCount = 0;
-
-      /** One full refresh over whatever is on disk now, timed end to end. */
-      const sweep = async () => {
+      /**
+       * One refresh over whatever is on disk now, timed end to end.
+       *
+       * `affectedDirs` is the watcher's answer for the burst that preceded this
+       * sweep, or null for the unscoped sweep the panel took before #12244.
+       *
+       * Each returned listing is merged under its own fresh Map, never swapped
+       * in wholesale: that is one copy per accepted response, which is what the
+       * panel's `setListings` actually does — and a wholesale swap would also
+       * discard every directory a scoped sweep deliberately did not re-read.
+       */
+      const sweep = async (affectedDirs: ReadonlySet<string> | null = null) => {
         const startedAt = performance.now();
-        const targets = browserTree.refreshTargets(listings, expanded, "", isVisible, null);
+        const targets = browserTree.refreshTargets(
+          listings,
+          expanded,
+          "",
+          isVisible,
+          null,
+          affectedDirs
+        );
         const swept = await listDirectories(tree.path, targets);
-        listings = swept.listings;
+        let listingsMapCopies = 0;
+        for (const [dirPath, nodes] of swept.listings) {
+          const next = new Map(listings);
+          next.set(dirPath, nodes);
+          listings = next;
+          listingsMapCopies += 1;
+        }
         const rows = browserTree.flattenTree(
           listings,
           expanded,
@@ -415,16 +443,30 @@ export const panelScenarios: PerfScenario[] = [
           hideDotfiles: false,
           alwaysHiddenPatterns,
         });
-        refreshTargetCount = targets.length;
-        relistedNodeCount = swept.nodes;
         return {
           ms: performance.now() - startedAt,
+          directoryRequests: targets.length,
+          listingsMapCopies,
+          relistedNodes: swept.nodes,
           rowPaths: rowPathSet(rows),
           rowCount: rows.length,
           hiddenJunk: hidden.alwaysHidden,
           touchedSize: listedSizeOf(listings, mutation.touchedPath),
         };
       };
+
+      /**
+       * The directory scope a burst of absolute paths resolves to, through the
+       * production helper. A conversion that fails hands back null, which is
+       * the full sweep — so an arm that expected to be scoped scores its
+       * unscoped request count and the regression is visible in the number.
+       */
+      const scopeFor = (absolutePaths: readonly string[]): ReadonlySet<string> | null => {
+        const dirs = affectedDirsForBurst(new Set(absolutePaths), tree.path, null);
+        return dirs === null ? null : new Set(dirs);
+      };
+
+      const burstsToRevert: Array<{ revert: () => void }> = [];
 
       try {
         // Every arm's expectation, from the manifest: the added visible file is
@@ -444,25 +486,87 @@ export const panelScenarios: PerfScenario[] = [
         mutation.writeTouch();
         const editSweep = await sweep();
 
-        const refreshMisses =
+        // Scored before the scoped arms write anything. `expectedRows` is a
+        // live set that each arm below adds to, and an arm can only be held to
+        // the rows that existed when it ran.
+        const unscopedMisses =
           setDifferenceCount(expectedRows, visibleSweep.rowPaths) +
           setDifferenceCount(expectedRows, ignoredOnlySweep.rowPaths) +
-          setDifferenceCount(expectedRows, editSweep.rowPaths) +
+          setDifferenceCount(expectedRows, editSweep.rowPaths);
+
+        // The scoped arms, each over the same fully-listed tree the unscoped
+        // ones left behind. Every burst's expected rows accumulate, so a later
+        // arm also re-proves that an earlier arm's directories were not thrown
+        // away by a sweep that skipped them.
+        const runScopedArm = async (dirs: readonly string[], count: number, suffix: string) => {
+          const burst = writeBurst(tree, dirs, count, `${token}${suffix}`);
+          // Registered before the write so a failure mid-arm still cleans up.
+          burstsToRevert.push(burst);
+          burst.write();
+          for (const path of burst.paths) expectedRows.add(path);
+          // Snapshotted here: this arm has to account for every row expected so
+          // far, not just its own — a scoped sweep that dropped the listings it
+          // deliberately did not re-read loses the earlier arms' rows, and that
+          // is precisely the failure this arm exists to catch.
+          const expectedNow = new Set(expectedRows);
+          const swept = await sweep(scopeFor(burst.absolutePaths));
+          return { ...swept, misses: setDifferenceCount(expectedNow, swept.rowPaths) };
+        };
+
+        const subtreeSweep = await runScopedArm([targetDirs[4] ?? ""], 1, "s");
+        const rootSweep = await runScopedArm([""], 1, "r");
+        const multiSweep = await runScopedArm(
+          [targetDirs[5] ?? "", targetDirs[6] ?? "", targetDirs[7] ?? ""],
+          20,
+          "m"
+        );
+
+        const refreshMisses =
+          unscopedMisses +
           Math.abs(visibleSweep.hiddenJunk - baseHiddenJunk) +
           Math.abs(ignoredOnlySweep.hiddenJunk - (baseHiddenJunk + 1)) +
           Math.abs(editSweep.hiddenJunk - (baseHiddenJunk + 1)) +
           (visibleSweep.touchedSize === mutation.touchedBytesBefore ? 0 : 1) +
           (ignoredOnlySweep.touchedSize === mutation.touchedBytesBefore ? 0 : 1) +
-          (editSweep.touchedSize === mutation.touchedBytesAfter ? 0 : 1);
+          (editSweep.touchedSize === mutation.touchedBytesAfter ? 0 : 1) +
+          // Each scoped arm against the rows expected at its own point.
+          subtreeSweep.misses +
+          rootSweep.misses +
+          multiSweep.misses +
+          // The edited file's size has to survive the scoped arms untouched:
+          // they never re-read its directory, so a stale value here means a
+          // scoped sweep discarded a listing it was right not to re-request.
+          (multiSweep.touchedSize === mutation.touchedBytesAfter ? 0 : 1);
 
         return {
-          durationMs: visibleSweep.ms + ignoredOnlySweep.ms + editSweep.ms,
+          durationMs:
+            visibleSweep.ms +
+            ignoredOnlySweep.ms +
+            editSweep.ms +
+            subtreeSweep.ms +
+            rootSweep.ms +
+            multiSweep.ms,
           metrics: {
             sweepMs: visibleSweep.ms,
             ignoredOnlySweepMs: ignoredOnlySweep.ms,
             inPlaceEditSweepMs: editSweep.ms,
-            refreshTargetCount,
-            relistedNodeCount,
+            // The before-numbers the scoped arms are read against: one unscoped
+            // sweep over this tree, whatever moved.
+            fullDirectoryRequests: visibleSweep.directoryRequests,
+            fullListingsMapCopies: visibleSweep.listingsMapCopies,
+            scopedSubtreeSweepMs: subtreeSweep.ms,
+            scopedSubtreeDirectoryRequests: subtreeSweep.directoryRequests,
+            scopedSubtreeListingsMapCopies: subtreeSweep.listingsMapCopies,
+            scopedRootSweepMs: rootSweep.ms,
+            scopedRootDirectoryRequests: rootSweep.directoryRequests,
+            scopedRootListingsMapCopies: rootSweep.listingsMapCopies,
+            scopedMultiSweepMs: multiSweep.ms,
+            scopedMultiDirectoryRequests: multiSweep.directoryRequests,
+            scopedMultiListingsMapCopies: multiSweep.listingsMapCopies,
+            // Still the UNSCOPED sweep's shape, so the pre-existing series keeps
+            // measuring the same thing now that scoped arms follow it.
+            refreshTargetCount: editSweep.directoryRequests,
+            relistedNodeCount: editSweep.relistedNodes,
             rowCount: visibleSweep.rowCount,
             hiddenJunkCount: editSweep.hiddenJunk,
             refreshMisses,
@@ -474,6 +578,7 @@ export const panelScenarios: PerfScenario[] = [
         };
       } finally {
         mutation.revert();
+        for (const burst of burstsToRevert) burst.revert();
       }
     },
   },

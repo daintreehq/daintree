@@ -56,6 +56,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     lastFetchedAt: null,
     lastGitStatusCheckedAt: 0,
     workingTreeChangedAt: 0,
+    workingTreeChangedDirs: undefined,
     fetchAuthFailed: false,
     fetchNetworkFailed: false,
     isFetchInFlight: false,
@@ -206,6 +207,29 @@ describe("SnapshotBuilder", () => {
     expect(new SnapshotBuilder(makeHost({ worktreeMode: "remote" })).build().worktreeMode).toBe(
       "remote"
     );
+  });
+
+  it("keeps the affected directories' three answers apart on the wire", () => {
+    // Absent, `null` and `[]` mean different things to the file browser — "no
+    // burst described", "burst unclassifiable, re-read everything" and "a real
+    // burst that touched nothing" — so none of them may collapse into another.
+    expect(new SnapshotBuilder(makeHost()).build().workingTreeChangedDirs).toBeUndefined();
+    // Suppressed while there is no stamp for them to belong to, even if the
+    // monitor happens to be holding a set.
+    const unstamped = makeHost({ workingTreeChangedDirs: ["src"] });
+    expect(new SnapshotBuilder(unstamped).build().workingTreeChangedDirs).toBeUndefined();
+
+    const uncertain = makeHost({ workingTreeChangedAt: 1_725_000_000_000, workingTreeChangedDirs: null });
+    expect(new SnapshotBuilder(uncertain).build().workingTreeChangedDirs).toBeNull();
+
+    const empty = makeHost({ workingTreeChangedAt: 1_725_000_000_000, workingTreeChangedDirs: [] });
+    expect(new SnapshotBuilder(empty).build().workingTreeChangedDirs).toEqual([]);
+
+    const known = makeHost({
+      workingTreeChangedAt: 1_725_000_000_000,
+      workingTreeChangedDirs: ["src/panels", ""],
+    });
+    expect(new SnapshotBuilder(known).build().workingTreeChangedDirs).toEqual(["src/panels", ""]);
   });
 
   it("omits workingTreeChangedAt until a fs write is observed, then surfaces it", () => {

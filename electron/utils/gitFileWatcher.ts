@@ -13,6 +13,7 @@ import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "./gitCheckIgnore.js";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 import { subscribeParcelWatcher } from "./parcelWatcherBackend.js";
 import { logWarn } from "./logger.js";
+import { affectedDirsForBurst } from "./worktreeAffectedDirs.js";
 
 const LINUX_INOTIFY_LIMIT_HELP =
   "inotify watch limit reached — file watching may be incomplete. " +
@@ -125,8 +126,12 @@ export interface GitFileWatcherOptions {
    * same coalescing as `onChange`. Drives the file browser's live refresh when
    * a write lands in a gitignored path that leaves `git status` unchanged
    * (#11330).
+   *
+   * Receives the burst's affected directories, worktree-relative and deduped
+   * (`""` = the worktree root), or `null` when the burst could not be described
+   * and the subscriber must assume everything changed (#12244).
    */
-  onWorktreeFilesChanged?: () => void;
+  onWorktreeFilesChanged?: (affectedDirs: readonly string[] | null) => void;
   /** Watch the working tree recursively for file edits (macOS FSEvents). */
   watchWorktree?: boolean;
   /** Minimum debounce delay for worktree events — first event in a burst fires at this delay. */
@@ -189,7 +194,9 @@ export class GitFileWatcher {
   private readonly worktreeDebounceRampMs = 10;
   private readonly onChange: () => void;
   private readonly onGitConfigChanged: (() => void) | undefined;
-  private readonly onWorktreeFilesChanged: (() => void) | undefined;
+  private readonly onWorktreeFilesChanged:
+    | ((affectedDirs: readonly string[] | null) => void)
+    | undefined;
   /** Set when the current (unflushed) burst touched `.git/config`. */
   private gitConfigChangePending = false;
   /**
@@ -835,7 +842,13 @@ export class GitFileWatcher {
     // status pass, let alone for a classification that may decide to skip it
     // (#11330). Firing it here (not the git-internal path) keeps it scoped to
     // actual working-tree writes.
-    this.onWorktreeFilesChanged?.();
+    // The burst itself, not the supersession-adjusted `paths` below: a
+    // superseded burst only lost its *classification*, and the burst it
+    // superseded already delivered its own directories through this same
+    // callback. Nothing is unaccounted for, so the scope stays exact.
+    this.onWorktreeFilesChanged?.(
+      affectedDirsForBurst(burst, this.worktreePath, this.worktreeRealPath)
+    );
 
     // The callback above is synchronous and may dispose this watcher.
     if (this.disposed) return;

@@ -2159,4 +2159,473 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
     await waitFor(() => expect(result.current.selectedNode?.path).toBe("src/a.ts"));
     expect(result.current.selectedNode?.isDirectory).toBe(false);
   });
+
+  // ---- Scoped refresh: re-list only the directories a change touched (#12244) ----
+
+  describe("scoped refresh", () => {
+    /**
+     * A three-directory tree, fully expanded, so a scoped tick has somewhere to
+     * NOT go. Every listing is served from the shape rather than a queue, so a
+     * re-list returns the same content and only the call log distinguishes a
+     * scoped pass from a full one.
+     */
+    function mockThreeBranches(): void {
+      listDirectory.mockImplementation(async (payload) => {
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+    }
+
+    const EXPANDED = ["a", "a/deep", "b"];
+
+    /** A store record for one burst. */
+    function burst(at: number, previousAt: number | null, dirs: readonly string[] | null) {
+      return { at, previousAt, dirs };
+    }
+
+    /** Which directories a run of the hook asked for, root as "". */
+    function requested(fromCall: number): string[] {
+      return listDirectory.mock.calls.slice(fromCall).map((call) => call[0].dirPath ?? "");
+    }
+
+    interface TickProps {
+      changeTick: number | undefined;
+      changedDirs: ReturnType<typeof burst> | undefined;
+      rootPath?: string;
+      selectedPath?: string | null;
+    }
+
+    async function mountTree(initialProps: TickProps) {
+      const harness = renderHook(
+        (props: TickProps) =>
+          useFileBrowserTree({
+            source: wtSource("wt-1"),
+            expandedPaths: EXPANDED,
+            hideDotfiles: false,
+            alwaysHiddenPatterns: [],
+            changeTick: props.changeTick,
+            changedDirs: props.changedDirs,
+            rootPath: props.rootPath,
+            selectedPath: props.selectedPath ?? null,
+          }),
+        { initialProps }
+      );
+      // The root plus the three expanded directories — waiting on the request
+      // count rather than a row tally keeps the helper usable by the arm where
+      // one of those listings deliberately fails.
+      await waitFor(() => expect(listDirectory.mock.calls.length).toBe(4));
+      await act(() => settle());
+      return harness;
+    }
+
+    /**
+     * The first tick under an identity can never be scoped — there is no
+     * consumed stamp for the record to chain off — so every scoped assertion
+     * spends one full tick establishing the cursor first. That is the shipped
+     * behaviour, not a test artefact: one full sweep per panel lifetime buys a
+     * continuity proof for every tick after it.
+     */
+    async function primeCursor(
+      rerender: (props: TickProps) => void,
+      base: TickProps
+    ): Promise<void> {
+      rerender({ ...base, changeTick: 100, changedDirs: burst(100, null, ["a"]) });
+      await act(() => settle());
+    }
+
+    it("re-lists only the touched directory, leaving the rest of the tree alone", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a/deep"]) });
+      await act(() => settle());
+
+      expect(requested(from)).toEqual(["a/deep"]);
+    });
+
+    it("re-lists only the root when a top-level entry changed", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, [""]) });
+      await act(() => settle());
+
+      expect(requested(from)).toEqual([""]);
+    });
+
+    it("re-lists each touched directory once when one burst spans several", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a", "b"]) });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["a", "b"]);
+    });
+
+    it("ignores a touched directory that is not on screen", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      // Nothing renders this directory, so re-reading it would buy nothing.
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["c/unexpanded"]) });
+      await act(() => settle());
+
+      expect(requested(from)).toEqual([]);
+    });
+
+    it("falls back to the full sweep when the burst could not be described", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, null) });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+    });
+
+    it("falls back to the full sweep with no record at all", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: undefined });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+    });
+
+    it("falls back to the full sweep when a git-status tick outran the burst", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      // The tick moved to 300 but the newest burst is still stamped 200: a git
+      // status pass moved it, and that pass describes no directories.
+      rerender({ ...base, changeTick: 300, changedDirs: burst(200, 100, ["a"]) });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+    });
+
+    it("falls back to the full sweep when a burst went by unseen", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      // Two bursts landed but React committed once: this record supersedes 150,
+      // not the 100 the tree last acted on, so 150's directories are lost.
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 150, ["a"]) });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+    });
+
+    it("takes the full sweep on the first tick, then scopes the next one", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+
+      const firstFrom = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 100, changedDirs: burst(100, null, ["a"]) });
+      await act(() => settle());
+      expect(requested(firstFrom).sort()).toEqual(["", "a", "a/deep", "b"]);
+
+      const secondFrom = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a"]) });
+      await act(() => settle());
+      expect(requested(secondFrom)).toEqual(["a"]);
+    });
+
+    it("advances the cursor across a full sweep so the tick after it scopes", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      // An unclassifiable burst — full sweep, but the cursor still moves to 200.
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, null) });
+      await act(() => settle());
+
+      const from = listDirectory.mock.calls.length;
+      rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["b"]) });
+      await act(() => settle());
+      expect(requested(from)).toEqual(["b"]);
+    });
+
+    it("keeps a manual refresh a full sweep whatever the last burst said", async () => {
+      mockThreeBranches();
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { result, rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a"]) });
+      await act(() => settle());
+
+      const from = listDirectory.mock.calls.length;
+      await act(async () => {
+        result.current.refresh({ manual: true });
+        await settle();
+      });
+
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
+    });
+
+    it("takes the full sweep when the change is above a browse root it cannot see", async () => {
+      // Rooted at "a": the tree holds no listing for "" , so a rename of "a"
+      // itself is only discoverable by re-reading the root.
+      listDirectory.mockImplementation(async (payload) => {
+        switch (payload.dirPath) {
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined, rootPath: "a" };
+      const harness = renderHook(
+        (props: TickProps) =>
+          useFileBrowserTree({
+            source: wtSource("wt-1"),
+            expandedPaths: ["a/deep"],
+            hideDotfiles: false,
+            alwaysHiddenPatterns: [],
+            changeTick: props.changeTick,
+            changedDirs: props.changedDirs,
+            rootPath: props.rootPath,
+          }),
+        { initialProps: base }
+      );
+      await waitFor(() => expect(harness.result.current.rows).toHaveLength(3));
+      await primeCursor(harness.rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      rerender_ancestor: {
+        harness.rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, [""]) });
+      }
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["a", "a/deep"]);
+    });
+
+    it("retries a failed listing on a scoped tick that did not touch it", async () => {
+      let failDeep = true;
+      listDirectory.mockImplementation(async (payload) => {
+        if (payload.dirPath === "a/deep") {
+          if (failDeep) throw new Error("nope");
+          return [file("a/deep/two.ts")];
+        }
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { result, rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+      failDeep = false;
+
+      const from = listDirectory.mock.calls.length;
+      // The burst touched "b" only, but a full sweep used to retry every failed
+      // directory for free and scoping must not quietly end that.
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
+      await act(() => settle());
+
+      expect(requested(from).sort()).toEqual(["a/deep", "b"]);
+      await waitFor(() =>
+        expect(result.current.rows.map((row) => row.path)).toContain("a/deep/two.ts")
+      );
+    });
+
+    it("defers a scoped refresh that collided with an in-flight read, then replays it", async () => {
+      const gate = deferred<FileTreeNode[]>();
+      let holdDeep = false;
+      listDirectory.mockImplementation(async (payload) => {
+        if (payload.dirPath === "a/deep" && holdDeep) return gate.promise;
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      // First scoped tick opens a read of "a/deep" and holds it.
+      holdDeep = true;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a/deep"]) });
+      await act(() => settle());
+      const from = listDirectory.mock.calls.length;
+
+      // A second burst arrives while that read is still open. Its own directory
+      // is free, so it goes out immediately; "a/deep" cannot be trusted from the
+      // read that started before the change, so it has to be re-read after.
+      rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["a/deep", "b"]) });
+      await act(() => settle());
+      expect(requested(from)).toEqual(["b"]);
+
+      holdDeep = false;
+      await act(async () => {
+        gate.resolve([file("a/deep/two.ts")]);
+        await settle();
+      });
+
+      // The replay is the union of what collided — "a/deep" — and nothing wider.
+      expect(requested(from).sort()).toEqual(["a/deep", "b"]);
+    });
+
+    it("widens a deferred scope to the whole tree when a manual refresh collides", async () => {
+      const gate = deferred<FileTreeNode[]>();
+      let holdDeep = false;
+      listDirectory.mockImplementation(async (payload) => {
+        if (payload.dirPath === "a/deep" && holdDeep) return gate.promise;
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      const base: TickProps = { changeTick: 1, changedDirs: undefined };
+      const { result, rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      holdDeep = true;
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a/deep"]) });
+      await act(() => settle());
+      const from = listDirectory.mock.calls.length;
+
+      await act(async () => {
+        result.current.refresh({ manual: true });
+        await settle();
+      });
+
+      holdDeep = false;
+      await act(async () => {
+        gate.resolve([file("a/deep/two.ts")]);
+        await settle();
+      });
+
+      // The manual press promoted the deferred scope, so the replay is the full
+      // sweep rather than the one directory the tick had asked for.
+      expect(requested(from)).toContain("a/deep");
+      expect(new Set(requested(from))).toEqual(new Set(["", "a", "a/deep", "b"]));
+    });
+
+    it("leaves selection and expansion untouched across a scoped pass", async () => {
+      mockThreeBranches();
+      const base: TickProps = {
+        changeTick: 1,
+        changedDirs: undefined,
+        selectedPath: "a/deep/two.ts",
+      };
+      const { result, rerender } = await mountTree(base);
+      await primeCursor(rerender, base);
+
+      const rowsBefore = result.current.rows.map((row) => row.path);
+      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
+      await act(() => settle());
+
+      expect(result.current.rows.map((row) => row.path)).toEqual(rowsBefore);
+      expect(result.current.selectedNode?.path).toBe("a/deep/two.ts");
+    });
+
+    it("re-reads the collapsed folder the viewer is listing when the change lands in it", async () => {
+      listDirectory.mockImplementation(async (payload) => {
+        switch (payload.dirPath) {
+          case undefined:
+            return [dir("a"), dir("b"), file("top.txt")];
+          case "a":
+            return [dir("a/deep"), file("a/one.ts")];
+          case "a/deep":
+            return [file("a/deep/two.ts")];
+          case "b":
+            return [file("b/three.ts")];
+          default:
+            return [];
+        }
+      });
+      // "b" is selected as a folder but collapsed out of the tree, so only the
+      // viewer depends on its listing.
+      const base: TickProps = { changeTick: 1, changedDirs: undefined, selectedPath: "b" };
+      const harness = renderHook(
+        (props: TickProps) =>
+          useFileBrowserTree({
+            source: wtSource("wt-1"),
+            expandedPaths: ["a"],
+            hideDotfiles: false,
+            alwaysHiddenPatterns: [],
+            changeTick: props.changeTick,
+            changedDirs: props.changedDirs,
+            selectedPath: props.selectedPath ?? null,
+          }),
+        { initialProps: base }
+      );
+      await waitFor(() => expect(harness.result.current.listingStatus).toBe("ready"));
+      await primeCursor(harness.rerender, base);
+
+      const from = listDirectory.mock.calls.length;
+      harness.rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
+      await act(() => settle());
+      expect(requested(from)).toEqual(["b"]);
+
+      const next = listDirectory.mock.calls.length;
+      harness.rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["a"]) });
+      await act(() => settle());
+      expect(requested(next)).toEqual(["a"]);
+    });
+  });
+
 });

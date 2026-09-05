@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
+import type { WorktreeChangedDirs } from "@/store/createWorktreeStore";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -63,6 +64,97 @@ const MAX_CONCURRENT_LISTINGS = 6;
  */
 const ROOT_RETRY_DELAYS_MS = [150, 400, 800] as const;
 
+/**
+ * Ceiling on directories accumulated in a deferred scope before it gives up and
+ * becomes a full refresh.
+ *
+ * Mirrors the watcher's own `WORKTREE_BURST_PATH_CAP`, which degrades a single
+ * burst to "unknown" at the same size. One burst can never exceed it (the
+ * directories are one parent per path), but a deferral spanning several bursts
+ * can, and a scope that has grown to thousands of directories is a full sweep
+ * wearing a costume — cheaper to say so than to carry the set.
+ */
+const MAX_PENDING_AFFECTED_DIRS = 2048;
+
+/**
+ * What a refresh should re-read: everything reachable, or only the directories
+ * a change actually touched.
+ */
+type RefreshScope = { kind: "all" } | { kind: "dirs"; dirs: ReadonlySet<string> };
+
+const REFRESH_ALL: RefreshScope = { kind: "all" };
+
+/**
+ * The set `refreshTargets` filters against, with the currently-failed listings
+ * folded in.
+ *
+ * Failed directories ride along on every scoped pass because the full sweep
+ * retried them for free — a change anywhere re-requested the whole tree,
+ * unreadable directories included. Scoping would silently end that and leave a
+ * transiently-unreadable folder stuck until the user pressed Refresh, so the
+ * retry is made explicit instead of lost.
+ */
+function scopeFilter(
+  scope: RefreshScope,
+  failedListings: ReadonlySet<string>
+): ReadonlySet<string> | null {
+  if (scope.kind === "all") return null;
+  if (failedListings.size === 0) return scope.dirs;
+  const dirs = new Set(scope.dirs);
+  for (const path of failedListings) dirs.add(path);
+  return dirs;
+}
+
+/**
+ * How much of the tree one change tick has to re-read.
+ *
+ * Scoping is the exception, not the rule: it needs a described burst whose
+ * stamp *is* the tick that moved, with proof that no burst went by unseen. Each
+ * bail-out below is a case where the directories on hand cannot account for
+ * everything that changed since the last pass, and the answer to that is the
+ * full refresh this hook has always done.
+ */
+function scopeForTick(
+  record: WorktreeChangedDirs | undefined,
+  tick: number | undefined,
+  lastConsumedAt: number | undefined,
+  rootPath: string
+): RefreshScope {
+  // No signal at all (a source with no watcher, an older host), or a burst the
+  // watcher could not classify.
+  if (record === undefined || record.dirs === null) return REFRESH_ALL;
+  // The tick is the newer of the git-status and filesystem stamps, so a tick
+  // this burst did not produce was produced by a git-status pass — which
+  // describes no directories, and whose own writes this burst may predate.
+  if (record.at !== tick) return REFRESH_ALL;
+  // A burst between the last one acted on and this one was never seen — the
+  // store saw it, but React batched the render away. Its directories are gone,
+  // so this scope is incomplete.
+  if (lastConsumedAt === undefined || record.previousAt !== lastConsumedAt) return REFRESH_ALL;
+  // A tree rooted below the worktree holds no listing above its own root, so a
+  // change to an ancestor — the browse root itself renamed or deleted — has no
+  // target that would reveal it. Only the full refresh re-reads the root and
+  // surfaces the failure.
+  if (rootPath !== "" && record.dirs.some((dir) => dir === "" || rootPath.startsWith(`${dir}/`))) {
+    return REFRESH_ALL;
+  }
+  return { kind: "dirs", dirs: new Set(record.dirs) };
+}
+
+/**
+ * Fold a scope into whatever a deferred refresh is already holding. "All"
+ * dominates in both directions and an over-large union collapses to it, so the
+ * merge can only ever widen what the replay re-reads — never narrow it, which
+ * is what would drop a change.
+ */
+function mergeScopes(pending: RefreshScope | null, incoming: RefreshScope): RefreshScope {
+  if (pending === null) return incoming;
+  if (pending.kind === "all" || incoming.kind === "all") return REFRESH_ALL;
+  const dirs = new Set(pending.dirs);
+  for (const dir of incoming.dirs) dirs.add(dir);
+  return dirs.size > MAX_PENDING_AFFECTED_DIRS ? REFRESH_ALL : { kind: "dirs", dirs };
+}
+
 export interface UseFileBrowserTreeArgs {
   /** What the tree is rooted at; null while nothing resolves (no tree, no fetches). */
   source: FileBrowserSource | null;
@@ -90,6 +182,18 @@ export interface UseFileBrowserTreeArgs {
    * is deliberately not in scope here.
    */
   changeTick: number | undefined;
+  /**
+   * The directories behind the latest raw-filesystem tick, when the workspace
+   * host could name them (#12244). Lets a change confined to one subtree
+   * re-list that subtree instead of the root plus every expanded directory.
+   *
+   * Only ever narrows the work, never skips it: the scope is used exactly when
+   * the record's stamp *is* the tick that bumped and its `previousAt` proves no
+   * burst went unseen. Anything else — a git-status tick, an unclassifiable
+   * burst, a batched render that swallowed a burst, a source with no watcher —
+   * falls back to the full refresh this hook has always done.
+   */
+  changedDirs?: WorktreeChangedDirs;
   /**
    * Last-known tree structure from the panel record (#11367). When it matches
    * the current identity, the identity reset seeds the listings from it and
@@ -225,6 +329,7 @@ export function useFileBrowserTree({
   alwaysHiddenPatterns,
   rootPath = "",
   changeTick,
+  changedDirs,
   treeSnapshot,
   sort = DEFAULT_FILE_SORT,
   selectedPath = null,
@@ -386,12 +491,24 @@ export function useFileBrowserTree({
   // different vintages.
   const listingPathRef = useRef(listingPath);
   const retainedPathsRef = useRef(retainedPaths);
+  // Read by a scoped refresh, which folds the failed directories back into its
+  // target set so a change tick still retries them — the full sweep retried
+  // them for free, and scoping must not quietly take that away.
+  const failedListingsRef = useRef(failedListings);
 
-  // Set when a refresh could not run because its targets were already in
-  // flight. Without it, a tick that arrives mid-flight is consumed by a request
-  // that had already read the filesystem, and the tree stays stale until the
-  // user touches it.
-  const refreshPendingRef = useRef(false);
+  // What a refresh could not run because its targets were already in flight,
+  // and at what scope. Without it, a tick that arrives mid-flight is consumed
+  // by a request that had already read the filesystem, and the tree stays stale
+  // until the user touches it. Holding the scope rather than a bare flag is
+  // what lets the replay stay narrow: a deferred single-subtree change replays
+  // as that subtree, not as the whole tree.
+  const refreshPendingRef = useRef<RefreshScope | null>(null);
+
+  // The `workingTreeChangedAt` stamp of the last burst this tree acted on, so
+  // the next one can prove nothing went by in between. Undefined until the
+  // first tick lands under this identity, which is why that first tick is
+  // always a full refresh.
+  const lastChangedDirsAtRef = useRef<number | undefined>(undefined);
 
   // `pump` and `fetchDirectory` call each other: a settled request pumps the
   // queue, and the queue starts requests. Routing one direction through a
@@ -601,13 +718,13 @@ export function useFileBrowserTree({
       void fetchDirectory(next.dirPath, next.generation);
     }
 
-    // A refresh that collided with in-flight work runs once the queue drains.
-    if (
-      refreshPendingRef.current &&
-      physicalInFlightRef.current === 0 &&
-      queueRef.current.length === 0
-    ) {
-      refreshPendingRef.current = false;
+    // A refresh that collided with in-flight work runs once the queue drains,
+    // at the union of every scope that collided — cleared before the replay so
+    // a change arriving during it forms the next pass rather than being folded
+    // into one already under way.
+    const pending = refreshPendingRef.current;
+    if (pending !== null && physicalInFlightRef.current === 0 && queueRef.current.length === 0) {
+      refreshPendingRef.current = null;
       const generation = generationRef.current;
       enqueueTargets(
         refreshTargets(
@@ -615,7 +732,8 @@ export function useFileBrowserTree({
           expandedSetRef.current,
           rootPath,
           isVisibleRef.current,
-          listingPathRef.current
+          listingPathRef.current,
+          scopeFilter(pending, failedListingsRef.current)
         ),
         generation
       );
@@ -649,7 +767,17 @@ export function useFileBrowserTree({
     treeSnapshotRef.current = treeSnapshot;
     listingPathRef.current = listingPath;
     retainedPathsRef.current = retainedPaths;
-  }, [listings, expandedSet, isVisible, pump, treeSnapshot, listingPath, retainedPaths]);
+    failedListingsRef.current = failedListings;
+  }, [
+    listings,
+    expandedSet,
+    isVisible,
+    pump,
+    treeSnapshot,
+    listingPath,
+    retainedPaths,
+    failedListings,
+  ]);
 
   // Cancel a pending root retry synchronously when the identity changes or the
   // panel unmounts. The generation bump that would invalidate the retry lives in
@@ -669,7 +797,7 @@ export function useFileBrowserTree({
     return () => {
       disposedRef.current = true;
       queueRef.current = [];
-      refreshPendingRef.current = false;
+      refreshPendingRef.current = null;
       // Drop any pending root retry so it can't fire into an unmounted panel.
       clearRootRetryTimer();
       // Invalidate everything still in the air so a late response can't commit
@@ -687,34 +815,49 @@ export function useFileBrowserTree({
     [enqueueTargets, pump]
   );
 
-  const refresh = useCallback(
-    (options?: { manual?: boolean }): void => {
+  const runRefresh = useCallback(
+    (scope: RefreshScope, manual: boolean): void => {
       const generation = generationRef.current;
       const targets = refreshTargets(
         listingsRef.current,
         expandedSetRef.current,
         rootPath,
         isVisibleRef.current,
-        listingPathRef.current
+        listingPathRef.current,
+        scopeFilter(scope, failedListingsRef.current)
       );
       // A user press should spin the toolbar icon until the re-list drains. Set
       // this before `pump` so the flag is up if fetches start synchronously; a
       // no-op refresh (no worktree, no targets) drains inside `pump` and clears
       // it again in the same batch, so the icon never flickers.
-      if (options?.manual) {
+      if (manual) {
         isRefreshingRef.current = true;
         setIsRefreshing(true);
       }
       // A target already in flight read the filesystem before this refresh was
       // asked for, so its result may not reflect the change that triggered us.
-      // Defer rather than accept that response as final.
-      if (targets.some((target) => inFlightRef.current.has(target))) {
-        refreshPendingRef.current = true;
+      // Defer rather than accept that response as final — and defer only the
+      // targets that actually collided, so a twenty-directory burst with one
+      // busy directory replays that one rather than all twenty. A full refresh
+      // still replays as a full refresh: it was never about specific targets.
+      const collided = targets.filter((target) => inFlightRef.current.has(target));
+      if (collided.length > 0) {
+        refreshPendingRef.current = mergeScopes(
+          refreshPendingRef.current,
+          scope.kind === "all" ? REFRESH_ALL : { kind: "dirs", dirs: new Set(collided) }
+        );
       }
       enqueueTargets(targets, generation);
       pump();
     },
     [enqueueTargets, pump, rootPath]
+  );
+
+  const refresh = useCallback(
+    (options?: { manual?: boolean }): void => {
+      runRefresh(REFRESH_ALL, options?.manual === true);
+    },
+    [runRefresh]
   );
 
   // Identity reset — only a worktree switch or a root change, not a visibility
@@ -730,7 +873,10 @@ export function useFileBrowserTree({
     resetRootRetryState(generationRef.current);
     inFlightRef.current.clear();
     queueRef.current = [];
-    refreshPendingRef.current = false;
+    refreshPendingRef.current = null;
+    // The incoming identity has no consumed tick of its own yet, so its first
+    // change tick cannot prove continuity and takes the full refresh.
+    lastChangedDirsAtRef.current = undefined;
     // A worktree switch abandons any in-flight manual refresh; its drain will
     // never complete for this identity, so end the spin here rather than leave
     // the icon stuck.
@@ -878,8 +1024,13 @@ export function useFileBrowserTree({
     // final. `hasLoadedRoot` is a dependency, so this re-runs when it lands.
     if (!hasLoadedRoot) return;
     lastTickRef.current = changeTick;
-    refresh();
-  }, [changeTick, hasLoadedRoot, refresh]);
+    const scope = scopeForTick(changedDirs, changeTick, lastChangedDirsAtRef.current, rootPath);
+    // Advanced even when the scope came out "all": the point of the cursor is
+    // where the *next* tick continues from, and a full refresh has covered
+    // everything up to here just as a scoped one covers its own directories.
+    if (changedDirs !== undefined) lastChangedDirsAtRef.current = changedDirs.at;
+    runRefresh(scope, false);
+  }, [changeTick, changedDirs, hasLoadedRoot, rootPath, runRefresh]);
 
   const rows = useMemo(
     () => flattenTree(listings, expandedSet, loadingPaths, rootPath, isVisible, sortKeyed),

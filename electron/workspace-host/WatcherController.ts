@@ -65,8 +65,12 @@ export interface WatcherControllerHost {
    * independent of whether git status changed. Lets the host stamp a
    * working-tree-changed timestamp so the file browser can refresh on writes
    * into gitignored paths that leave `git status` unmoved (#11330).
+   *
+   * `affectedDirs` names the burst's worktree-relative parent directories
+   * (`""` = the worktree root), or is `null` when the burst could not be
+   * described and every listing must be re-read (#12244).
    */
-  onWorktreeFilesChanged?(): void;
+  onWorktreeFilesChanged?(affectedDirs: readonly string[] | null): void;
 }
 
 /**
@@ -170,7 +174,7 @@ export class WatcherController {
       debounceMs: this.host.gitWatchDebounceMs,
       onChange: () => this.handleGitFileChange(),
       onGitConfigChanged: () => this.host.onGitConfigChanged?.(),
-      onWorktreeFilesChanged: () => this.handleWorktreeFilesChanged(),
+      onWorktreeFilesChanged: (affectedDirs) => this.handleWorktreeFilesChanged(affectedDirs),
       watchWorktree: mode === "recursive",
       worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
       worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
@@ -593,9 +597,9 @@ export class WatcherController {
    * can't stamp the monitor after `stop()`. `flushWorktreeChange` already
    * checks the watcher's own disposed flag; this is the controller-level gate.
    */
-  private handleWorktreeFilesChanged(): void {
+  private handleWorktreeFilesChanged(affectedDirs: readonly string[] | null): void {
     if (this.disposed || !this.host.isRunning) return;
-    this.host.onWorktreeFilesChanged?.();
+    this.host.onWorktreeFilesChanged?.(affectedDirs);
   }
 
   private handleGitFileChange(): void {

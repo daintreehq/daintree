@@ -395,6 +395,21 @@ export function FileBrowserPane({
   // One tick contract for `useFileBrowserTree`, whichever side supplied it.
   const changeTick = worktreeChangeTick ?? externalChangeTick;
 
+  // The directories behind the latest raw-filesystem tick (#12244). Handed over
+  // whole rather than pre-judged against `changeTick`: the record carries the
+  // stamp it describes and the one it superseded, and the tree is the only
+  // layer that knows which tick it last acted on — the test for "does this
+  // scope actually cover everything since then" belongs where that cursor
+  // lives. A workspace root gets nothing here, exactly as it gets nothing from
+  // the two tick maps (#11482), and falls back to the full refresh.
+  const changedDirs = useWorktreeStore(
+    useCallback(
+      (state) =>
+        sourceWorktreeId ? state.workingTreeChangedDirsById.get(sourceWorktreeId) : undefined,
+      [sourceWorktreeId]
+    )
+  );
+
   const {
     rows,
     isInitialLoading,
@@ -418,6 +433,7 @@ export function FileBrowserPane({
     alwaysHiddenPatterns,
     rootPath,
     changeTick,
+    changedDirs,
     treeSnapshot,
     sort,
     selectedPath,

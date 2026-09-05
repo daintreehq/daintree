@@ -924,9 +924,10 @@ describe("WorktreeMonitor", () => {
       const emitsBefore = vi.mocked(callbacks.onUpdate).mock.calls.length;
 
       const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-        (() => void) | undefined;
+        | ((affectedDirs: readonly string[] | null) => void)
+        | undefined;
       expect(fireWorktreeFilesChanged).toBeDefined();
-      fireWorktreeFilesChanged?.();
+      fireWorktreeFilesChanged?.(null);
 
       // Emitted off the write alone — a fresh snapshot, no extra git status run.
       expect(vi.mocked(callbacks.onUpdate).mock.calls.length).toBe(emitsBefore + 1);
@@ -943,14 +944,16 @@ describe("WorktreeMonitor", () => {
       const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
       await monitor.start();
 
-      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as () => void;
+      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as (
+        affectedDirs: readonly string[] | null
+      ) => void;
 
       // Two flushes with no timer advance between them: the monotonic guard
       // (Math.max(now, prev + 1)) must still move the stamp forward even when
       // Date.now() is unchanged.
-      fireWorktreeFilesChanged();
+      fireWorktreeFilesChanged(null);
       const first = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0]?.workingTreeChangedAt;
-      fireWorktreeFilesChanged();
+      fireWorktreeFilesChanged(null);
       const second = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0]?.workingTreeChangedAt;
 
       expect(first).toBeGreaterThan(0);
@@ -971,8 +974,10 @@ describe("WorktreeMonitor", () => {
       expect(monitor.hasInitialStatus).toBe(false);
       expect(callbacks.onUpdate).not.toHaveBeenCalled();
 
-      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as () => void;
-      fireWorktreeFilesChanged();
+      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as (
+        affectedDirs: readonly string[] | null
+      ) => void;
+      fireWorktreeFilesChanged(["src"]);
 
       // Stamped internally, but no incomplete snapshot emitted for it.
       expect(callbacks.onUpdate).not.toHaveBeenCalled();
@@ -985,6 +990,37 @@ describe("WorktreeMonitor", () => {
       expect(
         vi.mocked(callbacks.onUpdate).mock.calls[0]?.[0]?.workingTreeChangedAt
       ).toBeGreaterThan(0);
+      // But NOT the directories that burst named. A second flush before the
+      // first status would have overwritten them, and nothing would ever
+      // re-read the difference — so a retained stamp reports "unknown" rather
+      // than a set it cannot prove is complete (#12244).
+      expect(
+        vi.mocked(callbacks.onUpdate).mock.calls[0]?.[0]?.workingTreeChangedDirs
+      ).toBeNull();
+
+      monitor.stop();
+    });
+
+    it("carries the burst's directories on the snapshot the flush emits", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as (
+        affectedDirs: readonly string[] | null
+      ) => void;
+
+      fireWorktreeFilesChanged(["src/panels", ""]);
+      const emitted = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0];
+      expect(emitted?.workingTreeChangedDirs).toEqual(["src/panels", ""]);
+      expect(emitted?.workingTreeChangedAt).toBeGreaterThan(0);
+
+      // An unclassifiable burst replaces them rather than leaving the previous
+      // burst's directories standing against a newer stamp.
+      fireWorktreeFilesChanged(null);
+      const next = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0];
+      expect(next?.workingTreeChangedDirs).toBeNull();
+      expect(next?.workingTreeChangedAt).toBeGreaterThan(emitted?.workingTreeChangedAt ?? 0);
 
       monitor.stop();
     });

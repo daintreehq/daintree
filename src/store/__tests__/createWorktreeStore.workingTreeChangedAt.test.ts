@@ -136,3 +136,163 @@ describe("createWorktreeStore — workingTreeChangedAt side map", () => {
     expect(store.getState().worktrees.has("wt-1")).toBe(false);
   });
 });
+
+// The affected-directory side map (#12244) rides the same stamp: it lets the
+// file browser re-list only what a burst touched. Its `previousAt` chain is the
+// only thing standing between "scoped refresh" and "silently dropped a burst",
+// so these assert the chain, not just the payload.
+describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
+  it("records the burst's directories alongside the stamp they belong to", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        nextV()
+      );
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+      at: 1_000,
+      previousAt: null,
+      dirs: ["src"],
+    });
+  });
+
+  it("chains previousAt across consecutive updates so a consumer can prove continuity", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        nextV()
+      );
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 2_000, workingTreeChangedDirs: ["electron"] }),
+        nextV()
+      );
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+      at: 2_000,
+      previousAt: 1_000,
+      dirs: ["electron"],
+    });
+  });
+
+  it("never carries a previous burst's directories forward onto a new stamp", () => {
+    // The absent field means "this host described no burst for this stamp",
+    // which is not the same as "the same directories again" — inheriting would
+    // scope a refresh to directories that had nothing to do with the change.
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        nextV()
+      );
+    store.getState().applyUpdate(makeSnapshot("wt-1", { workingTreeChangedAt: 2_000 }), nextV());
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+      at: 2_000,
+      previousAt: 1_000,
+      dirs: null,
+    });
+  });
+
+  it("keeps a known-empty burst distinct from an undescribed one", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: [] }),
+        nextV()
+      );
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")?.dirs).toEqual([]);
+  });
+
+  it("holds the map identity when a snapshot repeats the stamp it already recorded", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        nextV()
+      );
+    const before = store.getState().workingTreeChangedDirsById;
+
+    // A git-status pass re-emits the same stamp; nothing new happened.
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", {
+          workingTreeChangedAt: 1_000,
+          workingTreeChangedDirs: ["src"],
+          modifiedCount: 3,
+        }),
+        nextV()
+      );
+
+    expect(store.getState().workingTreeChangedDirsById).toBe(before);
+  });
+
+  it("refuses to claim continuity on the authoritative snapshot path", () => {
+    // A full snapshot is the host's whole state and can jump across flushes the
+    // store never saw one by one, so the record it writes must say so — the
+    // consumer then takes one full re-read rather than scoping to a set that
+    // may be missing a burst.
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        nextV()
+      );
+    store
+      .getState()
+      .applySnapshot(
+        [makeSnapshot("wt-1", { workingTreeChangedAt: 3_000, workingTreeChangedDirs: ["electron"] })],
+        nextV()
+      );
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+      at: 3_000,
+      previousAt: null,
+      dirs: ["electron"],
+    });
+  });
+
+  it("carries an unchanged record through the authoritative snapshot path untouched", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        nextV()
+      );
+    const record = store.getState().workingTreeChangedDirsById.get("wt-1");
+
+    store
+      .getState()
+      .applySnapshot(
+        [makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] })],
+        nextV()
+      );
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toBe(record);
+  });
+
+  it("prunes the record when its worktree is removed", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        nextV()
+      );
+    store.getState().applyRemove("wt-1", nextV());
+
+    expect(store.getState().workingTreeChangedDirsById.has("wt-1")).toBe(false);
+  });
+});
