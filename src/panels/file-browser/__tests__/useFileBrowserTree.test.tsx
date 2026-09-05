@@ -2188,9 +2188,9 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
 
     const EXPANDED = ["a", "a/deep", "b"];
 
-    /** A store record for one burst. */
+    /** A store record for one burst, all from the same host run. */
     function burst(at: number, previousAt: number | null, dirs: readonly string[] | null) {
-      return { at, previousAt, dirs };
+      return { at, previousAt, dirs, run: "test-run" };
     }
 
     /** Which directories a run of the hook asked for, root as "". */
@@ -2245,7 +2245,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       await act(() => settle());
     }
 
-    it("re-lists only the touched directory, leaving the rest of the tree alone", async () => {
+    it("re-lists the touched directory and its parent, leaving the rest alone", async () => {
       mockThreeBranches();
       const base: TickProps = { changeTick: 1, changedDirs: undefined };
       const { rerender } = await mountTree(base);
@@ -2255,7 +2255,10 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a/deep"]) });
       await act(() => settle());
 
-      expect(requested(from)).toEqual(["a/deep"]);
+      // `a/deep` for its contents, `a` because that is where `a/deep`'s own row
+      // lives — its mtime, the Modified column and the sort that reads it. The
+      // root and `b` are untouched.
+      expect(requested(from).sort()).toEqual(["a", "a/deep"]);
     });
 
     it("re-lists only the root when a top-level entry changed", async () => {
@@ -2281,7 +2284,8 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a", "b"]) });
       await act(() => settle());
 
-      expect(requested(from).sort()).toEqual(["a", "b"]);
+      // Both, plus the root they both sit in — still four short of the sweep.
+      expect(requested(from).sort()).toEqual(["", "a", "b"]);
     });
 
     it("ignores a touched directory that is not on screen", async () => {
@@ -2367,7 +2371,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       const secondFrom = listDirectory.mock.calls.length;
       rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["a"]) });
       await act(() => settle());
-      expect(requested(secondFrom)).toEqual(["a"]);
+      expect(requested(secondFrom).sort()).toEqual(["", "a"]);
     });
 
     it("advances the cursor across a full sweep so the tick after it scopes", async () => {
@@ -2383,7 +2387,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       const from = listDirectory.mock.calls.length;
       rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["b"]) });
       await act(() => settle());
-      expect(requested(from)).toEqual(["b"]);
+      expect(requested(from).sort()).toEqual(["", "b"]);
     });
 
     it("keeps a manual refresh a full sweep whatever the last burst said", async () => {
@@ -2469,7 +2473,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
       await act(() => settle());
 
-      expect(requested(from).sort()).toEqual(["a/deep", "b"]);
+      expect(requested(from).sort()).toEqual(["", "a/deep", "b"]);
       await waitFor(() =>
         expect(result.current.rows.map((row) => row.path)).toContain("a/deep/two.ts")
       );
@@ -2508,7 +2512,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       // read that started before the change, so it has to be re-read after.
       rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["a/deep", "b"]) });
       await act(() => settle());
-      expect(requested(from)).toEqual(["b"]);
+      expect(requested(from).sort()).toEqual(["", "a", "b"]);
 
       holdDeep = false;
       await act(async () => {
@@ -2517,7 +2521,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       });
 
       // The replay is the union of what collided — "a/deep" — and nothing wider.
-      expect(requested(from).sort()).toEqual(["a/deep", "b"]);
+      expect(requested(from).sort()).toEqual(["", "a", "a/deep", "b"]);
     });
 
     it("unions successive deferred scopes rather than keeping only the last", async () => {
@@ -2766,7 +2770,9 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
       await act(() => settle());
 
-      expect(requested(from)).toContain("");
+      // Exactly the root and the burst's own directory — `toContain("")` would
+      // have been satisfied by a full sweep, which is what this used to do.
+      expect(requested(from).sort()).toEqual(["", "b"]);
       await waitFor(() => expect(result.current.rootError).toBeNull());
     });
 
@@ -2835,7 +2841,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
         changedDirs: burst(300, 200, ["b"]),
       });
       await act(() => settle());
-      expect(requested(next)).toEqual(["b"]);
+      expect(requested(next).sort()).toEqual(["", "b"]);
     });
 
     it("asks for nothing on a burst that resolved to no directory", async () => {
@@ -2855,7 +2861,7 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       const next = listDirectory.mock.calls.length;
       rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["b"]) });
       await act(() => settle());
-      expect(requested(next)).toEqual(["b"]);
+      expect(requested(next).sort()).toEqual(["", "b"]);
     });
 
     it("resets the cursor on a worktree switch so the new tree's first tick is full", async () => {
@@ -2963,12 +2969,12 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       const from = listDirectory.mock.calls.length;
       harness.rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, ["b"]) });
       await act(() => settle());
-      expect(requested(from)).toEqual(["b"]);
+      expect(requested(from).sort()).toEqual(["", "b"]);
 
       const next = listDirectory.mock.calls.length;
       harness.rerender({ ...base, changeTick: 300, changedDirs: burst(300, 200, ["a"]) });
       await act(() => settle());
-      expect(requested(next)).toEqual(["a"]);
+      expect(requested(next).sort()).toEqual(["", "a"]);
     });
   });
 });

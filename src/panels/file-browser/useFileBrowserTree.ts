@@ -141,6 +141,14 @@ function scopeForTick(
   // The two namespaces never meet, so a scoped pass would leave the alias's
   // rows stale (#11939). Rare enough to answer with the full sweep rather than
   // a canonical-identity map.
+  //
+  // Known gap: this can only see a link the tree holds a NODE for, which means
+  // a link at or above the browse root is invisible — nothing above `rootPath`
+  // is ever listed. Browsing rooted inside a symlinked directory therefore
+  // keeps taking scoped refreshes that the watcher's paths never match, and
+  // that subtree goes stale until a manual refresh. Closing it needs the host
+  // to send a realpath-relative form alongside the burst, which costs a syscall
+  // per changed path — deliberately out of scope here.
   if (hasSymlinkedDirectory) return REFRESH_ALL;
   // A burst between the last one acted on and this one was never seen — the
   // store saw it, but React batched the render away. Its directories are gone,
@@ -153,7 +161,19 @@ function scopeForTick(
   if (rootPath !== "" && record.dirs.some((dir) => dir === "" || rootPath.startsWith(`${dir}/`))) {
     return REFRESH_ALL;
   }
-  return { kind: "dirs", dirs: new Set(record.dirs) };
+  const dirs = new Set<string>();
+  for (const dir of record.dirs) {
+    dirs.add(dir);
+    // And the parent, because a directory's OWN row — its name, its mtime, the
+    // Modified column and the sort that reads it — lives in its PARENT's
+    // listing, not its own. Re-reading only the directory a write landed in
+    // leaves that row describing the tree as it was, which the issue's "sort
+    // order must be unaffected" rules out. One level up and no further: a
+    // grandparent's entry for the parent did not change, and this is what keeps
+    // a scoped pass at the "1 or 2 requests" the issue budgets for.
+    dirs.add(parentDirectoryOf(dir));
+  }
+  return { kind: "dirs", dirs };
 }
 
 /**
@@ -539,11 +559,11 @@ export function useFileBrowserTree({
    * on screen can go stale unnoticed.
    */
   const hasSymlinkedDirectory = useMemo(() => {
-    for (const path of expandedSet) {
-      if (findNodeInListings(listings, path)?.symlink !== undefined) return true;
-    }
-    for (const path of retainedPaths) {
-      if (findNodeInListings(listings, path)?.symlink !== undefined) return true;
+    for (const nodes of listings.values()) {
+      for (const node of nodes) {
+        if (node.symlink === undefined || !node.isDirectory) continue;
+        if (expandedSet.has(node.path) || retainedPaths.includes(node.path)) return true;
+      }
     }
     return false;
   }, [listings, expandedSet, retainedPaths]);
@@ -671,19 +691,41 @@ export function useFileBrowserTree({
           const replaced: string[] = [];
           for (const node of nodes) {
             if (!node.isDirectory || !listingsRef.current.has(node.path)) continue;
+            // Absent from the copy we are replacing is its own answer, and a
+            // suspicious one: the directory went away and came back (a delete
+            // and a re-create landing in separate bursts) while we held its
+            // listing the whole time, so that listing describes the old one.
+            if (!cachedMtimes.has(node.path)) {
+              replaced.push(node.path);
+              continue;
+            }
             const before = cachedMtimes.get(node.path);
-            // Both sides have to be known for the comparison to mean anything,
-            // and an unknown one is NOT treated as suspicious: a live listing
-            // always carries `mtimeMs`, so the only source without it is a
-            // rehydrated snapshot — whose every listing the identity reset is
-            // already revalidating. Re-reading on unknown would turn each
-            // scoped pass into a cascade down the whole restored tree, which is
-            // the full sweep this exists to avoid.
+            // Present but with an unknown mtime on either side is NOT
+            // suspicious: a live listing always carries `mtimeMs`, so the only
+            // source without it is a rehydrated snapshot — whose every listing
+            // the identity reset is already revalidating. Re-reading on unknown
+            // would turn each scoped pass into a cascade down the whole
+            // restored tree, which is the full sweep this exists to avoid.
             if (before === undefined || node.mtimeMs === undefined) continue;
             if (before === node.mtimeMs) continue;
             replaced.push(node.path);
           }
-          if (replaced.length > 0) enqueueTargets(replaced, generation);
+          if (replaced.length > 0) {
+            // A replaced child already being read started that read before we
+            // learned it was replaced, so its answer describes the old
+            // directory. `enqueueTargets` would silently skip it as a
+            // duplicate, so the collision is deferred the same way a colliding
+            // refresh is — otherwise the stale response commits and nothing is
+            // left queued to correct it.
+            const collided = replaced.filter((path) => inFlightRef.current.has(path));
+            if (collided.length > 0) {
+              refreshPendingRef.current = mergeScopes(refreshPendingRef.current, {
+                kind: "dirs",
+                dirs: new Set(collided),
+              });
+            }
+            enqueueTargets(replaced, generation);
+          }
         }
 
         setListings((previous) => {

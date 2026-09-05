@@ -151,7 +151,7 @@ describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
         nextV()
       );
 
-    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toMatchObject({
       at: 1_000,
       previousAt: null,
       dirs: ["src"],
@@ -173,7 +173,7 @@ describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
         nextV()
       );
 
-    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toMatchObject({
       at: 2_000,
       previousAt: 1_000,
       dirs: ["electron"],
@@ -193,7 +193,7 @@ describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
       );
     store.getState().applyUpdate(makeSnapshot("wt-1", { workingTreeChangedAt: 2_000 }), nextV());
 
-    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toMatchObject({
       at: 2_000,
       previousAt: 1_000,
       dirs: null,
@@ -257,7 +257,7 @@ describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
       nextV()
     );
 
-    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toEqual({
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toMatchObject({
       at: 3_000,
       previousAt: null,
       dirs: ["electron"],
@@ -282,6 +282,53 @@ describe("createWorktreeStore — workingTreeChangedDirs side map", () => {
       );
 
     expect(store.getState().workingTreeChangedDirsById.get("wt-1")).toBe(record);
+  });
+
+  it("breaks the chain when the worktree is re-created at the same path", () => {
+    // Same epoch, new incarnation: the stamp keeps climbing (it is clock-based)
+    // so nothing about the number says the old tree died, but its record
+    // describes a different timeline.
+    const store = createWorktreeStore();
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        generation: 1,
+        workingTreeChangedAt: 1_000,
+        workingTreeChangedDirs: ["src"],
+      }),
+      nextV()
+    );
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        generation: 2,
+        workingTreeChangedAt: 2_000,
+        workingTreeChangedDirs: ["electron"],
+      }),
+      nextV()
+    );
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")?.previousAt).toBeNull();
+  });
+
+  it("does not chain a later new-epoch event back onto the dead run", () => {
+    // Only the FIRST event of a new epoch sees the transition, so a guard that
+    // tests the incoming event rather than the record lets the second one
+    // reconnect. Here the first new-epoch update carries no fs stamp at all.
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 1_000, workingTreeChangedDirs: ["src"] }),
+        { epoch: "epoch-a", seq: 1 }
+      );
+    store.getState().applyUpdate(makeSnapshot("wt-1"), { epoch: "epoch-b", seq: 1 });
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { workingTreeChangedAt: 2_000, workingTreeChangedDirs: ["b"] }),
+        { epoch: "epoch-b", seq: 2 }
+      );
+
+    expect(store.getState().workingTreeChangedDirsById.get("wt-1")?.previousAt).toBeNull();
   });
 
   it("prunes the record when its worktree is removed", () => {

@@ -291,6 +291,23 @@ export interface WorktreeChangedDirs {
    * the burst could not be described and everything must be re-read.
    */
   readonly dirs: readonly string[] | null;
+  /**
+   * The host run this record belongs to. Continuity is only ever claimed within
+   * one run: across a host restart (new epoch) or a re-created worktree at the
+   * same path (new generation), whatever changed on disk in between reached
+   * nobody, so the chain has to break.
+   *
+   * Carried on the record rather than tested against the incoming event,
+   * because only the FIRST event of a new epoch sees the transition — a later
+   * one in the same run would find `epochChanged` false and chain straight back
+   * onto the dead run's stamp.
+   */
+  readonly run: string;
+}
+
+/** The host run a snapshot belongs to: its epoch plus the worktree's incarnation. */
+function runKeyFor(snapshot: WorktreeSnapshot, epoch: string): string {
+  return `${epoch}\u0000${snapshot.generation ?? ""}`;
 }
 
 /**
@@ -300,32 +317,45 @@ export interface WorktreeChangedDirs {
  * snapshot notifies no subscriber.
  *
  * `continuous` is false for the authoritative full-snapshot path, which can
- * jump across host events the store never saw individually.
+ * jump across host events the store never saw individually. A run change breaks
+ * continuity regardless of what the caller claims.
  */
 function mergeChangedDirs(
   current: Map<string, WorktreeChangedDirs>,
   snapshot: WorktreeSnapshot,
+  epoch: string,
   continuous: boolean
 ): Map<string, WorktreeChangedDirs> {
   const { workingTreeChangedAt: at } = snapshot;
   if (at === undefined) return current;
+  const run = runKeyFor(snapshot, epoch);
   const existing = current.get(snapshot.id);
-  if (existing?.at === at) return current;
-  // A strictly older stamp is never a new burst — it is a stale one being
-  // replayed. Renderer-built PR/issue overlays spread the CACHED snapshot,
-  // whose fs stamp goes stale the moment a timestamp-only update takes the
-  // `snapshotsEqual` fast path and leaves that object in place. Letting one
-  // walk the record backwards would reconnect the continuity chain across a
-  // burst that was never seen, and the consumer would scope past it.
-  if (existing !== undefined && at < existing.at) return current;
+  // Only a record from the SAME host run can be compared against or chained
+  // off. One from a dead run is not "older" — it describes a different
+  // timeline, so it neither dedups nor rejects nor supplies a predecessor.
+  const previous = existing !== undefined && existing.run === run ? existing : undefined;
+  if (previous !== undefined) {
+    if (previous.at === at) return current;
+    // A strictly older stamp is never a new burst — it is a stale one being
+    // replayed. Renderer-built PR/issue overlays spread the CACHED snapshot,
+    // whose fs stamp goes stale the moment a timestamp-only update takes the
+    // `snapshotsEqual` fast path and leaves that object in place. Letting one
+    // walk the record backwards would reconnect the continuity chain across a
+    // burst that was never seen, and the consumer would scope past it.
+    if (at < previous.at) return current;
+  }
+  // A record with no same-run predecessor is written once per run transition
+  // and reports `previousAt: null`, which is what actually stops the consumer
+  // scoping off it. The directories stay faithful to what the host said.
   const next = new Map(current);
   next.set(snapshot.id, {
     at,
-    previousAt: continuous ? (existing?.at ?? null) : null,
+    previousAt: continuous ? (previous?.at ?? null) : null,
     // Absent on the wire means the host described no burst for this stamp,
     // which is not the same as a burst that touched nothing — both must reach
     // the consumer as "re-read everything".
     dirs: snapshot.workingTreeChangedDirs ?? null,
+    run,
   });
   return next;
 }
@@ -614,15 +644,20 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       {
         let rebuilt = new Map<string, WorktreeChangedDirs>();
         for (const s of merged) {
-          const carried = epochChanged ? undefined : prev.workingTreeChangedDirsById.get(s.id);
-          // Carried by identity only within one host run: across an epoch the
-          // record's `previousAt` describes a chain the new host knows nothing
-          // about, and repeating the stamp would preserve it.
-          if (carried !== undefined && carried.at === s.workingTreeChangedAt) {
+          const carried = prev.workingTreeChangedDirsById.get(s.id);
+          // Carried by identity only within one host run: across an epoch or a
+          // re-created worktree the record's `previousAt` describes a chain the
+          // new run knows nothing about, and repeating the stamp would preserve
+          // it.
+          if (
+            carried !== undefined &&
+            carried.at === s.workingTreeChangedAt &&
+            carried.run === runKeyFor(s, version.epoch)
+          ) {
             rebuilt.set(s.id, carried);
             continue;
           }
-          rebuilt = mergeChangedDirs(rebuilt, s, false);
+          rebuilt = mergeChangedDirs(rebuilt, s, version.epoch, false);
         }
         const unchanged =
           rebuilt.size === prev.workingTreeChangedDirsById.size &&
@@ -778,7 +813,8 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const workingTreeChangedDirsById = mergeChangedDirs(
         prevState.workingTreeChangedDirsById,
         merged,
-        !epochChanged
+        version.epoch,
+        true
       );
       const workingTreeChangedDirsChanged =
         workingTreeChangedDirsById !== prevState.workingTreeChangedDirsById;

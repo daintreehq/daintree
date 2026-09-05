@@ -243,7 +243,17 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
       workingTreeChangedDirsById: new Map(
         worktreeTicks.fs === undefined
           ? []
-          : [["wt-1", { at: worktreeTicks.fs, previousAt: null, dirs: worktreeTicks.dirs }]]
+          : [
+              [
+                "wt-1",
+                {
+                  at: worktreeTicks.fs,
+                  previousAt: null,
+                  dirs: worktreeTicks.dirs,
+                  run: "test-run",
+                },
+              ],
+            ]
       ),
     }),
 }));
@@ -1682,7 +1692,12 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     renderPane({ worktreeId: "wt-1" });
 
     expect(treeArgs.changeTick).toBe(300);
-    expect(treeArgs.changedDirs).toEqual({ at: 300, previousAt: null, dirs: ["src/panels"] });
+    expect(treeArgs.changedDirs).toEqual({
+      at: 300,
+      previousAt: null,
+      dirs: ["src/panels"],
+      run: "test-run",
+    });
   });
 
   it("hands over an unclassifiable burst as-is rather than dropping the record", () => {
@@ -1692,7 +1707,12 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     worktreeTicks.dirs = null;
     renderPane({ worktreeId: "wt-1" });
 
-    expect(treeArgs.changedDirs).toEqual({ at: 300, previousAt: null, dirs: null });
+    expect(treeArgs.changedDirs).toEqual({
+      at: 300,
+      previousAt: null,
+      dirs: null,
+      run: "test-run",
+    });
   });
 
   it("hands over nothing when the worktree has seen no filesystem write", () => {

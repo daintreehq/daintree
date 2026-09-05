@@ -488,7 +488,18 @@ export const panelScenarios: PerfScenario[] = [
        */
       const scopeFor = (absolutePaths: readonly string[]): ReadonlySet<string> | null => {
         const dirs = affectedDirsForBurst(new Set(absolutePaths), tree.path, null);
-        return dirs === null ? null : new Set(dirs);
+        if (dirs === null) return null;
+        // Widened with each directory's parent exactly as the tree hook does:
+        // a directory's own row — its mtime, the Modified column, the sort that
+        // reads it — lives in its parent's listing. Pricing the raw burst
+        // instead would measure a scope the product never uses.
+        const scoped = new Set<string>();
+        for (const dir of dirs) {
+          scoped.add(dir);
+          const slash = dir.lastIndexOf("/");
+          scoped.add(slash === -1 ? "" : dir.slice(0, slash));
+        }
+        return scoped;
       };
 
       const burstsToRevert: Array<{ revert: () => void }> = [];
