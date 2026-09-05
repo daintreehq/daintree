@@ -264,35 +264,54 @@ describe("bystander probe", () => {
     expect(metrics).not.toHaveProperty("workerProbeMisses");
   });
 
-  it("reports a gap percentile at or below the worst freeze, and a delay percentile below it", async () => {
+  it("carries each percentile through to its own prefixed metric", () => {
+    // Distinct non-zero values, because an implementation that reported a
+    // constant 0 — or wired both keys to the same field — satisfies any
+    // assertion written as an inequality.
+    const metrics = bystanderMetrics("burst", {
+      ticksObserved: 12,
+      probeMisses: 0,
+      longestStallMs: 91,
+      blockedMs: 40,
+      p95StallMs: 7,
+      p95DelayMs: 3,
+      windowMs: 100,
+      blockedFraction: 0.4,
+    });
+    expect(metrics.burstP95StallMs).toBe(7);
+    expect(metrics.burstP95DelayMs).toBe(3);
+  });
+
+  it("reports a gap percentile well below the one freeze that dominates the max", async () => {
     const probe = await armBystanderProbe({ cadenceMs: 8 });
-    blockFor(60);
-    await sleep(60);
+    // Many ordinary gaps around a single long block, so the distribution and
+    // its extreme are far apart and a p95 cannot be confused with either.
+    await sleep(120);
+    blockFor(120);
+    await sleep(120);
     const reading = probe.stop();
 
-    // The percentile describes the distribution the max is the tail of, so it
-    // can never exceed it. Both are boundary-inclusive over the same gaps.
-    expect(reading.p95StallMs).toBeLessThanOrEqual(reading.longestStallMs);
-    // One cadence of every gap was always going to be spent waiting, so the
-    // delay figure trails the raw gap figure by exactly that much.
+    expect(reading.ticksObserved).toBeGreaterThan(10);
+    // The block owns the max...
+    expect(reading.longestStallMs).toBeGreaterThan(100);
+    // ...but it is one sample among many, so it must not own the percentile.
+    // This is what fails for an implementation returning the maximum.
+    expect(reading.p95StallMs).toBeLessThan(reading.longestStallMs / 2);
+    // And a real cadence still separates it from an implementation that
+    // returns a constant zero.
+    expect(reading.p95StallMs).toBeGreaterThan(0);
     expect(reading.p95DelayMs).toBeLessThanOrEqual(reading.p95StallMs);
     expect(reading.p95DelayMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("reports zero percentiles for a window that observed nothing at all", () => {
-    // `percentile` over an empty gap list must not read NaN: a non-finite
-    // measurement moves the exit code under --enforce-integrity.
-    const metrics = bystanderMetrics("idle", {
-      ticksObserved: 0,
-      probeMisses: 1,
-      longestStallMs: 0,
-      blockedMs: 0,
-      p95StallMs: 0,
-      p95DelayMs: 0,
-      windowMs: 0,
-      blockedFraction: 0,
-    });
-    expect(Number.isFinite(metrics.idleP95StallMs)).toBe(true);
-    expect(Number.isFinite(metrics.idleP95DelayMs)).toBe(true);
+  it("analyses once, so a second stop() returns the same reading it already computed", () => {
+    // `stop()` sorts the gap list to produce percentiles. A `finally` that
+    // stops an already-stopped probe must not repeat that work inside a
+    // scenario's measured bracket.
+    const probe = startBystanderProbe({ cadenceMs: 8 });
+    blockFor(20);
+    const first = probe.stop();
+    const second = probe.stop();
+    expect(second).toBe(first);
   });
 });

@@ -109,26 +109,32 @@ export interface BystanderReading {
    */
   blockedMs: number;
   /**
-   * 95th percentile of the raw observation gaps, boundary-inclusive.
+   * 95th percentile of the OBSERVED GAPS, boundary-inclusive.
    *
-   * The gap distribution, not the worst gap: `longestStallMs` reports the one
-   * worst freeze in the window, which a single unlucky collection can own, and
-   * `blockedMs` sums the excess without saying how any single pause felt. A
-   * percentile is what survives both — the pause a caller can expect to hit
-   * near the tail rather than at the extreme.
+   * The gap distribution rather than its extreme: `longestStallMs` reports the
+   * single worst freeze, which one unlucky collection can own, and `blockedMs`
+   * sums excess without saying how any individual pause looked.
    *
-   * Includes one cadence of ordinary waiting, because a gap always does. Read
-   * it as "the loop went unobserved this long", and use {@link p95DelayMs} for
-   * the part attributable to the workload.
+   * Read it as exactly what it is — a percentile over this window's gaps — and
+   * nothing more. It is NOT a caller's waiting-time distribution, and it is not
+   * a rate: among 100 gaps, one 100ms freeze beside 99 ordinary 4ms gaps has a
+   * p95 of 4ms, because the freeze is a single sample. Catch-up scheduling
+   * (`schedule()` anchors to absolute expected times) adds short gaps after a
+   * block, which pulls the distribution further from timer lateness.
+   *
+   * So it needs a control measured the same way on the same machine, like every
+   * other reading in this file — more so, because a window that is mostly idle
+   * puts the 95th percentile among idle gaps, where the workload cannot move it.
    */
   p95StallMs: number;
   /**
-   * 95th percentile of gap MINUS one cadence, floored at zero — the tail of
-   * timer lateness with the cadence the probe was always going to wait removed.
+   * The same percentile over gaps with one cadence subtracted, floored at zero.
    *
-   * This is the comparable figure across two arms measured at the same cadence:
-   * an idle loop reports ~0 here while still reporting a full cadence in
-   * {@link p95StallMs}.
+   * One cadence of every gap was always going to be spent waiting, so removing
+   * it makes two arms measured at the SAME cadence comparable — an idle loop
+   * reads ~0 here and a full cadence in {@link p95StallMs}. It is a percentile
+   * of excess gap, not an attribution of that excess to the workload: the
+   * caveats on {@link p95StallMs} apply unchanged.
    */
   p95DelayMs: number;
   /** Wall clock the probe covered. */
@@ -232,6 +238,15 @@ function start(options: BystanderOptions): InternalProbe {
    * `startBystanderProbe` documents.
    */
   let windowApparatusSound: boolean | undefined;
+  /**
+   * The analysed reading, computed once.
+   *
+   * `stop()` sorts the gap list twice to produce percentiles. That work is not
+   * the subject of any scenario, so it must not be repeated by a second
+   * `stop()` in a `finally`, and callers should capture their workload's end
+   * timestamp BEFORE the first one.
+   */
+  let closedReading: BystanderReading | undefined;
 
   let resolveArmed: (value: boolean) => void = () => {};
   const armed = new Promise<boolean>((resolve) => {
@@ -323,6 +338,8 @@ function start(options: BystanderOptions): InternalProbe {
         if (timer) clearTimeout(timer);
         settleArming(everFired);
       }
+      if (closedReading) return closedReading;
+
       const closedAt = endedAt ?? performance.now();
       const windowMs = closedAt - startedAt;
 
@@ -342,7 +359,7 @@ function start(options: BystanderOptions): InternalProbe {
         previous = at;
       }
 
-      return {
+      closedReading = {
         ticksObserved: observations.length,
         probeMisses: (windowApparatusSound ?? everFired) ? 0 : 1,
         longestStallMs,
@@ -355,6 +372,7 @@ function start(options: BystanderOptions): InternalProbe {
         windowMs,
         blockedFraction: windowMs > 0 ? blockedMs / windowMs : 0,
       };
+      return closedReading;
     },
   };
 }

@@ -282,6 +282,9 @@ describe("ProjectStateManager.enqueueProjectStateUpdate coalescing", () => {
   });
 
   afterEach(async () => {
+    // The sweep interval keeps an undisposed manager (and its cached state)
+    // reachable for the life of the run.
+    manager.dispose();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -457,52 +460,88 @@ describe("ProjectStateManager.enqueueProjectStateUpdate coalescing", () => {
     await expect(abstainer).resolves.toBeUndefined();
   });
 
-  it("keeps serving updates queued after a batch whose save failed", async () => {
+  it("keeps serving a batch that was already queued when an earlier save failed", async () => {
     const { release, parked } = openQueue({ persist: false });
 
-    const saves = vi.spyOn(manager, "saveProjectState");
-    saves.mockRejectedValueOnce(Object.assign(new Error("EPIPE"), { code: "EPIPE" }));
+    let doomedStarted!: () => void;
+    const started = new Promise<void>((resolve) => (doomedStarted = resolve));
+    let releaseDoomed!: () => void;
+    const doomedGate = new Promise<void>((resolve) => (releaseDoomed = resolve));
 
-    const doomed = manager.enqueueProjectStateUpdate(projectId, (existing) => ({
-      ...existing!,
-      focusMode: true,
-    }));
+    vi.spyOn(manager, "saveProjectState").mockRejectedValueOnce(
+      Object.assign(new Error("EPIPE"), { code: "EPIPE" })
+    );
+
+    const doomed = manager.enqueueProjectStateUpdate(projectId, async (existing) => {
+      doomedStarted();
+      await doomedGate;
+      return { ...existing!, focusMode: true };
+    });
     const alsoDoomed = manager.enqueueProjectStateUpdate(projectId, (existing) => ({
       ...existing!,
       activeWorktreeId: "wt-doomed",
     }));
 
     release();
-    await parked;
-    await expect(doomed).rejects.toThrow("EPIPE");
-    await expect(alsoDoomed).rejects.toThrow("EPIPE");
-
-    // The runner survives its batch failing.
-    saves.mockRestore();
-    await manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+    // The doomed batch is now running and frozen, so this lands in the NEXT
+    // one — a batch the runner is already holding when the failure hits, rather
+    // than a fresh enqueue after the queue went idle, which a runner that
+    // dropped its followers on failure would also survive.
+    await started;
+    const follower = manager.enqueueProjectStateUpdate(projectId, (existing) => ({
       ...existing!,
       sidebarWidth: 512,
     }));
+    releaseDoomed();
+
+    await parked;
+    await expect(doomed).rejects.toThrow("EPIPE");
+    await expect(alsoDoomed).rejects.toThrow("EPIPE");
+    await expect(follower).resolves.toBeUndefined();
+
+    // Nothing the failed batch produced was committed, so the follower built on
+    // the last state that actually reached disk.
     const result = await manager.getProjectState(projectId);
     expect(result!.sidebarWidth).toBe(512);
+    expect(result!.focusMode).toBeUndefined();
+    expect(result!.activeWorktreeId).not.toBe("wt-doomed");
   });
 
-  it("lets updates queued across a deletion recreate the state", async () => {
-    const { release, parked } = openQueue();
+  it("lets a batch queued across a completed deletion recreate the state", async () => {
+    // Gate the FOLLOWERS rather than the parked update, so the deletion is
+    // provably finished — file unlinked, cache invalidated — before the next
+    // batch takes its read. Without that the unlink races the read and the test
+    // can pass while observing the pre-deletion file.
+    let releaseFollowers!: () => void;
+    const followerGate = new Promise<void>((resolve) => (releaseFollowers = resolve));
+    const { release, parked } = openQueue({ persist: false });
 
-    const recreate = manager.enqueueProjectStateUpdate(projectId, (existing) =>
-      makeState({ ...existing, sidebarWidth: 777 })
-    );
+    const seen: Array<ProjectState | null> = [];
+    const followers = [
+      manager.enqueueProjectStateUpdate(projectId, async (existing) => {
+        await followerGate;
+        seen.push(existing);
+        return makeState({ projectId, sidebarWidth: 777 });
+      }),
+      manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...existing!,
+        activeWorktreeId: "wt-after-delete",
+      })),
+    ];
 
     release();
     await parked;
     await manager.clearProjectState(projectId);
-    await recreate;
+    releaseFollowers();
+    await Promise.all(followers);
 
-    // The delete lands between the two batches, so the queued update writes a
-    // fresh file rather than resurrecting a half-deleted one.
-    const result = await manager.getProjectState(projectId);
+    // The batch read AFTER the delete, so it started from nothing.
+    expect(seen).toEqual([null]);
+    const fresh = new ProjectStateManager(tempDir);
+    const result = await fresh.getProjectState(projectId);
     expect(result!.sidebarWidth).toBe(777);
+    expect(result!.activeWorktreeId).toBe("wt-after-delete");
+    fresh.dispose();
   });
 
   it("drains in order when a shutdown awaits each project's update in turn", async () => {
@@ -527,6 +566,133 @@ describe("ProjectStateManager.enqueueProjectStateUpdate coalescing", () => {
     expect((await fresh.getProjectState(projectId))!.sidebarWidth).toBe(11);
     expect((await fresh.getProjectState(otherProjectId))!.sidebarWidth).toBe(22);
     fresh.dispose();
+  });
+
+  it("keeps folded callers pending until the save that carries them lands", async () => {
+    const { release, parked } = openQueue({ persist: false });
+
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => (releaseSave = resolve));
+    const realSave = manager.saveProjectState.bind(manager);
+    const saves = vi.spyOn(manager, "saveProjectState").mockImplementation(async (id, state) => {
+      await saveGate;
+      return realSave(id, state);
+    });
+
+    const settled: string[] = [];
+    const a = manager
+      .enqueueProjectStateUpdate(projectId, (existing) => ({ ...existing!, focusMode: true }))
+      .then(() => settled.push("a"));
+    const b = manager
+      .enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...existing!,
+        activeWorktreeId: "wt-9",
+      }))
+      .then(() => settled.push("b"));
+
+    release();
+    await parked;
+    // Both updaters have run and the save is dispatched and blocked. Drain the
+    // microtask queue: anything that was going to settle early would have.
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(saves).toHaveBeenCalledTimes(1);
+    expect(settled).toEqual([]);
+
+    releaseSave();
+    await Promise.all([a, b]);
+    expect(settled).toEqual(["a", "b"]);
+  });
+
+  it("survives an updater whose result cannot be structured-cloned", async () => {
+    const { release, parked } = openQueue({ persist: false });
+
+    // A function is not transferable, so cloning this to hand it to the next
+    // updater throws DataCloneError. Escaping the batch would kill the runner
+    // and leave every caller — and everything queued behind — pending forever.
+    const poisoner = manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      onSomething: () => {},
+    }));
+    const follower = manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      focusMode: true,
+    }));
+
+    release();
+    await parked;
+    // The guarantee is that everything SETTLES rather than hanging.
+    const outcomes = await Promise.allSettled([poisoner, follower]);
+    expect(outcomes.map((o) => o.status)).toEqual(["rejected", "rejected"]);
+
+    // And the runner is still alive for the next update.
+    await manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      sidebarWidth: 321,
+    }));
+    const result = await manager.getProjectState(projectId);
+    expect(result!.sidebarWidth).toBe(321);
+  });
+
+  it("writes nothing when every folded updater declines", async () => {
+    const { release, parked } = openQueue({ persist: false });
+    const saves = vi.spyOn(manager, "saveProjectState");
+
+    const declined = [
+      manager.enqueueProjectStateUpdate(projectId, () => null),
+      manager.enqueueProjectStateUpdate(projectId, () => null),
+    ];
+
+    release();
+    await parked;
+    await expect(Promise.all(declined)).resolves.toEqual([undefined, undefined]);
+    expect(saves).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when every folded updater throws, and each caller gets its own error", async () => {
+    const { release, parked } = openQueue({ persist: false });
+    const saves = vi.spyOn(manager, "saveProjectState");
+
+    const first = manager.enqueueProjectStateUpdate(projectId, () => {
+      throw new Error("first boom");
+    });
+    const second = manager.enqueueProjectStateUpdate(projectId, () => {
+      throw new Error("second boom");
+    });
+
+    release();
+    await parked;
+    await expect(first).rejects.toThrow("first boom");
+    await expect(second).rejects.toThrow("second boom");
+    expect(saves).not.toHaveBeenCalled();
+  });
+
+  it("picks up an update enqueued from inside a running updater", async () => {
+    const { release, parked } = openQueue({ persist: false });
+
+    let reentrant!: Promise<void>;
+    const outer = manager.enqueueProjectStateUpdate(projectId, (existing) => {
+      // Fire-and-forget from inside a running batch. It cannot join this batch,
+      // which is already frozen, so it must be picked up by a later one rather
+      // than left sitting in the queue with no runner.
+      reentrant = manager.enqueueProjectStateUpdate(projectId, (later) => ({
+        ...later!,
+        activeWorktreeId: "wt-reentrant",
+      }));
+      return { ...existing!, focusMode: true };
+    });
+    const sibling = manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      sidebarWidth: 246,
+    }));
+
+    release();
+    await Promise.all([parked, outer, sibling]);
+    await reentrant;
+
+    const result = await manager.getProjectState(projectId);
+    expect(result!.activeWorktreeId).toBe("wt-reentrant");
+    expect(result!.focusMode).toBe(true);
+    expect(result!.sidebarWidth).toBe(246);
   });
 
   it("still costs one save per update when nothing overlaps", async () => {

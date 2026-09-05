@@ -636,7 +636,7 @@ async function fireStateBurst(
   burstSize: number,
   round: number,
   latencies: number[]
-): Promise<{ expected: BurstExpectation[]; rejected: number }> {
+): Promise<BurstRun> {
   const expected: BurstExpectation[] = Array.from({ length: burstSize }, (_, i) => ({
     key: `burst-${round}-${i}`,
     value: `draft-${round}-${i}`,
@@ -677,34 +677,101 @@ async function fireStateBurst(
     })
   );
 
-  return { expected, rejected: settled.filter((s) => s.status === "rejected").length };
+  return {
+    enqueued: settled.length,
+    fulfilled: settled.filter((s) => s.status === "fulfilled").length,
+    rejected: settled.filter((s) => s.status === "rejected").length,
+  };
+}
+
+/**
+ * Every key the whole workload owes, built BEFORE any of it runs.
+ *
+ * Deriving the expectation from what executed is the trap this avoids: a loop
+ * that skipped rounds would shrink its own oracle to match, and a workload that
+ * did nothing at all would be graded against an empty list and post the best
+ * numbers in the suite.
+ */
+function burstExpectations(burstSize: number): BurstExpectation[] {
+  const expected: BurstExpectation[] = [];
+  for (let round = 0; round < STATE_BURST_REPEATS; round += 1) {
+    for (let i = 0; i < burstSize; i += 1) {
+      expected.push({ key: `burst-${round}-${i}`, value: `draft-${round}-${i}` });
+    }
+  }
+  return expected;
+}
+
+interface BurstRun {
+  /** Updates actually handed to the queue. */
+  enqueued: number;
+  /** Promises that came back fulfilled. */
+  fulfilled: number;
+  /** Promises that came back rejected. */
+  rejected: number;
 }
 
 async function runStateBurstWorkload(
   fixture: ProjectStateFixture,
   burstSize: number,
   latencies: number[]
-): Promise<{ expected: BurstExpectation[]; rejected: number }> {
-  const expected: BurstExpectation[] = [];
-  let rejected = 0;
+): Promise<BurstRun> {
+  const run: BurstRun = { enqueued: 0, fulfilled: 0, rejected: 0 };
   for (let round = 0; round < STATE_BURST_REPEATS; round += 1) {
     const outcome = await fireStateBurst(fixture, burstSize, round, latencies);
-    expected.push(...outcome.expected);
-    rejected += outcome.rejected;
+    run.enqueued += outcome.enqueued;
+    run.fulfilled += outcome.fulfilled;
+    run.rejected += outcome.rejected;
   }
-  return { expected, rejected };
+  return run;
 }
 
 /** Read back what actually landed, never what the manager's cache believes. */
 async function readStateFromDisk(fixture: ProjectStateFixture): Promise<{
   draftInputs?: Record<string, string>;
-  terminals?: unknown[];
+  terminals?: Array<{ title?: string; cwd?: string }>;
   tabGroups?: unknown[];
+  mruList?: unknown[];
 }> {
   return JSON.parse(await readFile(fixture.filePath, "utf8"));
 }
 
+/**
+ * Everything the burst was supposed to leave alone, plus everything it was
+ * supposed to change. Graded on BOTH passes.
+ *
+ * Counting terminals is not preservation: a save that kept 40 entries but
+ * stripped their titles and paths writes a much smaller payload and would score
+ * better on every number this scenario reports.
+ */
+function stateBurstMisses(
+  onDisk: Awaited<ReturnType<typeof readStateFromDisk>>,
+  expected: BurstExpectation[]
+): { updateMisses: number; preservationMisses: number } {
+  const drafts = onDisk.draftInputs ?? {};
+  const terminals = onDisk.terminals ?? [];
+  let preservationMisses = 0;
+
+  if (terminals.length !== STATE_PANELS) preservationMisses += 1;
+  if ((onDisk.tabGroups?.length ?? 0) !== Math.ceil(STATE_PANELS / 8)) preservationMisses += 1;
+  if ((onDisk.mruList?.length ?? 0) !== 24) preservationMisses += 1;
+  // The seeded payload itself, not just its shape: these strings are most of
+  // the bytes the coalescing is supposed to stop rewriting.
+  if (terminals.some((t) => !t.title || !t.cwd)) preservationMisses += 1;
+  // A seeded draft, which the burst adds to and must never replace wholesale.
+  if (drafts["panel-0"] === undefined) preservationMisses += 1;
+
+  return {
+    updateMisses: expected.filter(({ key, value }) => drafts[key] !== value).length,
+    preservationMisses,
+  };
+}
+
 async function runStateBurstScenario(burstSize: number): Promise<ScenarioSample> {
+  // Owed up front, so a workload that ran fewer rounds than it claims is graded
+  // against what it PROMISED rather than against what it happened to do.
+  const expected = burstExpectations(burstSize);
+
   // PASS 1 — timing and main-thread availability, with NO global instrumentation
   // installed. The counter proxies in pass 2 cost a trap per clone and per
   // stringify, which is work proportional to exactly the operations under
@@ -713,8 +780,7 @@ async function runStateBurstScenario(burstSize: number): Promise<ScenarioSample>
   const timed = await createProjectStateFixture(STATE_PANELS);
   let burstMs: number;
   let reading;
-  let expected: BurstExpectation[];
-  let rejected: number;
+  let timedRun: BurstRun;
   const latencies: number[] = [];
   let onDiskTimed;
 
@@ -726,14 +792,15 @@ async function runStateBurstScenario(burstSize: number): Promise<ScenarioSample>
     const startedAt = performance.now();
     let endedAt = startedAt;
     try {
-      ({ expected, rejected } = await runStateBurstWorkload(timed, burstSize, latencies));
+      timedRun = await runStateBurstWorkload(timed, burstSize, latencies);
     } finally {
       // Workload end recorded BEFORE any analysis: `stop()` sorts the gap list
       // to compute percentiles, and that work is not the subject.
       endedAt = performance.now();
       probe.stop();
     }
-    // Idempotent — the same window, analysed now rather than at close.
+    // Idempotent, and analysed once — this returns the reading `stop()` already
+    // computed rather than recomputing it.
     reading = probe.stop();
     burstMs = endedAt - startedAt;
     onDiskTimed = await readStateFromDisk(timed);
@@ -744,39 +811,39 @@ async function runStateBurstScenario(burstSize: number): Promise<ScenarioSample>
   // PASS 2 — the same workload on a fresh fixture, counted.
   const counted = await createProjectStateFixture(STATE_PANELS);
   let counts;
+  let countedRun: BurstRun;
   let onDiskCounted;
   try {
-    ({ counts } = await withProjectStateCounters(counted, () =>
+    const outcome = await withProjectStateCounters(counted, () =>
       runStateBurstWorkload(counted, burstSize, [])
-    ));
+    );
+    counts = outcome.counts;
+    countedRun = outcome.result;
     onDiskCounted = await readStateFromDisk(counted);
   } finally {
     counted.dispose();
   }
 
-  const totalUpdates = burstSize * STATE_BURST_REPEATS;
-  const draftsTimed = onDiskTimed.draftInputs ?? {};
-  const draftsCounted = onDiskCounted.draftInputs ?? {};
   // Both passes are graded. A pass that silently dropped half a burst would
   // otherwise hide behind the other one's clean predicate.
-  const onDiskUpdateMisses =
-    expected.filter(({ key, value }) => draftsTimed[key] !== value).length +
-    expected.filter(({ key, value }) => draftsCounted[key] !== value).length;
+  const timedMisses = stateBurstMisses(onDiskTimed, expected);
+  const countedMisses = stateBurstMisses(onDiskCounted, expected);
 
-  // The seeded fixture must survive the burst intact: a coalesced save that
-  // wrote only the last updater's object would land every draft key and quietly
-  // drop the terminal list the whole cost model rests on.
-  const fixturePreservationMisses =
-    (onDiskTimed.terminals?.length === STATE_PANELS ? 0 : 1) +
-    (onDiskCounted.terminals?.length === STATE_PANELS ? 0 : 1) +
-    (onDiskTimed.tabGroups?.length === Math.ceil(STATE_PANELS / 8) ? 0 : 1);
+  const owed = expected.length;
+  const enqueued = timedRun.enqueued + countedRun.enqueued;
+  const fulfilled = timedRun.fulfilled + countedRun.fulfilled;
 
   return {
     durationMs: burstMs,
     metrics: {
       burstSize,
       burstRepeats: STATE_BURST_REPEATS,
-      updatesRequested: totalUpdates,
+      // What the scenario OWES, and what it actually handed to the queue. The
+      // floors below sit on the observed pair, so a fixture or loop that quietly
+      // scaled itself down is a measurement failure rather than a better number.
+      updatesRequested: owed,
+      updatesEnqueued: enqueued,
+      updatesSettled: fulfilled,
       fixturePanelCount: onDiskTimed.terminals?.length ?? 0,
 
       // The headline: how many durable writes a burst of `burstSize` costs.
@@ -796,9 +863,11 @@ async function runStateBurstScenario(burstSize: number): Promise<ScenarioSample>
       callerAwaitMaxMs: latencies.length > 0 ? Math.max(...latencies) : 0,
 
       probeMisses: reading.probeMisses,
-      callerResolutionMisses: rejected,
-      onDiskUpdateMisses,
-      fixturePreservationMisses,
+      // Graded across BOTH passes: a rejection in the counted pass is just as
+      // much a failed durable write as one in the timed pass.
+      callerResolutionMisses: timedRun.rejected + countedRun.rejected + (owed * 2 - enqueued),
+      onDiskUpdateMisses: timedMisses.updateMisses + countedMisses.updateMisses,
+      fixturePreservationMisses: timedMisses.preservationMisses + countedMisses.preservationMisses,
     },
   };
 }
@@ -897,7 +966,12 @@ export const persistenceScenarios: PerfScenario[] = [
       "fixturePreservationMisses",
       "probeMisses",
     ],
-    workloadFloors: { updatesRequested: 5 * STATE_BURST_REPEATS, fixturePanelCount: STATE_PANELS },
+    workloadFloors: {
+      updatesRequested: 5 * STATE_BURST_REPEATS,
+      updatesEnqueued: 2 * 5 * STATE_BURST_REPEATS,
+      updatesSettled: 2 * 5 * STATE_BURST_REPEATS,
+      fixturePanelCount: STATE_PANELS,
+    },
     run: () => runStateBurstScenario(5),
   },
   {
@@ -915,7 +989,12 @@ export const persistenceScenarios: PerfScenario[] = [
       "fixturePreservationMisses",
       "probeMisses",
     ],
-    workloadFloors: { updatesRequested: 20 * STATE_BURST_REPEATS, fixturePanelCount: STATE_PANELS },
+    workloadFloors: {
+      updatesRequested: 20 * STATE_BURST_REPEATS,
+      updatesEnqueued: 2 * 20 * STATE_BURST_REPEATS,
+      updatesSettled: 2 * 20 * STATE_BURST_REPEATS,
+      fixturePanelCount: STATE_PANELS,
+    },
     run: () => runStateBurstScenario(20),
   },
 ];

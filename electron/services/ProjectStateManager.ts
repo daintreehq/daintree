@@ -185,8 +185,31 @@ export class ProjectStateManager {
    * Serialize read-merge-write updates per project. ipcMain.handle runs
    * handlers concurrently, so two unqueued read-modify-write cycles for the
    * same projectId read the same snapshot and the last write silently reverts
-   * the other's field. Each queued updater sees the previous update's
-   * committed state. Returning null from the updater skips the save.
+   * the other's field. Returning null from the updater skips the save.
+   *
+   * Updates that arrive while one is already being applied are folded into a
+   * single batch: each still runs, in order, against the previous one's result,
+   * but the batch costs ONE save instead of one per update. The returned
+   * promise still resolves only once that save is durable, and a failed save
+   * rejects every caller whose update it carried.
+   *
+   * The one guarantee that narrowed: an updater now sees the previous update's
+   * ACCEPTED state, which for a folded batch has not reached disk yet — before,
+   * it always saw committed state. Three consequences worth knowing:
+   *
+   *   - An updater must not await another update for the SAME project. Its own
+   *     batch cannot save until every updater in it has returned, so waiting on
+   *     one of them — including one enqueued earlier — deadlocks. Enqueuing
+   *     without awaiting is fine; it simply lands in a later batch.
+   *   - Terminal validation runs once, over the batch's final state, not after
+   *     every updater. Nothing invalid can reach disk either way, because the
+   *     filter is a per-entry predicate over whatever is saved; what changed is
+   *     that a mid-batch entry another updater goes on to repair is no longer
+   *     dropped before that updater can see it.
+   *   - Returning null means "I want no write", and such a caller resolves even
+   *     if the batch's save fails. An updater that returns null because the
+   *     state ALREADY satisfies it is making a claim about durability it cannot
+   *     see, and should return the state instead so it shares the save's fate.
    */
   enqueueProjectStateUpdate(projectId: string, updater: ProjectStateUpdater): Promise<void> {
     let resolve!: () => void;
@@ -233,7 +256,15 @@ export class ProjectStateManager {
     try {
       let batch = firstBatch;
       for (;;) {
-        await this.runBatch(projectId, batch);
+        // `runBatch` settles every entry itself and is not supposed to throw.
+        // If it ever does, this catch keeps the runner alive: the alternative
+        // is an exception unwinding out of a promise nobody awaits, leaving
+        // this batch AND everything queued behind it pending forever.
+        try {
+          await this.runBatch(projectId, batch);
+        } catch (error) {
+          for (const entry of batch) entry.reject(error);
+        }
         const pending = this.writeQueues.get(projectId);
         // Nothing waiting. The `finally` below releases the claim in this same
         // synchronous step, so no enqueue can slip in between the two and be
@@ -283,20 +314,26 @@ export class ProjectStateManager {
     const outcomes: UpdateOutcome[] = [];
 
     for (const entry of batch) {
-      // Every updater gets its own copy, including the first.
-      //
-      // An updater may mutate what it is handed and THEN throw or return null,
-      // and that mutation has to be discarded — which is what happens today,
-      // where each update reads its own copy and a declined write simply
-      // abandons it. `shutdown.ts` and `projectSessionJournal.ts` both mutate
-      // `state.terminals[n]` in place and return the same object, so this is
-      // the live shape, not a hypothetical one.
-      //
-      // Handing the first updater the read's own clone would save a copy and
-      // was tried: it lets a first updater that mutates and then declines write
-      // straight through to the state the rest of the batch builds on.
-      const input = this.cloneProjectState(state);
       try {
+        // Every updater gets its own copy, including the first.
+        //
+        // An updater may mutate what it is handed and THEN throw or return
+        // null, and that mutation has to be discarded — which is what happens
+        // today, where each update reads its own copy and a declined write
+        // simply abandons it. `shutdown.ts` and `projectSessionJournal.ts` both
+        // mutate `state.terminals[n]` in place and return the same object, so
+        // this is the live shape, not a hypothetical one.
+        //
+        // Handing the first updater the read's own clone would save a copy and
+        // was tried: it lets a first updater that mutates and then declines
+        // write straight through to the state the rest of the batch builds on.
+        //
+        // INSIDE the try: `state` is a previous updater's return value, which
+        // is arbitrary caller data. A value structuredClone rejects (a function,
+        // a proxy, a class with an unclonable field) throws here, and an escape
+        // would kill the runner and leave every caller in this batch — and
+        // everything queued behind it — pending forever.
+        const input = this.cloneProjectState(state);
         const updated = await entry.updater(input);
         if (updated === null) {
           outcomes.push({ entry, kind: "noop" });
@@ -319,7 +356,11 @@ export class ProjectStateManager {
     let saveError: { error: unknown } | undefined;
     if (pendingSave) {
       try {
-        await this.saveProjectState(projectId, pendingSave);
+        // The last accepted result is the one object in the batch nothing else
+        // re-copies: every earlier one was cloned to become the next updater's
+        // input. Take an owned snapshot so a caller that kept a reference to
+        // what it returned cannot change what gets written after the fact.
+        await this.saveProjectState(projectId, this.cloneProjectState(pendingSave)!);
       } catch (error) {
         saveError = { error };
       }

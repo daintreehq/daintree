@@ -1347,9 +1347,16 @@ export class ProjectStore {
       () =>
         this.enqueueProjectStateUpdate(projectId, (existing) => {
           if (!existing) return null;
-          const rewritten = rewriteProjectStatePaths(existing, oldPath, newPath);
-          // Same object reference back ⇒ nothing rebased ⇒ skip the disk write.
-          return rewritten === existing ? null : rewritten;
+          // Returned even when nothing was rebased, rather than null.
+          //
+          // "Nothing to rebase" and "someone else already rebased this" look
+          // identical from here — both hand back the same object reference. A
+          // null would resolve this promise without sharing the save's outcome,
+          // so a batch-mate's rewrite that then failed to reach disk would be
+          // reported to the relocation as a success. Returning the state costs
+          // an unchanged write on the genuinely-nothing-to-do path, which a
+          // relocation does once.
+          return rewriteProjectStatePaths(existing, oldPath, newPath);
         }),
       async () => {
         // Dynamic import breaks the ProjectStore ⇄ windowState cycle at module
