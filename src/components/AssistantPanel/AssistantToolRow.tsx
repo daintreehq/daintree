@@ -166,12 +166,7 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
   const status = duration ?? (statusRestatesVerb ? null : label);
 
   return (
-    <li
-      className={cn(
-        "flex items-start gap-2 rounded-md px-2 py-1.5 assistant-text-base",
-        "bg-[var(--assistant-inset)]/60"
-      )}
-    >
+    <li className="assistant-tool-row flex items-start gap-2 px-2 py-2 assistant-text-base">
       <Icon
         aria-hidden="true"
         className={cn("mt-px size-3.5 shrink-0", glyph, spin && "animate-spin-slow")}
@@ -440,11 +435,10 @@ export function AssistantToolGroupHeader({
       aria-controls={panelId}
       aria-label={accessibleName}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+        "assistant-tool-header flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left",
         "assistant-text-sm",
-        // The same surface the rows carry. This is the whole difference between a row
-        // that reads as an executed call and one that reads as a caption.
-        "bg-[var(--assistant-inset)]/60",
+        // A disclosure rule groups the calls without filling every row.
+        "border border-[var(--assistant-border)]",
         "transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)]",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
       )}
