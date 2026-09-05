@@ -575,7 +575,8 @@ export const gitPipelineScenarios: PerfScenario[] = [
       async function runBurst(write: () => void): Promise<{
         spawns: number;
         statusPasses: number;
-        signals: number;
+        checkIgnores: number;
+        flushes: number;
         settled: boolean;
       }> {
         const from = recorder.cursor();
@@ -587,10 +588,19 @@ export const gitPipelineScenarios: PerfScenario[] = [
         );
         const settled = await quiesceGitSpawns(BURST_SETTLE_MS, BURST_FLUSH_TIMEOUT_MS);
         const window = gitSpawnsSince(mark);
+        // One write burst does not produce one flush: the leading-edge fast
+        // path fires on the first batch the watcher delivers and the ramp
+        // trails the rest, so a burst of N files routinely flushes twice.
+        // Dividing by the observed flush count is what makes these numbers
+        // per-flush, which is how the issue frames the cost — a raw per-burst
+        // tally would read as double the real figure.
+        const flushes = sawSignal ? browserSignals(recorder, from) : 0;
+        const per = (n: number) => (flushes > 0 ? n / flushes : 0);
         return {
-          spawns: window.count,
-          statusPasses: window.bySubcommand["status"] ?? 0,
-          signals: sawSignal ? browserSignals(recorder, from) : 0,
+          spawns: per(window.count),
+          statusPasses: per(window.bySubcommand["status"] ?? 0),
+          checkIgnores: per(window.bySubcommand["check-ignore"] ?? 0),
+          flushes,
           settled,
         };
       }
@@ -641,17 +651,23 @@ export const gitPipelineScenarios: PerfScenario[] = [
           metrics: {
             gitSpawnsPerIgnoredFlush: ignoredArm.spawns,
             statusPassesPerIgnoredFlush: ignoredArm.statusPasses,
+            // Named separately so the composition is legible rather than
+            // inferred: the whole change is one status pass per flush becoming
+            // one check-ignore, and a flat total would hide that.
+            checkIgnoresPerIgnoredFlush: ignoredArm.checkIgnores,
+            ignoredFlushes: ignoredArm.flushes,
             gitSpawnsPerTrackedFlush: trackedArm.spawns,
+            statusPassesPerTrackedFlush: trackedArm.statusPasses,
             gitSpawnsPerIgnoreEditFlush: ignoreEditArm.spawns,
             // Fail closed: a watcher that never fired is the cheapest possible
             // sample, and would otherwise read as a perfect result.
-            browserSignalMisses: ignoredArm.signals >= 1 && ignoredArm.settled ? 0 : 1,
+            browserSignalMisses: ignoredArm.flushes >= 1 && ignoredArm.settled ? 0 : 1,
             trackedRefreshMisses: trackedArm.statusPasses > 0 && trackedRefreshed ? 0 : 1,
             ignoreEditRefreshMisses: ignoreEditArm.statusPasses > 0 ? 0 : 1,
             spawnObserverMisses: observerMisses,
           },
           notes:
-            ignoredArm.signals === 0
+            ignoredArm.flushes === 0
               ? "no file-browser signal observed for the ignored burst"
               : undefined,
         };
