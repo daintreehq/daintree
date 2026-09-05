@@ -2330,6 +2330,16 @@ export class PluginService {
         this.removeHandlers(pluginId);
         this.unregisterImperativePluginActions(pluginId);
       },
+      // A protocol violation terminates the worker for good (#12276). Provenance
+      // is already recorded by `onActivationResult`; this releases the runtime
+      // state the owner holds — worker entry, activation cache, prompts — so the
+      // plugin can be re-opened rather than left stuck dead.
+      onTerminalFailure: () => {
+        terminalFailure = true;
+        // Guarded to the live entry: a replacement worker must not be torn down
+        // by its predecessor's failure.
+        if (this.pluginWorkers.get(pluginId) === entry) this.deactivateWorker(pluginId);
+      },
       // Fires on every activation outcome (initial + each reload). Keeps the
       // provenance `loadError` in sync so a fix-and-save clears a stale error
       // and a freshly-introduced one is recorded — the first-activation promise
@@ -2355,6 +2365,8 @@ export class PluginService {
     // for a prod worker — which has no file watcher to auto-recover — we tear the
     // worker down below so a re-open (Settings → Retry) re-forks and re-runs.
     let lastActivationOk: boolean | undefined;
+    /** Set when the worker broke the protocol and was terminated (#12276). */
+    let terminalFailure = false;
 
     const entry = { workerHost, bridge, revoke };
     this.pluginWorkers.set(pluginId, entry);
@@ -2379,6 +2391,14 @@ export class PluginService {
       this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       console.error(`[PluginService] Failed to start worker for ${pluginId}:`, err);
       throw err;
+    }
+
+    // A protocol violation during boot already tore the worker down and dropped
+    // the entry, so the raced-unload check below would read as a clean return
+    // and let `activatePlugin` cache the id as activated. Rethrow instead: the
+    // recovery path is a re-open that forks a fresh worker.
+    if (terminalFailure) {
+      throw new Error(`Plugin "${pluginId}" dev worker stopped: protocol violation`);
     }
 
     // If an unload raced the fork, the cleanup already disposed everything.
@@ -2441,6 +2461,9 @@ export class PluginService {
     // → Retry that re-runs `activatePlugin`; tear the failed worker down and
     // rethrow so the in-flight entry is dropped and the id is never cached,
     // mirroring the in-process loader's rethrow-on-activate-failure semantics.
+    if (terminalFailure) {
+      throw new Error(`Plugin "${pluginId}" dev worker stopped: protocol violation`);
+    }
     if (lastActivationOk === false && !plugin.devMode) {
       cleanup();
       throw new Error(`Plugin "${pluginId}" activate() failed`);
@@ -4487,7 +4510,7 @@ export class PluginService {
         skipped++;
         continue;
       }
-      if (this.deactivateIdleWorker(pluginId)) {
+      if (this.deactivateWorker(pluginId)) {
         disposed.push(pluginId);
       } else {
         skipped++;
@@ -4543,15 +4566,20 @@ export class PluginService {
   }
 
   /**
-   * Narrow worker teardown for the idle-dispose path: the worker, bridge, and
-   * activate-time imperative registrations go; the plugin, its manifest
-   * contributions, and its provenance record stay. The next lazy trigger
-   * (dispatch, panel open, forge/decoration pull) re-forks via
-   * `activateViaWorker` exactly like a dev reload re-registers over
-   * `clearPriorRegistrations` — that cycle is the proof this teardown is
-   * re-entrant. Contrast `unloadPlugin`, which removes the plugin entirely.
+   * Narrow worker teardown: the worker, bridge, and activate-time imperative
+   * registrations go; the plugin, its manifest contributions, and its
+   * provenance record stay. The next lazy trigger (dispatch, panel open,
+   * forge/decoration pull) re-forks via `activateViaWorker` exactly like a dev
+   * reload re-registers over `clearPriorRegistrations` — that cycle is the
+   * proof this teardown is re-entrant. Contrast `unloadPlugin`, which removes
+   * the plugin entirely.
+   *
+   * Two callers: the idle-dispose sweep, and a terminal protocol violation
+   * (#12276), which needs exactly this shape — the worker is unrecoverable, but
+   * the plugin itself did nothing to lose its contributions, and clearing the
+   * activation cache is what lets a re-open fork a fresh one.
    */
-  private deactivateIdleWorker(pluginId: string): boolean {
+  private deactivateWorker(pluginId: string): boolean {
     const entry = this.pluginWorkers.get(pluginId);
     if (!entry) return false;
     this.activatedPlugins.delete(pluginId);
@@ -4561,7 +4589,7 @@ export class PluginService {
       try {
         cleanup();
       } catch (err) {
-        console.error(`[PluginService] Idle-dispose cleanup for "${pluginId}" threw:`, err);
+        console.error(`[PluginService] Worker teardown cleanup for "${pluginId}" threw:`, err);
       }
       this.cleanupMap.delete(pluginId);
     }

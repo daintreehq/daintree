@@ -63,6 +63,7 @@ import type {
   ProcessResizeParams,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
+import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
@@ -109,6 +110,14 @@ export interface PluginDevWorkerMainBridgeDeps {
   onActivationResult?: (
     result: { ok: true } | { ok: false; error: string; stack?: string }
   ) => void;
+  /**
+   * Fires once when this worker breaks the protocol and the instance is
+   * terminated (#12276). Distinct from `onActivationResult`, which only records
+   * provenance: the owner also has to release the runtime state it holds — the
+   * worker entry, the activation cache, and any prompt this plugin left on
+   * screen — or the plugin is stuck dead with no path back.
+   */
+  onTerminalFailure?: () => void;
 }
 
 interface PendingInvoke {
@@ -147,8 +156,14 @@ export class PluginDevWorkerMainBridge {
   private readonly onActivationResult?: (
     result: { ok: true } | { ok: false; error: string; stack?: string }
   ) => void;
+  private readonly onTerminalFailure?: () => void;
 
   private disposed = false;
+  /**
+   * Latched once this worker generation has broken the protocol. Terminal: the
+   * plugin instance is torn down, so it is never cleared.
+   */
+  private protocolViolated = false;
   private invokeSeq = 1;
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
 
@@ -221,6 +236,7 @@ export class PluginDevWorkerMainBridge {
     this.getCapabilities = deps.getCapabilities;
     this.clearPriorRegistrations = deps.clearPriorRegistrations;
     this.onActivationResult = deps.onActivationResult;
+    this.onTerminalFailure = deps.onTerminalFailure;
 
     this.activationPromise = new Promise<void>((resolve, reject) => {
       this.activationResolve = resolve;
@@ -238,6 +254,7 @@ export class PluginDevWorkerMainBridge {
     this.workerHost.on("reloading", this.onReloading);
     this.workerHost.on("exit", this.onWorkerExit);
     this.workerHost.on("crash-loop", this.onCrashLoop);
+    this.workerHost.on("protocol-violation", this.onProtocolViolation);
   }
 
   /** Resolves once the worker's first `activate()` completes (or rejects). */
@@ -253,6 +270,7 @@ export class PluginDevWorkerMainBridge {
     this.workerHost.off("reloading", this.onReloading);
     this.workerHost.off("exit", this.onWorkerExit);
     this.workerHost.off("crash-loop", this.onCrashLoop);
+    this.workerHost.off("protocol-violation", this.onProtocolViolation);
     for (const dispose of this.subscriptionDisposers.values()) {
       try {
         dispose();
@@ -418,8 +436,114 @@ export class PluginDevWorkerMainBridge {
     this.failActivation(`Plugin "${this.pluginId}" dev worker crash loop (code ${code})`);
   };
 
-  private onWorkerMessage = (msg: PluginWorkerToHostMessage): void => {
+  /** The host rejected a message at the transport boundary (#12276). */
+  private onProtocolViolation = (reason: string): void => {
+    this.failProtocolViolation(reason);
+  };
+
+  /**
+   * Terminal, plugin-scoped failure for a worker that broke the protocol.
+   *
+   * Mirrors {@link onCrashLoop}'s reporting — `onActivationResult` is the only
+   * channel that reaches provenance after a successful activation, so a
+   * violation on a later reload still records a `loadError` — then tears the
+   * instance down: registrations, subscriptions, providers and spawned
+   * processes go with the generation, and the worker itself is stopped rather
+   * than left posting messages main will not read.
+   *
+   * The reason is a fixed main-authored phrase. Nothing derived from the
+   * rejected message reaches it: this string becomes the plugin's user-visible
+   * `loadError`, and Zod's own error text inlines the offending input.
+   *
+   * Each teardown step is contained separately so a throw in one cannot leave
+   * the misbehaving worker running.
+   */
+  private failProtocolViolation(reason: string): void {
+    if (this.protocolViolated) {
+      // A first pass whose reporting threw must not leave the worker running.
+      this.contain("worker dispose", () => this.workerHost.dispose());
+      return;
+    }
     if (this.disposed) return;
+    this.protocolViolated = true;
+    const error = `Plugin "${this.pluginId}" dev worker stopped: ${reason}`;
+    // Every step is contained on its own and the teardown sits in a `finally`:
+    // a throw anywhere in the reporting must not be what leaves the misbehaving
+    // worker running — or, worse, escape into `uncaughtException` and cause the
+    // very fatal recovery this whole path exists to prevent.
+    try {
+      this.contain("failure log", () => logger.error(`[${this.pluginId}] ${error}`));
+      // Through the latch, not around it (#12282): a registration this
+      // generation already rejected names the thing the author has to fix, and
+      // this phrase is the vaguer of the two. Latching also stops a later
+      // `activated` clearing the loadError.
+      this.contain("activation failure report", () => this.failActivation(error));
+      // Belt and braces on the gate itself: `failActivation` skips its own
+      // rejection when the latch already held, and skips the rest if the
+      // provenance listener throws. `rejectActivation` is idempotent, so a
+      // second call is inert once the promise has settled.
+      this.contain("activation rejection", () => this.rejectActivation(new Error(error)));
+      this.contain("generation retire", () => this.retireGeneration(error));
+      this.contain("bridge dispose", () => this.dispose());
+    } finally {
+      this.contain("worker dispose", () => this.workerHost.dispose());
+      // Owner-level teardown last: it re-enters `dispose()` on both sides, which
+      // is inert by now, and it is the step that lets the plugin be retried.
+      this.contain("owner teardown", () => this.onTerminalFailure?.());
+    }
+  }
+
+  /** Run one teardown step, absorbing (and best-effort logging) a throw. */
+  private contain(what: string, step: () => void): void {
+    try {
+      step();
+    } catch (err) {
+      try {
+        logger.error(`[${this.pluginId}] ${what} threw during protocol teardown`, err);
+      } catch {
+        // swallowed
+      }
+    }
+  }
+
+  /**
+   * An exception from validating, reporting or dispatching a worker message.
+   * The handlers below report their own operational failures, so reaching here
+   * means the reporting itself broke — terminal, and it must not escape as an
+   * uncaught exception or an unhandled rejection.
+   */
+  private failHandlerException(err: unknown): void {
+    try {
+      logger.error(`[${this.pluginId}] worker message handling threw`, err);
+    } catch {
+      // swallowed: the teardown below is what matters
+    }
+    this.failProtocolViolation("worker message handling failed");
+  }
+
+  private onWorkerMessage = (raw: unknown): void => {
+    if (this.disposed || this.protocolViolated) return;
+    // Second ingress point (#12276): `worker-message` is an ordinary emitter
+    // event, not a runtime-typed channel, so validate here too rather than
+    // trusting that every emitter upstream already did. Validation and its own
+    // diagnostic log sit INSIDE the guard — a logger that throws must not be
+    // what escapes this listener.
+    try {
+      const parsed = parseWorkerToHostMessage(raw);
+      if (!parsed.ok) {
+        logger.error(`[${this.pluginId}] worker message violates the protocol`, undefined, {
+          issues: parsed.issues,
+        });
+        this.failProtocolViolation("worker sent a malformed message");
+        return;
+      }
+      this.dispatchWorkerMessage(parsed.message);
+    } catch (err) {
+      this.failHandlerException(err);
+    }
+  };
+
+  private dispatchWorkerMessage(msg: PluginWorkerToHostMessage): void {
     // An `activated` from a child that has already been retired describes the
     // outgoing generation. Committing on it would close the incoming
     // generation's registration gate before that worker has proposed anything
@@ -447,7 +571,7 @@ export class PluginDevWorkerMainBridge {
         this.failActivation(msg.error);
         return;
       case "host-call":
-        void this.handleHostCall(msg);
+        void this.handleHostCall(msg).catch((err) => this.failHandlerException(err));
         return;
       case "host-cancel": {
         const controller = this.hostCallAborts.get(msg.requestId);
@@ -464,11 +588,13 @@ export class PluginDevWorkerMainBridge {
             ? { registrationKey: msg.registrationKey }
             : undefined;
         if (registration) this.pendingRegistrations.add(registration);
-        void this.handleHostNotify(msg, registration);
+        void this.handleHostNotify(msg, registration).catch((err) =>
+          this.failHandlerException(err)
+        );
         return;
       }
       case "subscribe":
-        void this.handleSubscribe(msg);
+        void this.handleSubscribe(msg).catch((err) => this.failHandlerException(err));
         return;
       case "unsubscribe": {
         const dispose = this.subscriptionDisposers.get(msg.subscriptionId);
@@ -494,11 +620,19 @@ export class PluginDevWorkerMainBridge {
         // Handled inside PluginDevWorkerHost; never re-emitted here.
         return;
     }
-  };
+  }
 
   private async handleHostCall(
     msg: Extract<PluginWorkerToHostMessage, { type: "host-call" }>
   ): Promise<void> {
+    // A second call under an id that is still outstanding is a protocol
+    // violation, not a retry: the two would share one reply and one
+    // cancellation handle, so the reply is no longer attributable to either.
+    // Ids become reusable once a call settles and `finally` clears the entry.
+    if (this.hostCallAborts.has(msg.requestId)) {
+      this.failProtocolViolation("worker reused an outstanding request id");
+      return;
+    }
     // Track an AbortController so a worker `host-cancel` can cancel the in-flight
     // read/mutation (signal-bearing host methods honor it).
     const controller = new AbortController();

@@ -553,4 +553,176 @@ describe("PluginDevWorkerHost", () => {
     });
     host.dispose();
   });
+
+  describe("protocol violations (#12276)", () => {
+    /** Start a host with a live child and drop the boot `ready` handshake. */
+    async function startedHost() {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const forwarded: any[] = [];
+      const violations: string[] = [];
+      host.on("worker-message", (m) => forwarded.push(m));
+      host.on("protocol-violation", (reason: string) => violations.push(reason));
+      void host.start();
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      return { host, child, forwarded, violations };
+    }
+
+    it("contains a malformed message instead of throwing out of the child listener", async () => {
+      const { child, forwarded, violations } = await startedHost();
+      // Each of these read `msg.type` off a non-object before this fix and threw
+      // a TypeError straight into `uncaughtException`.
+      expect(() => child.emit("message", null)).not.toThrow();
+      expect(forwarded).toHaveLength(0);
+      expect(violations).toEqual(["worker sent a malformed message"]);
+    });
+
+    it("rejects primitives, unknown tags and methods outside the allowlist", async () => {
+      for (const raw of [
+        42,
+        "host-call",
+        { type: "nope" },
+        { type: "host-call", requestId: "c1", method: "fs.unlink" },
+        { type: "host-notify", method: "fs.readFile" },
+        { type: "subscribe", subscriptionId: "s1", kind: "everything" },
+        { type: "invoke-result", requestId: "i1", ok: "maybe" },
+      ]) {
+        const { host, child, forwarded, violations } = await startedHost();
+        expect(() => child.emit("message", raw), JSON.stringify(raw)).not.toThrow();
+        expect(forwarded, JSON.stringify(raw)).toHaveLength(0);
+        expect(violations, JSON.stringify(raw)).toEqual(["worker sent a malformed message"]);
+        host.dispose();
+      }
+    });
+
+    it("admits a large but legitimate payload", async () => {
+      // No blanket size ceiling. A plugin writing a big file through
+      // `host.fs.writeFile` is doing something the host allows with no size
+      // contract of its own, so killing it would be a worse bug than the crash
+      // this validation fixes. Deliberately past the 32 MiB ceiling an earlier
+      // draft imposed, so restoring one fails here.
+      const { child, forwarded, violations } = await startedHost();
+      const contents = "x".repeat(33 * 1024 * 1024);
+      child.emit("message", {
+        type: "host-call",
+        requestId: "c1",
+        method: "fs.writeFile",
+        params: { path: "/tmp/big.bin", contents },
+      });
+      expect(violations).toHaveLength(0);
+      expect(forwarded).toHaveLength(1);
+      expect(forwarded[0].params.contents).toHaveLength(contents.length);
+    });
+
+    it("does not count a protocol violation as a crash or respawn the worker", async () => {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const crashLoop = vi.fn();
+      const exits = vi.fn();
+      const violations: string[] = [];
+      host.on("crash-loop", crashLoop);
+      host.on("exit", exits);
+      host.on("protocol-violation", (reason: string) => violations.push(reason));
+      host.start().catch(() => undefined);
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+
+      // Three violations in a row is what the crash window would trip on, if a
+      // live-but-misbehaving worker were (wrongly) accounted for as a crash.
+      child.emit("message", null);
+      child.emit("exit", 0);
+      await flush();
+
+      expect(violations).toEqual(["worker sent a malformed message"]);
+      expect(crashLoop).not.toHaveBeenCalled();
+      // No respawn: the worker is stopped, not restarted under a fresh fork.
+      expect(forkMock).toHaveBeenCalledTimes(1);
+      // dispose() already ran, so the exit is swallowed rather than reported.
+      expect(exits).not.toHaveBeenCalled();
+    });
+
+    it("contains a throwing worker-message listener", async () => {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const violations: string[] = [];
+      host.on("worker-message", () => {
+        throw new Error("bridge blew up");
+      });
+      host.on("protocol-violation", (reason: string) => violations.push(reason));
+      void host.start();
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      expect(() =>
+        child.emit("message", { type: "host-call", requestId: "c1", method: "getWorktrees" })
+      ).not.toThrow();
+      expect(violations).toEqual(["worker message handling failed"]);
+      expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    });
+
+    it("stops the worker even when the violation listener throws", async () => {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.start().catch(() => undefined);
+      host.on("protocol-violation", () => {
+        throw new Error("bridge teardown blew up");
+      });
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      expect(() => child.emit("message", null)).not.toThrow();
+      expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    });
+
+    it("stops the worker even with no bridge listening", async () => {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const ready = host.start();
+      ready.catch(() => undefined);
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      expect(() => child.emit("message", null)).not.toThrow();
+      await expect(ready).rejects.toThrow(/malformed message/);
+      expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    });
+
+    it("ignores anything the child says after teardown", async () => {
+      const { host, child, forwarded } = await startedHost();
+      host.dispose();
+      expect(() => child.emit("message", null)).not.toThrow();
+      expect(() =>
+        child.emit("message", { type: "host-call", requestId: "c1", method: "getWorktrees" })
+      ).not.toThrow();
+      expect(forwarded).toHaveLength(0);
+    });
+
+    it("stops forwarding worker output once a violation kills it", async () => {
+      const { child } = await startedHost();
+      loggerMock.info.mockClear();
+      // Positive control: while the worker is live, its stdout is forwarded.
+      child.stdout.push(Buffer.from("still running"));
+      await flush();
+      expect(loggerMock.info).toHaveBeenCalledWith(expect.stringContaining("still running"));
+
+      child.emit("message", null);
+      child.stdout.push(Buffer.from("noise on the way out"));
+      await flush();
+      expect(loggerMock.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("noise on the way out")
+      );
+    });
+
+    // The suppression above is scoped to the terminal case on purpose. A normal
+    // unload/idle-dispose/quit runs the plugin's own disposer, and a throw from
+    // it reaches the worker's stderr AFTER dispose() has set `isDisposed` — so
+    // gating on that flag would silently discard a broken disposer's only signal.
+    it("still forwards worker output through a graceful teardown", async () => {
+      const { host, child } = await startedHost();
+      loggerMock.warn.mockClear();
+      host.dispose();
+      child.stderr.push(Buffer.from("[PluginDevWorker] Plugin cleanup threw: boom"));
+      await flush();
+      expect(loggerMock.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Plugin cleanup threw: boom")
+      );
+    });
+  });
 });
