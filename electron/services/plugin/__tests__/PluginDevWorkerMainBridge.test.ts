@@ -1201,30 +1201,22 @@ describe("PluginDevWorkerMainBridge", () => {
       return () => seenSignal;
     };
 
-    it("forwards a signal that the reload boundary aborts", async () => {
+    it("forwards a signal that the generation boundary aborts", async () => {
       const { host, workerHost, bridge } = makeBridge();
       bridge.waitForActivation().catch(() => {});
       const signal = await openPrompt(host, workerHost);
       expect(signal()).toBeDefined();
       expect(signal()?.aborted).toBe(false);
 
-      workerHost.emit("reloading");
-
-      expect(signal()?.aborted).toBe(true);
-    });
-
-    it("aborts the prompt when the worker crashes instead", async () => {
-      const { host, workerHost, bridge } = makeBridge();
-      bridge.waitForActivation().catch(() => {});
-      const signal = await openPrompt(host, workerHost);
-
+      // A crash is the only boundary this bridge is carried across now — a
+      // rebuild disposes the bridge outright instead (#12277).
       workerHost.emit("exit", 139, false);
 
       expect(signal()?.aborted).toBe(true);
     });
   });
 
-  it("still cancels prompts when registration cleanup throws on reload (#12279)", async () => {
+  it("still cancels prompts when registration cleanup throws at the boundary (#12279)", async () => {
     const clear = vi.fn(() => {
       throw new Error("registration cleanup exploded");
     });
@@ -1245,7 +1237,7 @@ describe("PluginDevWorkerMainBridge", () => {
 
     // A throwing teardown step must not strand a dialog on the user's screen,
     // nor skip the rest of the cascade (#9322).
-    expect(() => workerHost.emit("reloading")).not.toThrow();
+    expect(() => workerHost.emit("exit", 139, false)).not.toThrow();
     expect(seenSignal?.aborted).toBe(true);
     expect(clear).toHaveBeenCalled();
   });
@@ -1315,9 +1307,9 @@ describe("PluginDevWorkerMainBridge", () => {
     await flush();
     clear.mockClear();
 
-    // A reload already emitted `reloading` and retired the generation before
-    // this lands, so the exit itself must not tear registrations down a second
-    // time — that would drop what the incoming generation just registered.
+    // An expected exit is a deliberate stop, and the bridge is disposed before
+    // the host that owns the worker — so a straggler admitted in the gap must
+    // not tear registrations down on its way past.
     workerHost.emit("exit", 0, true);
 
     expect(disposeProvider).not.toHaveBeenCalled();
