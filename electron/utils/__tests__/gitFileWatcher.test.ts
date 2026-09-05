@@ -2062,6 +2062,54 @@ describe("GitFileWatcher", () => {
       expect(checkIgnoredPaths).not.toHaveBeenCalled();
     });
 
+    it.each([".gitattributes", ".gitmodules", ".GITIGNORE"])(
+      "refreshes for a %s write",
+      async (name) => {
+        const onChange = vi.fn();
+        // `.gitattributes` changes normalisation, so it decides whether a CRLF
+        // working file still compares equal to its LF blob; `.gitmodules`
+        // carries submodule.<name>.ignore. Both change what status reports
+        // about OTHER paths. The name is matched case-insensitively because on
+        // APFS or NTFS `.GITIGNORE` is the same file to git.
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([p(name)]));
+
+        const { cb } = await startClassifyingWatcher({ onChange });
+        fireEvents(cb, [{ type: "update", path: p(name) }]);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(1);
+        expect(checkIgnoredPaths).not.toHaveBeenCalled();
+      }
+    );
+
+    it("drops the cached tracked-ignored answer when a .gitignore is written", async () => {
+      const onChange = vi.fn();
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
+      const { cb } = await startClassifyingWatcher({ onChange });
+
+      // Warm the probe to "no hazard" through a normal skippable burst.
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+      await vi.advanceTimersByTimeAsync(100);
+      await flushClassification();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(hasTrackedIgnoredPaths).toHaveBeenCalledTimes(1);
+
+      // A rule edit can newly ignore a directory holding a tracked file, which
+      // creates the hazard the cached answer denies — and it reaches no
+      // watched git-internal file, so nothing else would invalidate it.
+      fireEvents(cb, [{ type: "update", path: p(".gitignore") }]);
+      await vi.advanceTimersByTimeAsync(100);
+      vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(true);
+
+      // Same skippable shape as the first burst, so the flow reaches the
+      // probe again rather than short-circuiting on membership.
+      onChange.mockClear();
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+      await vi.advanceTimersByTimeAsync(100);
+      await flushClassification();
+      expect(hasTrackedIgnoredPaths).toHaveBeenCalledTimes(2);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
     it("refreshes for a nested .gitignore write", async () => {
       const onChange = vi.fn();
       const { cb } = await startClassifyingWatcher({ onChange });

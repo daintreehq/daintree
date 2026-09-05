@@ -78,8 +78,26 @@ const WORKTREE_CLASSIFY_TIMEOUT_MS = 2_000;
 /** Minimum gap between classification-failure warnings, per watcher. */
 const CLASSIFY_WARN_THROTTLE_MS = 30_000;
 
-/** The ignore-rule file, at any depth. A burst touching one always refreshes. */
-const GITIGNORE_FILE_NAME = ".gitignore";
+/**
+ * Worktree files whose contents change what `git status` reports about OTHER
+ * paths, at any depth. A burst touching one always refreshes.
+ *
+ * None of them can be classified on their own membership: each may itself be
+ * untracked and ignored — `.gitignore` can name itself, or `.git/info/exclude`
+ * can name it — in which case plain check-ignore reports it and the burst
+ * would look skippable while the rule change it carried altered the listing.
+ *
+ * `.gitattributes` earns its place through normalisation rather than ignore
+ * rules: flipping `text`/`-text` changes whether a CRLF working file still
+ * compares equal to its LF blob. `.gitmodules` carries
+ * `submodule.<name>.ignore`, which hides or reveals submodule modifications.
+ *
+ * Compared case-insensitively: on APFS or NTFS a file written as `.GITIGNORE`
+ * is the same file to git. On a case-sensitive filesystem that name is a
+ * different file and matching it merely costs one refresh — the conservative
+ * direction.
+ */
+const STATUS_AFFECTING_FILE_NAMES = new Set([".gitignore", ".gitattributes", ".gitmodules"]);
 
 /** A `@parcel/watcher` event as far as this file needs to read it. */
 interface WorktreeEvent {
@@ -711,14 +729,12 @@ export class GitFileWatcher {
         this.pendingWorktreePaths = null;
         return;
       }
-      // A `.gitignore` write changes what git considers ignored, so the burst
-      // can move OTHER files in or out of the status listing while touching
-      // only this one path. It cannot be classified on its own membership:
-      // a `.gitignore` that is itself ignored — by `.git/info/exclude`, or by
-      // a rule inside it naming itself — is untracked and ignored, so plain
-      // check-ignore reports it, and the burst would skip a refresh that the
-      // rule change made necessary. Verified against git 2.55.0.
-      if (basename(path) === GITIGNORE_FILE_NAME) {
+      if (STATUS_AFFECTING_FILE_NAMES.has(basename(path).toLowerCase())) {
+        // Such a write can also create the tracked/ignored overlap the hazard
+        // probe caches an answer about — newly ignoring a directory that holds
+        // a tracked file — and that change reaches no watched git-internal
+        // file, so the cached answer has to be dropped here too.
+        this.trackedIgnoredProbe = null;
         this.pendingWorktreePaths = null;
         return;
       }
@@ -762,14 +778,20 @@ export class GitFileWatcher {
    */
   private probeTrackedIgnored(): Promise<boolean> {
     if (!this.trackedIgnoredProbe) {
-      this.trackedIgnoredProbe = hasTrackedIgnoredPaths(this.worktreePath, {
+      // `attempt` is the promise the slot actually holds, so the identity
+      // check below compares like with like. Its own handler runs on a later
+      // tick, well after the assignment.
+      const attempt: Promise<boolean> = hasTrackedIgnoredPaths(this.worktreePath, {
         timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
       }).catch((error: unknown) => {
         // Fail closed and do not cache the failure: an unanswerable probe must
-        // mean "refresh", not "assume safe forever".
-        this.trackedIgnoredProbe = null;
+        // mean "refresh", not "assume safe forever". Clear the slot only if it
+        // still holds THIS attempt — an invalidation may already have replaced
+        // it, and erasing a newer probe would just re-spawn for nothing.
+        if (this.trackedIgnoredProbe === attempt) this.trackedIgnoredProbe = null;
         throw error;
       });
+      this.trackedIgnoredProbe = attempt;
     }
     return this.trackedIgnoredProbe;
   }

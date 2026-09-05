@@ -613,12 +613,23 @@ export const gitPipelineScenarios: PerfScenario[] = [
           BURST_FLUSH_TIMEOUT_MS
         );
         // `quiesceGitSpawns` watches process STARTS, not completions, so a
-        // classifier that is still running looks identical to one that
-        // finished. Waiting past the classifier's own deadline is what closes
-        // that hole: if it hung, its 2s timeout has fired by now and the
-        // fallback refresh it triggers is inside this window, where it counts
-        // against this arm instead of contaminating the next one.
-        await sleep(WORKTREE_CLASSIFY_DEADLINE_MS);
+        // classifier still running looks identical to one that finished.
+        // Waiting past the classifier's own deadline is what closes that hole:
+        // a hung classifier has timed out by then and the fallback refresh it
+        // triggers lands inside this window, where it counts against this arm
+        // instead of contaminating the next one.
+        //
+        // The wait has to hang off the LAST flush, not the first. One write
+        // burst routinely flushes twice, and a second flush arriving 800ms in
+        // starts its own classifier; sleeping from the first signal would let
+        // that one's deadline fall outside the window.
+        let seen = browserSignals(recorder, from, since);
+        for (;;) {
+          await sleep(WORKTREE_CLASSIFY_DEADLINE_MS);
+          const now = browserSignals(recorder, from, since);
+          if (now === seen) break;
+          seen = now;
+        }
         const settled = await quiesceGitSpawns(BURST_SETTLE_MS, BURST_FLUSH_TIMEOUT_MS);
         const window = gitSpawnsSince(mark);
         // One write burst does not produce one flush: the leading-edge fast

@@ -35,6 +35,15 @@ const GIT_ENV = {
 const roots: string[] = [];
 const watchers: GitFileWatcher[] = [];
 
+/** Porcelain status, so a test can prove a rule edit changed what git reports. */
+function status(root: string): string {
+  return execFileSync("git", ["status", "--porcelain"], {
+    cwd: root,
+    encoding: "utf8",
+    env: GIT_ENV,
+  });
+}
+
 function makeRepo(): { root: string; git: (args: string[]) => void } {
   const root = mkdtempSync(join(tmpdir(), "daintree-ignore-"));
   roots.push(root);
@@ -126,16 +135,25 @@ describe("worktree burst ignore classification against real git", () => {
     // check-ignore reports it — the burst would classify as skippable on
     // membership alone while the rule change it carries alters status.
     writeFileSync(join(root, ".gitignore"), ".gitignore\n.output/\n");
-    writeFileSync(join(root, "scratch.txt"), "visible\n");
+    writeFileSync(join(root, "seed.txt"), "committed\n");
+    // `scratch.txt` stays UNTRACKED on purpose. Committing it and then
+    // ignoring it would leave it in status either way AND create a
+    // tracked/ignored overlap, which trips the hazard probe — so the test
+    // would still pass with the `.gitignore` guard deleted, proving nothing.
+    writeFileSync(join(root, "scratch.txt"), "untracked and visible\n");
     mkdirSync(join(root, ".output"));
-    git(["add", "scratch.txt"]);
+    git(["add", "seed.txt"]);
     git(["commit", "-m", "init"]);
+    expect(status(root)).toContain("scratch.txt");
 
     const observed = await observe(root, () => {
       appendFileSync(join(root, ".gitignore"), "scratch.txt\n");
     });
 
     expect(observed.changes).toBeGreaterThan(0);
+    // The rule edit really did change what status reports — otherwise the
+    // refresh would be guarding nothing.
+    expect(status(root)).not.toContain("scratch.txt");
   });
 
   it("refreshes for a modified tracked file whose on-disk case left the index behind", async () => {
