@@ -617,7 +617,9 @@ export const gitPipelineScenarios: PerfScenario[] = [
         const durationMs = performance.now() - start;
 
         // Arm 2 — tracked control. A real edit inside the same burst shape must
-        // still produce the correct snapshot, not just any refresh.
+        // still produce the correct snapshot, not just any refresh. The file is
+        // already in the standing dirty set, so this changes its content again
+        // rather than adding to the change count.
         const trackedFrom = recorder.cursor();
         const trackedArm = await runBurst(() => {
           writeFileSync(trackedFile, `tracked edit ${stamp}\n`.repeat(8));
