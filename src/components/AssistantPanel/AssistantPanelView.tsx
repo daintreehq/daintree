@@ -230,14 +230,13 @@ function LiveStatus({
     return () => clearInterval(timer);
   }, [visible, startedAt]);
   const elapsed = startedAt === null ? 0 : Math.max(0, now - startedAt);
+  const waitingOnUser = PHASES_WAITING_ON_THE_USER.has(phase ?? "");
   const stalled =
-    !PHASES_WAITING_ON_THE_USER.has(phase ?? "") &&
-    lastActivityAt !== null &&
-    now - lastActivityAt > STALL_THRESHOLD_MS;
+    !waitingOnUser && lastActivityAt !== null && now - lastActivityAt > STALL_THRESHOLD_MS;
 
   return (
     <div className={cn("assistant-live-status mt-3 assistant-text-sm", stalled && "is-stalled")}>
-      {/* The SAME dashed circle every active tool row spins, rather than the animated
+      {/* The SAME dashed circle every active tool row shows, rather than the animated
           braille character this line used to draw.
 
           Two reasons, and the second is the one that decides it. The house rule is
@@ -246,10 +245,18 @@ function LiveStatus({
           braille frames also do not READ: each is three or four dots inside a 12px cell,
           which at rest is a speck of dust rather than an indicator — and at rest is
           exactly where reduced motion leaves it, frozen on frame one, permanently
-          meaningless to the readers who most need a legible cue. */}
+          meaningless to the readers who most need a legible cue.
+
+          It only SPINS while the assistant is the one working. A phase that is waiting
+          on the user — an approval, a question — is not progress, and rotating through
+          it says the machine is busy when the thing it is busy with is the reader. The
+          glyph holds still and the label says what it wants. */}
       <CircleDashed
         aria-hidden="true"
-        className="assistant-live-spinner size-3.5 shrink-0 animate-spin-slow"
+        className={cn(
+          "assistant-live-spinner size-3.5 shrink-0",
+          !waitingOnUser && "animate-spin-slow"
+        )}
       />
       <span role="status">
         {label}
