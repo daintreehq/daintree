@@ -614,7 +614,7 @@ async function runStoreOpenScenario(): Promise<ScenarioSample> {
   };
 }
 
-// --- PERF-405/406: coalescing the project-state write queue -------------------
+// --- PERF-406/407: coalescing the project-state write queue -------------------
 
 interface BurstExpectation {
   key: string;
@@ -952,7 +952,7 @@ export const persistenceScenarios: PerfScenario[] = [
     run: runStoreOpenScenario,
   },
   {
-    id: "PERF-405",
+    id: "PERF-406",
     name: "Project State Write Queue — 5-update burst",
     description:
       "A real ProjectStateManager over a real temp config dir holding a 40-panel project with draft inputs and tab groups, taking ten back-to-back bursts of 5 per-field updates enqueued with no await between them. Reports durable writes, whole-state clones and payload bytes per burst alongside main-thread availability. The IPC hop, the renderer debounce and ProjectStore's derived metadata are out of frame.",
@@ -975,10 +975,10 @@ export const persistenceScenarios: PerfScenario[] = [
     run: () => runStateBurstScenario(5),
   },
   {
-    id: "PERF-406",
+    id: "PERF-407",
     name: "Project State Write Queue — 20-update burst",
     description:
-      "The PERF-405 workload at the burst size a fleet launch or a drag actually produces: twenty per-field updates enqueued with no await between them, ten times over. The burst size is the variable; fixture, probe cadence and predicates are identical.",
+      "The PERF-406 workload at the burst size a fleet launch or a drag actually produces: twenty per-field updates enqueued with no await between them, ten times over. The burst size is the variable; fixture, probe cadence and predicates are identical.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 8, nightly: 12 },

@@ -140,7 +140,7 @@ const FAMILIES: readonly Family[] = [
   },
   {
     label: "project-state-queue",
-    ids: ["PERF-405", "PERF-406"],
+    ids: ["PERF-406", "PERF-407"],
     kind: "mechanism",
     fidelity: PURE,
     claim:

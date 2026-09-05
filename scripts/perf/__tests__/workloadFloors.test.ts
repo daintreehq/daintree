@@ -122,8 +122,8 @@ describe("workload floors", () => {
       "PERF-163",
       "PERF-164",
       "PERF-395",
-      "PERF-405",
       "PERF-406",
+      "PERF-407",
     ]);
     for (const scenario of declaring) {
       for (const [metric, floor] of Object.entries(scenario.workloadFloors!)) {
