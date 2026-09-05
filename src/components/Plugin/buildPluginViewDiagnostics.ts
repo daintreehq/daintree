@@ -2,29 +2,50 @@ import { isErrorLike } from "@shared/utils/ipcErrorSerialization";
 import { scrubReportText } from "@shared/utils/reportScrubbers";
 
 /**
- * Depth bound for the `.cause` walk. Spelled independently of the log walk's
- * `MAX_ERROR_SCAN_DEPTH`, but the same size: past this many links the chain is
+ * Depth bound for the `.cause` walk. Past this many links the chain is
  * describing a wrapper stack no reader follows, and an unbounded walk is a
  * denial-of-service surface handed to plugin authors.
  */
 const MAX_CAUSE_DEPTH = 8;
 
+/**
+ * Bounds on serializing a non-Error cause. `new Error("x", { cause: new
+ * Array(0xffffffff) })` costs the author nothing to build and would otherwise
+ * park `JSON.stringify` on billions of holes during render.
+ */
+const MAX_ARRAY_ENTRIES = 50;
+const MAX_VALUE_CHARS = 4000;
+
 /** Sentinels, spelled as `logErrorNormalization` and `ipcErrorSerialization` spell them. */
 const MAX_DEPTH = "[MaxDepth]";
 const CIRCULAR = "[Circular]";
 const UNSERIALIZABLE = "[Unserializable]";
+const TRUNCATED = "[Truncated]";
 
 const FALLBACK_MESSAGE = "Unknown render error";
+
+/**
+ * Applies the redaction policy to one leaf string.
+ *
+ * Threaded down to every leaf rather than run once over the finished document,
+ * because both the label and the encoding a leaf ends up inside destroy the
+ * anchors the scrubber matches on: `Caused by: Error: access_token=…` is no
+ * longer at a line start for `oauth-query-param`'s `(^|[?&])`, and JSON's
+ * `"\nghp_…"` puts a literal `n` against the sigil `\bghp_` needs. Scrubbing
+ * first and labelling after keeps every pattern anchored where it was written
+ * to match.
+ */
+type Scrub = (text: string) => string;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 /**
  * Read one property without ever throwing. Every field here comes off a value a
  * plugin threw, which may be a Proxy or expose a throwing getter — the
  * diagnostics pane must not become the second failure.
  */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function readUnknown(source: unknown, key: string): unknown {
   if (!isRecord(source)) return undefined;
   try {
@@ -44,7 +65,7 @@ function readString(source: unknown, key: string): string | undefined {
  * explicit `{ cause: null }` is still reported as a link in the chain.
  */
 function hasCause(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isRecord(value)) return false;
   try {
     return "cause" in value;
   } catch {
@@ -62,19 +83,23 @@ function extractCode(value: unknown): string | undefined {
 }
 
 /**
- * Readable JSON for an object that is not an Error. `JSON.stringify` throws on
- * cycles, BigInt, and a hostile `toJSON`, and overflows the stack on a
- * pathologically deep graph — all of which land in the `catch`. The `seen` set
- * is never unwound, so a value referenced twice reads `[Circular]` the second
- * time even without a true cycle; `ipcErrorSerialization` makes the same
- * trade for the same reason.
+ * Readable JSON for an object that is not an Error, scrubbed as it is walked.
+ *
+ * `JSON.stringify` throws on cycles, BigInt and a hostile `toJSON`, and
+ * overflows the stack on a pathologically deep graph — all of which land in the
+ * `catch`. The `seen` set is never unwound, so a value referenced twice reads
+ * `[Circular]` the second time even without a true cycle;
+ * `ipcErrorSerialization` makes the same trade for the same reason.
  */
-function stringifyObject(value: object): string {
+function stringifyObject(value: object, scrub: Scrub): string {
   const seen = new WeakSet<object>();
+  let json: string | undefined;
   try {
-    const json = JSON.stringify(
+    json = JSON.stringify(
       value,
       (_key, item: unknown) => {
+        if (typeof item === "string") return scrub(item);
+        if (typeof item === "bigint") return String(item);
         if (isErrorLike(item)) {
           return {
             name: readString(item, "name") ?? "Error",
@@ -82,30 +107,44 @@ function stringifyObject(value: object): string {
             stack: readString(item, "stack"),
           };
         }
-        if (typeof item === "bigint") return String(item);
-        if (typeof item !== "object" || item === null) return item;
+        if (!isRecord(item)) return item;
         if (seen.has(item)) return CIRCULAR;
         seen.add(item);
-        return item;
+        if (Array.isArray(item)) {
+          return item.length > MAX_ARRAY_ENTRIES
+            ? [...item.slice(0, MAX_ARRAY_ENTRIES), TRUNCATED]
+            : item;
+        }
+        // Rebuilt so the keys are scrubbed too — `JSON.stringify` writes a key
+        // verbatim and never offers it to the replacer. Cycle detection stays
+        // on the original object, which is already in `seen`.
+        const scrubbed: Record<string, unknown> = {};
+        for (const [key, child] of Object.entries(item)) scrubbed[scrub(key)] = child;
+        return scrubbed;
       },
       2
     );
-    return json ?? UNSERIALIZABLE;
   } catch {
     return UNSERIALIZABLE;
   }
+  if (json === undefined) return UNSERIALIZABLE;
+  // Safe to cut: every string inside was scrubbed on the way in, so a slice
+  // cannot expose the leading bytes of a secret that straddled the boundary.
+  return json.length > MAX_VALUE_CHARS ? `${json.slice(0, MAX_VALUE_CHARS)}\n${TRUNCATED}` : json;
 }
 
 /** Render a cause that is not an Error, keeping its type legible. */
-function formatValue(value: unknown): string {
+function formatValue(value: unknown, scrub: Scrub): string {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
-  // Quoted, so an empty-string cause is distinguishable from a missing one.
-  if (typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "object") return stringifyObject(value);
+  // Scrubbed before quoting, not after: `JSON.stringify` escapes the very
+  // characters the secret patterns anchor against.
+  if (typeof value === "string") return JSON.stringify(scrub(value));
+  if (typeof value === "object") return stringifyObject(value, scrub);
   if (typeof value === "function") return "[Function]";
   try {
-    return String(value);
+    // A symbol's description is author-supplied text like any other.
+    return scrub(String(value));
   } catch {
     return UNSERIALIZABLE;
   }
@@ -114,6 +153,8 @@ function formatValue(value: unknown): string {
 /**
  * The frame lines of a stack, without the `Name: message` header V8 prepends —
  * the caller has already printed that, and repeating it doubles every cause.
+ * A stack with no `at` frames at all (Safari and Firefox spell them
+ * `fn@file:line`) is kept whole rather than guessed at.
  */
 function stackFrames(stack: string | undefined): string | undefined {
   if (!stack) return undefined;
@@ -130,10 +171,10 @@ function stackFrames(stack: string | undefined): string | undefined {
  * tree — with a `seen` set against cycles, mirroring
  * `gitOperationErrors.isMissingGitExecutableError`.
  */
-function formatCauses(root: unknown): string[] {
+function formatCauses(root: unknown, scrub: Scrub): string[] {
   const blocks: string[] = [];
   const seen = new Set<unknown>();
-  if (typeof root === "object" && root !== null) seen.add(root);
+  if (isRecord(root)) seen.add(root);
 
   let current: unknown = root;
   for (let depth = 0; hasCause(current); depth += 1) {
@@ -142,7 +183,7 @@ function formatCauses(root: unknown): string[] {
       break;
     }
     const cause = readUnknown(current, "cause");
-    if (typeof cause === "object" && cause !== null) {
+    if (isRecord(cause)) {
       if (seen.has(cause)) {
         blocks.push(`Caused by: ${CIRCULAR}`);
         break;
@@ -151,15 +192,16 @@ function formatCauses(root: unknown): string[] {
     }
 
     if (isErrorLike(cause)) {
-      const name = readString(cause, "name") ?? "Error";
-      const message = readString(cause, "message") ?? "";
+      const name = scrub(readString(cause, "name") ?? "Error");
+      const message = scrub(readString(cause, "message") ?? "");
       const code = extractCode(cause);
       const header =
-        `Caused by: ${name}${message ? `: ${message}` : ""}` + (code ? ` (code: ${code})` : "");
+        `Caused by: ${name}${message ? `: ${message}` : ""}` +
+        (code ? ` (code: ${scrub(code)})` : "");
       const frames = stackFrames(readString(cause, "stack"));
-      blocks.push(frames ? `${header}\n${frames}` : header);
+      blocks.push(frames ? `${header}\n${scrub(frames)}` : header);
     } else {
-      blocks.push(`Caused by: ${formatValue(cause)}`);
+      blocks.push(`Caused by: ${formatValue(cause, scrub)}`);
     }
 
     current = cause;
@@ -169,23 +211,34 @@ function formatCauses(root: unknown): string[] {
 }
 
 /** The message a plugin's thrown value carries, whatever kind of value it is. */
-function extractMessage(error: unknown): string {
-  if (isErrorLike(error)) return readString(error, "message") || FALLBACK_MESSAGE;
-  if (typeof error === "string") return error || FALLBACK_MESSAGE;
-  if (error === null || error === undefined) return FALLBACK_MESSAGE;
-  // A thrown plain object reads `[object Object]` through `String`, which tells
-  // the author nothing about what threw.
-  return formatValue(error) || FALLBACK_MESSAGE;
+function extractMessage(error: unknown, scrub: Scrub): string {
+  const raw = isErrorLike(error)
+    ? readString(error, "message")
+    : typeof error === "string"
+      ? error
+      : error === null || error === undefined
+        ? undefined
+        : // A thrown plain object reads `[object Object]` through `String`,
+          // which tells the author nothing about what threw.
+          formatValue(error, scrub);
+  if (raw === undefined) return FALLBACK_MESSAGE;
+  // Whitespace-only would render as an empty pane saying nothing at all.
+  const scrubbed = scrub(raw);
+  return scrubbed.trim().length > 0 ? scrubbed : FALLBACK_MESSAGE;
 }
 
-function buildTrace(error: unknown, componentStack: string | null | undefined): string {
+function buildTrace(
+  error: unknown,
+  componentStack: string | null | undefined,
+  scrub: Scrub
+): string {
   return [
     "Stack:",
-    readString(error, "stack") || "No stack trace available",
-    ...formatCauses(error).flatMap((block) => ["", block]),
+    scrub(readString(error, "stack") || "No stack trace available"),
+    ...formatCauses(error, scrub).flatMap((block) => ["", block]),
     "",
     "Component stack:",
-    componentStack || "No component stack available",
+    scrub(componentStack || "No component stack available"),
   ].join("\n");
 }
 
@@ -204,36 +257,53 @@ export interface PluginViewDiagnosticsInput {
 }
 
 export interface PluginViewDiagnostics {
-  /** Redaction policy already applied — safe to render as-is. */
   message: string;
   /** Structured error code, when the thrown value carried one. */
   code: string | undefined;
-  /** Stack, cause chain and component stack, redaction policy already applied. */
+  /** Stack, cause chain and component stack. */
   trace: string;
   /** How this document was produced: `redacted` or `raw (dev mode)`. */
   mode: string;
   /** The copyable report. */
   report: string;
+  /**
+   * Identity as the pane should display it. Manifest-supplied, so it is
+   * author-controlled text like every other field here — the pane renders
+   * these rather than its own props so a screenshot and a copy say the same
+   * thing.
+   */
+  pluginId: string;
+  pluginDisplayName: string;
+  kindId: string;
+  panelDisplayName: string;
+  componentPath: string;
+  incidentId: string | undefined;
 }
 
 /**
- * Build the diagnostics an errored plugin view shows and copies.
+ * Build the diagnostics an errored plugin view shows and copies. Every string
+ * on the returned object has the redaction policy already applied.
  *
  * Everything a plugin author controls — the message, the cause chain, the
- * stacks — is untrusted text: the author decides what goes in it, and it
- * routinely carries absolute paths, credentialed URLs, request payloads and
- * tokens. So the *whole* document is scrubbed for an installed plugin, not just
- * the trace, and the report says which of the two it is (#12281). This is not a
- * reversal of #9427, which keeps the sibling `ErrorFallback`'s message raw: that
- * message is first-party Daintree text, where scrubbing costs signal and
- * prevents no leak. The trust boundary differs, so the policy does.
+ * stacks, and the manifest identity — is untrusted text: the author decides
+ * what goes in it, and it routinely carries absolute paths, credentialed URLs,
+ * request payloads and tokens. So the *whole* document is scrubbed for an
+ * installed plugin, not just the trace, and it says which of the two it is
+ * (#12281).
+ *
+ * This is not a reversal of #9427. That issue was about the sibling
+ * `ErrorBoundary/ErrorFallback`, which shows fixed first-party copy in
+ * production and the raw message only under `import.meta.env.DEV` — so it has
+ * no untrusted message to redact in the first place. This pane deliberately
+ * shows plugin-authored text to a production user, which is exactly why it has
+ * to scrub it.
  *
  * A dev-mode plugin's paths are the author's own, so raw output is the useful
  * output there — labelled as raw rather than silently different.
  *
- * The assembled report is scrubbed a second time. `scrubReportText` is
- * idempotent, so this costs nothing on the fields already scrubbed above, and
- * it means a field added to the report later cannot ship raw the way `Message:`
+ * The assembled report is scrubbed once more at the end. `scrubReportText` is
+ * idempotent, so this costs nothing on fields already scrubbed above, and it
+ * means a field added to the report later cannot ship raw the way `Message:`
  * did — which is the bug this function exists to close.
  */
 export function buildPluginViewDiagnostics({
@@ -247,19 +317,28 @@ export function buildPluginViewDiagnostics({
   componentPath,
   incidentId,
 }: PluginViewDiagnosticsInput): PluginViewDiagnostics {
-  const scrub = (text: string): string => (devMode ? text : scrubReportText(text));
+  const scrub: Scrub = (text) => (devMode ? text : scrubReportText(text));
 
-  const message = scrub(extractMessage(error));
+  const identity = {
+    pluginId: scrub(pluginId),
+    pluginDisplayName: scrub(pluginDisplayName),
+    kindId: scrub(kindId),
+    panelDisplayName: scrub(panelDisplayName),
+    componentPath: scrub(componentPath),
+    incidentId: incidentId ? scrub(incidentId) : undefined,
+  };
+
+  const message = extractMessage(error, scrub);
   const rawCode = extractCode(error);
   const code = rawCode === undefined ? undefined : scrub(rawCode);
-  const trace = scrub(buildTrace(error, componentStack));
+  const trace = buildTrace(error, componentStack, scrub);
   const mode = devMode ? "raw (dev mode)" : "redacted";
 
   const report = [
-    `Plugin: ${pluginDisplayName} (${pluginId})`,
-    `Panel: ${panelDisplayName} (${kindId})`,
-    `Module: ${componentPath}`,
-    ...(incidentId ? [`Error ID: ${incidentId}`] : []),
+    `Plugin: ${identity.pluginDisplayName} (${identity.pluginId})`,
+    `Panel: ${identity.panelDisplayName} (${identity.kindId})`,
+    `Module: ${identity.componentPath}`,
+    ...(identity.incidentId ? [`Error ID: ${identity.incidentId}`] : []),
     ...(code ? [`Code: ${code}`] : []),
     `Report: ${mode}`,
     "",
@@ -268,5 +347,5 @@ export function buildPluginViewDiagnostics({
     trace,
   ].join("\n");
 
-  return { message, code, trace, mode, report: scrub(report) };
+  return { ...identity, message, code, trace, mode, report: scrub(report) };
 }

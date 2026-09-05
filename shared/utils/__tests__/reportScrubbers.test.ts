@@ -162,3 +162,31 @@ describe("scrubReportText", () => {
     expect(result).not.toContain("ghp_0123456789");
   });
 });
+
+describe("scrubReportPath across a multi-section document", () => {
+  // The username classes matched every character but `/`, `"` and `\\` — which
+  // includes newlines. A home path at the end of one section therefore ate the
+  // rest of the document into the `USER` replacement, silently truncating the
+  // very report it was redacting.
+  it("stops the username match at the end of its line", () => {
+    const report = "Message: /Users/alice\n\nStack:\nkeep me\n\nComponent stack:\nand me";
+
+    const scrubbed = scrubReportPath(report);
+
+    expect(scrubbed).toContain("Message: /Users/USER");
+    expect(scrubbed).toContain("keep me");
+    expect(scrubbed).toContain("and me");
+  });
+
+  it("still redacts a username containing spaces", () => {
+    expect(scrubReportPath("/Users/john smith/notes.txt")).toBe("/Users/USER/notes.txt");
+    expect(scrubReportPath("C:\\Users\\john smith\\notes.txt")).toBe("C:\\Users\\USER\\notes.txt");
+  });
+
+  it("stops a Windows username match at the end of its line", () => {
+    const scrubbed = scrubReportPath("Path: C:\\Users\\alice\nStack:\nkeep me");
+
+    expect(scrubbed).toContain("C:\\Users\\USER");
+    expect(scrubbed).toContain("keep me");
+  });
+});

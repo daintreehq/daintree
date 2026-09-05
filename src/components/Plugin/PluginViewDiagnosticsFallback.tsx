@@ -71,13 +71,6 @@ export function PluginViewDiagnosticsFallback({
 }: PluginViewDiagnosticsFallbackProps) {
   const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
 
-  const announcedRef = useRef(false);
-  useEffect(() => {
-    if (announcedRef.current) return;
-    announcedRef.current = true;
-    useAnnouncerStore.getState().announce(`${panelDisplayName} error`, "polite");
-  }, [panelDisplayName]);
-
   // Built once, here, so the rendered pane and the copied report can never
   // diverge — the label claiming redaction has to describe both.
   const diagnostics = useMemo(
@@ -105,7 +98,17 @@ export function PluginViewDiagnosticsFallback({
       incidentId,
     ]
   );
-  const { message, trace, report } = diagnostics;
+  // Destructured from the builder rather than read off the props: the manifest
+  // supplies these, so they are author-controlled text like the message, and a
+  // pane labelled redacted must not print them raw beside that label.
+  const { message, trace, report, panelDisplayName: panelName } = diagnostics;
+
+  const announcedRef = useRef(false);
+  useEffect(() => {
+    if (announcedRef.current) return;
+    announcedRef.current = true;
+    useAnnouncerStore.getState().announce(`${panelName} error`, "polite");
+  }, [panelName]);
 
   const handleCopy = useCallback(() => {
     void copy(report);
@@ -118,7 +121,7 @@ export function PluginViewDiagnosticsFallback({
   return (
     <div
       role="region"
-      aria-label={`${panelDisplayName} render error`}
+      aria-label={`${panelName} render error`}
       data-testid="plugin-view-diagnostics"
       className="flex h-full min-h-0 w-full flex-col gap-4 overflow-auto bg-surface-panel p-6"
     >
@@ -128,7 +131,7 @@ export function PluginViewDiagnosticsFallback({
           className="text-sm font-semibold text-status-error"
           data-testid="plugin-view-diagnostics-title"
         >
-          Couldn&apos;t render {panelDisplayName}
+          Couldn&apos;t render {panelName}
         </h2>
       </div>
 
@@ -144,18 +147,18 @@ export function PluginViewDiagnosticsFallback({
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         <dt className="text-text-muted">Plugin</dt>
         <dd className="font-mono break-all text-text-primary">
-          {pluginDisplayName} ({pluginId})
+          {diagnostics.pluginDisplayName} ({diagnostics.pluginId})
         </dd>
         <dt className="text-text-muted">Panel</dt>
         <dd className="font-mono break-all text-text-primary">
-          {panelDisplayName} ({kindId})
+          {panelName} ({diagnostics.kindId})
         </dd>
         <dt className="text-text-muted">Module</dt>
-        <dd className="font-mono break-all text-text-primary">{componentPath}</dd>
-        {incidentId && (
+        <dd className="font-mono break-all text-text-primary">{diagnostics.componentPath}</dd>
+        {diagnostics.incidentId && (
           <>
             <dt className="text-text-muted">Error ID</dt>
-            <dd className="font-mono break-all text-text-primary">{incidentId}</dd>
+            <dd className="font-mono break-all text-text-primary">{diagnostics.incidentId}</dd>
           </>
         )}
         {diagnostics.code && (

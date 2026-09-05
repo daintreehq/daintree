@@ -28,7 +28,7 @@ const CAROL_TOKEN = `ghp_${"c".repeat(36)}`;
 /** Carries a path and a token in the one field #12281 shipped raw. */
 const LEAKY_MESSAGE = `Failed to load /Users/carol/config.json ${CAROL_TOKEN}`;
 const STACK = `Error: boom (${ALICE_TOKEN})\n    at Widget (/Users/alice/plugins/acme/dashboard.js:10:5)`;
-const COMPONENT_STACK = `\n    at Widget (/Users/bob/plugins/acme/dashboard.js:10:5) ${BOB_TOKEN}`;
+const COMPONENT_STACK = `\n    at Widget (/Users/bob/plugins/acme/panel.js:20:7) ${BOB_TOKEN}`;
 /** Everything that must never survive redaction for an installed plugin. */
 const SENSITIVE = ["/Users/alice", "/Users/bob", ALICE_TOKEN, BOB_TOKEN];
 /** Only the cases that actually render a leaky message or cause assert these. */
@@ -105,8 +105,10 @@ describe("PluginViewDiagnosticsFallback", () => {
 
     for (const secret of SENSITIVE) expect(trace()).not.toContain(secret);
     // Redaction must not cost the frame itself — the author still needs to see
-    // which module and line threw.
+    // which module and line threw. Both stacks, with distinct locations, so
+    // one surviving cannot stand in for the other.
     expect(trace()).toContain("dashboard.js:10:5");
+    expect(trace()).toContain("panel.js:20:7");
   });
 
   it("leaves a dev-mode plugin's paths and secrets raw even though the app build is not DEV", () => {
@@ -119,9 +121,10 @@ describe("PluginViewDiagnosticsFallback", () => {
 
   // The message is plugin-authored, untrusted text: the author decides whether
   // it carries a path or a token, so a report labelled redacted must scrub it
-  // too (#12281). Not a reversal of #9427 — that keeps the *first-party*
-  // ErrorFallback's message raw, where scrubbing costs signal and prevents no
-  // leak. The trust boundary differs, so the policy does.
+  // too (#12281). Not a reversal of #9427 — the sibling ErrorFallback shows
+  // fixed first-party copy in production and the raw message only under
+  // `import.meta.env.DEV`, so it has no untrusted message to redact. This pane
+  // deliberately shows plugin text to a production user, which is why it must.
   it("redacts the message an installed plugin threw", () => {
     renderFallback({ devMode: false, error: makeError(LEAKY_MESSAGE, STACK) });
 
@@ -160,6 +163,23 @@ describe("PluginViewDiagnosticsFallback", () => {
     expect(trace()).toContain("Caused by: Error: inner");
     expect(trace()).toContain("a.js:1:1");
     for (const secret of [...SENSITIVE, ...CAROL_SENSITIVE]) expect(trace()).not.toContain(secret);
+  });
+
+  // The manifest supplies the identity, so the plugin author controls it — a
+  // pane that prints it raw under "Report: redacted" is #12281 again in a
+  // different field.
+  it("redacts the manifest identity it prints beside the redacted label", () => {
+    renderFallback({
+      devMode: false,
+      pluginDisplayName: `Acme ${CAROL_TOKEN}`,
+      componentPath: "plugin:///Users/carol/dev/acme/dashboard.js",
+    });
+
+    const pane = screen.getByTestId("plugin-view-diagnostics").textContent ?? "";
+    for (const secret of CAROL_SENSITIVE) expect(pane).not.toContain(secret);
+    // The identity still has to identify something.
+    expect(pane).toContain("Acme");
+    expect(pane).toContain("dashboard.js");
   });
 
   it("copies the trace it renders and nothing sensitive beyond it", async () => {
