@@ -77,6 +77,9 @@
   margin-inline: calc(-1 * var(--assistant-gutter));
   padding: 0.3em var(--assistant-gutter);
   border-block: 1px solid var(--assistant-border);
+  /* A block-level flex item sizes itself from its containing block, so the negative
+     margins already widen it — unlike the tool summary next door, which is a `w-full`
+     button and had to be told. Stated here so the two are not read as disagreeing. */
   background: var(--assistant-raised);
   color: var(--assistant-fg);
 }
@@ -184,6 +187,7 @@
   gap: var(--assistant-mark-gap);
   margin-inline: calc(-1 * var(--assistant-gutter));
   padding: 0.15em var(--assistant-gutter);
+  width: calc(100% + 2 * var(--assistant-gutter));
   text-align: left;
 }
 
@@ -221,6 +225,12 @@
   gap: var(--assistant-mark-gap);
   margin-inline: calc(-1 * var(--assistant-gutter));
   padding-inline: var(--assistant-gutter);
+  /* `w-full` on the button resolves to 100% of the CONTENT box it is bleeding out of,
+     so pulling both margins outward left the hover band two gutters short of the rail
+     and the highlight stopped before the edge it was supposed to reach. The width has
+     to grow by exactly what the margins gave away. */
+  width: calc(100% + 2 * var(--assistant-gutter));
+  cursor: pointer;
 }
 
 /* Vertical rhythm in LINES, not in pixels.
@@ -446,10 +456,17 @@
   padding-left: var(--assistant-list-gutter);
 }
 
+/* The marker takes the SECONDARY tier, not the dim one.
+   
+   A list marker is structure a reader navigates by — which item am I on, how many are
+   there — and `--assistant-fg-dim` is the tier reserved for things it is fine to miss.
+   Measured on Solarized Dark the dim tier puts an ordered numeral at 3.19:1, under the
+   4.5:1 floor body text holds, so on the tightest themes the numbers faded out of a list
+   whose text was perfectly legible. */
 .assistant-prose li::before {
   position: absolute;
   left: 0;
-  color: var(--assistant-fg-dim);
+  color: var(--assistant-fg-secondary);
 }
 
 .assistant-prose ul > li::before {
@@ -534,12 +551,62 @@
    `rem` was the bug worth naming — a rem is pinned to the document root, so the block's
    inset held at ~10px while every glyph inside it grew with the user's terminal font. */
 .assistant-prose pre {
+  /* A containing block for the overflow fade below. `relative` on a scroll container
+     positions a pseudo-element against the PADDING box rather than the scrolled
+     content, so the fade stays pinned to the visible right edge instead of riding away
+     with the text. */
+  position: relative;
   background: var(--assistant-inset);
   border: 1px solid var(--assistant-border);
   border-radius: 0;
   padding: 0.5em 0.6em;
+  /* On the BLOCK, and that is the whole point.
+     
+     Setting it on the `code` inside instead does nothing measurable: `code` is inline,
+     the `pre` establishes the line box, and the block's own strut — inherited at 1.55
+     from the prose root — holds the line pitch open no matter how tight the inline
+     content asks to be. The first attempt at this did exactly that and moved the
+     rendered pitch by zero pixels, while a contract test comparing DECLARATIONS
+     cheerfully agreed it had worked. */
+  line-height: 1.25;
   /* Its own scroll container — the panel body must never scroll horizontally. */
   overflow-x: auto;
+  /* And reachable from the keyboard, because it is the only way to read the rest of a
+     line that does not fit. A scroll container is not focusable by default in every
+     engine, and a snippet needing 80 columns in a rail that has 48 leaves half of
+     itself behind an interaction a keyboard user could not perform. */
+  scrollbar-width: thin;
+}
+
+/* A fence that continues past its right edge SAYS so.
+   
+   Clipped at the panel's width with no scrollbar drawn and no ellipsis, a line simply
+   stopped — `const fg = parse(term.foreground) ?? [204, 204,` reads as complete code
+   until you notice it cannot be. The wrapper carries a fade on the edge that is actually
+   overflowing, which is a signal the reader cannot mistake for content.
+   
+   Driven by `animation-timeline: scroll()`: the fade is at full strength while there is
+   more to the right and gone once the reader reaches the end, with no scroll listener
+   and no re-render. Engines without scroll-driven animations simply show the fade
+   permanently, which is the safe way to be wrong — a fence that admits it might continue
+   beats one that hides that it does. */
+@keyframes assistant-fence-end {
+  to {
+    opacity: 0;
+  }
+}
+
+.assistant-prose pre::after {
+  content: "";
+  position: absolute;
+  inset-block: 1px;
+  right: 1px;
+  width: 1.5em;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--assistant-inset));
+  animation: assistant-fence-end linear both;
+  animation-timeline: scroll(self inline);
+  animation-range: contain;
 }
 
 /* Inside a fence the block IS the container, so the span's own ground, rule and
@@ -563,7 +630,7 @@
   color: var(--assistant-fg);
   padding: 0;
   font-size: 1em;
-  line-height: 1.25;
+  /* Inherited from the `pre` above, which is the element that can actually enforce it. */
 }
 
 /* --- Fenced-code syntax tokens -------------------------------------------- */
