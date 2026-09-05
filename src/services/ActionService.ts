@@ -613,6 +613,11 @@ export class ActionService {
         // deselection needs to know WHICH targets survived it, and the only
         // trustworthy source is the host that raised the dialog (#12123).
         hostApprovedTargets: options?.hostApprovedTargets,
+        // And the recipe half of it (#12263). Same unconditional stamp for the
+        // same reason: this is what tells a recipe run that a human read the
+        // terminals a dialog listed, so an injected `contextOverride` must not
+        // be able to claim an approval that raises the agent terminal cap.
+        hostApprovedRecipeRun: options?.hostApprovedRecipeRun,
       };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown

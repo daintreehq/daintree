@@ -953,6 +953,55 @@ describe("ActionService", () => {
         );
       });
 
+      // The recipe half (#12263). Same unspoofable terms, and load-bearing for
+      // a different reason: this one decides HOW MANY terminals a run may open,
+      // so a caller able to plant it could hand itself the full ten-pane recipe
+      // the confirm dialog exists to gate.
+      it("stamps ctx.hostApprovedRecipeRun from the dispatch options", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 10, terminalsDigest: "deadbeef" },
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({
+            hostApprovedRecipeRun: {
+              recipeId: "r1",
+              terminalCount: 10,
+              terminalsDigest: "deadbeef",
+            },
+          })
+        );
+      });
+
+      it("overwrites a contextOverride that claims a recipe approval nobody gave", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        const result = await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: {
+            hostApprovedRecipeRun: {
+              recipeId: "r1",
+              terminalCount: 10,
+              terminalsDigest: "deadbeef",
+            },
+          },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostApprovedRecipeRun: undefined })
+        );
+      });
+
       it("overwrites a contextOverride that claims per-target approvals nobody gave", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
         service.register(confirmAction(mockRun));

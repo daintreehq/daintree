@@ -8,6 +8,7 @@ import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
 import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
 import {
@@ -39,7 +40,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
-import type { ActionSource } from "@shared/types/actions";
+import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
@@ -77,11 +78,24 @@ export interface RecipeRunOptions {
   spawnBatch?: { id: string; size: number };
   /**
    * The action dispatch source that triggered this run. When `"agent"`, a
-   * lower per-run terminal cap ({@link MAX_AGENT_RECIPE_TERMINALS}) is applied
-   * to bound the blast radius of MCP-driven recipe runs. Forwarded from
-   * `recipe.run`'s `ActionContext.dispatchSource`.
+   * per-run terminal cap is applied to bound the blast radius of MCP-driven
+   * recipe runs — {@link MAX_AGENT_RECIPE_TERMINALS}, unless
+   * {@link hostApprovedRecipeRun} raises it to what an approver was shown.
+   * Forwarded from `recipe.run`'s `ActionContext.dispatchSource`.
    */
   dispatchSource?: ActionSource;
+  /**
+   * The recipe run a human approved in the host confirm dialog, forwarded from
+   * `ActionContext.hostApprovedRecipeRun` (#12263). When it names the recipe
+   * actually resolved here, the agent cap becomes the terminal count the
+   * approver was shown instead of {@link MAX_AGENT_RECIPE_TERMINALS}.
+   *
+   * Host-set and unspoofable at the source — `ActionService` stamps it from the
+   * dispatch options, so it cannot arrive from an action's args or from a
+   * `contextOverride`. Absent falls back to {@link MAX_AGENT_RECIPE_TERMINALS};
+   * present but no longer covering this recipe authorizes nothing at all.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
 }
 
 function isAgentRecipeType(type: RecipeTerminalType): boolean {
@@ -248,12 +262,46 @@ interface RecipeState {
 export { MAX_TERMINALS_PER_RECIPE };
 
 /**
- * Per-run terminal cap for agent-dispatched recipe runs. A single MCP-approved
- * `recipe.run` shouldn't authorize a full {@link MAX_TERMINALS_PER_RECIPE}-wide
- * spawn — an agent context needs at most a handful of panels. Bounds the blast
- * radius without blocking legitimate agent use.
+ * Per-run terminal cap for an agent-dispatched recipe run that NO human was
+ * shown (#12263).
+ *
+ * Every agent `recipe.run` is confirmation-gated, so the cap was never what
+ * stood between an agent and a spawn — the dialog was. What the cap did was
+ * shrink the offer: a five-pane recipe was previewed as "starts 3 of 5", so a
+ * human clicking Approve authorized three, and the recipe meant something
+ * different depending on who ran it. An approver reading every terminal the
+ * dialog lists can authorize all of them, and
+ * `RecipeRunOptions.hostApprovedRecipeRun` is how that approval reaches here.
+ *
+ * This number is what remains for a run with no such approval behind it: one
+ * pre-authorized by a standing automation grant, which names a tool in Settings
+ * with no arguments and no preview in front of the person who issued it. That
+ * caller has shown nobody anything, so it keeps the conservative ceiling.
  */
 export const MAX_AGENT_RECIPE_TERMINALS = 3;
+
+/**
+ * Whether a host approval still describes the recipe about to run (#12263).
+ *
+ * All three parts must hold, and the numeric one is checked rather than
+ * trusted: `validIndices.length > cap` is silently false for `NaN`, so a
+ * malformed count would wave the whole recipe through, and `splice(-1)` would
+ * drop one terminal instead of all of them. No producer sends those today —
+ * the bridge reads `recipe.terminals.length` — but this is the consumer of an
+ * authority token, and #8331's rule for those is that a malformed field fails
+ * safe rather than fails open.
+ */
+function approvalCoversRecipe(
+  approval: HostApprovedRecipeRun,
+  recipe: Pick<TerminalRecipe, "id" | "terminals">
+): boolean {
+  return (
+    approval.recipeId === recipe.id &&
+    Number.isSafeInteger(approval.terminalCount) &&
+    approval.terminalCount >= 0 &&
+    approval.terminalsDigest === recipeApprovalDigest(recipe.terminals)
+  );
+}
 
 /**
  * Drop a permanently-deleted recipe's toolbar pin (#12217).
@@ -999,15 +1047,44 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     }
 
-    // Defense-in-depth blast-radius cap for agent-dispatched runs. recipe.run's
-    // danger:"confirm" gate already requires user approval for agent sources,
-    // but one approval shouldn't authorize a full 10-terminal recipe. Apply the
-    // cap BEFORE preflightSpawnBatchLimit so a capped agent run can never reach
-    // the confirmation-dialog path (which would hang a headless MCP dispatch).
-    if (options?.dispatchSource === "agent" && validIndices.length > MAX_AGENT_RECIPE_TERMINALS) {
-      const dropped = validIndices.splice(MAX_AGENT_RECIPE_TERMINALS);
+    // Blast-radius cap for agent-dispatched runs, sized by what a human was
+    // actually shown. recipe.run's danger:"confirm" gate already requires an
+    // approval for agent sources; when that approval still covers the recipe
+    // resolved here, it authorizes the number of terminals it listed.
+    //
+    // Three outcomes, not two. No approval at all is the conservative default:
+    // nobody was shown anything, so MAX_AGENT_RECIPE_TERMINALS. An approval
+    // that covers this recipe grants its count. An approval that does NOT
+    // grants zero — the tempting fallback to the smaller cap would be wrong,
+    // because a one-terminal offer whose recipe has since been shadowed by a
+    // ten-terminal winner would start three terminals nobody previewed. A
+    // failed approval is evidence about THIS run, not the absence of one.
+    //
+    // Ordered before preflightSpawnBatchLimit so the cap bounds the batch the
+    // limit gate sizes, not the other way round. That is ALL it does. This used
+    // to claim a capped agent run "can never reach the confirmation-dialog
+    // path", which is false: preflightSpawnBatchLimit prompts on
+    // `currentCount + allowed > DEFAULT_CONFIRMATION_LIMIT`, and `currentCount`
+    // is the workspace's ambient panel count, which no per-recipe cap bounds.
+    // 18 panels already open plus a capped 3 is 21, and that prompts today —
+    // with no timeout on the dialog and a 30s deadline on the dispatch behind
+    // it. Left alone deliberately: it is a separate defect from this cap, and
+    // widening the approved ceiling only changes how often it is reached.
+    const approval = options?.hostApprovedRecipeRun;
+    const approvalCovers = approval !== undefined && approvalCoversRecipe(approval, recipe);
+    const agentTerminalCap = approval
+      ? approvalCovers
+        ? approval.terminalCount
+        : 0
+      : MAX_AGENT_RECIPE_TERMINALS;
+    if (options?.dispatchSource === "agent" && validIndices.length > agentTerminalCap) {
+      const dropped = validIndices.splice(agentTerminalCap);
+      const error =
+        approval && !approvalCovers
+          ? "Recipe changed since it was approved"
+          : "Agent recipe terminal cap reached";
       for (const index of dropped) {
-        results.failed.push({ index, error: "Agent recipe terminal cap reached" });
+        results.failed.push({ index, error });
       }
     }
 

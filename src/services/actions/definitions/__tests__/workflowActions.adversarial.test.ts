@@ -627,6 +627,38 @@ describe("worktree.createWithRecipe", () => {
     );
   });
 
+  it("forwards ctx.hostApprovedRecipeRun so an approval covers the whole recipe (#12263)", async () => {
+    // This composite previews the recipe through the same formatter recipe.run
+    // does, so the dialog lists every terminal. Forwarding dispatchSource alone
+    // would leave it starting three of them.
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await def.run({ source: newBranch("feature/foo"), recipeId: "recipe-1" }, {
+      dispatchSource: "agent",
+      hostApprovedRecipeRun: {
+        recipeId: "recipe-1",
+        terminalCount: 6,
+        terminalsDigest: "deadbeef",
+      },
+    } as never);
+
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      expect.any(String),
+      "wt-new",
+      expect.any(Object),
+      expect.objectContaining({
+        dispatchSource: "agent",
+        hostApprovedRecipeRun: {
+          recipeId: "recipe-1",
+          terminalCount: 6,
+          terminalsDigest: "deadbeef",
+        },
+      })
+    );
+  });
+
   it("recipe failure after worktree creation throws PARTIAL_SUCCESS with worktree info", async () => {
     setRecipe("recipe-1", async () => {
       throw new Error("recipe boom");
@@ -904,6 +936,48 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
       expect.any(Object),
       expect.objectContaining({ dispatchSource: "agent" })
     );
+  });
+
+  it("workflow.startWorkOnIssue: a bare approval carries no recipe scope, a host one does (#12263)", async () => {
+    // End-to-end through the real ActionService, which is where the stamp
+    // lives. `confirmed: true` alone is a standing grant — no dialog, nobody
+    // shown anything — so nothing raises the cap. The same dispatch carrying
+    // the host's record of what a dialog listed does.
+    forgeClientMock.getIssue.mockResolvedValue({
+      number: 6609,
+      title: "Add workflow macro tools",
+      url: "https://github.com/x/y/issues/6609",
+    });
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const service = registerThroughActionService(makeCallbacks());
+
+    const granted = await service.dispatch(
+      "workflow.startWorkOnIssue" as ActionId,
+      { issueNumber: 6609, agentId: "claude", recipeId: "recipe-1" },
+      { source: "agent", confirmed: true }
+    );
+    expect(granted.ok).toBe(true);
+    expect(
+      (runRecipeWithResults.mock.calls[0]?.[4] as Record<string, unknown>).hostApprovedRecipeRun
+    ).toBeUndefined();
+
+    const approved = await service.dispatch(
+      "workflow.startWorkOnIssue" as ActionId,
+      { issueNumber: 6609, agentId: "claude", recipeId: "recipe-1" },
+      {
+        source: "agent",
+        confirmed: true,
+        hostApprovedRecipeRun: {
+          recipeId: "recipe-1",
+          terminalCount: 8,
+          terminalsDigest: "deadbeef",
+        },
+      }
+    );
+    expect(approved.ok).toBe(true);
+    expect(
+      (runRecipeWithResults.mock.calls[1]?.[4] as Record<string, unknown>).hostApprovedRecipeRun
+    ).toEqual({ recipeId: "recipe-1", terminalCount: 8, terminalsDigest: "deadbeef" });
   });
 });
 

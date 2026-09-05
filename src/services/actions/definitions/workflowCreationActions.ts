@@ -374,13 +374,18 @@ export function registerWorkflowCreationActions(
             };
             // Forward dispatchSource so runRecipeWithResults applies the
             // agent-source terminal cap to MCP-driven worktree+recipe combos,
-            // matching recipe.run.
+            // and hostApprovedRecipeRun so an approval covers every terminal
+            // the dialog listed — both matching recipe.run. This composite's
+            // confirm dialog previews the same recipe through the same
+            // formatter, so omitting the second would preview terminals it then
+            // refused to start (#12263).
             const results = await useRecipeStore
               .getState()
               .runRecipeWithResults(recipeId, path, worktreeId, recipeContext, {
                 spawnedBy,
                 focusPolicy,
                 dispatchSource: ctx.dispatchSource,
+                hostApprovedRecipeRun: ctx.hostApprovedRecipeRun,
               });
             // "Launched" means at least one terminal actually spawned — a run
             // where every terminal was dropped (e.g. panel limit) must not
@@ -644,13 +649,18 @@ export function registerWorkflowCreationActions(
             };
             // Forward dispatchSource so runRecipeWithResults applies the
             // agent-source terminal cap to MCP-driven worktree+recipe combos,
-            // matching recipe.run.
+            // and hostApprovedRecipeRun so an approval covers every terminal
+            // the dialog listed — both matching recipe.run. This composite's
+            // confirm dialog previews the same recipe through the same
+            // formatter, so omitting the second would preview terminals it then
+            // refused to start (#12263).
             const results = await useRecipeStore
               .getState()
               .runRecipeWithResults(recipeId, worktreePath, worktreeId, recipeContext, {
                 spawnedBy,
                 focusPolicy,
                 dispatchSource: ctx.dispatchSource,
+                hostApprovedRecipeRun: ctx.hostApprovedRecipeRun,
               });
             // "Launched" means at least one terminal actually spawned — a run
             // where every terminal was dropped (e.g. panel limit) must not

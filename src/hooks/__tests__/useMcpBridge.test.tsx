@@ -3,6 +3,7 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import { __resetMcpConfirmStoreForTesting, useMcpConfirmStore } from "@/store/mcpConfirmStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
   resetStoreAccessorsForTesting,
@@ -1942,9 +1943,224 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "recipe.run",
       expect.objectContaining({ recipeId: "winner" }),
-      expect.objectContaining({ confirmed: true })
+      // The approval names the winner too, not the id the caller asked for —
+      // recipeStore matches on the resolved id, so a scope naming "shadowed"
+      // would authorize nothing at all rather than the recipe here (#12263).
+      expect.objectContaining({
+        confirmed: true,
+        hostApprovedRecipeRun: expect.objectContaining({
+          recipeId: "winner",
+          terminalCount: 1,
+        }),
+      })
     );
     useRecipeStore.getState().reset();
+  });
+
+  describe("recipe run approval scope (#12263)", () => {
+    const fiveTerminalRecipe = {
+      id: "recipe-1",
+      name: "Fleet",
+      projectId: "p1",
+      terminals: Array.from({ length: 5 }, (_, i) => ({
+        type: "terminal" as const,
+        command: `step-${i}`,
+      })),
+      createdAt: 1,
+    };
+
+    async function seedRecipe() {
+      const { useRecipeStore } = await import("@/store/recipeStore");
+      useRecipeStore.setState({ recipes: [fiveTerminalRecipe] });
+      return useRecipeStore;
+    }
+
+    // Not left to a tail-position reset in each case: an assertion that throws
+    // would skip it and leak seeded recipes into the next test.
+    afterEach(async () => {
+      const { useRecipeStore } = await import("@/store/recipeStore");
+      useRecipeStore.getState().reset();
+    });
+
+    it("offers every terminal and carries the approved count into the dispatch", async () => {
+      const useRecipeStore = await seedRecipe();
+      mocks.get.mockReturnValue(confirmManifestEntry({ id: "recipe.run", name: "recipe.run" }));
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-scope",
+        actionId: "recipe.run",
+        args: { recipeId: "recipe-1" },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // What the approver reads and what the approval authorizes are the same
+      // number, by construction — both come from the one resolved recipe.
+      const preview = (useMcpConfirmStore.getState().current?.preview ?? []).join("\n");
+      expect(preview).toContain("Starts 5 terminals");
+      expect(preview).not.toContain("not started");
+
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await dispatched;
+
+      const options = mocks.dispatch.mock.calls[0]?.[2] as Record<string, unknown>;
+      expect(options.source).toBe("agent");
+      expect(options.hostApprovedRecipeRun).toEqual({
+        recipeId: "recipe-1",
+        terminalCount: 5,
+        terminalsDigest: recipeApprovalDigest(fiveTerminalRecipe.terminals),
+      });
+      useRecipeStore.getState().reset();
+    });
+
+    it("issues an approval for every action that starts a recipe, not just recipe.run", async () => {
+      // RECIPE_SPAWNING_ACTIONS membership is what issues the approval now, so
+      // dropping a composite from it would preview five terminals honestly and
+      // then silently start three.
+      for (const actionId of [
+        "recipe.run",
+        "worktree.createWithRecipe",
+        "workflow.startWorkOnIssue",
+      ]) {
+        const useRecipeStore = await seedRecipe();
+        mocks.dispatch.mockReset().mockResolvedValue({ ok: true, result: { ok: true } });
+        mocks.get.mockReturnValue(confirmManifestEntry({ id: actionId, name: actionId }));
+        renderHook(() => useMcpBridge());
+
+        const dispatched = dispatchHandler?.({
+          requestId: `req-${actionId}`,
+          actionId,
+          args: { recipeId: "recipe-1" },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        useMcpConfirmStore.getState().resolveCurrent("approved");
+        await dispatched;
+
+        const options = mocks.dispatch.mock.calls[0]?.[2] as Record<string, unknown>;
+        expect(options.hostApprovedRecipeRun).toMatchObject({ terminalCount: 5 });
+        useRecipeStore.getState().reset();
+      }
+    });
+
+    it("keeps each pending request's offer to itself", async () => {
+      // The offer is a local in each dispatch handler invocation. Hoisting it
+      // into shared hook state would be invisible until two recipes are in
+      // flight at once — at which point one approval would authorize the
+      // other's terminals.
+      const { useRecipeStore } = await import("@/store/recipeStore");
+      const twoTerminalRecipe = {
+        id: "recipe-2",
+        name: "Pair",
+        projectId: "p1",
+        terminals: [
+          { type: "terminal" as const, command: "x" },
+          { type: "terminal" as const, command: "y" },
+        ],
+        createdAt: 1,
+      };
+      useRecipeStore.setState({ recipes: [fiveTerminalRecipe, twoTerminalRecipe] });
+      mocks.get.mockReturnValue(confirmManifestEntry({ id: "recipe.run", name: "recipe.run" }));
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      renderHook(() => useMcpBridge());
+
+      const first = dispatchHandler?.({
+        requestId: "req-a",
+        actionId: "recipe.run",
+        args: { recipeId: "recipe-1" },
+      });
+      const second = dispatchHandler?.({
+        requestId: "req-b",
+        actionId: "recipe.run",
+        args: { recipeId: "recipe-2" },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The queue promotes one at a time; approve both in turn.
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await first;
+      await Promise.resolve();
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await second;
+
+      const byRecipe = new Map(
+        mocks.dispatch.mock.calls.map((call) => {
+          const args = call[1] as { recipeId: string };
+          const options = call[2] as { hostApprovedRecipeRun?: { terminalCount: number } };
+          return [args.recipeId, options.hostApprovedRecipeRun?.terminalCount];
+        })
+      );
+      expect(byRecipe.get("recipe-1")).toBe(5);
+      expect(byRecipe.get("recipe-2")).toBe(2);
+      useRecipeStore.getState().reset();
+    });
+
+    it("carries no approval scope for a pre-granted dispatch that showed no modal", async () => {
+      // A standing automation grant names a tool in Settings — no arguments, no
+      // preview, nobody shown five terminals. It must stay on the unapproved
+      // cap, which is exactly what an absent scope means downstream.
+      const useRecipeStore = await seedRecipe();
+      mocks.get.mockReturnValue(confirmManifestEntry({ id: "recipe.run", name: "recipe.run" }));
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      renderHook(() => useMcpBridge());
+
+      await dispatchHandler?.({
+        requestId: "req-granted",
+        actionId: "recipe.run",
+        args: { recipeId: "recipe-1" },
+        confirmed: true,
+      });
+
+      const options = mocks.dispatch.mock.calls[0]?.[2] as Record<string, unknown>;
+      expect(options.hostApprovedRecipeRun).toBeUndefined();
+      useRecipeStore.getState().reset();
+    });
+
+    it("dispatches no approval scope when the approver rejected", async () => {
+      const useRecipeStore = await seedRecipe();
+      mocks.get.mockReturnValue(confirmManifestEntry({ id: "recipe.run", name: "recipe.run" }));
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-reject",
+        actionId: "recipe.run",
+        args: { recipeId: "recipe-1" },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      // Assert the modal genuinely came up first: "dispatch not called" alone
+      // would also pass if the request had failed before any dialog appeared.
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-reject");
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      await dispatched;
+
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      useRecipeStore.getState().reset();
+    });
+
+    it("dispatches no approval scope when the confirmation timed out", async () => {
+      const useRecipeStore = await seedRecipe();
+      mocks.get.mockReturnValue(confirmManifestEntry({ id: "recipe.run", name: "recipe.run" }));
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-timeout",
+        actionId: "recipe.run",
+        args: { recipeId: "recipe-1" },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-timeout");
+      useMcpConfirmStore.getState().resolveCurrent("timeout");
+      await dispatched;
+
+      // An offer captured from a settled preview must not survive the timeout.
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      useRecipeStore.getState().reset();
+    });
   });
   describe("batch terminal kill dispatch (#12123)", () => {
     function killBatchManifestEntry() {
@@ -2869,6 +3085,55 @@ describe("forge write previews (#12118)", () => {
     expect(lines.join("\n")).toContain("line two");
     expect(mocks.buildGitPreview).not.toHaveBeenCalled();
     expect(mocks.buildPreview).not.toHaveBeenCalled();
+  });
+
+  it("offers a spawning recipe's full terminal count, and nothing for a non-spawning one", async () => {
+    const { useRecipeStore } = await import("@/store/recipeStore");
+    useRecipeStore.setState({
+      recipes: [
+        {
+          id: "recipe-1",
+          name: "Fleet",
+          projectId: "p1",
+          terminals: [
+            { type: "terminal", command: "a" },
+            { type: "terminal", command: "b" },
+          ],
+          createdAt: 1,
+        },
+      ],
+    });
+
+    const spawning = await buildMcpConfirmPreview({
+      kind: "recipe",
+      recipeId: "recipe-1",
+      resolvedRecipeId: "recipe-1",
+      spawns: true,
+    });
+    expect(spawning.approvedRecipeRun).toEqual({
+      recipeId: "recipe-1",
+      terminalCount: 2,
+      terminalsDigest: expect.stringMatching(/^[0-9a-f]{16}$/),
+    });
+
+    // recipe.delete / recipe.saveToRepo are gated and preview the same content,
+    // but start nothing — there is no spawn for an approval to authorize.
+    const naming = await buildMcpConfirmPreview({
+      kind: "recipe",
+      recipeId: "recipe-1",
+      resolvedRecipeId: "recipe-1",
+      spawns: false,
+    });
+    expect(naming.approvedRecipeRun).toBeUndefined();
+
+    const missing = await buildMcpConfirmPreview({
+      kind: "recipe",
+      recipeId: "gone",
+      resolvedRecipeId: "gone",
+      spawns: true,
+    });
+    expect(missing.approvedRecipeRun).toBeUndefined();
+    useRecipeStore.getState().reset();
   });
 
   it("builds the comment preview synchronously, with no fetch", async () => {

@@ -43,7 +43,8 @@ import {
   formatTerminalLaunchPreviewLines,
   type TerminalLaunchPreview,
 } from "@/lib/mcpTerminalLaunchPreview";
-import { MAX_AGENT_RECIPE_TERMINALS, useRecipeStore } from "@/store/recipeStore";
+import { useRecipeStore } from "@/store/recipeStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import {
   resolveWorktreeLocation,
   type WorktreeLocationArgs,
@@ -52,6 +53,7 @@ import type {
   ActionContext,
   ActionDispatchResult,
   ActionId,
+  HostApprovedRecipeRun,
   HostApprovedTarget,
 } from "@shared/types/actions";
 import type { McpConfirmationDecision, McpSessionOrigin } from "@shared/types/ipc/mcpServer";
@@ -98,11 +100,16 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
 
 /**
  * Of the gated actions that carry a `recipeId`, the ones that actually START
- * the recipe's terminals. Purely a wording concern for the confirm preview:
- * `recipe.delete` and `recipe.saveToRepo` are also gated and preview the same
- * content, but telling the approver those terminals are about to run would be
- * false. Getting this list wrong understates a dispatch's framing; it can never
- * skip a gate, which `resolveEffectiveActionDanger` owns from the args alone.
+ * the recipe's terminals. `recipe.delete` and `recipe.saveToRepo` are gated too
+ * and preview the same content, but telling the approver those terminals are
+ * about to run would be false.
+ *
+ * No longer only a wording concern: membership is also what issues the run
+ * approval (#12263), so an action dropped from this list previews its recipe
+ * honestly and then silently falls back to the three-terminal unapproved cap.
+ * Still cannot skip a gate in either direction — `resolveEffectiveActionDanger`
+ * owns that from the args alone — and a wrongly-added action would issue an
+ * approval nothing reads, since only the three launch paths forward it.
  */
 const RECIPE_SPAWNING_ACTIONS = new Set([
   "recipe.run",
@@ -679,6 +686,13 @@ export interface McpConfirmPreviewResult {
   lines: string[];
   /** Present only when the fetch put a D3 typed-name gate up (#12115). */
   typedNameTarget?: string;
+  /**
+   * What a spawning recipe dispatch's preview offered, for the approval to
+   * carry into the run (#12263). Built from the same resolved recipe the lines
+   * describe, so the count travelling with the approval is by construction the
+   * count the approver read.
+   */
+  approvedRecipeRun?: HostApprovedRecipeRun;
 }
 
 /**
@@ -706,10 +720,20 @@ export async function buildMcpConfirmPreview(
     // the resolve-time recipe so the lines reflect the store at modal-open.
     const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId) ?? null;
     return {
-      lines: formatRecipePreviewLines(recipe, {
-        agentTerminalCap: MAX_AGENT_RECIPE_TERMINALS,
-        spawns: target.spawns,
-      }),
+      lines: formatRecipePreviewLines(recipe, { spawns: target.spawns }),
+      // Only for a dispatch that will actually start them, and only from the
+      // recipe the lines came from. A gated dispatch that merely names the
+      // recipe (delete, save, open the editor) starts nothing, so there is no
+      // spawn for an approval to authorize (#12263).
+      ...(target.spawns && recipe
+        ? {
+            approvedRecipeRun: {
+              recipeId: recipe.id,
+              terminalCount: recipe.terminals.length,
+              terminalsDigest: recipeApprovalDigest(recipe.terminals),
+            },
+          }
+        : {}),
     };
   }
   if (target.kind === "worktreeDelete") {
@@ -1033,6 +1057,15 @@ export function useMcpBridge(): void {
         // selected nothing — and an action that needs it refuses on its absence
         // rather than reading "approved" as "approved all of these".
         let hostApprovedTargets: HostApprovedTarget[] | undefined;
+        // The recipe half of the same attestation (#12263). Captured from the
+        // preview build, exactly like `approvedTypedNameTarget` above and for
+        // the same reason: the modal keeps approval disabled until `setPreview`
+        // lands, so a click can only ever land after this is set from the lines
+        // the approver is looking at. Stays undefined for a pre-granted
+        // dispatch, which builds no preview — so a standing automation grant
+        // keeps the smaller unapproved terminal cap rather than silently
+        // inheriting a ten-pane authority nobody was shown.
+        let approvedRecipeRun: HostApprovedRecipeRun | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -1102,9 +1135,10 @@ export function useMcpBridge(): void {
               const previewPending = hasAsyncPreview;
               if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
-                  .then(({ lines, typedNameTarget }) => {
+                  .then(({ lines, typedNameTarget, approvedRecipeRun: offered }) => {
                     if (disposed) return;
                     approvedTypedNameTarget = typedNameTarget;
+                    approvedRecipeRun = offered;
                     useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
                   })
                   // The builder already fails soft, but a rejection escaping it
@@ -1113,6 +1147,7 @@ export function useMcpBridge(): void {
                   // it unconditionally.
                   .catch(() => {
                     if (disposed) return;
+                    approvedRecipeRun = undefined;
                     useMcpConfirmStore.getState().setPreview(requestId, []);
                   });
               }
@@ -1258,6 +1293,7 @@ export function useMcpBridge(): void {
                 // back to live renderer context, unchanged behaviour.
                 contextOverride: context,
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
+                ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
               }),
             actionId
           );

@@ -190,6 +190,54 @@ export interface ActionContext {
    * list as permission to act on the full request.
    */
   hostApprovedTargets?: readonly HostApprovedTarget[];
+  /**
+   * The recipe run a human approved in the host confirm dialog, for a dispatch
+   * that spawns a recipe's terminals (#12263). Set by `ActionService.dispatch`
+   * from {@link ActionDispatchOptions.hostApprovedRecipeRun} on the same terms
+   * as {@link hostApprovedTargets}: host-only, never on any `argsSchema`, and
+   * stamped over whatever a `contextOverride` claimed.
+   *
+   * Absent is the default and the fail-safe. It means no dialog listed this
+   * recipe's terminals — an unconfirmed call, or one pre-authorized by a
+   * standing automation grant, which names a tool in Settings and shows nobody
+   * a preview. Those keep the smaller unapproved ceiling
+   * (`MAX_AGENT_RECIPE_TERMINALS`). Present means a human read the terminals
+   * the dialog listed and approved starting them, so the run may start that
+   * many rather than the first three.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
+}
+
+/**
+ * The recipe run one human approval in the host confirm dialog covers (#12263).
+ *
+ * Names WHAT was offered, not merely that something was, in three parts that
+ * together pin the offer to one recipe, one size and one set of commands.
+ *
+ * `recipeId` is the RESOLVED winner: `getRecipeById` follows shadowing, so the
+ * id a caller asked for and the recipe that actually runs can differ (#8725).
+ * `terminalCount` is the blast radius the approver read, so a recipe that grew
+ * between the preview and the run cannot start terminals nobody was offered.
+ * `terminalsDigest` covers the contents, because the first two are satisfied by
+ * a recipe whose commands were rewritten under the same id while the dialog
+ * waited — which is a live window, not a theoretical one, since the composites
+ * await a worktree creation before their recipe runs.
+ *
+ * An approval that fails ANY of the three authorizes nothing at all — not the
+ * unapproved ceiling. The two cases are genuinely different: an absent approval
+ * means nobody was shown anything and the conservative default applies, while a
+ * failed one is positive evidence that what will run is not what was approved.
+ * Falling back there would start terminals off the back of an approval for
+ * something else, so the run reports every index as a failure and the caller
+ * asks again (#8331).
+ */
+export interface HostApprovedRecipeRun {
+  /** The recipe the dialog previewed, after shadow resolution (#8725). */
+  recipeId: string;
+  /** How many terminals the dialog said would start. */
+  terminalCount: number;
+  /** Fingerprint of the terminals it listed — see `recipeApprovalDigest`. */
+  terminalsDigest: string;
 }
 
 /**
@@ -513,6 +561,13 @@ export interface ActionDispatchOptions {
    * only by the MCP renderer bridge, from the rows the approver left checked.
    */
   hostApprovedTargets?: readonly HostApprovedTarget[];
+  /**
+   * Trusted record of the recipe a host confirmation offered and a human
+   * approved — NOT a client-supplied value. See
+   * {@link ActionContext.hostApprovedRecipeRun}. Set only by the MCP renderer
+   * bridge, from the preview the approver actually read.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
 }
 
 export interface ActionDispatchPayload {
