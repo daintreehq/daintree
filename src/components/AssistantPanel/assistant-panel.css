@@ -78,6 +78,7 @@
 }
 
 .assistant-session {
+  padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--assistant-border);
   color: var(--assistant-fg-secondary);
 }
@@ -118,9 +119,8 @@
 }
 
 .assistant-welcome {
-  max-width: 42ch;
-  margin: 1.5em auto;
-  padding: 1em 0.5em;
+  margin: 1.5em 0;
+  padding: 1em 0;
 }
 
 .assistant-starter {
