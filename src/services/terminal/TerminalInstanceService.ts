@@ -660,13 +660,11 @@ class TerminalInstanceService {
   }
 
   private layoutTransitionTimer: number | undefined;
+  private layoutTransitionDeadline = 0;
+  private readonly layoutTransitionPendingIds = new Set<string>();
 
   suppressResizesDuringLayoutTransition(panelIds: string[], durationMs: number): void {
     if (panelIds.length === 0) return;
-
-    if (this.layoutTransitionTimer !== undefined) {
-      clearTimeout(this.layoutTransitionTimer);
-    }
 
     // Dead-man fallback that outlives the timer-driven unlock below. The +150
     // margin (vs the +100 it covered before) spans XtermAdapter's ~50ms
@@ -677,11 +675,29 @@ class TerminalInstanceService {
     const safetyTtl = durationMs + 150;
     for (const id of panelIds) {
       this.resizeController.lockResize(id, true, safetyTtl);
+      this.layoutTransitionPendingIds.add(id);
     }
+
+    // One service-wide timer serves every overlapping transition, so a second
+    // arm must not simply replace the first: the ids it doesn't name would be
+    // unlocked by their TTL and never corrected, because the TTL only stops
+    // `isResizeLocked` reporting — it schedules nothing (#12264). The pending
+    // set is therefore the union of every arm still owed a pass, and the
+    // deadline is the latest of them, so a short transition layered on a long
+    // one can't cut the long one's window short.
+    const deadline = Date.now() + durationMs;
+    if (this.layoutTransitionTimer !== undefined) {
+      if (deadline <= this.layoutTransitionDeadline) return;
+      clearTimeout(this.layoutTransitionTimer);
+    }
+    this.layoutTransitionDeadline = deadline;
 
     this.layoutTransitionTimer = window.setTimeout(() => {
       this.layoutTransitionTimer = undefined;
-      for (const id of panelIds) {
+      this.layoutTransitionDeadline = 0;
+      const ids = [...this.layoutTransitionPendingIds];
+      this.layoutTransitionPendingIds.clear();
+      for (const id of ids) {
         if (!this.instances.has(id)) continue;
         this.resizeController.lockResize(id, false);
       }
@@ -692,7 +708,7 @@ class TerminalInstanceService {
       // close/open supersedes it cleanly (#8597). The grid hook
       // (useContentGridContext) also schedules a pass ~50ms later when grid
       // deps change; the resize() dedup guard absorbs the overlap.
-      this.runResizePass(panelIds);
+      this.runResizePass(ids);
     }, durationMs);
   }
 

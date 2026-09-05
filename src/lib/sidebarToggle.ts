@@ -23,9 +23,11 @@ import { SIDEBAR_TOGGLE_LOCK_MS } from "./terminalLayout";
  * Terminal ids affected by a sidebar/assistant-panel width change on the active
  * worktree: every grid panel on the active worktree plus the assistant's dock
  * terminal. Shared by the toggle-time suppression (suppressSidebarResizes,
- * TTL-based) and the drag-time resize lock (AppLayout's sidebar/assistant
- * divider drag, boolean lockResize). Both reflow `<main flex:1>`, which holds
- * the grid.
+ * TTL-based), the drag-time resize lock (AppLayout's sidebar/assistant divider
+ * drag, boolean lockResize), and the diagnostics dock's height transition
+ * (signalDiagnosticsDockLayoutChange, #12264). All of them reflow
+ * `<main flex:1>`, which holds the grid — the affected set is the same whether
+ * the row loses width or height.
  */
 export function getSidebarAffectedTerminalIds(): string[] {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
