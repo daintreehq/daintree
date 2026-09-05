@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useRef, useState, useEffect, useLayoutEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,8 @@ import {
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
+
+import { signalDiagnosticsDockLayoutChange } from "@/lib/diagnosticsDockLayout";
 
 import { DIAGNOSTICS_DOCK_REGION_ID } from "./regionIds";
 
@@ -248,6 +250,18 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     observer.observe(parent);
     return () => observer.disconnect();
   }, [isOpen, setMaxHeight]);
+
+  // #12264: the dock claims (or releases) its height from the same flex column
+  // that holds the panel grid, so every commit that changes it is a reflow of
+  // `<main>` and owes the grid the same protocol a sidebar transition does.
+  // Published from a layout effect, not the store, for two reasons: the first
+  // open resolves a lazy chunk, so `isOpen` flips a frame or more before any
+  // dock DOM exists to measure against; and running post-commit means
+  // subscribers read the settled box rather than the one before it. `activeTab`
+  // is deliberately not a dependency — switching tabs moves nothing.
+  useLayoutEffect(() => {
+    signalDiagnosticsDockLayoutChange();
+  }, [isOpen, height]);
 
   useEffect(() => {
     if (!isResizing && isOpen) {

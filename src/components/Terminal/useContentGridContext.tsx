@@ -47,6 +47,7 @@ import {
   subscribeSidebarLayoutTransitionUnlock,
   subscribeSidebarHydrationUnlock,
 } from "@/lib/layoutTransitionLock";
+import { subscribeDiagnosticsDockLayoutChange } from "@/lib/diagnosticsDockLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useProjectBranding } from "@/hooks";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -641,6 +642,14 @@ export function useContentGridContext({
     // #10827: remeasure once the persisted sidebar width is restored. Fires
     // synchronously if hydration already completed before this effect mounted.
     const unsubscribeHydration = subscribeSidebarHydrationUnlock(remeasureAfterUnlock);
+    // #12264: the diagnostics dock takes its height out of the same flex column
+    // as the grid, but a height-only change moves none of the deps of this
+    // effect and — when it leaves `scrollRowHeight` alone — schedules no
+    // terminal correction either. The signal fires post-commit, and
+    // `remeasureAfterUnlock` reads `gridContainerRef.current` rather than the
+    // element this effect captured, so it also picks up a grid container that
+    // was replaced by a branch switch since the observer was attached.
+    const unsubscribeDock = subscribeDiagnosticsDockLayoutChange(remeasureAfterUnlock);
 
     return () => {
       observer.disconnect();
@@ -648,6 +657,7 @@ export function useContentGridContext({
       if (finalRafId !== null) cancelAnimationFrame(finalRafId);
       unsubscribeTransition();
       unsubscribeHydration();
+      unsubscribeDock();
       setGridDimensions(null);
     };
   }, [setGridDimensions, gridTerminals.length, maximizedId, twoPaneSplitEnabled, showPlaceholder]);
