@@ -835,33 +835,57 @@ export class GitFileWatcher {
     // its own and needs no special case: a `.gitignore` edit (nothing ignores
     // it), a delete of a tracked file (still in the index), the create half of
     // a rename into a tracked location.
-    // Both run concurrently so the guard costs no extra latency, and the probe
-    // is cached across flushes so it usually costs no extra spawn either.
-    void Promise.all([
-      checkIgnoredPaths(this.worktreePath, paths, {
-        signal: controller.signal,
-        timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
-      }),
-      this.probeTrackedIgnored(),
-    ]).then(
-      ([ignored, hasTrackedIgnored]) => {
-        if (this.disposed || generation !== this.classifyGeneration) return;
-        this.classifyController = null;
-        // Skip only when EVERY path is provably irrelevant. A mixed burst
-        // exits 0 too, so the exit code is not the test — membership is.
-        if (!hasTrackedIgnored && paths.every((path) => ignored.has(path))) return;
-        this.onChange();
-      },
-      // Two-argument form, not `.catch`: a `.catch` chained after the success
-      // handler would also catch an exception thrown by `onChange()` itself
-      // and call it a second time.
-      (error: unknown) => {
-        if (this.disposed || generation !== this.classifyGeneration) return;
-        this.classifyController = null;
-        this.warnClassifyFailure(error);
-        this.onChange();
-      }
-    );
+    void checkIgnoredPaths(this.worktreePath, paths, {
+      signal: controller.signal,
+      timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
+    })
+      .then(
+        async (ignored) => {
+          if (this.disposed || generation !== this.classifyGeneration) return;
+          // Skip only when EVERY path is provably irrelevant. A mixed burst
+          // exits 0 too, so the exit code is not the test — membership is.
+          if (!paths.every((path) => ignored.has(path))) {
+            this.classifyController = null;
+            this.onChange();
+            return;
+          }
+          // Only a burst we are about to SKIP needs the hazard answer, so the
+          // probe stays off the path of every burst that was going to refresh
+          // anyway — a checkout storm pays check-ignore and nothing more. It
+          // is cached besides, so even the skip path usually spends no spawn.
+          let hasTrackedIgnored: boolean;
+          try {
+            hasTrackedIgnored = await this.probeTrackedIgnored();
+          } catch (error) {
+            if (this.disposed || generation !== this.classifyGeneration) return;
+            this.classifyController = null;
+            this.warnClassifyFailure(error);
+            this.onChange();
+            return;
+          }
+          if (this.disposed || generation !== this.classifyGeneration) return;
+          this.classifyController = null;
+          if (hasTrackedIgnored) this.onChange();
+        },
+        // Two-argument form, not a chained `.catch`: a `.catch` here would
+        // also catch an exception thrown by `onChange()` in the success
+        // handler and call `onChange()` a second time.
+        (error: unknown) => {
+          if (this.disposed || generation !== this.classifyGeneration) return;
+          this.classifyController = null;
+          this.warnClassifyFailure(error);
+          this.onChange();
+        }
+      )
+      .catch((error: unknown) => {
+        // Only reachable when `onChange()` itself threw. Report it rather than
+        // retrying it — a retry is what the two-argument form above avoids —
+        // and never leave it as an unhandled rejection.
+        logWarn("Worktree status refresh threw after ignore classification", {
+          path: this.worktreePath,
+          error: (error as Error)?.message ?? String(error),
+        });
+      });
   }
 
   /**

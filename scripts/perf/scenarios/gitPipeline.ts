@@ -601,10 +601,12 @@ export const gitPipelineScenarios: PerfScenario[] = [
         checkIgnores: number;
         flushes: number;
         settled: boolean;
+        workMs: number;
       }> {
         const from = recorder.cursor();
         const since = latestBrowserStamp(recorder);
         const mark = gitSpawnMark();
+        const startedAt = performance.now();
         write();
         const sawSignal = await pollUntil(
           () => browserSignals(recorder, from, since) > 0,
@@ -633,6 +635,11 @@ export const gitPipelineScenarios: PerfScenario[] = [
           checkIgnores: per(window.bySubcommand["check-ignore"] ?? 0),
           flushes,
           settled,
+          // Timed to the last git spawn in the window, the way PERF-104 times
+          // its storm — NOT wall clock, which now carries the fixed
+          // classifier-deadline sleep above and would report the
+          // instrumentation instead of the work.
+          workMs: window.lastAtMs === null ? 0 : Math.max(0, window.lastAtMs - startedAt),
         };
       }
 
@@ -644,7 +651,6 @@ export const gitPipelineScenarios: PerfScenario[] = [
         await quiesceGitSpawns(BURST_SETTLE_MS, BURST_FLUSH_TIMEOUT_MS);
 
         const observerMisses = spawnObserverMisses();
-        const start = performance.now();
 
         // Arm 1 — the case the whole change exists for. Every path is ignored
         // by the repo's own rules and untracked, so nothing here can move
@@ -655,7 +661,10 @@ export const gitPipelineScenarios: PerfScenario[] = [
             writeFileSync(join(outputDir, `chunk-${stamp}-${i}.js`), `build output ${i}\n`);
           }
         });
-        const durationMs = performance.now() - start;
+        // Fail closed on the duration too: a watcher that never spawned git
+        // has workMs 0, which would read as the cheapest possible sample AND
+        // trip the liveness guard's "must self-time a positive duration" rule.
+        const durationMs = ignoredArm.workMs > 0 ? ignoredArm.workMs : BURST_FLUSH_TIMEOUT_MS;
 
         // A dead watcher makes every later arm wait out its full deadline for
         // a signal that cannot come. Stop here and report the miss instead:
