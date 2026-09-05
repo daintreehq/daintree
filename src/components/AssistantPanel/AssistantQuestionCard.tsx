@@ -290,8 +290,15 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
 
       // Everything below is a decision, and the decision has already been made: the
       // answer is in flight and this sheet is read-only until it settles.
+      //
+      // Read-only, not INESCAPABLE. Swallowing every unmodified key took Tab and
+      // Shift+Tab with it, so between submitting an answer and the engine acknowledging
+      // it a keyboard user was held inside the sheet — and an acknowledgement that is
+      // slow to arrive makes that a trap of unbounded length. Only the keys that would
+      // CHANGE the answer are suppressed; the ones that move focus somewhere else are
+      // not a decision and never were.
       if (submitted !== null) {
-        if (e.key !== "Escape") e.preventDefault();
+        if (e.key !== "Escape" && e.key !== "Tab") e.preventDefault();
         return;
       }
       pointerLive.current = false;

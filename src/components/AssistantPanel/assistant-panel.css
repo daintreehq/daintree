@@ -26,15 +26,56 @@
   font-variant-ligatures: none;
 }
 
+/* ONE gutter, and every row in the panel is measured from it.
+
+   In `em` rather than Tailwind's `px-3`, because the whole panel tracks the live
+   terminal font size: a fixed 12px inset means the rail's margin stops matching the
+   pane beside it the moment somebody changes their type size, and every full-bleed row
+   below — which cancels this inset with a negative margin — would overshoot by exactly
+   the difference. Sizing both from the same `em` keeps them equal by construction.
+
+   0.85em rather than 1em: terminal emulators sit in a 6–12px window inset, and at the
+   default 12px face this lands mid-band at ~10px while buying back most of a character
+   cell on each side of a rail that only has about 48 of them. */
 .assistant-transcript {
+  padding: 0.85em var(--assistant-gutter);
   scrollbar-gutter: stable;
 }
 
+.assistant-panel {
+  --assistant-gutter: 0.85em;
+  /* ONE space, in the panel's own unit, between a leading glyph and the words it marks.
+
+     Every row that opens with a status glyph, a chevron or a spinner pays exactly this,
+     and every one of those glyphs is 14px — so every line of text in the rail starts on
+     the same axis, the way a shell's output does. It is `ch` rather than a Tailwind
+     `gap-2` because on a monospace surface the character IS the unit the column is
+     measured in, and a fixed 8px stops being one space the moment the terminal font
+     size changes. */
+  --assistant-mark-gap: 1ch;
+}
+
+/* What you typed, echoed the way a shell echoes it.
+
+   The marker sits IN the transcript's gutter and the text hangs exactly two character
+   cells after it — the geometry of a shell prompt, and near enough the same hang the
+   prose list gutter uses below. Before this the block carried 0.8em of padding on all
+   four sides, which put the user's words at x=43 while the answer directly beneath them
+   started at x=12: the two halves of one conversation did not share a left edge, and a
+   turn read as a stack of unrelated components rather than as scrollback.
+
+   The ground bleeds to the panel edges instead of floating inside the gutter. A raised
+   slab inset on both sides is a chat bubble; a band that runs the full width of the rail
+   is what a terminal does to mark a line. Cancelling the gutter with a negative margin
+   and paying it back as padding is what keeps the TEXT on the shared axis while the
+   BACKGROUND ignores it — and both sides read the same custom property, so they cannot
+   drift apart when the terminal font size changes. */
 .assistant-prompt {
   display: flex;
   align-items: flex-start;
-  gap: 0.65em;
-  padding: 0.8em;
+  gap: var(--assistant-mark-gap);
+  margin-inline: calc(-1 * var(--assistant-gutter));
+  padding: 0.3em var(--assistant-gutter);
   border-block: 1px solid var(--assistant-border);
   background: var(--assistant-raised);
   color: var(--assistant-fg);
@@ -55,7 +96,10 @@
 }
 
 .assistant-text-control {
-  min-height: 24px;
+  /* `em`, not px: this is a hit target on a surface whose type size is a live user
+     setting, so it has to grow with the text it sits under rather than staying a fixed
+     24px while the label inside it doubles. */
+  min-height: 2em;
   border-radius: var(--radius-sm);
   color: var(--assistant-fg-secondary);
   cursor: pointer;
@@ -78,7 +122,9 @@
 }
 
 .assistant-session {
-  padding-bottom: 0.75rem;
+  /* `em`, not `rem`: a `rem` is pinned to the document root and would hold at 12px while
+     everything around it grew with the terminal face. */
+  padding-bottom: 0.6em;
   border-bottom: 1px solid var(--assistant-border);
   color: var(--assistant-fg-secondary);
 }
@@ -86,9 +132,9 @@
 .assistant-session-trigger {
   display: flex;
   align-items: center;
-  gap: 0.5em;
-  min-height: 28px;
-  padding: 0.25em 0.5em;
+  gap: var(--assistant-mark-gap);
+  min-height: 2.2em;
+  padding: 0.25em 0;
   cursor: pointer;
   list-style: none;
 }
@@ -109,8 +155,8 @@
 .assistant-session-facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.5em 1em;
-  padding: 0.75em;
+  gap: 0.35em 1em;
+  padding: 0.5em 0 0.25em 2ch;
 }
 
 .assistant-session-facts dd {
@@ -118,38 +164,95 @@
   overflow-wrap: anywhere;
 }
 
+/* A startup banner, not an onboarding panel.
+
+   The padding here used to sit ON TOP of the margin, and both sat under a masthead that
+   had already spaced itself away with a bottom margin and a rule — three separations
+   stacked into 32px of nothing between the divider and the first word, on a surface
+   whose whole claim is that it is as dense as the terminal beside it. One gap, stated
+   once, in lines of the panel's own leading. */
 .assistant-welcome {
-  margin: 1.5em 0;
-  padding: 1em 0;
+  margin: 1.45em 0 0;
 }
 
+/* On the gutter axis like everything else, with the chevron in the same two-cell column
+   the echoed prompt uses. The old 0.5em box indented the label to x=39 and made three
+   commands read as three cards. */
 .assistant-starter {
   display: flex;
   align-items: center;
-  gap: 0.65em;
-  padding: 0.5em;
+  gap: var(--assistant-mark-gap);
+  margin-inline: calc(-1 * var(--assistant-gutter));
+  padding: 0.15em var(--assistant-gutter);
   text-align: left;
 }
 
+/* The expanded calls hang under a left rule — the continuous vertical track a terminal
+   uses for nested output, and the treatment the collapsed header above now defers to
+   rather than competing with it by drawing a box of its own.
+
+   The indent is deliberately about two character cells. A 1em margin plus 0.5em of
+   padding was 2.5 cells per level, which a rail of ~48 columns cannot spend twice. */
 .assistant-tool-list {
-  margin: 0.5em 0 0 1em;
+  margin: 0.4em 0 0 0.5ch;
   border-left: 1px solid var(--assistant-border-strong);
-  padding-left: 0.5em;
+  padding-left: 1.5ch;
 }
 
 .assistant-tool-row + .assistant-tool-row {
   border-top: 1px solid var(--assistant-border);
 }
 
+/* A row, not a card.
+
+   The header used to draw a 1px border on all four sides with a 6px radius, so a settled
+   turn stacked three unrelated container shapes down the rail — a filled slab for the
+   prompt, a rounded outlined box for the tool group, and a bordered card for an
+   approval — each at its own inset. The component's own doc comment already said this
+   summary adds "no accent, no border, no weight the rows do not have"; the border was an
+   accretion that contradicted it.
+
+   What replaces it is the same full-bleed band the echoed prompt uses, so hover reads as
+   a terminal highlighting a line rather than as a button lighting up. The disclosure is
+   still obvious: it keeps its status glyph, its trailing chevron, its hover ground and
+   its focus ring. */
 .assistant-tool-header {
-  min-height: 28px;
+  min-height: 2.2em;
+  gap: var(--assistant-mark-gap);
+  margin-inline: calc(-1 * var(--assistant-gutter));
+  padding-inline: var(--assistant-gutter);
+}
+
+/* Vertical rhythm in LINES, not in pixels.
+
+   Tailwind's spacing scale is px throughout, so `mb-5` and `space-y-6` held at 20px and
+   24px while the text around them tracked the terminal font — and neither figure was a
+   whole number of this panel's line boxes at any size, so the column never settled onto
+   a grid. One blank line between blocks is what a terminal puts there, and 1.45em is
+   exactly one line of the chrome leading set on `.assistant-panel`. */
+.assistant-gap-line {
+  margin-bottom: 1.45em;
+}
+
+.assistant-turn-flow > * + * {
+  margin-top: 1.45em;
+}
+
+/* Any row that opens with a glyph and continues with words. Used where the row has no
+   class of its own worth naming — the notices, the auto-approve banner, the welcome
+   heading — so that they land on the same text axis as the prompt, the starters, the
+   tool summary and the live status line. */
+.assistant-mark-row {
+  gap: var(--assistant-mark-gap);
 }
 
 .assistant-live-status {
   display: flex;
-  align-items: baseline;
-  gap: 0.65em;
-  padding: 0.5em 0;
+  /* Centre, not baseline: the spinner is now a drawn glyph rather than a text
+     character, and a baseline-aligned SVG hangs below the line it belongs to. */
+  align-items: center;
+  gap: var(--assistant-mark-gap);
+  padding: 0.4em 0;
   color: var(--assistant-fg-secondary);
 }
 
@@ -390,7 +493,12 @@
   border: 1px solid var(--assistant-border);
   color: var(--assistant-code);
   padding: 0.1em 0.3em;
-  border-radius: var(--radius-sm);
+  /* Square. A 6px radius on a 12px face rounds a chip that is only ~17px tall into a
+     pill, which is the shape a web app uses and the shape a character cell never has.
+     The colour, the ground and the hairline are the settled three cues and all three
+     stay; only the corner goes. `rounded-none` is an explicit member of the radius
+     scale, so this is a named step rather than an arbitrary value. */
+  border-radius: 0;
   /* `anywhere` is inherited from the prose root, where it exists so a long path can
      never force the panel to scroll sideways. Inside a chip it is too eager: it breaks
      at whatever column the line happens to end at, so `--assistant-code` splits after
@@ -420,11 +528,16 @@
   color: inherit;
 }
 
+/* A fence is GRID content, and takes grid geometry: square corners, an `em` inset that
+   tracks the terminal face, and the tight leading below.
+
+   `rem` was the bug worth naming — a rem is pinned to the document root, so the block's
+   inset held at ~10px while every glyph inside it grew with the user's terminal font. */
 .assistant-prose pre {
   background: var(--assistant-inset);
   border: 1px solid var(--assistant-border);
-  border-radius: var(--radius-md);
-  padding: 0.6rem 0.7rem;
+  border-radius: 0;
+  padding: 0.5em 0.6em;
   /* Its own scroll container — the panel body must never scroll horizontally. */
   overflow-x: auto;
 }
@@ -433,13 +546,24 @@
    colour all come off. The colour especially: code cyan marks a literal EMBEDDED in
    prose, and a fenced block is nothing but literals — painting the whole of it says
    nothing and fights the syntax tokens that land on top of it. */
+/* Inside a fence the block IS the container, so the span's own ground, rule and colour
+   all come off — and so does the PROSE LEADING.
+
+   1.55 is the right figure for continuous monospace prose and the wrong one for a grid.
+   The rule this file states three hundred lines up — that a fractional line height leaves
+   sub-pixel gaps between stacked box-drawing glyphs and breaks the borders a TUI draws —
+   was waved off for prose on the grounds that "nothing is drawing a box out of
+   characters". Inside a fence something very often is: an ASCII tree, a table, a diagram,
+   the output of any tool that draws one. 1.25 keeps those strokes contiguous and puts
+   roughly two more lines of a snippet on screen, without collapsing to the 1.0 that only
+   a real character grid can afford. */
 .assistant-prose pre code {
   background: transparent;
   border: 0;
   color: var(--assistant-fg);
   padding: 0;
   font-size: 1em;
-  line-height: 1.55;
+  line-height: 1.25;
 }
 
 /* --- Fenced-code syntax tokens -------------------------------------------- */
@@ -611,63 +735,6 @@
   animation: assistant-caret-blink 1.1s steps(1, end) infinite;
 }
 
-/* The cockpit's braille spinner, frame for frame (internal/ui/theme/glyphs.go:56).
-   It is the "silent work" cue on the live status line — the model is working and
-   nothing is streaming yet.
-
-   Driven by an animated `content` rather than a React tick: the frame rate a spinner
-   needs (~12fps) is far faster than the 500ms elapsed clock, and a second interval
-   re-rendering the whole transcript ten times a second to move one glyph is a real
-   cost for a decorative character. Each frame owns an explicit band so the discrete
-   value holds for its whole slice instead of flipping at the midpoint. */
-@keyframes assistant-spinner-frames {
-  0%,
-  9.99% {
-    content: "\2839";
-  }
-  10%,
-  19.99% {
-    content: "\2819";
-  }
-  20%,
-  29.99% {
-    content: "\2839";
-  }
-  30%,
-  39.99% {
-    content: "\2838";
-  }
-  40%,
-  49.99% {
-    content: "\283c";
-  }
-  50%,
-  59.99% {
-    content: "\2834";
-  }
-  60%,
-  69.99% {
-    content: "\2826";
-  }
-  70%,
-  79.99% {
-    content: "\2827";
-  }
-  80%,
-  89.99% {
-    content: "\2807";
-  }
-  90%,
-  100% {
-    content: "\280f";
-  }
-}
-
-.assistant-spinner::after {
-  content: "\2839";
-  animation: assistant-spinner-frames 0.8s infinite;
-}
-
 /* NOTE: the active-call spinner uses the app's existing global `.animate-spin-slow`
    (src/index.css). Redefining it here would have overridden it for every other
    component that uses it — the panel header, the panel tab, the agent-state chip —
@@ -689,11 +756,6 @@
   .assistant-caret {
     opacity: 1;
   }
-  /* The spinner holds on its first frame: it still marks the line as live, and the
-     elapsed clock beside it carries the "time is passing" signal on its own. */
-  .assistant-spinner::after {
-    animation: none;
-  }
 }
 
 body[data-reduce-animations="true"] .assistant-prose.is-streaming > *:last-child::after,
@@ -708,10 +770,6 @@ body[data-reduce-animations="true"]
 body[data-reduce-animations="true"] .assistant-caret {
   animation: none;
   opacity: 1;
-}
-
-body[data-reduce-animations="true"] .assistant-spinner::after {
-  animation: none;
 }
 
 /* The answer well's cursor, in the two modes that ask more of it than a fill.
