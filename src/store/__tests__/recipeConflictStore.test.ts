@@ -5,6 +5,7 @@ const baseRequest = (recipeId: string): RecipeConflictRequest => ({
   recipeId,
   recipeName: `Recipe ${recipeId}`,
   updates: { name: `Recipe ${recipeId}` },
+  reason: "stale",
 });
 
 afterEach(() => {

@@ -2921,6 +2921,97 @@ describe("recipeStore", () => {
       });
     });
 
+    describe("RECIPE_FORWARD_COMPAT_CONFLICT handling (#12261)", () => {
+      // A refusal because the tracked file holds content this build can't
+      // represent. Routed through the same conflict gate as the stale case —
+      // the resolution (reload, or overwrite with force) is identical — but
+      // tagged so the dialog can explain a different problem.
+      function makeForwardCompatError(detail: string) {
+        const err = new Error(
+          `[AppError|RECIPE_FORWARD_COMPAT_CONFLICT|${encodeURIComponent(detail)}] ` +
+            "Saving would delete unsupported content from 1 in-repo recipe file(s)"
+        );
+        err.name = "Error";
+        return err;
+      }
+
+      async function importConflictStore() {
+        const mod = await import("../recipeConflictStore");
+        // Release rather than drop: clearing the field alone would leave an
+        // earlier failed test's awaiter hanging forever.
+        if (mod.useRecipeConflictStore.getState().pendingConflict) {
+          mod.useRecipeConflictStore.getState().resolveConflict("cancel");
+        }
+        return mod.useRecipeConflictStore;
+      }
+
+      const inRepoRecipe = {
+        id: "inrepo-fwd",
+        name: "Future Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+      };
+
+      function seedStore() {
+        useRecipeStore.setState({
+          inRepoRecipes: [inRepoRecipe],
+          globalRecipes: [],
+          projectRecipes: [],
+          recipes: [inRepoRecipe],
+          currentProjectId: "project-1",
+        });
+      }
+
+      it("parks a forward-compat conflict carrying the main process's detail", async () => {
+        seedStore();
+        const store = await importConflictStore();
+        const detail = 'future-recipe.json — terminal #2 (type "future-agent")';
+        updateInRepoRecipeMock.mockRejectedValueOnce(makeForwardCompatError(detail));
+
+        const promise = useRecipeStore.getState().updateRecipe("inrepo-fwd", { name: "Mine" });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const pending = store.getState().pendingConflict;
+        expect(pending?.reason).toBe("forward-compat");
+        expect(pending?.detail).toBe(detail);
+
+        store.getState().resolveConflict("cancel");
+        await expect(promise).resolves.toBeUndefined();
+        // Rolled back — the rejected edit must not linger in memory.
+        expect(useRecipeStore.getState().inRepoRecipes[0]?.name).toBe("Future Recipe");
+      });
+
+      it("'overwrite' retries with force:true, which is the guard's explicit resolution", async () => {
+        seedStore();
+        const store = await importConflictStore();
+        updateInRepoRecipeMock.mockRejectedValueOnce(makeForwardCompatError("detail"));
+        updateInRepoRecipeMock.mockResolvedValueOnce(undefined);
+
+        const promise = useRecipeStore.getState().updateRecipe("inrepo-fwd", { name: "Mine" });
+        await Promise.resolve();
+        await Promise.resolve();
+        store.getState().resolveConflict("overwrite");
+        await expect(promise).resolves.toBeUndefined();
+
+        expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(2);
+        expect(updateInRepoRecipeMock.mock.calls[1]?.[3]).toEqual({ force: true });
+      });
+
+      it("leaves unrelated AppErrors to propagate rather than opening the dialog", async () => {
+        seedStore();
+        const store = await importConflictStore();
+        const err = new Error("[AppError|VALIDATION|nope] Invalid recipe");
+        err.name = "Error";
+        updateInRepoRecipeMock.mockRejectedValueOnce(err);
+
+        await expect(
+          useRecipeStore.getState().updateRecipe("inrepo-fwd", { name: "Mine" })
+        ).rejects.toThrow();
+        expect(store.getState().pendingConflict).toBeNull();
+      });
+    });
+
     it("updateRecipe rolls back inRepoRecipes on failure", async () => {
       const inRepoRecipe = {
         id: "inrepo-test",

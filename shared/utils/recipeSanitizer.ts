@@ -61,7 +61,13 @@ export interface RecipeSanitizeOptions {
   additionalAllowedTypes?: ReadonlySet<string>;
 }
 
-function isAllowedRecipeType(type: string, options: RecipeSanitizeOptions | undefined): boolean {
+/**
+ * Whether `type` is admissible at this trust boundary. Exported so the
+ * forward-compatibility detector in `recipeCompatibility.ts` can ask the same
+ * question without duplicating the allowlist — the two must never disagree
+ * about which terminals this build can represent (#12261).
+ */
+export function isAllowedRecipeType(type: string, options?: RecipeSanitizeOptions): boolean {
   return ALLOWED_RECIPE_TYPES.has(type) || options?.additionalAllowedTypes?.has(type) === true;
 }
 

@@ -3,7 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import type { TerminalRecipe } from "../../types/index.js";
-import { stableInRepoId } from "../../../shared/utils/recipeFilename.js";
+import { stableInRepoId, safeRecipeFilename } from "../../../shared/utils/recipeFilename.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -761,5 +761,304 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
     // After loading, the cache is populated and the same write succeeds.
     await fresh.readInRepoRecipes(projectPath);
     await expect(fresh.writeInRepoRecipeChecked(projectPath, recipe)).resolves.toBeUndefined();
+  });
+});
+
+describe("ProjectStore in-repo recipe forward-compatibility guard (#12261)", () => {
+  let tmpDir: string;
+  let projectPath: string;
+  let store: ProjectStore;
+  let recipesDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-fwd-"));
+    projectPath = path.join(tmpDir, "repo");
+    recipesDir = path.join(projectPath, ".daintree", "recipes");
+    store = new ProjectStore();
+    (store as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    (store as unknown as { fileStore: { projectsConfigDir: string } }).fileStore.projectsConfigDir =
+      tmpDir;
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Lands a file exactly as a newer build would have: content this build reads
+   * with parts dropped, and whose bytes then never change — so the staleness
+   * guard sees a matching hash and waves the write through.
+   */
+  async function seedFutureFile(name: string, body: Record<string, unknown>): Promise<string> {
+    await fs.mkdir(recipesDir, { recursive: true });
+    // Resolve the filename the same way the reader and writer do. Spelling it
+    // `${name}.json` passes on a case-insensitive macOS volume and fails on
+    // Linux CI, where the inspector would look at a different file.
+    const filePath = path.join(recipesDir, safeRecipeFilename(name));
+    await fs.writeFile(filePath, JSON.stringify(body, null, 2) + "\n", "utf-8");
+    return filePath;
+  }
+
+  const futureBody = (name: string, extra: Record<string, unknown> = {}) => ({
+    id: stableInRepoId(name),
+    name,
+    terminals: [{ type: "terminal", command: "echo hi" }],
+    createdAt: 1,
+    scope: "inrepo",
+    ...extra,
+  });
+
+  it("refuses a save that would strip an unknown top-level field, leaving bytes untouched", async () => {
+    const filePath = await seedFutureFile("Widget", futureBody("Widget", { ritual: "nightly" }));
+    const original = await fs.readFile(filePath, "utf-8");
+
+    // Load the way the app does, so the staleness cache is warm and matching —
+    // this is precisely the state in which the old guard passes the write.
+    const [loaded] = await store.readInRepoRecipes(projectPath);
+    expect(loaded.name).toBe("Widget");
+    // The unknown field is genuinely gone from memory — this is the loss the
+    // write-back would commit, and the staleness guard is blind to it because
+    // the file's bytes never changed.
+    expect(loaded).not.toHaveProperty("ritual");
+
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, {
+        ...loaded,
+        terminals: [{ type: "terminal", command: "changed" }],
+      })
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
+
+    expect(await fs.readFile(filePath, "utf-8")).toBe(original);
+  });
+
+  it("refuses a save that would drop a terminal of an unrecognized type", async () => {
+    const filePath = await seedFutureFile("Fleet", {
+      ...futureBody("Fleet"),
+      terminals: [{ type: "terminal", command: "echo hi" }, { type: "future-agent" }],
+    });
+    const original = await fs.readFile(filePath, "utf-8");
+    const [loaded] = await store.readInRepoRecipes(projectPath);
+    // The unsupported terminal is already gone from memory — this is the loss.
+    expect(loaded.terminals).toHaveLength(1);
+
+    await expect(store.writeInRepoRecipeChecked(projectPath, loaded)).rejects.toMatchObject({
+      code: "RECIPE_FORWARD_COMPAT_CONFLICT",
+    });
+    expect(await fs.readFile(filePath, "utf-8")).toBe(original);
+  });
+
+  it("refuses a save that would strip an unknown field from a terminal", async () => {
+    await seedFutureFile("Runner", {
+      ...futureBody("Runner"),
+      terminals: [{ type: "terminal", command: "echo hi", retryPolicy: "always" }],
+    });
+    const [loaded] = await store.readInRepoRecipes(projectPath);
+    await expect(store.writeInRepoRecipeChecked(projectPath, loaded)).rejects.toMatchObject({
+      code: "RECIPE_FORWARD_COMPAT_CONFLICT",
+    });
+  });
+
+  it("names the affected file and what would be lost, without leaking values", async () => {
+    await seedFutureFile("Detail", futureBody("Detail", { secretPlan: "launch-codes" }));
+    const [loaded] = await store.readInRepoRecipes(projectPath);
+
+    // One rejection, asserted whole — `expect.not.stringContaining` would also
+    // pass against an absent field, so the presence checks have to be on the
+    // same captured value.
+    const error = await store
+      .writeInRepoRecipeChecked(projectPath, loaded)
+      .then(() => null)
+      .catch((e: Error & { code?: string; userMessage?: string }) => e);
+    expect(error?.code).toBe("RECIPE_FORWARD_COMPAT_CONFLICT");
+    // Detail must ride in `userMessage`: `context` never crosses the contextBridge.
+    expect(error?.userMessage).toContain("detail.json");
+    expect(error?.userMessage).toContain("secretPlan");
+    expect(error?.userMessage).not.toContain("launch-codes");
+  });
+
+  it("fires on a cold cache, before any read has happened", async () => {
+    // The cache can't answer this question, so the guard must not depend on it.
+    await seedFutureFile("Cold", futureBody("Cold", { ritual: 1 }));
+    const fresh = new ProjectStore();
+    (fresh as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    await fresh.initialize();
+
+    await expect(
+      fresh.writeInRepoRecipeChecked(projectPath, makeRecipe({ name: "Cold" }))
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
+  });
+
+  it("protects a file the reader dropped entirely", async () => {
+    // Every terminal unsupported → the reader skips the recipe, so it never
+    // reaches the store and has no cache entry at all. Overwriting it is the
+    // worst case: the whole file's content is destroyed.
+    const filePath = await seedFutureFile("Ghost", {
+      ...futureBody("Ghost"),
+      terminals: [{ type: "future-agent" }],
+    });
+    const original = await fs.readFile(filePath, "utf-8");
+    expect(await store.readInRepoRecipes(projectPath)).toHaveLength(0);
+
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, makeRecipe({ name: "Ghost" }))
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
+    expect(await fs.readFile(filePath, "utf-8")).toBe(original);
+  });
+
+  it("refuses a rename when the old-name file is the affected one", async () => {
+    // The rename deletes the old file, so it must be inspected too.
+    const oldPath = await seedFutureFile("Before", futureBody("Before", { ritual: 1 }));
+    const original = await fs.readFile(oldPath, "utf-8");
+    const [loaded] = await store.readInRepoRecipes(projectPath);
+
+    await expect(
+      store.writeInRepoRecipeChecked(
+        projectPath,
+        { ...loaded, name: "After" },
+        { previousName: "Before" }
+      )
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
+
+    await expect(fs.access(path.join(recipesDir, "after.json"))).rejects.toThrow();
+    expect(await fs.readFile(oldPath, "utf-8")).toBe(original);
+  });
+
+  it("force=true overwrites, because the dialog's Overwrite is the explicit resolution", async () => {
+    const filePath = await seedFutureFile("Forced", futureBody("Forced", { ritual: 1 }));
+    const [loaded] = await store.readInRepoRecipes(projectPath);
+
+    await expect(
+      store.writeInRepoRecipeChecked(
+        projectPath,
+        { ...loaded, terminals: [{ type: "terminal", command: "mine" }] },
+        { force: true }
+      )
+    ).resolves.toBeUndefined();
+
+    const written = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    expect(written.ritual).toBeUndefined();
+    expect(written.terminals[0].command).toBe("mine");
+  });
+
+  it("leaves a fully-understood recipe alone on every path", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Plain"), name: "Plain" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+    await store.readInRepoRecipes(projectPath);
+
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, {
+        ...recipe,
+        terminals: [{ type: "terminal", command: "still fine" }],
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.assertInRepoRecipesForwardCompatible(projectPath, ["Plain"])
+    ).resolves.toBeUndefined();
+  });
+
+  it("passes for a brand-new recipe whose file does not exist yet", async () => {
+    await expect(
+      store.assertInRepoRecipesForwardCompatible(projectPath, ["Nothing Here"])
+    ).resolves.toBeUndefined();
+  });
+
+  it("ignores a malformed file, which the reader already skips and holds nothing to preserve", async () => {
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(path.join(recipesDir, "broken.json"), "{ not json", "utf-8");
+    await expect(
+      store.assertInRepoRecipesForwardCompatible(projectPath, ["Broken"])
+    ).resolves.toBeUndefined();
+  });
+
+  it("aggregates every affected file in one batch error and dedupes by filename", async () => {
+    await seedFutureFile("One", futureBody("One", { ritual: 1 }));
+    await seedFutureFile("Two", {
+      ...futureBody("Two"),
+      terminals: [{ type: "future-agent" }],
+    });
+    await store.writeInRepoRecipe(projectPath, makeRecipe({ name: "Three" }));
+
+    // "One" and "ONE" are distinct names resolving to the same file — dedup has
+    // to happen on the resolved filename, so a rename can't report it twice.
+    const names = ["One", "Two", "Three", "ONE"];
+    await expect(
+      store.assertInRepoRecipesForwardCompatible(projectPath, names)
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
+
+    const error = await store
+      .assertInRepoRecipesForwardCompatible(projectPath, names)
+      .catch((e: Error & { userMessage?: string }) => e);
+    const lines = (error as { userMessage: string }).userMessage.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("one.json");
+    expect(lines[1]).toContain("two.json");
+  });
+
+  it("reconciliation does not promote a local recipe over an unsupported file", async () => {
+    // The nastiest path: no user action at all. An ordinary project load runs
+    // reconciliation, and `seenFilenames` is built from what the reader
+    // returned — so a file it dropped whole records no owner and would be
+    // promoted straight over.
+    const filePath = await seedFutureFile("Ghost", {
+      ...futureBody("Ghost"),
+      terminals: [{ type: "future-agent" }],
+    });
+    const original = await fs.readFile(filePath, "utf-8");
+    expect(await store.readInRepoRecipes(projectPath)).toHaveLength(0);
+
+    const projectId = "a".repeat(64);
+    await store.saveRecipes(projectId, [makeRecipe({ id: "local-ghost", name: "Ghost" })]);
+    await store.reconcileProjectRecipes(projectPath, projectId);
+
+    // The in-repo file is untouched...
+    expect(await fs.readFile(filePath, "utf-8")).toBe(original);
+    // ...and the local recipe still survives in the mirror rather than being dropped.
+    expect((await store.getRecipes(projectId)).map((r) => r.id)).toContain("local-ghost");
+  });
+
+  it("reconciliation still promotes when the destination is absent or clean", async () => {
+    const projectId = "a".repeat(64);
+    await store.saveRecipes(projectId, [makeRecipe({ id: "local-new", name: "Fresh" })]);
+    await store.reconcileProjectRecipes(projectPath, projectId);
+
+    const onDisk = await fs.readFile(path.join(recipesDir, "fresh.json"), "utf-8");
+    expect(JSON.parse(onDisk).name).toBe("Fresh");
+  });
+
+  it("refuses a save that would drop terminals past the per-recipe cap", async () => {
+    // 11 ordinary terminals: the reader returns 10 and caches the 11-entry
+    // file's hash, so both the staleness guard and a key/type diff see nothing.
+    const filePath = await seedFutureFile("Crowded", {
+      ...futureBody("Crowded"),
+      terminals: Array.from({ length: 11 }, (_, i) => ({
+        type: "terminal",
+        command: `echo ${i}`,
+      })),
+    });
+    const original = await fs.readFile(filePath, "utf-8");
+    const [loaded] = await store.readInRepoRecipes(projectPath);
+    expect(loaded.terminals).toHaveLength(10);
+
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, { ...loaded, showInEmptyState: true })
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
+    expect(await fs.readFile(filePath, "utf-8")).toBe(original);
+  });
+
+  it("keeps projects separate — another clone's file cannot block this one", async () => {
+    const otherPath = path.join(tmpDir, "other-repo");
+    await fs.mkdir(path.join(otherPath, ".daintree", "recipes"), { recursive: true });
+    await fs.writeFile(
+      path.join(otherPath, ".daintree", "recipes", safeRecipeFilename("Shared")),
+      JSON.stringify(futureBody("Shared", { ritual: 1 }), null, 2) + "\n",
+      "utf-8"
+    );
+    await expect(
+      store.assertInRepoRecipesForwardCompatible(projectPath, ["Shared"])
+    ).resolves.toBeUndefined();
+    await expect(
+      store.assertInRepoRecipesForwardCompatible(otherPath, ["Shared"])
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
   });
 });

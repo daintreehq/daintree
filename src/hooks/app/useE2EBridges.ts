@@ -62,6 +62,7 @@ export function useE2EBridges(): void {
           recipeId: `inrepo-${recipeName}`,
           recipeName,
           updates: { name: recipeName },
+          reason: "stale",
         });
       };
 

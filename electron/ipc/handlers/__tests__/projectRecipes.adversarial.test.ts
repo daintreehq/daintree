@@ -15,6 +15,7 @@ const projectStoreMock = vi.hoisted(() => ({
   deleteRecipe: vi.fn(),
   readInRepoRecipes: vi.fn(() => []),
   writeInRepoRecipe: vi.fn(),
+  assertInRepoRecipesForwardCompatible: vi.fn(),
   deleteInRepoRecipe: vi.fn(),
   reconcileProjectRecipes: vi.fn(() => []),
 }));
@@ -361,6 +362,35 @@ describe("projectRecipes IPC adversarial", () => {
         recipes: [validRecipe(), { ...validRecipe(), id: "r2", terminals: [secretTerminal()] }],
       })
     ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
+    expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
+  });
+
+  it("syncInRepoRecipes pre-flights forward compatibility before writing anything", async () => {
+    projectStoreMock.getProjectById.mockReturnValueOnce({ path: "/repo" } as never);
+    await getHandler(CHANNELS.PROJECT_SYNC_INREPO_RECIPES)(fakeEvent(), {
+      projectId: "p1",
+      recipes: [validRecipe(), { ...validRecipe(), id: "r2", name: "Second" }],
+    });
+    expect(projectStoreMock.assertInRepoRecipesForwardCompatible).toHaveBeenCalledWith("/repo", [
+      "My Recipe",
+      "Second",
+    ]);
+    expect(projectStoreMock.writeInRepoRecipe).toHaveBeenCalledTimes(2);
+  });
+
+  it("syncInRepoRecipes writes nothing when the pre-flight rejects", async () => {
+    // This writer is unchecked by design, so the pre-flight is the only thing
+    // standing between an automation-driven sync and the tracked files (#12261).
+    projectStoreMock.getProjectById.mockReturnValueOnce({ path: "/repo" } as never);
+    projectStoreMock.assertInRepoRecipesForwardCompatible.mockRejectedValueOnce(
+      Object.assign(new Error("would strip"), { code: "RECIPE_FORWARD_COMPAT_CONFLICT" })
+    );
+    await expect(
+      getHandler(CHANNELS.PROJECT_SYNC_INREPO_RECIPES)(fakeEvent(), {
+        projectId: "p1",
+        recipes: [validRecipe()],
+      })
+    ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
     expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
   });
 
