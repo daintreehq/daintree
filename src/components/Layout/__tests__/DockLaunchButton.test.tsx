@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import {
   getPanelKindIds,
   getPanelKindConfig,
+  registerPanelKind,
+  unregisterPanelKind,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 
@@ -3010,5 +3012,127 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       // One launcher, two placements, same inventory — the issue's end state.
       expect(new Set(toolbar)).toEqual(new Set(dock));
     });
+  });
+});
+
+describe("panel origin marker", () => {
+  const GLOBAL_KIND = "acme.dashboard.overview";
+  const PROJECT_KIND = "project:proj-1/acme.notes/scratch";
+
+  function registerKind(id: string, name: string, over: Partial<PanelKindConfig> = {}) {
+    registerPanelKind({
+      id,
+      name,
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      dockable: false,
+      extensionId: "acme.dashboard",
+      ...over,
+    });
+  }
+
+  afterEach(() => {
+    unregisterPanelKind(GLOBAL_KIND);
+    unregisterPanelKind(PROJECT_KIND);
+  });
+
+  /** The row for a named item, found the way a screen reader would place it. */
+  function rowNamed(container: HTMLElement, name: string): HTMLElement {
+    const row = options(container).find((el) =>
+      (el.getAttribute("aria-label") ?? "").startsWith(`${name},`)
+    );
+    if (!row) throw new Error(`no row named ${name}`);
+    return row;
+  }
+
+  it("marks both plugin tiers in browse and leaves built-ins unmarked", () => {
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Plugin");
+    expect(qualifierTextOf(rowNamed(container, "Scratch"))).toBe("Project plugin");
+    // The rule this follows: provenance earns a marker only where it differs
+    // from the default, so the majority of rows stay exactly as they were.
+    expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("");
+  });
+
+  it("stacks origin behind the category in search rather than displacing it", () => {
+    // Search is the one mode where the row has to say what it IS — a query can
+    // return a recipe and a panel with the same name — so the category keeps
+    // the front of the slot.
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Dashnotes", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "dash" } });
+
+    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Panel · Plugin");
+    expect(qualifierTextOf(rowNamed(container, "Dashnotes"))).toBe("Panel · Project plugin");
+  });
+
+  it("keeps a built-in row's search qualifier at the bare category", () => {
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "review" } });
+
+    expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("Panel");
+  });
+
+  it("speaks both tiers while searching, not just in browse", () => {
+    // `rowNamed` only needs the name prefix, so the visual-qualifier cases
+    // above would still pass if search dropped origin from the spoken name.
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Dashnotes", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "dash" } });
+
+    expect(rowNamed(container, "Dashboard").getAttribute("aria-label")).toContain("Plugin");
+    expect(rowNamed(container, "Dashnotes").getAttribute("aria-label")).toContain("Project plugin");
+  });
+
+  it("speaks a global plugin's tier in browse too", () => {
+    registerKind(GLOBAL_KIND, "Dashboard");
+    const { container } = renderButton();
+
+    const label = rowNamed(container, "Dashboard").getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Dashboard, Grid")).toBe(true);
+    expect(label).toContain("Plugin");
+    expect(label).not.toContain("Project plugin");
+  });
+
+  it("speaks the origin without disturbing the accessible-name prefix", () => {
+    // `e2e/helpers/panels.ts` matches rows by `[aria-label^="Name,"]`, and a
+    // listener has no trailing span to read — so origin is appended as its own
+    // clause after the destination rather than folded into it.
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    const label = rowNamed(container, "Scratch").getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Scratch, Grid")).toBe(true);
+    expect(label).toContain("Project plugin");
+  });
+
+  it("adds nothing to a built-in row's accessible name", () => {
+    const { container } = renderButton();
+
+    // Case-insensitive: `toContain("Plugin")` alone would let a stray
+    // "Project plugin" through on the row that is meant to carry neither.
+    const label = rowNamed(container, "Review").getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Review, Grid")).toBe(true);
+    expect(label).not.toMatch(/plugin|built-in/i);
+  });
+
+  it("keeps a disabled reason ahead of the panel branch in the slot", () => {
+    // State changes what Enter does; provenance does not. Guards the branch
+    // ordering: a panel branch inserted above the disabled one would blank this
+    // row's reason, and only a panel can reach either.
+    const { container } = renderButton({ hasProject: false });
+
+    expect(qualifierTextOf(rowNamed(container, "Dev Preview"))).toBe("Needs a project");
   });
 });

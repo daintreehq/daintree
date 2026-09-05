@@ -7,8 +7,10 @@ import {
 import {
   panelKindIsDockable,
   getPanelKindConfig,
+  getPanelKindOrigin,
   subscribeToPanelKindRegistry,
   getPanelKindRegistrySnapshot,
+  type PanelKindOrigin,
 } from "@shared/config/panelKindRegistry";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useActionMruStore } from "@/store/actionMruStore";
@@ -120,6 +122,10 @@ export interface DockLaunchPanelItem extends DockLaunchItemBase {
   /** Where selecting this item actually lands the panel. Derived from
    * `panelKindIsDockable`, so the label can never contradict `addPanel`. */
   location: "dock" | "grid";
+  /** Which tier contributed the kind. Classified once here rather than at each
+   * render site so the launcher, its context menu and the palette cannot
+   * disagree about the same kind (#12272). */
+  origin: PanelKindOrigin;
 }
 
 export interface DockLaunchRecipeItem extends DockLaunchItemBase {
@@ -425,6 +431,8 @@ function toPanelItem(
     iconId: string;
     color: string;
     searchAliases?: string[];
+    extensionId?: string;
+    projectId?: string | null;
   },
   surface: DockLaunchSurface,
   preconditions: DockLaunchPreconditions
@@ -444,6 +452,7 @@ function toPanelItem(
     // to this group without the registry aliases having to spell it out.
     searchAliases: [...(config.searchAliases ?? []), "panel", location],
     location,
+    origin: getPanelKindOrigin(config),
     disabled: panelPrecondition(config.id, preconditions),
   };
 }

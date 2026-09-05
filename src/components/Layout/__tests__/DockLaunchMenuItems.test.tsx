@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   getPanelKindIds,
   getPanelKindConfig,
+  registerPanelKind,
+  unregisterPanelKind,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 
@@ -216,5 +218,70 @@ describe("DockLaunchMenuItems", () => {
 
     fireEvent.click(getByText("Review"));
     expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ location: "grid" }));
+  });
+});
+
+describe("DockLaunchMenuItems — panel origin", () => {
+  const GLOBAL_KIND = "acme.dashboard.overview";
+  const PROJECT_KIND = "project:proj-1/acme.notes/scratch";
+
+  function registerKind(id: string, name: string, over: Partial<PanelKindConfig> = {}) {
+    registerPanelKind({
+      id,
+      name,
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      dockable: false,
+      extensionId: "acme.dashboard",
+      ...over,
+    });
+  }
+
+  afterEach(() => {
+    unregisterPanelKind(GLOBAL_KIND);
+    unregisterPanelKind(PROJECT_KIND);
+  });
+
+  /** The menu item carrying a name, by the text a reader gets from it. */
+  function itemNamed(container: HTMLElement, name: string): HTMLElement {
+    const node = Array.from(container.querySelectorAll<HTMLElement>("button")).find((el) =>
+      Array.from(el.querySelectorAll("span")).some((s) => s.textContent === name)
+    );
+    if (!node) throw new Error(`no menu item named ${name}`);
+    return node;
+  }
+
+  it("names both plugin tiers in the item's computed accessible name", () => {
+    // The menu item has no label of its own — its name IS its content — so this
+    // queries by role rather than reading textContent: an `aria-hidden` on the
+    // marker would keep the text and lose the announcement.
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { getByRole } = renderItems();
+
+    // Whitespace-tolerant: adjacent spans concatenate without a separator, and
+    // the assertion is about the marker reaching the name, not its spacing.
+    expect(getByRole("button", { name: /^Dashboard\s*Plugin$/ })).toBeTruthy();
+    expect(getByRole("button", { name: /^Scratch\s*Project plugin$/ })).toBeTruthy();
+  });
+
+  it("leaves a built-in item's name as just its name", () => {
+    const { getByRole, container } = renderItems();
+
+    expect(getByRole("button", { name: "Review" })).toBeTruthy();
+    expect(itemNamed(container, "Review").textContent).toBe("Review");
+  });
+
+  it("still launches the kind the marked row names", () => {
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { container } = renderItems();
+
+    fireEvent.click(itemNamed(container, "Scratch"));
+    expect(addPanelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: PROJECT_KIND, location: "grid" })
+    );
   });
 });

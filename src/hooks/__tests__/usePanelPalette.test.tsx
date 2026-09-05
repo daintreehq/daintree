@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
 
@@ -32,7 +32,8 @@ const {
   projectState: { currentProject: { id: "proj-1" } as { id: string } | null },
 }));
 
-vi.mock("@shared/config/panelKindRegistry", () => ({
+vi.mock("@shared/config/panelKindRegistry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@shared/config/panelKindRegistry")>()),
   getPanelKindIds: getPanelKindIdsMock,
   getPanelKindConfig: getPanelKindConfigMock,
 }));
@@ -175,6 +176,106 @@ describe("usePanelPalette", () => {
 
     const browser = result.current.results.find((item) => item.id === "browser");
     expect(browser?.category).toBe("tool");
+  });
+
+  it("classifies each tool option's origin from the registry's ownership fields", () => {
+    getPanelKindIdsMock.mockReturnValue(["browser", "vendor.kind", "project:proj-1/vendor/local"]);
+    const base = {
+      iconId: "package",
+      color: "#aaa",
+      showInPalette: true,
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+    };
+    const configs: Record<string, object> = {
+      browser: { ...base, id: "browser", name: "Browser", shortcut: "Cmd+B" },
+      "vendor.kind": { ...base, id: "vendor.kind", name: "Vendor", extensionId: "vendor" },
+      "project:proj-1/vendor/local": {
+        ...base,
+        id: "project:proj-1/vendor/local",
+        name: "Local",
+        extensionId: "vendor",
+        projectId: "proj-1",
+      },
+    };
+    getPanelKindConfigMock.mockImplementation((kind: string) => configs[kind]);
+    getPanelKindDefinitionMock.mockImplementation((kind: string) => ({
+      id: kind,
+      component: () => null,
+    }));
+
+    const { result } = renderHook(() => usePanelPalette());
+    const originOf = (id: string) => result.current.results.find((item) => item.id === id)?.origin;
+
+    expect(originOf("browser")).toBe("builtin");
+    expect(originOf("vendor.kind")).toBe("plugin");
+    expect(originOf("project:proj-1/vendor/local")).toBe("project-plugin");
+  });
+
+  it("keeps the shortcut in description rather than spending it on origin", () => {
+    // The palette's second line is composed at render time; `description` stays
+    // the shortcut alone so Fuse never starts matching rows on their tier.
+    const { result } = renderHook(() => usePanelPalette());
+
+    const browser = result.current.results.find((item) => item.id === "browser");
+    expect(browser?.description).toBe("Cmd+B");
+  });
+
+  it("keeps origin out of the search index", async () => {
+    // The tier is a marker, not a keyword: typing "plugin" must not silently
+    // become a way to filter the palette by provenance, which would make the
+    // result list mean something different from what the query says.
+    getPanelKindIdsMock.mockReturnValue(["vendor.kind", "project:proj-1/vendor/local"]);
+    const base = {
+      iconId: "package",
+      color: "#aaa",
+      showInPalette: true,
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "vendor",
+    };
+    const configs: Record<string, object> = {
+      "vendor.kind": { ...base, id: "vendor.kind", name: "Zephyr" },
+      "project:proj-1/vendor/local": {
+        ...base,
+        id: "project:proj-1/vendor/local",
+        name: "Quartz",
+        projectId: "proj-1",
+      },
+    };
+    getPanelKindConfigMock.mockImplementation((kind: string) => configs[kind]);
+    getPanelKindDefinitionMock.mockImplementation((kind: string) => ({
+      id: kind,
+      component: () => null,
+    }));
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    act(() => result.current.setQuery("plugin"));
+    await waitFor(() => expect(result.current.query).toBe("plugin"));
+    await waitFor(() => {
+      const ids = result.current.results.map((item) => item.id);
+      expect(ids).not.toContain("vendor.kind");
+      expect(ids).not.toContain("project:proj-1/vendor/local");
+    });
+
+    // The control: both are still findable by the thing the user actually sees.
+    act(() => result.current.setQuery("quartz"));
+    await waitFor(() => {
+      expect(result.current.results.map((item) => item.id)).toContain(
+        "project:proj-1/vendor/local"
+      );
+    });
+  });
+
+  it("leaves agent options without an origin, which is a panel-kind notion", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const claude = result.current.results.find((item) => item.id === "agent:claude");
+    expect(claude?.category).toBe("agent");
+    expect(claude?.origin).toBeUndefined();
   });
 
   it("assigns category 'agent' to the MORE_AGENTS_PANEL_ID entry", () => {
