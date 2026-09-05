@@ -448,9 +448,11 @@ export interface PanelRestoreContext {
    * {@link projectRoot}, which is its path. A plugin-contributed panel kind is
    * persisted portably and re-qualified against this (#12280), so a layout
    * written under one project identity resolves under whichever one opens it.
-   * `null` for a restore with no project in scope: plugin kinds then stay
-   * portable and reach the missing-plugin placeholder with their state intact,
-   * which is the same outcome as an uninstalled plugin.
+   * `null` for a restore with no project in scope: `requalifyPersistedKind`
+   * then qualifies a project-local kind against an unresolvable sentinel
+   * project rather than leaving it portable, where it would alias onto an
+   * installed global plugin's kind. The panel reaches the missing-plugin
+   * placeholder with its state intact, as an uninstalled plugin's would.
    */
   projectId: string | null;
   agentSettings: AgentSettings | undefined;

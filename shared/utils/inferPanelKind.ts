@@ -15,8 +15,10 @@ interface InferKindInput extends PersistedKindSource {
  *
  * `projectId` is the project the snapshot is being restored INTO, and is what
  * re-qualifies a plugin-contributed kind against it (#12280). Omitting it is
- * safe — a project-local kind then stays in its portable form, which resolves
- * to no registry entry and so reaches the missing-plugin placeholder with its
+ * safe — `requalifyPersistedKind` then qualifies a project-local kind against
+ * an unresolvable sentinel project rather than handing back the portable form,
+ * which would alias onto an installed global plugin's id, so the panel resolves
+ * to no registry entry and reaches the missing-plugin placeholder with its
  * record and state intact — but every restore path that knows its project
  * should pass one, because `panelKindHasPty` and `getPanelKindConfig` are keyed
  * on the fully-qualified id and would otherwise mis-classify the panel.
