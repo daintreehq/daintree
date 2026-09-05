@@ -316,7 +316,7 @@ export const idleWindowScenarios: PerfScenario[] = [
           });
         }
 
-        fault = installProcessProbeFault();
+        fault = installProcessProbeFault(harness.cache.getCensusHelperPid());
         const faultInjected = !processProbeWorks();
         const drained = await drainInFlightRefresh(harness);
         // Spawned while the probe is broken, so a cache that reports it has

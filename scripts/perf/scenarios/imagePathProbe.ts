@@ -49,14 +49,16 @@ import {
  * scenario on the parent commit — `backoffMisses` is deliberately not an
  * integrity predicate so that reading stays valid.
  *
- * PLATFORMS. Linux is declared `unsupported` and skipped rather than reported:
- * there the probe is `readlink /proc/<pid>/exe`, pure Node with no subprocess
- * at all, so `probeSpawns` is structurally zero both before and after the fix
- * and the benchmark could never move. Counting readlink calls instead would
- * mean wrapping the subject's own dependency, which is the shape this harness
- * exists to refuse. Windows is `diagnostic`: PowerShell is a direct child and
- * so is visible to the observer, but its start cost dominates the reading and
- * the observer's own Windows caveats apply.
+ * PLATFORMS. macOS only. Linux is declared `unsupported` and skipped rather
+ * than reported: there the probe is `readlink /proc/<pid>/exe`, pure Node with
+ * no subprocess at all, so `probeSpawns` is structurally zero both before and
+ * after the fix and the benchmark could never move. Counting readlink calls
+ * instead would mean wrapping the subject's own dependency, which is the shape
+ * this harness exists to refuse. Windows was `diagnostic` until #12243 and is
+ * now `unsupported` for the same structural reason as Linux: the probe has no
+ * Windows path left. `ExecutablePath` arrives with every row of the
+ * ProcessTreeCache census, so there is no per-PID subprocess to storm and no
+ * count that could move. PERF-409 is where the Windows reading lives now.
  *
  * WHAT THIS IS NOT. The counted probes are absent-PID lookups. They exercise
  * the real failure path end to end, but a failing probe has no observable end,
@@ -186,7 +188,7 @@ export const imagePathProbeScenarios: PerfScenario[] = [
     id: "PERF-405",
     name: "Image-Path Probe Retry Storm",
     description:
-      "A real ImagePathProbe read at the pty-host's own 1500ms cadence for the 40 polls a minute contains, against a PID that can never resolve, counting the `lsof`/PowerShell starts it actually makes. Two arms share the window: one long-lived probe (what the product does) and a fresh probe per read, whose first read takes the same path the pre-#12239 gate took on every read of an unresolved PID. The ratio between them is a measured before/after on one machine in one session rather than arithmetic over a remembered number. The predicates grade the apparatus, not the feature: the observer proves it can still see a start, a positive control on this process's own PID proves the probe resolves anything at all, the absent PID is qualified as genuinely costing a subprocess, the reference arm must achieve its one-start-per-read workload, and — the one without which none of the rest is safe — the sustained arm must have retried at all and still be retrying in the back half of the window, because a probe whose retries died reports one start against forty and scores better than a working one. The issue's 5x bar is reported but deliberately left out of the predicates, so a reading taken on the pre-backoff tree stays valid evidence. Skipped on Linux, where the probe is a bare readlink and there is no subprocess storm to measure.",
+      "A real ImagePathProbe read at the pty-host's own 1500ms cadence for the 40 polls a minute contains, against a PID that can never resolve, counting the `lsof` starts it actually makes. Two arms share the window: one long-lived probe (what the product does) and a fresh probe per read, whose first read takes the same path the pre-#12239 gate took on every read of an unresolved PID. The ratio between them is a measured before/after on one machine in one session rather than arithmetic over a remembered number. The predicates grade the apparatus, not the feature: the observer proves it can still see a start, a positive control on this process's own PID proves the probe resolves anything at all, the absent PID is qualified as genuinely costing a subprocess, the reference arm must achieve its one-start-per-read workload, and — the one without which none of the rest is safe — the sustained arm must have retried at all and still be retrying in the back half of the window, because a probe whose retries died reports one start against forty and scores better than a working one. The issue's 5x bar is reported but deliberately left out of the predicates, so a reading taken on the pre-backoff tree stays valid evidence. Skipped on Linux, where the probe is a bare readlink, and on Windows, where #12243 removed the probe's subprocess path entirely — see PERF-409.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     // One 60s window per iteration, and the count is a rate over that window:
@@ -195,7 +197,7 @@ export const imagePathProbeScenarios: PerfScenario[] = [
     warmups: 0,
     iterations: { ci: 1, nightly: 1 },
     correctness: [...CORRECTNESS],
-    platforms: { linux: "unsupported", win32: "diagnostic" },
+    platforms: { linux: "unsupported", win32: "unsupported" },
     async run(): Promise<ScenarioSample> {
       const { ImagePathProbe, IMAGE_PATH_RETRY_MAX_MS } = await loadImagePathProbeModule();
       // The longest a healthy probe may go between retries: the published

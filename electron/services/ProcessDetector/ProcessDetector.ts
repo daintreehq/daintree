@@ -1,6 +1,7 @@
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { ProcessInfo, ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "../pty/ImagePathProbe.js";
+import { toExecutableBasename } from "../../utils/executableBasename.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { logIdentityDebug } from "../pty/identityDebug.js";
 import type {
@@ -664,11 +665,22 @@ export class ProcessDetector {
         //
         // Budgeted separately from the traversal: descending the cached tree is
         // pure Map lookups, but each unseen PID costs a probe subprocess on
-        // macOS/Windows. Deeper nodes are build tools, which don't rewrite
-        // their titles, so they identify fine from comm/argv alone.
-        if (this.imagePathProbe && depth <= MAX_IMAGE_PATH_PROBE_DEPTH) {
-          probedPids.add(proc.pid);
-          const imageBasename = this.imagePathProbe.readBasename(proc.pid);
+        // macOS. Deeper nodes are build tools, which don't rewrite their
+        // titles, so they identify fine from comm/argv alone.
+        if (depth <= MAX_IMAGE_PATH_PROBE_DEPTH) {
+          // Windows gets the image path from the census row itself — the same
+          // `Win32_Process` data the probe used to fetch per PID with its own
+          // `powershell.exe` (#12243). It is already in hand, and it cannot go
+          // stale across a PID recycle the way a separately cached probe result
+          // can, because it arrived on the row that named the PID. Only PIDs
+          // that actually reach the probe are recorded for eviction.
+          let imageBasename: string | null = null;
+          if (proc.executablePath) {
+            imageBasename = toExecutableBasename(proc.executablePath);
+          } else if (this.imagePathProbe) {
+            probedPids.add(proc.pid);
+            imageBasename = this.imagePathProbe.readBasename(proc.pid);
+          }
           if (imageBasename) {
             const imageCandidate = buildDetectedCandidate(imageBasename, command, order++, {
               pid: proc.pid,
