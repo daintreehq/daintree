@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 import type { DaintreeMcpTier, Project } from "@shared/types/project";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
@@ -298,7 +299,18 @@ export function GeneralTab({
         setInRepoExpanded(false);
       }
     } catch (err) {
-      setInRepoError(formatErrorMessage(err, "Failed to enable in-repo settings"));
+      // The forward-compat refusal (#12261) carries its per-file detail in
+      // `userMessage` — `context` never survives the contextBridge — so lead
+      // with why nothing was written and list the files underneath.
+      if (isClientAppError(err) && err.code === "RECIPE_FORWARD_COMPAT_CONFLICT") {
+        setInRepoError(
+          "In-repo settings weren't enabled. These recipe files hold content this version of " +
+            "Daintree doesn't understand, and enabling would delete it from them:\n" +
+            (err.userMessage ?? "")
+        );
+      } else {
+        setInRepoError(formatErrorMessage(err, "Failed to enable in-repo settings"));
+      }
     } finally {
       setInRepoEnabling(false);
     }
@@ -719,7 +731,7 @@ export function GeneralTab({
 
         {inRepoError && (
           <div
-            className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
+            className="mt-2 whitespace-pre-line text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
             role="alert"
           >
             {inRepoError}

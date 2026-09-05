@@ -53,6 +53,7 @@ import {
   cleanupUserDataRootQuarantineFiles,
 } from "./projectQuarantineCleanup.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
+import { describeRecipeForwardIncompat } from "../../shared/utils/recipeCompatibility.js";
 import { isInRepoRecipeId } from "../../shared/utils/recipeFilename.js";
 
 import { bumpFrecencyScore, decayFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
@@ -418,6 +419,14 @@ export class ProjectStore {
     options: { force?: boolean; previousName?: string } = {}
   ): Promise<void> {
     if (!options.force) {
+      // Checked before staleness: an unchanged file can still be one this build
+      // would strip on write-back, and that loss is invisible to a hash
+      // comparison taken from those same unchanged bytes (#12261). A rename
+      // reads both destinations, since the old-name file is deleted below.
+      await this.assertInRepoRecipesForwardCompatible(projectPath, [
+        recipe.name,
+        ...(options.previousName ? [options.previousName] : []),
+      ]);
       await this.assertRecipeFileNotStale(projectPath, recipe.id, recipe.name);
       if (
         options.previousName &&
@@ -433,6 +442,56 @@ export class ProjectStore {
     }
     const hash = await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
     this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipe.id), hash);
+  }
+
+  /**
+   * Refuses a write into `.daintree/recipes/` that would delete content this
+   * build cannot represent (#12261).
+   *
+   * `.daintree/recipes/*.json` is git-tracked and shared between machines on
+   * different builds. This build rebuilds every recipe from an explicit field
+   * list and drops terminals whose `type` it doesn't know, then serializes that
+   * reduced object straight back over the file — so without this guard an older
+   * build silently commits away whatever a newer one wrote. The staleness guard
+   * cannot catch it: the file hasn't changed, so its hash still matches.
+   *
+   * Each destination is read fresh rather than looked up in
+   * `inRepoRecipeHashes`. The files most at risk are the ones the reader
+   * dropped entirely, which never get a cache entry at all — a cold cache must
+   * never read as "safe to overwrite".
+   *
+   * Names are deduplicated by resolved filename so a rename whose two names
+   * collapse to one file is reported once.
+   *
+   * Public so the batch writers (enable-in-repo-settings, recipe sync) can
+   * pre-flight every destination before their first write and fail the whole
+   * operation, rather than stopping halfway with some files already rewritten.
+   */
+  async assertInRepoRecipesForwardCompatible(
+    projectPath: string,
+    recipeNames: string[]
+  ): Promise<void> {
+    const seen = new Set<string>();
+    const affected: string[] = [];
+    for (const name of recipeNames) {
+      const filename = safeRecipeFilename(name);
+      if (seen.has(filename)) continue;
+      seen.add(filename);
+      const loss = await this.identityFiles.inspectInRepoRecipeForwardCompat(projectPath, name);
+      if (loss) affected.push(`${filename} — ${describeRecipeForwardIncompat(loss)}`);
+    }
+    if (affected.length === 0) return;
+
+    // The detail has to travel in `userMessage`: `context` never crosses the
+    // contextBridge (the preload reconstructs only code/message/userMessage),
+    // and packaged builds strip it outright.
+    const detail = affected.join("\n");
+    throw new AppError({
+      code: "RECIPE_FORWARD_COMPAT_CONFLICT",
+      message: `Saving would delete unsupported content from ${affected.length} in-repo recipe file(s)`,
+      userMessage: detail,
+      context: { projectPath, affected },
+    });
   }
 
   private async assertRecipeFileNotStale(

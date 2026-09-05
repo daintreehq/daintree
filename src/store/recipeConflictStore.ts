@@ -15,12 +15,29 @@ import type { TerminalRecipe } from "@/types";
 
 export type RecipeConflictResolution = "reload" | "overwrite" | "cancel";
 
+/**
+ * Why the write was refused. `"stale"` is the original case (#9186): the file
+ * changed on disk since load. `"forward-compat"` is #12261: the file is
+ * unchanged, but holds fields or terminal types this build cannot represent, so
+ * saving would delete them. The two need different copy — one is about someone
+ * else's edit, the other about this build's own blind spot — but the same
+ * reload/overwrite resolution.
+ */
+export type RecipeConflictReason = "stale" | "forward-compat";
+
 export interface RecipeConflictRequest {
   recipeId: string;
   recipeName: string;
   updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>;
   /** Original name when the failed save was a rename — passed back to the retry. */
   previousName?: string;
+  reason: RecipeConflictReason;
+  /**
+   * For `"forward-compat"`, the main process's description of exactly what
+   * would be deleted (one line per affected file). Shown verbatim so the user
+   * can weigh Overwrite against a specific loss rather than a vague warning.
+   */
+  detail?: string;
 }
 
 interface PendingRecipeConflict extends RecipeConflictRequest {

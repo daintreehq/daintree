@@ -95,6 +95,18 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
       throw new Error(`Project not found: ${projectId}`);
     }
     const settings = await projectStore.getProjectSettings(projectId);
+
+    // Enabling rewrites every project recipe over `.daintree/recipes/`. Any
+    // destination already holding content this build can't represent would be
+    // silently stripped and committed, so check them all up front and fail the
+    // whole operation — a half-written batch with `inRepoSettings` flipped on is
+    // worse than not enabling at all (#12261).
+    const recipes = await projectStore.getRecipes(projectId);
+    await projectStore.assertInRepoRecipesForwardCompatible(
+      project.path,
+      recipes.map((recipe) => recipe.name)
+    );
+
     await projectStore.writeInRepoProjectIdentity(project.path, {
       id: project.id,
       name: project.name,
@@ -103,8 +115,7 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
     });
     await projectStore.writeInRepoSettings(project.path, settings);
 
-    // Sync existing project recipes to .daintree/recipes/
-    const recipes = await projectStore.getRecipes(projectId);
+    // Sync existing project recipes to .daintree/recipes/ (pre-flighted above).
     for (const recipe of recipes) {
       await projectStore.writeInRepoRecipe(project.path, recipe);
     }

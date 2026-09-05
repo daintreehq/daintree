@@ -29,6 +29,10 @@ export type AppErrorCode =
   | "ARG_COUNT_EXCEEDED"
   | "PAYLOAD_TOO_LARGE"
   | "RECIPE_STALE_CONFLICT"
+  // A write into `.daintree/recipes/` would delete content this build cannot
+  // represent — unknown fields, or terminals of an unrecognized type — that a
+  // newer build (or a plugin) put in the tracked file (#12261).
+  | "RECIPE_FORWARD_COMPAT_CONFLICT"
   | "PLUGIN_ACTIVATION_FAILED"
   // A project-bound plugin host call had no live renderer for its own project.
   // Deliberately not a fallback to the focused view: delivering it elsewhere is

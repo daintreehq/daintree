@@ -657,7 +657,19 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         inRepoRecipes: prevInRepo,
         recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo, get().pluginRecipes),
       });
-      if (isInRepo && isClientAppError(error) && error.code === "RECIPE_STALE_CONFLICT") {
+      // Both refusals resolve the same way — reload from disk, or overwrite with
+      // `force: true` — so they share this gate and differ only in the dialog's
+      // copy. `force` is the explicit resolution the guards hold out for; it is
+      // reachable only from the dialog's Overwrite button (#9186, #12261).
+      const conflictReason =
+        isInRepo && isClientAppError(error)
+          ? error.code === "RECIPE_STALE_CONFLICT"
+            ? "stale"
+            : error.code === "RECIPE_FORWARD_COMPAT_CONFLICT"
+              ? "forward-compat"
+              : undefined
+          : undefined;
+      if (conflictReason) {
         const projectId = get().currentProjectId;
         const previousName = updates.name && updates.name !== recipe.name ? recipe.name : undefined;
         const resolution = await useRecipeConflictStore.getState().requestConflict({
@@ -665,6 +677,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           recipeName: updatedRecipe.name,
           updates: sanitizedUpdates,
           previousName,
+          reason: conflictReason,
+          detail:
+            conflictReason === "forward-compat" && isClientAppError(error)
+              ? error.userMessage
+              : undefined,
         });
         if (resolution === "reload" && projectId) {
           void get().loadRecipes(projectId);
