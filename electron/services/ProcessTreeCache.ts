@@ -190,11 +190,14 @@ export class ProcessTreeCache {
   }
 
   private advanceBackoff(): void {
-    // Never below the configured base interval — a tight lineage ceiling caps
-    // how far we drift, it must not make the census poll faster than asked.
+    // Never below the configured base interval — a ceiling caps how far we
+    // drift, it must not make the census poll FASTER than asked. Both ceilings
+    // need the floor, not just the lineage one: a cache configured slower than
+    // 15s would otherwise be pulled down to 15s by the first unchanged sweep,
+    // which is the opposite of backing off.
     const ceiling = this.hasLineageRoots()
       ? Math.max(LINEAGE_BACKOFF_CEILING_MS, this.pollIntervalMs)
-      : BACKOFF_CEILING_MS;
+      : Math.max(BACKOFF_CEILING_MS, this.pollIntervalMs);
     this.currentIntervalMs = Math.min(
       Math.ceil(this.currentIntervalMs * BACKOFF_MULTIPLIER),
       ceiling

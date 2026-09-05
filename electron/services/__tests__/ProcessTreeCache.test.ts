@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProcessTreeCache, type ProcessInfo } from "../ProcessTreeCache.js";
 import { CENSUS_SENTINEL_PREFIX } from "../WindowsProcessCensus.js";
@@ -810,7 +811,6 @@ describe("ProcessTreeCache command/env construction", () => {
     expect(await internals.refreshUnix()).toBe(true);
   });
 
-
   describe("Windows refresh", () => {
     interface FakeStream extends EventEmitter {
       setEncoding: () => void;
@@ -989,8 +989,43 @@ describe("ProcessTreeCache command/env construction", () => {
         ])
       );
 
+      // Both rows must EXIST first: `?.executablePath` reads undefined just as
+      // happily for a process the parse dropped, so without this an
+      // implementation that rejected rows with no ExecutablePath would pass.
+      expect(cache.getProcess(100)?.comm).toBe("system");
+      expect(cache.getProcess(101)?.comm).toBe("blank");
       expect(cache.getProcess(100)?.executablePath).toBeUndefined();
       expect(cache.getProcess(101)?.executablePath).toBeUndefined();
+    });
+
+    it("replaces the image path on every census rather than carrying one forward", async () => {
+      // The PID-reuse contract (#8794): the path came from the row that named
+      // the PID, so a row that stops carrying one must not keep serving the
+      // previous answer.
+      const { cache, internals } = windowsCache();
+      const row = (executablePath: string | null) =>
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            ExecutablePath: executablePath,
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1024",
+            CreationDate: null,
+          },
+        ]);
+
+      await refreshOnce(internals, row("C:\\a\\node.exe"));
+      expect(cache.getProcess(100)?.executablePath).toBe("C:\\a\\node.exe");
+
+      await refreshOnce(internals, row("C:\\b\\node.exe"));
+      expect(cache.getProcess(100)?.executablePath).toBe("C:\\b\\node.exe");
+
+      await refreshOnce(internals, row(null));
+      expect(cache.getProcess(100)?.executablePath).toBeUndefined();
     });
 
     it("omits the census helper from the snapshot it produced, but reports its RSS", async () => {
@@ -1034,23 +1069,83 @@ describe("ProcessTreeCache command/env construction", () => {
 
     it("does not let the helper's own row drive the idle backoff", async () => {
       // A one-shot probe had a new PID every poll, which made every snapshot
-      // look changed. A stable excluded helper must read as unchanged.
-      const { internals } = windowsCache();
-      const payload = JSON.stringify([
-        {
-          ProcessId: helpers.length === 0 ? 9000 : helpers[0].pid,
-          ParentProcessId: process.pid,
-          Name: "powershell.exe",
-          CommandLine: "powershell.exe -NoProfile",
-          KernelModeTime: "0",
-          UserModeTime: "0",
-          WorkingSetSize: "1024",
-          CreationDate: null,
-        },
-      ]);
+      // look changed and pinned the census at its base interval. The FIRST
+      // refresh is the discriminating one: submitting the same row twice would
+      // read as unchanged even if the helper were included.
+      const { cache, internals } = windowsCache();
+      const helperRow = (pid: number) => ({
+        ProcessId: pid,
+        ParentProcessId: process.pid,
+        Name: "powershell.exe",
+        CommandLine: "powershell.exe -NoProfile",
+        KernelModeTime: "0",
+        UserModeTime: "0",
+        WorkingSetSize: "1024",
+        CreationDate: null,
+      });
 
-      await refreshOnce(internals, payload);
-      expect(await refreshOnce(internals, payload)).toBe(false);
+      const first = internals.refreshWindows();
+      const firstHelperPid = helpers[0].pid;
+      respond(helpers[0], JSON.stringify([helperRow(firstHelperPid)]));
+      // An empty cache growing an owned descendant is a change; this one is
+      // excluded, so there is nothing to see.
+      expect(await first).toBe(false);
+      expect(cache.getChildPids(process.pid)).toEqual([]);
+
+      // A replacement helper carries a different PID. That is the case a stable
+      // PID alone would not cover, and it must still leave the owned tree flat.
+      helpers[0].emit("exit", 0, null);
+
+      const second = internals.refreshWindows();
+      const replacementPid = helpers[1].pid;
+      expect(replacementPid).not.toBe(firstHelperPid);
+      respond(helpers[1], JSON.stringify([helperRow(replacementPid)]));
+      expect(await second).toBe(false);
+      expect(cache.getChildPids(process.pid)).toEqual([]);
+    });
+
+    it("publishes CPU deltas and startTime across successive production refreshes", async () => {
+      // The pre-existing CPU tests drive a copied formula over hand-built maps.
+      // This one goes through the real transport, which is what changed.
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        const { cache, internals } = windowsCache();
+        const row = (ticks: string, createdAt: string) =>
+          JSON.stringify([
+            {
+              ProcessId: 100,
+              ParentProcessId: 1,
+              Name: "node.exe",
+              CommandLine: "node server.js",
+              KernelModeTime: ticks,
+              UserModeTime: "0",
+              WorkingSetSize: "1048576",
+              CreationDate: createdAt,
+            },
+          ]);
+
+        await refreshOnce(internals, row("0", "2026-01-01T00:00:00.000Z"));
+        // First sample of a PID has nothing to diff against.
+        expect(cache.getProcess(100)?.cpuPercent).toBe(0);
+        expect(cache.getProcess(100)?.startTime).toBe("2026-01-01T00:00:00.000Z");
+
+        vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
+        await refreshOnce(internals, row("5000000", "2026-01-01T00:00:00.000Z"));
+        // 5,000,000 100ns ticks = 500ms of CPU over 1000ms of wall clock.
+        const cores = Math.max(os.availableParallelism(), 1);
+        expect(cache.getProcess(100)?.cpuPercent).toBeCloseTo(50 / cores, 5);
+
+        // Same PID, new incarnation: the snapshot key changes with
+        // CreationDate, so the delta starts over rather than reading the dead
+        // process's counters as a spike.
+        vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
+        await refreshOnce(internals, row("9000000", "2026-01-01T00:00:01.500Z"));
+        expect(cache.getProcess(100)?.cpuPercent).toBe(0);
+        expect(cache.getProcess(100)?.startTime).toBe("2026-01-01T00:00:01.500Z");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("clears the cache when the census comes back empty", async () => {
@@ -1133,6 +1228,30 @@ describe("ProcessTreeCache command/env construction", () => {
     });
   });
 
+  describe("backoff floor", () => {
+    it("never backs a slow-configured cache off to something faster than its base", () => {
+      // The ceilings cap how far the interval DRIFTS; they must not pull it
+      // below what the caller asked for. Only the lineage branch used to carry
+      // that floor, so a cache configured slower than the 15s idle ceiling was
+      // sped up by its first unchanged sweep.
+      const cache = new ProcessTreeCache(60_000);
+      const internals = cache as unknown as { advanceBackoff: () => void };
+
+      internals.advanceBackoff();
+      expect(cache.getCurrentIntervalMs()).toBe(60_000);
+    });
+
+    it("still advances toward the idle ceiling at the shipped base interval", () => {
+      const cache = new ProcessTreeCache(1_500);
+      const internals = cache as unknown as { advanceBackoff: () => void };
+
+      internals.advanceBackoff();
+      expect(cache.getCurrentIntervalMs()).toBe(2_250);
+      for (let i = 0; i < 20; i++) internals.advanceBackoff();
+      expect(cache.getCurrentIntervalMs()).toBe(15_000);
+    });
+  });
+
   describe("Windows census idle retirement", () => {
     it("retires the helper once demand has been gone past the backoff ceiling", async () => {
       vi.useFakeTimers();
@@ -1193,6 +1312,86 @@ describe("ProcessTreeCache command/env construction", () => {
         cache.onRefresh(() => {});
         await vi.advanceTimersByTimeAsync(0);
         expect(cache.getCensusHelperPid()).not.toBeNull();
+        cache.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts a fresh window when demand returns before the deadline", async () => {
+      vi.useFakeTimers();
+      mockSpawn.mockImplementation(() => {
+        const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        const stdout = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stdout.setEncoding = vi.fn();
+        const stderr = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stderr.resume = vi.fn();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: vi.fn((chunk: string) => {
+            queueMicrotask(() =>
+              stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}${chunk.trim()}\n`)
+            );
+            return true;
+          }),
+          end: vi.fn(),
+        });
+        Object.assign(child, { pid: 9300, stdout, stderr, stdin, kill: vi.fn() });
+        return child;
+      });
+
+      try {
+        const cache = new ProcessTreeCache(1000);
+        (cache as unknown as { isWindows: boolean }).isWindows = true;
+        const unsubscribe = cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Arm the retirement window, then take the demand back before it fires.
+        unsubscribe();
+        await vi.advanceTimersByTimeAsync(2_000);
+        cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(cache.getCensusHelperPid()).toBe(9300);
+
+        cache.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the helper while a lineage ledger still holds roots", async () => {
+      // Roots with no subscribers are still demand: the ledger can only record
+      // a descendant it observes.
+      vi.useFakeTimers();
+      mockSpawn.mockImplementation(() => {
+        const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        const stdout = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stdout.setEncoding = vi.fn();
+        const stderr = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stderr.resume = vi.fn();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: vi.fn((chunk: string) => {
+            queueMicrotask(() =>
+              stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}${chunk.trim()}\n`)
+            );
+            return true;
+          }),
+          end: vi.fn(),
+        });
+        Object.assign(child, { pid: 9400, stdout, stderr, stdin, kill: vi.fn() });
+        return child;
+      });
+
+      try {
+        const cache = new ProcessTreeCache(1000);
+        (cache as unknown as { isWindows: boolean }).isWindows = true;
+        cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+        const unsubscribe = cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+        unsubscribe();
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(cache.getCensusHelperPid()).toBe(9400);
+
         cache.stop();
       } finally {
         vi.useRealTimers();

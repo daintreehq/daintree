@@ -56,6 +56,17 @@ const execFileAsync = promisify(execFile);
  * is taken before teardown, so the baseline arm is UNDERCOUNTED — the bias runs
  * against the finding, which is the safe direction.
  *
+ * The two totals do NOT cover the same boundaries: the persistent arm's delta
+ * runs between two tick samples and so spans one fewer census than it made,
+ * and it excludes the startup CPU the baseline charges to every one of its
+ * processes. Both effects flatter the persistent arm, which is the unsafe
+ * direction — so the comparison is published per census
+ * (`censusCpuMsPerRefresh` against `baselineCpuMsPerRefresh`, and the ratio
+ * between those), where the spans are equalised, rather than as two raw totals
+ * a reader would divide differently. If the helper is replaced mid-window the
+ * two samples belong to different processes, so the reading is discarded
+ * outright rather than reported as a delta across an identity change.
+ *
  * Neither CPU figure includes work done inside the WMI provider processes on
  * the other side of the CIM call. That work is real and is charged to
  * `WmiPrvSE.exe`, not to either arm.
@@ -88,8 +99,9 @@ const BASELINE_TIMEOUT_MS = 20_000;
 /** An hour: far past the window, so the cache polls only when driven. */
 const SELF_POLL_DISABLED_MS = 3_600_000;
 
-/** Room for the refresh `start()` fires without awaiting. */
-const SETTLE_MS = 250;
+/** How long a cold PowerShell start plus first enumeration may take. */
+const STARTUP_DEADLINE_MS = 30_000;
+const STARTUP_POLL_MS = 25;
 
 const BASELINE_CPU_PREFIX = "CPUMS:";
 
@@ -215,9 +227,13 @@ export function gradeCpuTicks(
  * Apparatus-integrity predicates only.
  *
  * The issue's "census CPU must at least halve" bar is deliberately NOT here.
- * It is the judgement this scenario exists to inform, and a reading taken on
- * the parent commit — where the sustained arm IS the baseline transport and
- * the ratio is 1 — has to stay valid evidence rather than a failed run.
+ * It is the judgement this scenario exists to inform, and a run that finds no
+ * improvement has to be a finding rather than a failed benchmark.
+ *
+ * The comparison lives entirely inside this commit — both arms are driven from
+ * HEAD, over the same exported query — so it does NOT depend on being runnable
+ * against the parent commit, where neither this scenario nor the helper module
+ * it imports exists.
  */
 const CORRECTNESS = [
   "spawnObserverMisses",
@@ -333,10 +349,24 @@ export const windowsCensusScenarios: PerfScenario[] = [
           );
         }
 
-        // `start()` fires a refresh it does not await. Let it settle so the
-        // first timed refresh below is not swallowed by the `isRefreshing`
-        // guard and recorded as a zero-latency sample.
-        await sleep(SETTLE_MS);
+        // Wait for the cold start to COMPLETE, on a deadline. A fixed sleep
+        // cannot: a first PowerShell start plus CIM enumeration can take most
+        // of a second on a cold machine, and a driven refresh that lands on top
+        // of it returns immediately through the `isRefreshing` guard — after
+        // which the loop grades an empty cache and books fixture misses that
+        // never recover, on a machine where nothing was actually wrong.
+        const startupDeadline = performance.now() + STARTUP_DEADLINE_MS;
+        while (!harness.isHealthy() && performance.now() < startupDeadline) {
+          await sleep(STARTUP_POLL_MS);
+        }
+        if (!harness.isHealthy()) {
+          return failClosed("the census never produced a healthy first snapshot", {
+            spawnObserverMisses: observerMisses,
+          });
+        }
+        // One more, so the fixture children started after that first census are
+        // in the snapshot the loop's first iteration grades.
+        await harness.cache.refresh();
 
         const start = performance.now();
 
@@ -350,7 +380,11 @@ export const windowsCensusScenarios: PerfScenario[] = [
         let fixtureCpuMisses = 0;
         let helperFirstTicks: bigint | null = null;
         let helperLastTicks: bigint | null = null;
+        let helperTickPid: number | null = null;
+        let helperTickSamples = 0;
+        let helperTickIdentityBroke = false;
         let helperRssKb = 0;
+        let censusHealthMisses = 0;
 
         for (let read = 0; read < CENSUS_WINDOW_READS; read += 1) {
           const deadline = start + read * CENSUS_POLL_INTERVAL_MS;
@@ -368,6 +402,7 @@ export const windowsCensusScenarios: PerfScenario[] = [
             censusRefreshes += 1;
             censusLatencies.push(censusLatency);
           }
+          if (!harness.isHealthy()) censusHealthMisses += 1;
 
           // Graded on EVERY refresh, not once at the end: a census that goes
           // blind halfway through would otherwise pass on its first snapshot.
@@ -415,8 +450,15 @@ export const windowsCensusScenarios: PerfScenario[] = [
             if (helperPid !== null) {
               const ticks = cpuTicksForPid(rows, helperPid);
               if (ticks !== null) {
+                // Anchored to ONE process. A helper replaced mid-window would
+                // otherwise have the old process's first sample subtracted from
+                // the new one's last, which is not a delta of anything and can
+                // even come out negative.
+                if (helperTickPid === null) helperTickPid = helperPid;
+                if (helperTickPid !== helperPid) helperTickIdentityBroke = true;
                 helperFirstTicks ??= ticks;
                 helperLastTicks = ticks;
+                helperTickSamples += 1;
               }
             }
           }
@@ -424,17 +466,39 @@ export const windowsCensusScenarios: PerfScenario[] = [
 
         const windowMs = performance.now() - start;
         const censusLaunches = powerShellStarts(allSpawnsSince(windowMark)) - baselineLaunches;
-        const censusCpuMs =
-          helperFirstTicks !== null && helperLastTicks !== null
-            ? ticksToMs(helperLastTicks - helperFirstTicks)
-            : 0;
+        const censusCpuUsable =
+          !helperTickIdentityBroke &&
+          helperTickSamples >= 2 &&
+          helperFirstTicks !== null &&
+          helperLastTicks !== null;
+        const censusCpuMs = censusCpuUsable
+          ? ticksToMs((helperLastTicks as bigint) - (helperFirstTicks as bigint))
+          : 0;
+        // The delta spans the censuses BETWEEN its two samples, which is one
+        // fewer than the samples themselves.
+        const censusCpuSpanRefreshes = censusCpuUsable ? helperTickSamples - 1 : 0;
+        const censusCpuMsPerRefresh =
+          censusCpuSpanRefreshes > 0 ? censusCpuMs / censusCpuSpanRefreshes : 0;
+        const baselineCpuMsPerRefresh =
+          baselineRefreshes > 0 ? baselineCpuMs / baselineRefreshes : 0;
 
-        // The persistent arm really did reuse ONE process. Without this, an
-        // arm that respawned on every refresh and an arm that never ran at all
-        // are both "a low number".
-        const helperReuseMisses = censusRefreshes > 1 && censusLaunches <= 1 ? 0 : 1;
-        const baselineFidelityMisses = baselineLaunches === CENSUS_WINDOW_READS ? 0 : 1;
-        const censusLivenessMisses = harness.isHealthy() && censusRefreshes > 0 ? 0 : 1;
+        // The persistent arm really did reuse ONE process — exactly one, not
+        // "at most one". Without this, an arm that respawned on every refresh
+        // and an arm that never started at all are both "a low number".
+        const helperReuseMisses =
+          censusRefreshes === CENSUS_WINDOW_READS && censusLaunches === 1 ? 0 : 1;
+        // Starts alone are not fidelity: forty processes that all started and
+        // all failed would satisfy a launch count while contributing no census
+        // at all, and every other predicate here would still read zero.
+        const baselineFidelityMisses =
+          baselineLaunches === CENSUS_WINDOW_READS && baselineRefreshes === CENSUS_WINDOW_READS
+            ? 0
+            : 1;
+        // Graded on every refresh, not only at the end: a census that failed in
+        // the middle and recovered leaves the fixture children sitting in the
+        // stale snapshot, so the oracle above cannot see the gap.
+        const censusLivenessMisses =
+          censusHealthMisses === 0 && censusRefreshes > 0 && harness.isHealthy() ? 0 : 1;
 
         const metrics: Record<string, number> = {
           spawnObserverMisses: observerMisses,
@@ -449,7 +513,11 @@ export const windowsCensusScenarios: PerfScenario[] = [
             censusLaunches > 0 ? baselineLaunches / censusLaunches : baselineLaunches,
           censusCpuMs,
           baselineCensusCpuMs: baselineCpuMs,
-          baselineToSustainedCpuRatio: censusCpuMs > 0 ? baselineCpuMs / censusCpuMs : 0,
+          censusCpuMsPerRefresh,
+          baselineCpuMsPerRefresh,
+          censusCpuSpanRefreshes,
+          baselineToSustainedCpuRatio:
+            censusCpuMsPerRefresh > 0 ? baselineCpuMsPerRefresh / censusCpuMsPerRefresh : 0,
           censusLatencyMsP95: nearestRankPercentile(censusLatencies, 0.95),
           baselineCensusLatencyMsP95: nearestRankPercentile(baselineLatencies, 0.95),
           helperRssKb,
@@ -466,8 +534,10 @@ export const windowsCensusScenarios: PerfScenario[] = [
           metrics,
           notes:
             `${censusLaunches} PowerShell start(s) against a ${baselineLaunches}-start reference ` +
-            `over ${CENSUS_WINDOW_READS} refreshes; census CPU ${censusCpuMs.toFixed(0)}ms against ` +
-            `${baselineCpuMs.toFixed(0)}ms (the issue's bar is ${CENSUS_REQUIRED_CPU_REDUCTION}x)`,
+            `over ${CENSUS_WINDOW_READS} refreshes; census CPU ` +
+            `${censusCpuMsPerRefresh.toFixed(1)}ms per refresh against ` +
+            `${baselineCpuMsPerRefresh.toFixed(1)}ms (the issue's bar is ` +
+            `${CENSUS_REQUIRED_CPU_REDUCTION}x)`,
         };
       } finally {
         harness.stop();

@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CENSUS_COOLDOWN_BASE_MS,
+  CENSUS_COOLDOWN_CEILING_MS,
   CENSUS_FAILURES_BEFORE_COOLDOWN,
   CENSUS_PIPELINE,
   CENSUS_REQUEST_TIMEOUT_MS,
@@ -95,6 +97,40 @@ describe("WindowsProcessCensus", () => {
       expect(children[0].writes).toHaveLength(5);
     });
 
+    it("writes one newline-terminated request id per census and reuses the child", async () => {
+      // `[Console]::In.ReadLine()` blocks until a newline arrives, so a request
+      // written without one hangs a real helper forever while every mock in
+      // this file answers it happily. The ids must also advance, or the
+      // sentinel correlation has nothing to correlate.
+      const census = new WindowsProcessCensus();
+      for (let i = 0; i < 3; i++) {
+        const pending = census.request();
+        respond(children[0], "[]");
+        await pending;
+      }
+
+      expect(children[0].writes).toEqual(["1\n", "2\n", "3\n"]);
+      // A helper "reused" by killing it and keeping the reference would pass a
+      // spawn count against these fakes.
+      expect(children[0].kill).not.toHaveBeenCalled();
+      expect(children[0].stdin.end).not.toHaveBeenCalled();
+    });
+
+    it("pipes all three streams, decodes stdout as UTF-8, and drains stderr", async () => {
+      // stdout without an encoding yields Buffers, which would corrupt a
+      // multi-byte character split across a chunk boundary. An undrained
+      // stderr pipe eventually blocks the helper mid-census.
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+      respond(children[0], "[]");
+      await pending;
+
+      const opts = mockSpawn.mock.calls[0][2] as { stdio?: unknown };
+      expect(opts.stdio).toEqual(["pipe", "pipe", "pipe"]);
+      expect(children[0].stdout.setEncoding).toHaveBeenCalledWith("utf8");
+      expect(children[0].stderr.resume).toHaveBeenCalled();
+    });
+
     it("spawns powershell directly and hidden, never through a shell", async () => {
       const census = new WindowsProcessCensus();
       const pending = census.request();
@@ -122,7 +158,9 @@ describe("WindowsProcessCensus", () => {
 
       const args = mockSpawn.mock.calls[0][1] as string[];
       const script = args[args.indexOf("-Command") + 1];
-      expect(script).toContain("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)");
+      expect(script).toContain(
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)"
+      );
       expect(script).toContain("$OutputEncoding = [System.Text.UTF8Encoding]::new($false)");
       // Before `while`, not inside it: re-running it per request would be
       // wasted work, and a BOM-ful encoding would break every frame but the
@@ -224,16 +262,132 @@ describe("WindowsProcessCensus", () => {
       expect(await pending).toBe(payload);
     });
 
+    it("waits for the sentinel's line ending before resolving", async () => {
+      // The defect this closes: resolving on the id alone leaves the trailing
+      // CRLF to arrive with nothing outstanding, which reads as a protocol
+      // violation and retires a perfectly healthy helper — putting one
+      // PowerShell start back on every poll, and never earning a cooldown
+      // because every request "succeeded".
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+      const id = lastRequestId(children[0]);
+      const settled = vi.fn();
+      void pending.then(settled, settled);
+
+      children[0].stdout.emit("data", `[]\r\n${CENSUS_SENTINEL_PREFIX}${id}`);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+
+      children[0].stdout.emit("data", "\r\n");
+      expect(await pending).toBe("[]");
+      expect(census.isRunning).toBe(true);
+
+      // The helper survived, so the next census costs no start.
+      const next = census.request();
+      respond(children[0], "[]");
+      await next;
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for the LF half of a CRLF split across chunks", async () => {
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+      const id = lastRequestId(children[0]);
+      const settled = vi.fn();
+      void pending.then(settled, settled);
+
+      children[0].stdout.emit("data", `[]\r\n${CENSUS_SENTINEL_PREFIX}${id}\r`);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+
+      children[0].stdout.emit("data", "\n");
+      expect(await pending).toBe("[]");
+    });
+
+    it("does not accept a longer id that starts with the one it asked for", async () => {
+      // Request 1 must not take request 10's answer. Matching the id as a bare
+      // prefix is the easy way to get this wrong.
+      vi.useFakeTimers();
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+      const id = lastRequestId(children[0]);
+      expect(id).toBe("1");
+      const settled = vi.fn();
+      void pending.then(settled, settled);
+
+      children[0].stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}${id}0\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+
+      const assertion = expect(pending).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(CENSUS_REQUEST_TIMEOUT_MS);
+      await assertion;
+    });
+
+    it("reassembles a sentinel split after a payload long enough to need the scan overlap", async () => {
+      // A short payload leaves the incremental scan starting at offset 0, where
+      // rescanning the whole buffer and scanning only the new region are the
+      // same thing. This one is long enough that they are not.
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+      const id = lastRequestId(children[0]);
+      const sentinel = `${CENSUS_SENTINEL_PREFIX}${id}`;
+      const payload = `[{"CommandLine":"${"x".repeat(200_000)}"}]`;
+
+      children[0].stdout.emit("data", `${payload}\r\n${sentinel.slice(0, 9)}`);
+      children[0].stdout.emit("data", `${sentinel.slice(9)}\r\n`);
+
+      expect(await pending).toBe(payload);
+    });
+
+    it("strips a BOM from a later frame, not just the first", async () => {
+      // The encoding bootstrap runs once at startup; a regression that made it
+      // per-request, or that lost the BOM-less flag, breaks every frame after
+      // the first rather than the first one (#7955).
+      const census = new WindowsProcessCensus();
+      const first = census.request();
+      respond(children[0], "[]");
+      await first;
+
+      const second = census.request();
+      const id = lastRequestId(children[0]);
+      children[0].stdout.emit(
+        "data",
+        `\uFEFF[{"ProcessId":1}]\r\n${CENSUS_SENTINEL_PREFIX}${id}\r\n`
+      );
+      expect(await second).toBe('[{"ProcessId":1}]');
+    });
+
+    it("rejects and retires a response that never stops arriving, then recovers", async () => {
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+
+      const chunk = "x".repeat(1024 * 1024);
+      const assertion = expect(pending).rejects.toThrow(/exceeded/);
+      for (let i = 0; i < 33 && census.isRunning; i++) {
+        children[0].stdout.emit("data", chunk);
+      }
+      await assertion;
+
+      expect(census.isRunning).toBe(false);
+      const next = census.request();
+      respond(children[1], "[]");
+      expect(await next).toBe("[]");
+    });
+
     it("ignores a response framed for a different request id", async () => {
       vi.useFakeTimers();
       const census = new WindowsProcessCensus();
       const pending = census.request();
 
-      children[0].stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}999\n`);
-
       const settled = vi.fn();
       void pending.then(settled, settled);
-      await Promise.resolve();
+      children[0].stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}999\n`);
+
+      // A full timer drain, not one microtask: promise adoption can hide an
+      // already-settled response for another turn, and a single
+      // `await Promise.resolve()` would let this assertion pass either way.
+      await vi.advanceTimersByTimeAsync(0);
       expect(settled).not.toHaveBeenCalled();
 
       await expect(
@@ -362,6 +516,100 @@ describe("WindowsProcessCensus", () => {
       const retry = census.request();
       respond(children[children.length - 1], "[]");
       expect(await retry).toBe("[]");
+    });
+
+    it("rejects on an asynchronous child error event", async () => {
+      // spawn() can succeed and then emit ENOENT, which is a different code
+      // path from the synchronous throw below.
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+
+      children[0].emit("error", new Error("spawn powershell.exe ENOENT"));
+
+      await expect(pending).rejects.toThrow(/ENOENT/);
+      expect(census.isRunning).toBe(false);
+    });
+
+    it("survives a stdin error arriving after the helper was retired", async () => {
+      // The teardown race this closes: detaching stdin's error handler a beat
+      // before end()/kill() lets a queued EPIPE become an unhandled 'error',
+      // and the pty-host's uncaughtException handler exits — taking every
+      // terminal with it.
+      const census = new WindowsProcessCensus();
+      const pending = census.request();
+      respond(children[0], "[]");
+      await pending;
+
+      census.dispose();
+
+      expect(() => children[0].stdin.emit("error", new Error("EPIPE"))).not.toThrow();
+      expect(() => children[0].emit("error", new Error("EPIPE"))).not.toThrow();
+    });
+
+    it("does not charge a late frame from a retired helper to its replacement", async () => {
+      const census = new WindowsProcessCensus();
+      const first = census.request();
+      respond(children[0], "[]");
+      await first;
+      expect(census.retireIfIdle()).toBe(true);
+
+      const second = census.request();
+      // The retired child's stream is still live in this fake; a frame from it
+      // must not resolve — or retire — the request the replacement is serving.
+      children[0].stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}2\n`);
+      expect(census.isRunning).toBe(true);
+
+      respond(children[1], '[{"ProcessId":7}]');
+      expect(await second).toBe('[{"ProcessId":7}]');
+    });
+
+    it("walks the cooldown ladder at its published boundaries", async () => {
+      vi.useFakeTimers();
+      const census = new WindowsProcessCensus();
+
+      const failOnce = async (): Promise<void> => {
+        const pending = census.request();
+        children[children.length - 1].emit("exit", 1, null);
+        await expect(pending).rejects.toThrow();
+      };
+
+      for (let i = 0; i < CENSUS_FAILURES_BEFORE_COOLDOWN; i++) await failOnce();
+
+      // 15s, then 30s, then the 60s ceiling — each checked just short of the
+      // boundary and again at it, so a constant delay of any single length
+      // cannot satisfy the whole ladder.
+      for (const expectedMs of [
+        CENSUS_COOLDOWN_BASE_MS,
+        CENSUS_COOLDOWN_BASE_MS * 2,
+        CENSUS_COOLDOWN_CEILING_MS,
+        CENSUS_COOLDOWN_CEILING_MS,
+      ]) {
+        await vi.advanceTimersByTimeAsync(expectedMs - 1);
+        await expect(census.request()).rejects.toThrow(/cooling down/);
+        await vi.advanceTimersByTimeAsync(1);
+        await failOnce();
+      }
+    });
+
+    it("does not let an idle death alone push the helper toward a cooldown", async () => {
+      vi.useFakeTimers();
+      const census = new WindowsProcessCensus();
+      const first = census.request();
+      respond(children[0], "[]");
+      await first;
+
+      // Nothing was outstanding, so this is not a failure and must not be
+      // charged. Two real failures after it are still below the threshold.
+      children[0].emit("exit", 0, null);
+      for (let i = 0; i < CENSUS_FAILURES_BEFORE_COOLDOWN - 1; i++) {
+        const pending = census.request();
+        children[children.length - 1].emit("exit", 1, null);
+        await expect(pending).rejects.toThrow();
+      }
+
+      const recovered = census.request();
+      respond(children[children.length - 1], "[]");
+      expect(await recovered).toBe("[]");
     });
 
     it("charges a synchronous spawn failure to the same ladder", async () => {

@@ -33,13 +33,24 @@ describe("toExecutableBasename", () => {
     expect(toExecutableBasename("")).toBeNull();
     expect(toExecutableBasename("   ")).toBeNull();
     expect(toExecutableBasename("/")).toBeNull();
+    expect(toExecutableBasename("\\")).toBeNull();
+    expect(toExecutableBasename("C:\\")).toBeNull();
+  });
+
+  it("returns null for a directory path rather than the directory's own name", () => {
+    // A trailing separator used to fall back to the whole path, so
+    // "/some/directory/" reported itself as an executable basename.
+    expect(toExecutableBasename("/some/directory/")).toBeNull();
+    expect(toExecutableBasename("C:\\Program Files\\Claude\\")).toBeNull();
   });
 
   it("returns null when stripping the extension would leave nothing", () => {
     expect(toExecutableBasename("/tmp/.exe")).toBeNull();
   });
 
-  it("keeps non-ASCII basenames intact", () => {
-    expect(toExecutableBasename("/opt/工具/agent.exe")).toBe("agent");
+  it("keeps a non-ASCII basename intact rather than stripping it", () => {
+    // Unicode in the DIRECTORY proves nothing — it is discarded either way.
+    expect(toExecutableBasename("/opt/tools/工具.exe")).toBe("工具");
+    expect(toExecutableBasename("C:\\Programme\\Übersetzer.exe")).toBe("übersetzer");
   });
 });

@@ -32,10 +32,13 @@ describe("PERF-409 apparatus", () => {
       expect(nearestRankPercentile(values, 0.95)).toBe(38);
     });
 
-    it("is order-independent", () => {
-      expect(nearestRankPercentile([50, 10, 30, 20, 40], 0.5)).toBe(
-        nearestRankPercentile([10, 20, 30, 40, 50], 0.5)
-      );
+    it("sorts before ranking, and rounds the rank up", () => {
+      // Both mutations this kills read as passes against a mid-position
+      // assertion: an unsorted p50 over [50,10,30,20,40] still lands on 30, and
+      // Math.floor is indistinguishable from Math.ceil when 0.95 x N is already
+      // a whole number. p95 of an unsorted five-sample set is neither.
+      expect(nearestRankPercentile([50, 10, 30, 20, 40], 0.95)).toBe(50);
+      expect(nearestRankPercentile([10, 20, 30], 0.5)).toBe(20);
     });
 
     it("reports 0 for an empty sample rather than NaN", () => {
@@ -119,7 +122,10 @@ describe("PERF-409 apparatus", () => {
     ];
 
     it("reports zero misses when every child is present under the right parent", () => {
-      const reading = gradeSnapshot((pid) => (pid === 10 || pid === 11 ? { ppid: 1 } : undefined), expected);
+      const reading = gradeSnapshot(
+        (pid) => (pid === 10 || pid === 11 ? { ppid: 1 } : undefined),
+        expected
+      );
       expect(reading).toEqual({ fixtureDiscoveryMisses: 0, fixtureParentMisses: 0 });
     });
 
@@ -148,11 +154,15 @@ describe("PERF-409 apparatus", () => {
     const expected = [{ pid: 10, ppid: 1 }];
 
     it("passes a child with CPU time against it", () => {
-      expect(gradeCpuTicks([{ ProcessId: 10, KernelModeTime: "1", UserModeTime: "1" }], expected)).toBe(0);
+      expect(
+        gradeCpuTicks([{ ProcessId: 10, KernelModeTime: "1", UserModeTime: "1" }], expected)
+      ).toBe(0);
     });
 
     it("counts a child the census reported no CPU for", () => {
-      expect(gradeCpuTicks([{ ProcessId: 10, KernelModeTime: "0", UserModeTime: "0" }], expected)).toBe(1);
+      expect(
+        gradeCpuTicks([{ ProcessId: 10, KernelModeTime: "0", UserModeTime: "0" }], expected)
+      ).toBe(1);
     });
 
     it("counts a child missing from the payload entirely", () => {

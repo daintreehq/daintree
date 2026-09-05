@@ -91,8 +91,8 @@ const MAX_RESPONSE_CHARS = 32 * 1024 * 1024;
  * the throttle exists so that failure costs no process starts at all.
  */
 export const CENSUS_FAILURES_BEFORE_COOLDOWN = 3;
-const CENSUS_COOLDOWN_BASE_MS = 15_000;
-const CENSUS_COOLDOWN_CEILING_MS = 60_000;
+export const CENSUS_COOLDOWN_BASE_MS = 15_000;
+export const CENSUS_COOLDOWN_CEILING_MS = 60_000;
 
 interface PendingRequest {
   id: number;
@@ -124,7 +124,7 @@ export class WindowsProcessCensus {
   private pending: PendingRequest | null = null;
   private nextRequestId = 1;
   private consecutiveFailures = 0;
-  private cooldownUntil = 0;
+  private cooldownTimer: NodeJS.Timeout | null = null;
   private disposed = false;
 
   /** PID of the live helper, or null while none is running. */
@@ -151,12 +151,13 @@ export class WindowsProcessCensus {
       throw new Error("Windows census helper is already serving a request");
     }
 
-    const now = Date.now();
-    if (now < this.cooldownUntil) {
-      throw new Error(
-        `Windows census helper is cooling down for ${this.cooldownUntil - now}ms after ` +
-          `${this.consecutiveFailures} consecutive failures`
-      );
+    if (this.cooldownTimer !== null) {
+      // Deliberately a stable message with no remaining-time in it. The cache
+      // deduplicates its probe-failure log by exact message, and the cache
+      // retries at its BASE interval while this is throwing — a countdown in
+      // the text would put roughly forty distinct lines a minute in the log
+      // for one standing fault.
+      throw new Error("Windows census helper is cooling down after consecutive failures");
     }
 
     let child: ChildProcess;
@@ -208,6 +209,10 @@ export class WindowsProcessCensus {
    */
   dispose(): void {
     this.disposed = true;
+    if (this.cooldownTimer !== null) {
+      clearTimeout(this.cooldownTimer);
+      this.cooldownTimer = null;
+    }
     const pending = this.pending;
     this.pending = null;
     if (pending) {
@@ -232,7 +237,10 @@ export class WindowsProcessCensus {
     this.stdoutBuffer = "";
 
     child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => this.consume(chunk));
+    // Guarded on identity rather than detached at retirement: see retire().
+    child.stdout?.on("data", (chunk: string) => {
+      if (this.child === child) this.consume(chunk);
+    });
 
     // Drained and dropped. The helper's stderr is not part of the protocol, and
     // an undrained pipe would eventually block the child.
@@ -278,23 +286,54 @@ export class WindowsProcessCensus {
 
     const marker = `${CENSUS_SENTINEL_PREFIX}${pending.id}`;
     // Only the newly arrived region can complete the sentinel, minus an overlap
-    // for a marker split across two chunks. Rescanning the whole buffer per
-    // chunk would be quadratic over a multi-MB payload.
-    const from = Math.max(0, previousLength - marker.length - 1);
+    // for a marker (or its CRLF terminator) split across two chunks. Rescanning
+    // the whole buffer per chunk would be quadratic over a multi-MB payload.
+    const from = Math.max(0, previousLength - marker.length - 2);
+    let sentinelAt = -1;
     let at = this.stdoutBuffer.indexOf(marker, from);
-    // The sentinel is a whole line. A process command line inside the payload
-    // could contain the literal, and that must not terminate the frame.
-    while (at > 0 && this.stdoutBuffer[at - 1] !== "\n") {
+    while (at !== -1) {
+      if (at === 0 || this.stdoutBuffer[at - 1] === "\n") {
+        // The sentinel is a whole LINE, and the frame is not complete until its
+        // terminator has arrived. Both halves matter:
+        //
+        //  - matching the id as a PREFIX would let request 1 accept the answer
+        //    to request 10;
+        //  - resolving before the line ending would leave the trailing CRLF to
+        //    arrive with nothing outstanding, which reads as a protocol
+        //    violation and retires a perfectly healthy helper — restoring one
+        //    PowerShell start per poll, and never earning a cooldown because
+        //    every request "succeeded".
+        const end = at + marker.length;
+        const after = this.stdoutBuffer[end];
+        if (after === undefined) return;
+        if (after === "\n") {
+          sentinelAt = at;
+          break;
+        }
+        if (after === "\r") {
+          const next = this.stdoutBuffer[end + 1];
+          if (next === undefined) return;
+          if (next === "\n") {
+            sentinelAt = at;
+            break;
+          }
+        }
+      }
+      // Not a sentinel line: a process command line inside the payload can
+      // carry the literal, and that must not terminate the frame.
       at = this.stdoutBuffer.indexOf(marker, at + 1);
     }
-    if (at === -1) return;
+    if (sentinelAt === -1) return;
 
-    const frame = this.stdoutBuffer.slice(0, at);
-    // The sentinel terminates the response: anything after it was not asked
-    // for. Clearing is also what keeps #10410 off this path — the accumulated
-    // buffer is the only string here the instance RETAINS, so it is the only
-    // one whose slices could pin a multi-MB parent. The payload below is handed
-    // straight to JSON.parse and dropped, so it needs no flat copy.
+    const frame = this.stdoutBuffer.slice(0, sentinelAt);
+    // The sentinel line terminates the response, its terminator included:
+    // anything after it was not asked for. Clearing is also what keeps #10410
+    // off this path — the accumulated buffer is the only string here the
+    // instance RETAINS, so it is the only one whose slices could pin a multi-MB
+    // parent. On a SUCCESSFUL parse the payload below is handed straight to
+    // JSON.parse and dropped, so it needs no flat copy; a parse failure is a
+    // different story, but there the caller's SyntaxError is what carries the
+    // source, and a flat copy here would not change that.
     this.stdoutBuffer = "";
 
     let payload: string | null = null;
@@ -318,7 +357,6 @@ export class WindowsProcessCensus {
     this.pending = null;
     clearTimeout(pending.timer);
     this.consecutiveFailures = 0;
-    this.cooldownUntil = 0;
     pending.resolve(payload);
   }
 
@@ -346,7 +384,14 @@ export class WindowsProcessCensus {
     if (this.consecutiveFailures < CENSUS_FAILURES_BEFORE_COOLDOWN) return;
     const steps = this.consecutiveFailures - CENSUS_FAILURES_BEFORE_COOLDOWN;
     const delayMs = Math.min(CENSUS_COOLDOWN_BASE_MS * 2 ** steps, CENSUS_COOLDOWN_CEILING_MS);
-    this.cooldownUntil = Date.now() + delayMs;
+    // A timer rather than a `Date.now()` deadline: the cooldown is an elapsed
+    // duration, and a wall clock that steps backwards — an NTP correction, a
+    // laptop waking in another timezone — would otherwise strand the census for
+    // however far back it stepped.
+    if (this.cooldownTimer !== null) clearTimeout(this.cooldownTimer);
+    this.cooldownTimer = setTimeout(() => {
+      this.cooldownTimer = null;
+    }, delayMs);
   }
 
   /**
@@ -358,18 +403,19 @@ export class WindowsProcessCensus {
    * the pty-host's parent force-kills the host one second after asking it to
    * shut down, so teardown here cannot wait on the child noticing. The helper
    * starts no children of its own, so plain `kill()` leaves nothing behind.
+   *
+   * Every listener stays attached. `this.child` is nulled first and all of them
+   * are guarded on it, so they are already inert — and detaching them would
+   * drop the stdin `error` handler a beat before `end()`/`kill()`, which is
+   * exactly when an EPIPE surfaces. An unhandled `error` on a stream reaches
+   * the pty-host's `uncaughtException` handler, which exits the host: a routine
+   * teardown race would take every terminal with it.
    */
   private retire(): void {
     const child = this.child;
     this.child = null;
     this.stdoutBuffer = "";
     if (!child) return;
-
-    child.stdout?.removeAllListeners();
-    child.stderr?.removeAllListeners();
-    child.stdin?.removeAllListeners();
-    child.removeAllListeners("exit");
-    child.removeAllListeners("error");
 
     try {
       child.stdin?.end();
