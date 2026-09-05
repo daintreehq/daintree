@@ -499,6 +499,11 @@ export class PluginDevWorkerHost extends EventEmitter {
   private handleWorkerMessage(msg: PluginWorkerToHostMessage): void {
     if (this.isDisposed) return;
     if (msg.type === "ready") {
+      // A child we have already asked to die must not be told to `start`: it
+      // would import and activate the plugin while racing its own teardown, and
+      // the outcome it posted would describe a generation the bridge has
+      // already retired (#12282). The replacement announces its own `ready`.
+      if (this.expectingExit) return;
       // Spike #10890: record whether Electron honored the permission-model
       // execArgv flags. Only logged when we actually requested them, so a
       // normal fork stays quiet. `honored=false` on Electron 42 is the expected
