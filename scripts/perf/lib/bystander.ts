@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { percentile } from "./stats";
 
 /**
  * How responsive the rest of the process stayed while something else ran.
@@ -107,6 +108,29 @@ export interface BystanderReading {
    * unavailable", which a median cannot express and a max hides the frequency of.
    */
   blockedMs: number;
+  /**
+   * 95th percentile of the raw observation gaps, boundary-inclusive.
+   *
+   * The gap distribution, not the worst gap: `longestStallMs` reports the one
+   * worst freeze in the window, which a single unlucky collection can own, and
+   * `blockedMs` sums the excess without saying how any single pause felt. A
+   * percentile is what survives both — the pause a caller can expect to hit
+   * near the tail rather than at the extreme.
+   *
+   * Includes one cadence of ordinary waiting, because a gap always does. Read
+   * it as "the loop went unobserved this long", and use {@link p95DelayMs} for
+   * the part attributable to the workload.
+   */
+  p95StallMs: number;
+  /**
+   * 95th percentile of gap MINUS one cadence, floored at zero — the tail of
+   * timer lateness with the cadence the probe was always going to wait removed.
+   *
+   * This is the comparable figure across two arms measured at the same cadence:
+   * an idle loop reports ~0 here while still reporting a full cadence in
+   * {@link p95StallMs}.
+   */
+  p95DelayMs: number;
   /** Wall clock the probe covered. */
   windowMs: number;
   /** Share of the window spent blocked, 0..1. */
@@ -304,6 +328,7 @@ function start(options: BystanderOptions): InternalProbe {
 
       let longestStallMs = 0;
       let blockedMs = 0;
+      const gaps: number[] = [];
       const stallFloor = cadenceMs * 2;
       let previous = startedAt;
       // The tail counts: a block that is still running when the workload
@@ -311,6 +336,7 @@ function start(options: BystanderOptions): InternalProbe {
       // observations would discard the largest gap in the window.
       for (const at of [...observations, closedAt]) {
         const gap = at - previous;
+        gaps.push(gap);
         if (gap > longestStallMs) longestStallMs = gap;
         if (gap > stallFloor) blockedMs += gap - cadenceMs;
         previous = at;
@@ -321,6 +347,11 @@ function start(options: BystanderOptions): InternalProbe {
         probeMisses: (windowApparatusSound ?? everFired) ? 0 : 1,
         longestStallMs,
         blockedMs,
+        p95StallMs: percentile(gaps, 95),
+        p95DelayMs: percentile(
+          gaps.map((gap) => Math.max(0, gap - cadenceMs)),
+          95
+        ),
         windowMs,
         blockedFraction: windowMs > 0 ? blockedMs / windowMs : 0,
       };
@@ -344,6 +375,8 @@ export function bystanderMetrics(
     [`${prefix}LongestStallMs`]: reading.longestStallMs,
     [`${prefix}BlockedMs`]: reading.blockedMs,
     [`${prefix}BlockedPct`]: reading.blockedFraction * 100,
+    [`${prefix}P95StallMs`]: reading.p95StallMs,
+    [`${prefix}P95DelayMs`]: reading.p95DelayMs,
     [`${prefix}ProbeTicks`]: reading.ticksObserved,
   };
 }

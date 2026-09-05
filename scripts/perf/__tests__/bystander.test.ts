@@ -245,6 +245,8 @@ describe("bystander probe", () => {
       probeMisses: 0,
       longestStallMs: 4,
       blockedMs: 0,
+      p95StallMs: 3,
+      p95DelayMs: 1,
       windowMs: 100,
       blockedFraction: 0,
     });
@@ -252,11 +254,45 @@ describe("bystander probe", () => {
       "workerBlockedMs",
       "workerBlockedPct",
       "workerLongestStallMs",
+      "workerP95DelayMs",
+      "workerP95StallMs",
       "workerProbeTicks",
     ]);
     // Not folded into the prefix: one scenario declares one predicate for the
     // probe regardless of how many arms it runs, and an undeclared one is
     // invisible to the runner.
     expect(metrics).not.toHaveProperty("workerProbeMisses");
+  });
+
+  it("reports a gap percentile at or below the worst freeze, and a delay percentile below it", async () => {
+    const probe = await armBystanderProbe({ cadenceMs: 8 });
+    blockFor(60);
+    await sleep(60);
+    const reading = probe.stop();
+
+    // The percentile describes the distribution the max is the tail of, so it
+    // can never exceed it. Both are boundary-inclusive over the same gaps.
+    expect(reading.p95StallMs).toBeLessThanOrEqual(reading.longestStallMs);
+    // One cadence of every gap was always going to be spent waiting, so the
+    // delay figure trails the raw gap figure by exactly that much.
+    expect(reading.p95DelayMs).toBeLessThanOrEqual(reading.p95StallMs);
+    expect(reading.p95DelayMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports zero percentiles for a window that observed nothing at all", () => {
+    // `percentile` over an empty gap list must not read NaN: a non-finite
+    // measurement moves the exit code under --enforce-integrity.
+    const metrics = bystanderMetrics("idle", {
+      ticksObserved: 0,
+      probeMisses: 1,
+      longestStallMs: 0,
+      blockedMs: 0,
+      p95StallMs: 0,
+      p95DelayMs: 0,
+      windowMs: 0,
+      blockedFraction: 0,
+    });
+    expect(Number.isFinite(metrics.idleP95StallMs)).toBe(true);
+    expect(Number.isFinite(metrics.idleP95DelayMs)).toBe(true);
   });
 });

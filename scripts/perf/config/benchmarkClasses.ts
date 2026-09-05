@@ -139,6 +139,14 @@ const FAMILIES: readonly Family[] = [
       "Real better-sqlite3 and real electron-store writes, including WAL and whole-file amplification. Nothing here says how much of a save or an open the user perceives.",
   },
   {
+    label: "project-state-queue",
+    ids: ["PERF-405", "PERF-406"],
+    kind: "mechanism",
+    fidelity: PURE,
+    claim:
+      "The real ProjectStateManager write queue over real temp storage: real validation, real JSON.stringify, real atomic writes, and a real main-thread availability probe alongside them. The updaters are called directly, so the IPC hop that carries them, the renderer's own 500ms debounce upstream, and ProjectStore's derived-metadata observer downstream are all absent — this prices the queue, not the layout change a user makes.",
+  },
+  {
     label: "soak",
     ids: ["PERF-060", "PERF-061", "PERF-062", "PERF-063"],
     kind: "mechanism",
