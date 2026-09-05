@@ -113,8 +113,24 @@ describe("grid content is denser than prose", () => {
    * defect, whatever the numbers are.
    */
   it("sets fenced code tighter than paragraph prose", () => {
-    expect(lineHeightOf(".assistant-prose pre code")).toBeLessThan(
-      lineHeightOf(".assistant-prose")
-    );
+    expect(lineHeightOf(".assistant-prose pre")).toBeLessThan(lineHeightOf(".assistant-prose"));
+  });
+
+  /**
+   * And sets it on the element that can actually enforce it.
+   *
+   * This is the check that was missing, and its absence is why the first attempt at the
+   * rule above shipped doing nothing. The leading was declared on `.assistant-prose pre
+   * code`, which is INLINE: the `pre` establishes the line box, its own strut is
+   * inherited at the prose value, and no line-height on the inline content can pull the
+   * pitch below it. Rendered spacing did not move by a pixel while a test comparing
+   * declarations reported the fix had landed.
+   *
+   * jsdom has no layout, so the pitch itself cannot be measured here. What can be
+   * asserted is the structural fact the bug turned on: the tighter value belongs on the
+   * block.
+   */
+  it("declares that leading on the pre, which owns the line box", () => {
+    expect(() => lineHeightOf(".assistant-prose pre")).not.toThrow();
   });
 });
