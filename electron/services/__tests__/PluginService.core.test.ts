@@ -878,7 +878,10 @@ describe("PluginService manifest command contributions (#9281)", () => {
         },
       },
       {
-        "do-thing.ts": `export default () => "loaded"`,
+        // A real, eligible handler: with only a `.ts` sibling the plugin would
+        // be ineligible for a worker anyway, so "nothing forked" would prove
+        // nothing about laziness.
+        "do-thing.js": `export default () => "loaded"`,
       }
     );
 
@@ -1052,6 +1055,9 @@ describe("PluginService manifest command contributions (#9281)", () => {
     );
 
     const service = new PluginService(tmpDir);
+    // The main-process importer is the thing this issue removes from the path,
+    // so watch it directly rather than inferring from the result.
+    const runImport = vi.spyOn(service as unknown as { runImport: () => unknown }, "runImport");
     await service.initialize();
 
     const result = await service.dispatchHandler(
@@ -1061,6 +1067,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
       [{ issue: 42 }]
     );
     expect(result).toEqual({ ok: true, args: { issue: 42 } });
+    expect(runImport).not.toHaveBeenCalled();
 
     // A plugin with no `main` still gets a worker, forked on first dispatch
     // because it has a resolved command handler — the case that used to be
@@ -1106,14 +1113,156 @@ describe("PluginService manifest command contributions (#9281)", () => {
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    await service.dispatchHandler("acme.cmd-nocache", "acme.cmd-nocache.go", ctx("acme.cmd-nocache"), []);
-    await service.dispatchHandler("acme.cmd-nocache", "acme.cmd-nocache.go", ctx("acme.cmd-nocache"), []);
+    await service.dispatchHandler(
+      "acme.cmd-nocache",
+      "acme.cmd-nocache.go",
+      ctx("acme.cmd-nocache"),
+      []
+    );
+    const first = devWorkerMock.bridges[0];
+    expect(first.invokeCommand).toHaveBeenCalledTimes(1);
 
-    // Every dispatch goes back over the port. A cached main-side closure would
-    // have short-circuited the second one.
-    expect(devWorkerMock.bridges[0].invokeCommand).toHaveBeenCalledTimes(2);
-    // And one worker serves both — the fork is not per dispatch.
-    expect(devWorkerMock.instances).toHaveLength(1);
+    // Main holds no handler for the command: the relay is rebuilt per dispatch.
+    const handlers = (service as unknown as { pluginActionHandlers: Map<string, unknown> })
+      .pluginActionHandlers;
+    expect(handlers.has("acme.cmd-nocache.go")).toBe(false);
+
+    // Stand in for a reload: swap the live worker's bridge, as a respawn does.
+    // A relay captured at build time would still be pointing at `first`.
+    const workers = (service as unknown as {
+      pluginWorkers: Map<string, { bridge: { invokeCommand: unknown } }>;
+    }).pluginWorkers;
+    const replacement = { invokeCommand: vi.fn(async () => "from the replacement") };
+    workers.get("acme.cmd-nocache")!.bridge = replacement as never;
+
+    const result = await service.dispatchHandler(
+      "acme.cmd-nocache",
+      "acme.cmd-nocache.go",
+      ctx("acme.cmd-nocache"),
+      []
+    );
+
+    expect(result).toBe("from the replacement");
+    expect(replacement.invokeCommand).toHaveBeenCalledTimes(1);
+    expect(first.invokeCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("forks the worker when an activation trigger raced handler discovery", async () => {
+    // Regression: worker eligibility reads the probed handler paths, so a
+    // trigger landing mid-probe used to see an empty map, conclude the plugin
+    // needed no worker, and have `activatePlugin` latch that verdict for the
+    // plugin's lifetime — leaving every later command permanently unrunnable.
+    await writePluginWithSrc(
+      "cmd-race",
+      {
+        name: "acme.cmd-race",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "go",
+              title: "Go",
+              description: "",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      { "go.js": `export default () => "ran"` }
+    );
+
+    let releaseProbe: () => void = () => {};
+    const probeHeld = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    let probeStarted: () => void = () => {};
+    const probeRunning = new Promise<void>((resolve) => {
+      probeStarted = resolve;
+    });
+    const realAccess = fs.access.bind(fs);
+    const accessSpy = vi
+      .spyOn(fs, "access")
+      .mockImplementation(async (target: Parameters<typeof fs.access>[0], ...rest) => {
+        if (String(target).endsWith(`${path.sep}go.js`)) {
+          probeStarted();
+          await probeHeld;
+        }
+        return realAccess(target, ...(rest as [number | undefined]));
+      });
+
+    try {
+      const service = new PluginService(tmpDir);
+      const init = service.initialize();
+      await probeRunning;
+      // The trigger lands while the probe is still in flight.
+      const early = service.activatePlugin("acme.cmd-race");
+      releaseProbe();
+      await init;
+      await early;
+      accessSpy.mockRestore();
+
+      const result = await service.dispatchHandler(
+        "acme.cmd-race",
+        "acme.cmd-race.go",
+        ctx("acme.cmd-race"),
+        []
+      );
+      expect(result).toBe("ran");
+      expect(devWorkerMock.instances).toHaveLength(1);
+    } finally {
+      accessSpy.mockRestore();
+    }
+  });
+
+  it("keeps a built-in's manifest command on the in-process importer", async () => {
+    // The other half of the gate: built-ins are app-bundled code that never
+    // gets a worker, so their command handlers still import into Electron main
+    // — now because they are named as allowed, not because nothing excluded them.
+    const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-cmd-"));
+    try {
+      const dir = path.join(builtinRoot, "cmd-builtin");
+      await fs.mkdir(path.join(dir, "src"), { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({
+          name: "acme.cmd-builtin",
+          version: "1.0.0",
+          contributes: {
+            commands: [
+              {
+                id: "go",
+                title: "Go",
+                description: "",
+                category: "Test",
+                kind: "command",
+                danger: "safe",
+              },
+            ],
+          },
+        })
+      );
+      await fs.writeFile(path.join(dir, "src", "go.js"), `export default () => "in-main"`);
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinRoot });
+      await service.initialize();
+
+      const result = await service.dispatchHandler(
+        "acme.cmd-builtin",
+        "acme.cmd-builtin.go",
+        ctx("acme.cmd-builtin"),
+        []
+      );
+      expect(result).toBe("in-main");
+      // No worker, and the imported handler IS cached in main for a built-in.
+      expect(devWorkerMock.instances).toHaveLength(0);
+      const handlers = (service as unknown as { pluginActionHandlers: Map<string, unknown> })
+        .pluginActionHandlers;
+      expect(handlers.has("acme.cmd-builtin.go")).toBe(true);
+    } finally {
+      await fs.rm(builtinRoot, { recursive: true, force: true });
+    }
   });
 
   it("forks no worker for a command whose only handler sibling is .ts", async () => {

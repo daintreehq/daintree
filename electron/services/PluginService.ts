@@ -698,6 +698,19 @@ export class PluginService {
    */
   private commandModulePaths = new Map<string, string>();
   /**
+   * In-flight command-handler discovery, keyed by plugin id. Set synchronously
+   * on the same tick the plugin becomes addressable and cleared when probing
+   * settles, so activation can tell "this plugin has no command handlers" apart
+   * from "we have not looked yet" (#12274).
+   *
+   * Without it, an activation trigger that lands mid-probe reads an empty
+   * {@link commandModulePaths}, concludes the plugin needs no worker, and
+   * `activatePlugin` latches that verdict in `activatedPlugins` for the
+   * plugin's lifetime — leaving a commands-only plugin permanently unable to
+   * fork the worker its commands now need.
+   */
+  private commandDiscovery = new Map<string, Promise<void>>();
+  /**
    * Set of namespaced action ids whose descriptor was registered from
    * `manifest.contributes.commands`. Distinguishes a manifest-declared
    * command (whose handler is the lazy `src/{cmd.id}.{ext}` import) from
@@ -2059,7 +2072,19 @@ export class PluginService {
     // front). Probes happen after `plugins.set()` so
     // `validateAndBuildActionDescriptor` sees the plugin as loaded.
     if (manifest.contributes.commands.length > 0) {
-      await this.registerManifestCommands(pluginId, plugin);
+      // Published synchronously, before the first `await` inside the probe, so
+      // an activation trigger racing discovery waits for the answer instead of
+      // reading a half-filled map (#12274). Nothing has run between
+      // `plugins.set()` above and here, so there is no earlier gap to cover.
+      const discovery = this.registerManifestCommands(pluginId, plugin);
+      this.commandDiscovery.set(pluginId, discovery);
+      try {
+        await discovery;
+      } finally {
+        if (this.commandDiscovery.get(pluginId) === discovery) {
+          this.commandDiscovery.delete(pluginId);
+        }
+      }
     }
 
     return plugin;
@@ -2241,10 +2266,12 @@ export class PluginService {
     return async (args: unknown) => {
       const entry = this.pluginWorkers.get(pluginId);
       if (!entry || entry.activation.ok === false) {
-        throw new Error(
-          `Plugin "${pluginId}" is not activated; cannot run command "${channel}"`
-        );
+        throw new Error(`Plugin "${pluginId}" is not activated; cannot run command "${channel}"`);
       }
+      // `entry.activation.ok` describes the last outcome the bridge REPORTED,
+      // which survives the worker it described: after a crash the entry and its
+      // stale `ok: true` both persist while a replacement forks. The bridge's
+      // own generation state is the live fact, so it makes the final call.
       return entry.bridge.invokeCommand(channel, resolvedPath, args);
     };
   }
@@ -2408,6 +2435,17 @@ export class PluginService {
    * Only a fork failure (no worker at all) rejects.
    */
   private async activateViaWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
+    // Worker eligibility reads the probed handler paths, so it cannot be decided
+    // while the probe is still running (#12274). Settling first turns a race
+    // into a wait; deciding early would latch "no worker needed" forever.
+    const discovery = this.commandDiscovery.get(pluginId);
+    if (discovery) {
+      await discovery.catch(() => undefined);
+      // Standard post-await liveness re-check (#9428): an unload — or a
+      // disable/re-enable that replaced this generation — may have landed while
+      // we waited, and must not fork a worker for a plugin that is gone.
+      if (this.plugins.get(pluginId) !== plugin) return;
+    }
     if (!this.hasWorkerCode(pluginId, plugin)) return;
     // A re-activation while a worker is already live is a no-op — the worker
     // owns its own reload cycle; activatePlugin's idempotency normally prevents

@@ -1217,6 +1217,22 @@ export class PluginDevWorkerMainBridge {
    * driven from `dispatchHostNotify` inside this class.
    */
   invokeCommand(namespacedId: string, resolvedPath: string, args: unknown): Promise<unknown> {
+    // Only a generation that has COMMITTED activation can serve a command.
+    // `workerHost.isReady()` alone is not that test: it is true the instant a
+    // child exists, which after a crash means the replacement counts as ready
+    // while it is still booting — before it has been sent `start`, so its proxy
+    // does not exist yet and the worker drops the message on the floor. Nothing
+    // ever answers, and an invoke has no timeout, so the caller would hang and
+    // the phantom pending invoke would block idle disposal too. Every other
+    // invoke kind is implicitly protected by re-registration (a retired
+    // generation's handlers are unregistered, so main has nothing to call);
+    // manifest commands are resolved from the plugin's manifest and survive
+    // retirement, so they need the check made explicitly.
+    if (this.activationPhase !== "succeeded") {
+      return Promise.reject(
+        new Error(`Plugin "${this.pluginId}" worker is not ready to run command "${namespacedId}"`)
+      );
+    }
     return this.invoke({ kind: "command", namespacedId, resolvedPath, args });
   }
 
