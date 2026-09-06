@@ -1546,6 +1546,10 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("prompt"),
     sessionId: IdString,
     text: z.string(),
+    worktree: z
+      .object({ id: IdString, path: z.string().min(1), branch: z.string() })
+      .nullable()
+      .optional(),
   }),
   z.object({
     type: z.literal("approval:decide"),

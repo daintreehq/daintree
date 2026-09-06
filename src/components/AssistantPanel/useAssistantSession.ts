@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
+import {
+  getWorktreeSelectionSnapshot,
+  getWorktreePathIndex,
+  getWorktreeBranchById,
+} from "@/store/storeAccessors";
 import { assistantStoreForSlot, type AssistantStoreApi } from "@/store/assistantStore";
 import { DEFAULT_ASSISTANT_SLOT } from "@shared/config/assistantSlots";
 import type { AssistantHostEvent } from "@shared/types/ipc/assistantHost";
@@ -534,6 +539,13 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       // Appended locally because the engine does not echo the prompt back — and a
       // prompt sent mid-turn is folded into the RUNNING turn as an interjection, so
       // the store's own turn list is the only place a user turn exists.
+      // Capture before IPC or any await: a later focus change must not retarget this message.
+      const worktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId;
+      const path = worktreeId ? getWorktreePathIndex()?.get(worktreeId) : undefined;
+      const worktree =
+        worktreeId && path
+          ? { id: worktreeId, path, branch: getWorktreeBranchById(worktreeId) ?? "" }
+          : null;
       const localTurnId = store.getState().appendUserTurn(text);
       // The local checks above can only see what the renderer knows. The engine can
       // exit between them and main receiving this command, in which case main answers
@@ -541,7 +553,7 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       // transcript that nothing will ever answer. Take it back out and say so.
       safeFireAndForget(
         window.electron.assistantHost
-          .send({ type: "prompt", sessionId, text })
+          .send({ type: "prompt", sessionId, text, worktree })
           .then(({ delivered }) => {
             if (delivered) return;
             const state = store.getState();

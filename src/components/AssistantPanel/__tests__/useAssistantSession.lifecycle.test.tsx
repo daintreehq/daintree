@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  setWorktreeSelectionAccessor,
+  setWorktreePathIndexAccessor,
+  setWorktreeBranchAccessor,
+} from "@/store/storeAccessors";
 import { useAssistantSession } from "../useAssistantSession";
 import { useAssistantStore } from "@/store/assistantStore";
 
@@ -74,6 +79,8 @@ beforeEach(() => {
     clearTimeout(id as unknown as NodeJS.Timeout)
   );
   useAssistantStore.getState().reset(null);
+  setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+  setWorktreePathIndexAccessor(() => new Map());
 });
 
 afterEach(() => {
@@ -144,6 +151,62 @@ describe("useAssistantSession — a dead session refuses work", () => {
       expect.objectContaining({ type: "prompt", sessionId: "ses_live" })
     );
     expect(useAssistantStore.getState().turns.some((t) => t.role === "user")).toBe(true);
+  });
+
+  it("captures each message's current worktree without restarting the assistant", async () => {
+    let selected = "wt-open";
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: selected,
+      restoreWorktreeId: selected,
+    }));
+    setWorktreePathIndexAccessor(
+      () =>
+        new Map([
+          ["wt-open", "/open"],
+          ["wt-send", "/send"],
+          ["wt-detached", "/detached"],
+        ])
+    );
+    // "" is what the view store's accessor answers for a detached HEAD, and the engine
+    // names the branch back to the user — so a message must carry the real one.
+    const branches = new Map([
+      ["wt-open", "feature/open"],
+      ["wt-send", "feature/send"],
+      ["wt-detached", ""],
+    ]);
+    setWorktreeBranchAccessor((worktreeId) => branches.get(worktreeId));
+    const { result } = await live();
+    selected = "wt-send";
+    act(() => {
+      result.current.submit("ask Claude and Codex for a fact");
+    });
+    const submitted = send.mock.calls.find(([command]) => command.type === "prompt")![0];
+    selected = "wt-open";
+    expect(submitted.worktree).toEqual({ id: "wt-send", path: "/send", branch: "feature/send" });
+    act(() => {
+      result.current.submit("ask those agents to vote");
+    });
+    expect(send).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: "ask those agents to vote",
+        worktree: { id: "wt-open", path: "/open", branch: "feature/open" },
+      })
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+    selected = "wt-detached";
+    act(() => {
+      result.current.submit("ask about this tree");
+    });
+    expect(send).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        worktree: { id: "wt-detached", path: "/detached", branch: "" },
+      })
+    );
+    selected = "missing";
+    act(() => {
+      result.current.submit("new task");
+    });
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ worktree: null }));
   });
 
   it("refuses a prompt after the engine exits, and records no user turn", async () => {
