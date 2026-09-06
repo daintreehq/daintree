@@ -2072,10 +2072,12 @@ export class PluginService {
     // front). Probes happen after `plugins.set()` so
     // `validateAndBuildActionDescriptor` sees the plugin as loaded.
     if (manifest.contributes.commands.length > 0) {
-      // Published synchronously, before the first `await` inside the probe, so
-      // an activation trigger racing discovery waits for the answer instead of
-      // reading a half-filled map (#12274). Nothing has run between
-      // `plugins.set()` above and here, so there is no earlier gap to cover.
+      // Published before this stack yields, so an activation trigger racing
+      // discovery waits for the answer instead of reading a half-filled map
+      // (#12274). Calling `registerManifestCommands` runs its body up to the
+      // first probe, but nothing else can interleave until this stack suspends —
+      // and nothing runs between `plugins.set()` above and here either, so
+      // there is no gap on either side to cover.
       const discovery = this.registerManifestCommands(pluginId, plugin);
       this.commandDiscovery.set(pluginId, discovery);
       try {
@@ -2311,9 +2313,11 @@ export class PluginService {
   private hasWorkerCode(pluginId: string, plugin: LoadedPlugin): boolean {
     if (plugin.isBuiltin) return false;
     if (plugin.resolvedMain) return true;
-    return plugin.manifest.contributes?.commands?.some((cmd) =>
-      this.commandModulePaths.has(`${pluginId}.${cmd.id}`)
-    ) ?? false;
+    return (
+      plugin.manifest.contributes?.commands?.some((cmd) =>
+        this.commandModulePaths.has(`${pluginId}.${cmd.id}`)
+      ) ?? false
+    );
   }
 
   /**
@@ -2436,15 +2440,27 @@ export class PluginService {
    */
   private async activateViaWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
     // Worker eligibility reads the probed handler paths, so it cannot be decided
-    // while the probe is still running (#12274). Settling first turns a race
-    // into a wait; deciding early would latch "no worker needed" forever.
-    const discovery = this.commandDiscovery.get(pluginId);
-    if (discovery) {
-      await discovery.catch(() => undefined);
-      // Standard post-await liveness re-check (#9428): an unload — or a
-      // disable/re-enable that replaced this generation — may have landed while
-      // we waited, and must not fork a worker for a plugin that is gone.
-      if (this.plugins.get(pluginId) !== plugin) return;
+    // while the probe is still running (#12274) — deciding early would latch
+    // "no worker needed" for the plugin's lifetime. Only a plugin with no `main`
+    // depends on the answer, though, and the wait is deliberately confined to
+    // it: `main` alone already makes a plugin eligible, so making every plugin
+    // queue behind a filesystem probe would let one unresponsive mount stall an
+    // activation that never needed the probe's result.
+    if (!plugin.resolvedMain) {
+      const discovery = this.commandDiscovery.get(pluginId);
+      if (discovery) {
+        await discovery.catch(() => undefined);
+        // Post-await liveness re-check (#9428). Throwing rather than returning:
+        // a return reads as a successful activation, and `activatePlugin` would
+        // leave this fulfilled promise cached under an id whose CURRENT
+        // generation was never activated — every later trigger would then get
+        // the stale promise back and no worker would ever fork. The rejection
+        // path drops the in-flight entry instead, so the live generation can
+        // still activate (#10899); `activatePlugin` itself still never rejects.
+        if (this.plugins.get(pluginId) !== plugin) {
+          throw new Error(`Plugin "${pluginId}" was replaced during activation`);
+        }
+      }
     }
     if (!this.hasWorkerCode(pluginId, plugin)) return;
     // A re-activation while a worker is already live is a no-op — the worker

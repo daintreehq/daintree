@@ -20,9 +20,23 @@ const IDENTITY = {
 
 class FakeParentPort extends EventEmitter {
   posted: any[] = [];
+  private readonly waiters = new Map<string, (msg: any) => void>();
   postMessage = (msg: any): void => {
     this.posted.push(msg);
+    this.waiters.get(msg.type)?.(msg);
   };
+
+  /**
+   * Resolve off `postMessage` rather than polling: `start()` awaits a real
+   * filesystem ESM import, and any hand-picked deadline would be both flaky
+   * under load and shorter than the production 5s import budget. This waits
+   * under vitest's own test timeout instead.
+   */
+  waitFor(type: string): Promise<any> {
+    const already = this.posted.find((m) => m.type === type);
+    if (already) return Promise.resolve(already);
+    return new Promise((resolve) => this.waiters.set(type, resolve));
+  }
 }
 
 /**
@@ -37,16 +51,6 @@ async function loadWorker(port: FakeParentPort): Promise<void> {
     writable: true,
   });
   await import("../plugin-dev-worker.js");
-}
-
-/** Let the module's async `start()` settle — it awaits a real dynamic import. */
-async function settled(port: FakeParentPort, type: string): Promise<any> {
-  for (let i = 0; i < 200; i++) {
-    const found = port.posted.find((m) => m.type === type);
-    if (found) return found;
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  throw new Error(`no "${type}" posted; got ${JSON.stringify(port.posted)}`);
 }
 
 describe("plugin worker bootstrap", () => {
@@ -82,9 +86,15 @@ describe("plugin worker bootstrap", () => {
 
   it("reports activated without importing anything when there is no bundle (#12274)", async () => {
     await loadWorker(port);
-    port.emit("message", { type: "start", bundleUrl: undefined, pluginId: "acme.demo", identity: IDENTITY });
+    const activated = port.waitFor("activated");
+    port.emit("message", {
+      type: "start",
+      bundleUrl: undefined,
+      pluginId: "acme.demo",
+      identity: IDENTITY,
+    });
 
-    expect(await settled(port, "activated")).toMatchObject({ hasCleanup: false });
+    expect(await activated).toMatchObject({ hasCleanup: false });
     // A commands-only plugin has no `activate()` to fail, so nothing may be
     // reported as an activation error.
     expect(port.posted.find((m) => m.type === "activate-error")).toBeUndefined();
@@ -97,9 +107,11 @@ describe("plugin worker bootstrap", () => {
     await fs.writeFile(handler, `export default async (args) => ({ ran: true, args })`);
 
     await loadWorker(port);
+    const activated = port.waitFor("activated");
     port.emit("message", { type: "start", pluginId: "acme.demo", identity: IDENTITY });
-    await settled(port, "activated");
+    await activated;
 
+    const invoked = port.waitFor("invoke-result");
     port.emit("message", {
       type: "invoke",
       requestId: "c1",
@@ -109,7 +121,7 @@ describe("plugin worker bootstrap", () => {
       args: { n: 1 },
     });
 
-    expect(await settled(port, "invoke-result")).toMatchObject({
+    expect(await invoked).toMatchObject({
       requestId: "c1",
       ok: true,
       result: { ran: true, args: { n: 1 } },
@@ -122,6 +134,7 @@ describe("plugin worker bootstrap", () => {
     await fs.writeFile(bundle, `export const activate = () => () => {};`);
 
     await loadWorker(port);
+    const activated = port.waitFor("activated");
     port.emit("message", {
       type: "start",
       bundleUrl: pathToFileURL(bundle).href,
@@ -129,6 +142,6 @@ describe("plugin worker bootstrap", () => {
       identity: IDENTITY,
     });
 
-    expect(await settled(port, "activated")).toMatchObject({ hasCleanup: true });
+    expect(await activated).toMatchObject({ hasCleanup: true });
   });
 });
