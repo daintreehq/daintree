@@ -647,7 +647,6 @@ describe("makePluginViewContent", () => {
       const first = signals[0]!;
       expect(first.aborted).toBe(false);
       const callsBeforeReset = lazyCalls.count;
-      const resetKeyBeforeReset = boundaryProps.last!.resetKeys?.[0];
 
       // Drive the very callback the boundary's "Try again" invokes. Going
       // through `onReset` rather than a thrown render keeps this deterministic:
@@ -669,15 +668,61 @@ describe("makePluginViewContent", () => {
       expect(first.aborted).toBe(true);
       expect(second.aborted).toBe(false);
       // ...and the module is genuinely re-imported rather than the controller
-      // merely being swapped: a fresh `lazy()` ref, and a bumped reset key so
-      // the boundary clears its error state.
+      // merely being swapped: a fresh `lazy()` ref. The boundary clears its
+      // error state by being remounted on a new `key` (#12278) rather than
+      // through `resetKeys`, which it no longer takes — a fresh wrapper alone
+      // does not remount a view whose resolved type is unchanged.
       expect(lazyCalls.count).toBeGreaterThan(callsBeforeReset);
-      expect(boundaryProps.last!.resetKeys?.[0]).not.toBe(resetKeyBeforeReset);
 
       // Kind removal must abort the CURRENT controller, resolved through the ref
       // at call time rather than the one captured when the effect was set up.
       act(() => emit!({ kinds: [] }));
       expect(second.aborted).toBe(true);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("aborts the outgoing signal the moment the view throws, not when retry is clicked", async () => {
+    // #12278: `handleRenderError` reported the failure but left the controller
+    // armed, so between the throw and the user clicking Try again or Close,
+    // anything the plugin tied to `disposeSignal` kept running — fetches,
+    // subscriptions, timers. `handleReset` already aborted correctly on retry,
+    // which is exactly what made the gap easy to miss: the leak is only visible
+    // in the window BEFORE any recovery action, so asserting on the state right
+    // after `onError` is the only way to see it.
+    const signals: AbortSignal[] = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: { disposeSignal: AbortSignal }) {
+            if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      render(<Content panelId="panel-abort-on-error" />);
+
+      await waitFor(() => expect(signals).not.toHaveLength(0));
+      const signal = signals[0]!;
+      expect(signal.aborted).toBe(false);
+
+      // The boundary's own `onError`, driven directly for the same reason the
+      // retry test drives `onReset`: a synchronously throwing view double fights
+      // React's concurrent initial-mount recovery.
+      const onError = boundaryProps.last!.onError;
+      expect(onError).toBeTypeOf("function");
+      act(() => onError!(new Error("view blew up"), { componentStack: "" }));
+
+      // No retry, no close, no unmount — just the throw.
+      expect(signal.aborted).toBe(true);
     } finally {
       vi.doUnmock("react");
     }

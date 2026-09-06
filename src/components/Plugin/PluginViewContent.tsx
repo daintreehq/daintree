@@ -24,7 +24,14 @@ import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallbac
 import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
+import { cn } from "@/lib/utils";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import {
+  usePluginRuntimeStatus,
+  usePluginRuntimeStatusStore,
+} from "@/store/pluginRuntimeStatusStore";
+import { PluginViewRuntimeStatus } from "@/components/Plugin/PluginViewRuntimeStatus";
+import { presentWorkerStatus, useWorkerStall } from "@/components/Plugin/pluginWorkerPresentation";
 import {
   PLUGIN_STYLE_ROOT_PROPS,
   preparePluginStyles,
@@ -98,6 +105,23 @@ export interface PluginViewContentProps {
    * tracked.
    */
   panelRemovedSignal?: AbortSignal;
+  /**
+   * The panel's CURRENT accepted state, re-read at the moment recovery starts
+   * (#12278).
+   *
+   * `initialArgs` is frozen at first render on purpose — within one mount the
+   * view owns its state, and a live prop would hand any view that persists
+   * derived state a render loop. But a recovery is a *new* attempt, and
+   * restoring the bag the panel was opened with would silently discard
+   * everything the view persisted since. A host backed by a panel record
+   * supplies this so recovery restores the latest accepted state; one without a
+   * record (project surfaces) omits it and recovery reuses the mount snapshot.
+   *
+   * "Accepted" is the honest word: `persistState` admits a patch into a
+   * debounced save path, so this is what the store holds, not what reached disk
+   * — which is why nothing in the recovery UI promises the user a saved panel.
+   */
+  readRecoveryState?: () => { state?: Record<string, unknown>; version?: number } | null;
 }
 
 /**
@@ -387,6 +411,7 @@ export function makePluginViewContent(
     onRequestClose,
     worktreeId,
     panelRemovedSignal: panelRemovedSignalOverride,
+    readRecoveryState,
   }: PluginViewContentProps) {
     // Frozen at the first render of this mount rather than forwarded live.
     // `extensionState` reaches this component straight off the panel record, so
@@ -396,10 +421,13 @@ export function makePluginViewContent(
     // handing any view that persists state derived from `initialArgs` a render
     // loop. The bag exists to restore a view on its NEXT mount; within one
     // mount the view owns its state.
-    const [mountArgs] = useState(() => initialArgs);
+    // Replaced only by `replaceAttempt` — a recovery is a new attempt, not the
+    // same mount, so re-reading the latest accepted state there does not reopen
+    // the live-prop hazard this freeze exists to close.
+    const [mountArgs, setMountArgs] = useState(() => initialArgs);
     // Frozen with the bag it describes: a live version against a frozen bag
     // would tell the view its state had migrated when what it holds has not.
-    const [mountStateVersion] = useState(() => stateVersion);
+    const [mountStateVersion, setMountStateVersion] = useState(() => stateVersion);
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array. Each `lazy()` wrapper caches its
     // import result on its own payload, so a chunk-load failure is sticky for
@@ -483,46 +511,255 @@ export function makePluginViewContent(
     // when the node commits and invokes the returned cleanup when it unmounts,
     // which is exactly the lifetime the observer registration wants — and it
     // rides the existing mount/retry cycle rather than adding a second one.
-    const styleRootRef = useCallback(
-      (node: HTMLDivElement | null) => registerPluginStyleRoot(node),
-      []
-    );
+    const contentNodeRef = useRef<HTMLDivElement | null>(null);
+    const styleRootRef = useCallback((node: HTMLDivElement | null) => {
+      contentNodeRef.current = node;
+      const unregister = registerPluginStyleRoot(node);
+      // Cleared in the cleanup, not by a `null` call: React 19 invokes a
+      // callback ref's returned cleanup INSTEAD of re-calling it with null, so
+      // without this the ref would pin a detached subtree until the next mount.
+      return () => {
+        contentNodeRef.current = null;
+        unregister();
+      };
+    }, []);
+    /** Focus lands here when the content it was inside goes inert. */
+    const statusRef = useRef<HTMLDivElement | null>(null);
+    /** Whether focus is currently somewhere inside the plugin's own content. */
+    const focusWasInsideContent = useRef(false);
+
+    /**
+     * Whether the boundary is currently showing its fallback.
+     *
+     * Tracked here because the boundary does not expose it, and the rebind path
+     * below has to know: `ErrorBoundary.componentDidUpdate` calls `onReset`
+     * whenever `resetKeys` change WHILE it is showing an error, and `retryCount`
+     * is that key.
+     */
+    const boundaryShowingError = useRef(false);
 
     const handleRenderError = useCallback(
       (error: Error) => {
+        boundaryShowingError.current = true;
         lastErrorWasImportStage.current = isImportStageFailure(error);
+        // Abort BEFORE reporting, and for the same reason `handleReset` does it
+        // on retry: the thrown-away view instance is finished either way, so
+        // anything it tied to `disposeSignal` has to cancel now rather than keep
+        // fetching and subscribing until the user happens to click Try again or
+        // Close. Read through the ref so a post-retry controller is the one that
+        // gets aborted (#12278).
+        controllerRef.current?.abort();
         reportViewRenderFailed(panelId, { kindId, pluginId });
       },
       [panelId]
     );
 
+    /**
+     * Discard the current mount attempt and start a fresh one.
+     *
+     * The single path for both recoveries, because they need identical
+     * machinery and differ only in what triggers them: the user retrying a view
+     * that threw, and a restarted backend the view has to rebind to. Keeping
+     * them as one function is what stops the two from drifting into subtly
+     * different teardown.
+     */
+    const replaceAttempt = useCallback(
+      (requestRecoveryPath: boolean): void => {
+        // The attempt being built is new, so whatever the last one threw is no
+        // longer on screen once it commits.
+        boundaryShowingError.current = false;
+        // Abort the outgoing view's signal before swapping in a fresh controller
+        // — the prior view instance is being discarded, so any fetches or
+        // subscriptions it tied to `disposeSignal` must cancel now rather than
+        // linger until the whole subtree unmounts (#10512 review). Read through
+        // the ref so the CURRENT controller is the one aborted even when a prior
+        // attempt already swapped it.
+        controllerRef.current?.abort();
+        // Fresh controller for the retry so the new lazy import sees an
+        // unaborted signal; the mirror effect propagates it to controllerRef.
+        setController(new AbortController());
+        // Restore what the panel most recently persisted rather than the bag it
+        // was opened with — recovery is not supposed to cost the user their
+        // work. Absent for hosts with no panel record, which keep the mount
+        // snapshot.
+        const recovered = readRecoveryState?.();
+        if (recovered) {
+          setMountArgs(recovered.state);
+          setMountStateVersion(recovered.version);
+        }
+        // Ask main for a fresh view generation only when the module fetch is
+        // what failed (#11728) — a new `lazy()` wrapper alone cannot recover
+        // that, because the poisoned entry belongs to the specifier, not the
+        // wrapper. Activation failures and render throws still just remount.
+        setLazyView(() => createLazyView(requestRecoveryPath));
+        setRetryCount((c) => c + 1);
+        // The retry is under way, so the panel is no longer failed — it is
+        // loading. Clearing here (rather than waiting for the next commit) keeps
+        // a worker from seeing a stale `render-failed` for as long as the import
+        // takes.
+        clearViewRenderFailure(panelId);
+      },
+      [panelId, readRecoveryState]
+    );
+
     const handleReset = (): void => {
-      // Abort the outgoing view's signal before swapping in a fresh controller —
-      // the prior view instance is being discarded on retry, so any fetches or
-      // subscriptions it tied to `disposeSignal` must cancel now rather than
-      // linger until the whole subtree unmounts (#10512 review).
-      controller.abort();
-      // Fresh controller for the retry so the new lazy import sees an unaborted
-      // signal; the mirror effect propagates it to controllerRef for teardown.
-      setController(new AbortController());
-      // Ask main for a fresh view generation only when the module fetch is what
-      // failed (#11728) — a new `lazy()` wrapper alone cannot recover that,
-      // because the poisoned entry belongs to the specifier, not the wrapper.
-      // Activation failures and render throws still just remount.
-      setLazyView(() => createLazyView(lastErrorWasImportStage.current));
-      setRetryCount((c) => c + 1);
-      // The retry is under way, so the panel is no longer failed — it is loading.
-      // Clearing here (rather than waiting for the next commit) keeps a worker
-      // from seeing a stale `render-failed` for as long as the import takes.
-      clearViewRenderFailure(panelId);
+      replaceAttempt(lastErrorWasImportStage.current);
     };
+
+    // Warm the runtime-health mirror at mount. Idempotent and module-level, so
+    // every panel of every plugin shares one subscription and one hydration.
+    const initRuntimeStatus = usePluginRuntimeStatusStore((s) => s.init);
+    useEffect(() => initRuntimeStatus(), [initRuntimeStatus]);
+    const worker = usePluginRuntimeStatus(pluginId)?.worker ?? null;
+    const inFlight = worker?.state === "starting" || worker?.state === "activating";
+    // Only a transient state can stall. A `ready` or `failed` worker is settled,
+    // and arming a timer on it would escalate a healthy panel after 30 seconds.
+    const stalled = useWorkerStall(inFlight ? worker.stateSince : null);
+    // Latched, never lowered: once this panel has had a working backend, a
+    // transient state is a recovery rather than a first load, and stays one even
+    // if the backend never comes back.
+    const [everReady, setEverReady] = useState(false);
+    useEffect(() => {
+      if (worker?.state === "ready") setEverReady(true);
+    }, [worker?.state]);
+    const [restarting, setRestarting] = useState(false);
+    // Guards the settle: a panel closed mid-restart must not set state on a
+    // subtree React has already torn down.
+    const restartAliveRef = useRef(true);
+    useEffect(() => {
+      restartAliveRef.current = true;
+      return () => {
+        restartAliveRef.current = false;
+      };
+    }, []);
+    const handleRestartPlugin = useCallback(() => {
+      const restart = window.electron?.plugin?.restartWorker;
+      if (typeof restart !== "function") return;
+      setRestarting(true);
+      void restart(pluginId)
+        .catch(() => {
+          // The banner is driven by the pushed status, not by this call's
+          // outcome: a restart that ran and failed again republishes `failed`,
+          // which is the state the user needs to see either way.
+        })
+        .finally(() => {
+          if (restartAliveRef.current) setRestarting(false);
+        });
+      // `pluginId` is a factory-scope constant, not a reactive value.
+    }, []);
+
+    // `restarting` joins `everReady` in the gate because the two answer the same
+    // question — is this a recovery or a first load. On a panel whose INITIAL
+    // activation failed, `everReady` is false forever, so without this the
+    // `starting` the restart publishes would fall through to `kind: "content"`:
+    // the banner would unmount mid-restart, taking the button's own pending
+    // state with it, and `contentInert` would lift and re-arm the dead
+    // backend's stale controls for the whole round trip.
+    const presentation = presentWorkerStatus(worker, stalled, everReady || restarting);
+
+    /**
+     * Worker generation this attempt is bound to.
+     *
+     * A ref, not state: it must be read and written inside the effect that
+     * decides whether to rebind, and re-rendering on it would achieve nothing.
+     * `null` until a `ready` worker has been seen at all, so the FIRST
+     * observation adopts the generation silently — a panel that mounts against
+     * an already-running backend must not treat that backend as a replacement
+     * and immediately remount itself.
+     */
+    const boundWorkerGeneration = useRef<number | null>(null);
+    useEffect(() => {
+      if (!worker || worker.state !== "ready") return;
+      const previous = boundWorkerGeneration.current;
+      // Already bound to this backend. Checked before the write, so a repeated
+      // `ready` for one generation can never replace the attempt twice — which
+      // is also what keeps the failed-view branch below from looping.
+      if (previous === worker.generation) return;
+      boundWorkerGeneration.current = worker.generation;
+      // The first `ready` this panel has seen, on a view that is fine: adopt the
+      // generation silently. A panel mounting against an already-running backend
+      // must not read that backend as a replacement and throw its view away.
+      //
+      // A FAILED view is the exception, and the case that made this branch
+      // conditional rather than unconditional: when the initial activation is
+      // what failed, this panel never observed a `ready` at all, so treating
+      // "first observation" as "nothing to do" would clear the banner and leave
+      // the user staring at the original error with the backend now healthy.
+      if (previous === null && !boundaryShowingError.current) return;
+      // A different generation is ready: the backend this view was talking to is
+      // gone and a new one is live. Every panel on the instance runs this from
+      // the same broadcast, which is what makes them move together — no
+      // main-side panel registry is involved (#12278).
+      replaceAttempt(false);
+    }, [worker, replaceAttempt]);
+
+    // Stale content stays visible behind a terminal failure — it is the last
+    // thing the plugin actually produced, and blanking it loses context the user
+    // may still want to read — but it stops being interactive. Clicking a
+    // control whose backend is gone does nothing and reports nothing, which
+    // reads as the app being broken rather than the plugin.
+    const contentInert = presentation.kind === "unavailable";
+
+    // `inert` blanks focus inside the subtree, which would drop the user on
+    // `document.body` with no way back. Move them onto the host-owned status
+    // instead — but ONLY when focus was actually in there, so a panel going dark
+    // in the background never steals focus from what the user is doing.
+    //
+    // Ownership is tracked as it happens rather than read back afterwards: this
+    // effect runs after the commit that applied `inert`, by which point the
+    // browser may already have blurred the descendant and `document.activeElement`
+    // reads as `body`.
+    useEffect(() => {
+      if (!contentInert) return;
+      const content = contentNodeRef.current;
+      const active = document.activeElement;
+      const hadFocus =
+        focusWasInsideContent.current || (!!content && !!active && content.contains(active));
+      if (!hadFocus) return;
+      focusWasInsideContent.current = false;
+      statusRef.current?.focus({ preventScroll: true });
+    }, [contentInert]);
 
     return (
       // Outside the boundary, not inside: the fallback is rendered BY the
       // boundary, so a provider nested within it would be unmounted exactly when
       // the fallback needs the close callback.
       <PluginViewCloseContext.Provider value={closeContextValue}>
+        {/* The host-owned layer, outside the boundary AND the Suspense: a
+            backend failure is the host's to report, and nesting the report
+            inside the subtree it describes would let a crashed view take its own
+            explanation down with it (#11231, #12278). It is deliberately NOT
+            inside the plugin's style root either, so a plugin stylesheet cannot
+            restyle the control that recovers from it. */}
+        {/* Focusable so the rescue below has somewhere to put focus when the
+            content it was inside goes inert. The ring is deliberately NOT
+            suppressed: focus arrives here programmatically, and a visible ring
+            is what tells the user where it went. */}
+        <div ref={statusRef} tabIndex={-1}>
+          <PluginViewRuntimeStatus
+            presentation={presentation}
+            panelDisplayName={displayName}
+            onRestartPlugin={handleRestartPlugin}
+            restarting={restarting}
+          />
+        </div>
         <ErrorBoundary
+          // The attempt counter is the boundary's KEY, not its `resetKeys`.
+          //
+          // A fresh `lazy()` wrapper alone does not remount anything: React
+          // compares the RESOLVED type, so a wrapper that resolves to the same
+          // module export reuses the existing fiber — the view keeps its state
+          // and its `deps: []` subscriptions while `replaceAttempt` has already
+          // aborted the `disposeSignal` those subscriptions were tied to. That
+          // combination is worse than not recovering at all. Remounting the
+          // whole boundary subtree is what makes an attempt genuinely new.
+          //
+          // It also gives attempt replacement a single owner. `resetKeys` made
+          // `componentDidUpdate` call `onReset` whenever the key changed while
+          // the fallback was up — so a backend rebind landing on a crashed view
+          // built the attempt twice. A remounted boundary starts with no error,
+          // so there is nothing left for an auto-reset to do.
+          key={retryCount}
           variant="component"
           // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
           // it that way), so prefixing pluginId again doubled it.
@@ -530,7 +767,6 @@ export function makePluginViewContent(
           fallback={PluginViewFallback}
           onError={handleRenderError}
           onReset={handleReset}
-          resetKeys={[retryCount]}
         >
           <Suspense
             fallback={
@@ -545,7 +781,26 @@ export function makePluginViewContent(
             }
           >
             <ContentFadeIn
-              className="flex flex-col flex-1 min-h-0 w-full"
+              className={cn("flex flex-col flex-1 min-h-0 w-full", contentInert && "opacity-60")}
+              // Native `inert`, not `pointer-events-none` + `aria-hidden`: the
+              // CSS pair stops the mouse but leaves every control tabbable and
+              // Enter-activatable, and `aria-hidden` around a focused element is
+              // the exact shape Chromium refuses to hide. `inert` removes the
+              // subtree from focus, hit-testing and the accessibility tree in one
+              // go, which is the whole claim being made about stale content.
+              inert={contentInert}
+              onFocus={() => {
+                focusWasInsideContent.current = true;
+              }}
+              onBlur={(e) => {
+                // Not while going inert: applying the attribute is itself what
+                // blurred the descendant, and clearing here would erase the very
+                // fact the rescue above needs.
+                if (contentInert) return;
+                if (!e.currentTarget.contains(e.relatedTarget)) {
+                  focusWasInsideContent.current = false;
+                }
+              }}
               ref={styleRootRef}
               {...PLUGIN_STYLE_ROOT_PROPS}
             >

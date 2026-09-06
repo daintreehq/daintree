@@ -75,7 +75,10 @@ import {
   setProjectPluginVisibility,
 } from "../projectPluginVisibility.js";
 import { CHANNELS } from "../../../ipc/channels.js";
-import type { PluginActionDescriptor } from "../../../../shared/types/plugin.js";
+import type {
+  PluginActionDescriptor,
+  PluginRuntimeStatus,
+} from "../../../../shared/types/plugin.js";
 
 const GLOBAL_PLUGIN = "acme.global";
 const PROJECT_PLUGIN_A = "acme.local-a";
@@ -84,13 +87,14 @@ const PROJECT_A = "project-a";
 const PROJECT_B = "project-b";
 
 let actions: PluginActionDescriptor[] = [];
+let runtimeStatuses: PluginRuntimeStatus[] = [];
 
 function makeBroadcaster(): PluginContributionBroadcaster {
   return new PluginContributionBroadcaster({
     isDisposed: () => false,
     listPluginActions: () => actions,
     initPromise: Promise.resolve(),
-    listPluginDevStatuses: () => [],
+    listPluginRuntimeStatuses: () => runtimeStatuses,
     isReplacingPlugin: () => false,
   });
 }
@@ -128,6 +132,7 @@ beforeEach(() => {
   registryMock.getProjectForWebContents.mockReturnValue(null);
   registryMock.getRegisteredProjectViews.mockReturnValue([]);
   actions = [action(GLOBAL_PLUGIN, "acme.global.hello")];
+  runtimeStatuses = [];
   contributionsMock.panelKinds = [{ id: "acme.global.panel", extensionId: GLOBAL_PLUGIN }];
   contributionsMock.toolbarButtons = [{ id: "acme.global.btn", pluginId: GLOBAL_PLUGIN }];
   contributionsMock.keybindings = [{ pluginId: GLOBAL_PLUGIN, item: { key: "Ctrl+G" } }];
@@ -458,6 +463,55 @@ describe("pushSnapshotTo", () => {
     expect(payload.kinds.map((k) => k.id)).toEqual(["acme.global.panel", "acme.local-a.panel"]);
   });
 
+  it("replays only the target project's runtime statuses, plus every global one", async () => {
+    const status = (pluginId: string): PluginRuntimeStatus => ({
+      pluginId,
+      viewGeneration: 1,
+      worker: null,
+      dev: null,
+    });
+    runtimeStatuses = [
+      status(GLOBAL_PLUGIN),
+      status(`project__${PROJECT_A}__acme.local-a`),
+      status(`project__${PROJECT_B}__acme.local-b`),
+    ];
+    const wc = fakeWebContents(11);
+    registryMock.getProjectForWebContents.mockReturnValue(PROJECT_A);
+
+    const b = makeBroadcaster();
+    await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+    // The same ownership filter the pull handler applies, so replay and pull
+    // agree — and another project's plugin-authored `detail` never reaches a
+    // view with no panel to render it on.
+    const ids = (
+      sentPayloads(wc, "plugin:runtime-status-changed") as Array<{ pluginId: string }>
+    ).map((p) => p.pluginId);
+    expect(ids).toEqual([GLOBAL_PLUGIN, `project__${PROJECT_A}__acme.local-a`]);
+  });
+
+  it("replays global runtime statuses only when the target's project is unknown", async () => {
+    runtimeStatuses = [
+      { pluginId: GLOBAL_PLUGIN, viewGeneration: 1, worker: null, dev: null },
+      {
+        pluginId: `project__${PROJECT_A}__acme.local-a`,
+        viewGeneration: 1,
+        worker: null,
+        dev: null,
+      },
+    ];
+    const wc = fakeWebContents(11);
+    registryMock.getProjectForWebContents.mockReturnValue(null);
+
+    const b = makeBroadcaster();
+    await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+    const ids = (
+      sentPayloads(wc, "plugin:runtime-status-changed") as Array<{ pluginId: string }>
+    ).map((p) => p.pluginId);
+    expect(ids).toEqual([GLOBAL_PLUGIN]);
+  });
+
   it("fails closed when the target's project cannot be resolved — global only, never another project's", async () => {
     setPluginContributionScope(PROJECT_PLUGIN_A, PROJECT_A);
     setPluginContributionScope(PROJECT_PLUGIN_B, PROJECT_B);
@@ -516,7 +570,7 @@ describe("pushSnapshotTo", () => {
       isDisposed: () => true,
       listPluginActions: () => actions,
       initPromise: Promise.resolve(),
-      listPluginDevStatuses: () => [],
+      listPluginRuntimeStatuses: () => [],
       isReplacingPlugin: () => false,
     });
     await disposed.pushSnapshotTo(wc as unknown as Electron.WebContents);

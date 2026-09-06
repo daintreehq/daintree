@@ -1022,6 +1022,10 @@ export const CHANNELS = {
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
+  /** Per-instance runtime health snapshot, for a renderer store hydrating after it subscribed. */
+  PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
+  /** Retire a plugin's backend generation and start a fresh one (panel recovery). */
+  PLUGIN_RESTART_WORKER: "plugin:restart-worker",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */

@@ -17,7 +17,10 @@ import {
 } from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
-import { usePluginDevStatus, usePluginDevStatusStore } from "@/store/pluginDevStatusStore";
+import {
+  usePluginRuntimeStatus,
+  usePluginRuntimeStatusStore,
+} from "@/store/pluginRuntimeStatusStore";
 import { systemClient } from "@/clients/systemClient";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -257,9 +260,10 @@ export function PluginDetailPane({
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
-  const initDevStatus = usePluginDevStatusStore((s) => s.init);
-  useEffect(() => initDevStatus(), [initDevStatus]);
-  const devStatus = usePluginDevStatus(plugin.instanceId);
+  const initRuntimeStatus = usePluginRuntimeStatusStore((s) => s.init);
+  useEffect(() => initRuntimeStatus(), [initRuntimeStatus]);
+  const runtimeStatus = usePluginRuntimeStatus(plugin.instanceId);
+  const devStatus = runtimeStatus?.dev ?? null;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
@@ -351,8 +355,8 @@ export function PluginDetailPane({
                 // says whether the running backend and the mounted view came
                 // out of the same build (#12277).
                 <span className={BADGE_CLASS}>
-                  {devStatus?.viewGeneration != null
-                    ? `Dev · gen ${devStatus.viewGeneration}`
+                  {runtimeStatus?.viewGeneration != null
+                    ? `Dev · gen ${runtimeStatus.viewGeneration}`
                     : "Dev"}
                 </span>
               )}

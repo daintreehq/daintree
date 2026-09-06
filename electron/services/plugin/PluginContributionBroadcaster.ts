@@ -15,6 +15,7 @@ import {
   hasProjectPluginVisibilityOverrides,
   isPluginVisibleInProject,
 } from "./projectPluginVisibility.js";
+import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import type { PluginActionDescriptor, PluginScopeKey } from "../../../shared/types/plugin.js";
 
 /**
@@ -209,8 +210,8 @@ interface PluginContributionBroadcasterDeps {
   listPluginActions: () => PluginActionDescriptor[];
   /** Resolves once startup load + activation has settled (or dispose ran). */
   initPromise: Promise<void>;
-  /** Live `daintree-plugin dev` sessions, for the cold-start replay (#12277). */
-  listPluginDevStatuses: () => import("../../../shared/types/plugin.js").PluginDevStatus[];
+  /** Live per-instance runtime health, for the cold-start replay (#12277, #12278). */
+  listPluginRuntimeStatuses: () => import("../../../shared/types/plugin.js").PluginRuntimeStatus[];
   /**
    * True while a plugin is being replaced in place (a dev rebuild reconcile).
    * The unload half of a replacement empties the registries for one turn, and a
@@ -624,13 +625,22 @@ export class PluginContributionBroadcaster {
         name: "plugin:recipes-changed",
         payload: { recipes: getPluginRecipes(), complete: false },
       },
-      // Not project-scoped: a dev session is a global plugin by construction,
-      // and a view that missed the live event has no other way to learn which
-      // generation is running.
-      ...this.deps.listPluginDevStatuses().map((status) => ({
-        name: "plugin:dev-status-changed",
-        payload: { pluginId: status.pluginId, status },
-      })),
+      // Narrowed by instance ownership, not by `forProject`: a runtime status is
+      // health metadata about a backend, so what governs it is which project the
+      // instance belongs to, not whether the project chose to show the plugin's
+      // contributions — a hidden plugin whose worker died still owes its own
+      // project's views the news. The same filter runs on the pull path
+      // (`plugin:runtime-statuses-get`), so replay and pull agree.
+      ...this.deps
+        .listPluginRuntimeStatuses()
+        .filter((status) => {
+          const owner = projectIdFromPluginInstanceKey(status.pluginId);
+          return owner === null || owner === target;
+        })
+        .map((status) => ({
+          name: "plugin:runtime-status-changed",
+          payload: { pluginId: status.pluginId, status },
+        })),
     ];
     for (const event of events) {
       try {

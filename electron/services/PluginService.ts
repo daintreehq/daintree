@@ -71,7 +71,10 @@ import type {
   PluginSettingsUiValues,
   PluginWorktreeStatus,
   PluginPanelBadge,
-  PluginDevStatus,
+  PluginRuntimeStatus,
+  PluginWorkerStatus,
+  PluginWorkerState,
+  PluginWorkerReason,
   PluginProtocolAuthority,
   ViewContribution,
   PluginHostBinding,
@@ -996,7 +999,7 @@ export class PluginService {
       isDisposed: () => this.disposed,
       listPluginActions: () => this.listPluginActions(),
       initPromise: this.initPromise,
-      listPluginDevStatuses: () => this.listPluginDevStatuses(),
+      listPluginRuntimeStatuses: () => this.listPluginRuntimeStatuses(),
       isReplacingPlugin: () => this.devReplaceDepth > 0,
     });
 
@@ -2535,7 +2538,15 @@ export class PluginService {
         terminalFailure = true;
         // Guarded to the live entry: a replacement worker must not be torn down
         // by its predecessor's failure.
-        if (this.pluginWorkers.get(pluginId) === entry) this.deactivateWorker(pluginId);
+        if (this.pluginWorkers.get(pluginId) !== entry) return;
+        // Published HERE rather than from the host listener in
+        // `watchWorkerHealth`. The bridge subscribes to `protocol-violation` in
+        // its constructor, so it runs first: it fails the activation (which
+        // publishes `activation-failed`) and tears the entry down, and by the
+        // time the health listener gets its turn its identity guard fails. The
+        // violation would otherwise be reported as "it threw while starting up".
+        this.setWorkerStatus(pluginId, "failed", "protocol-violation", null);
+        this.deactivateWorker(pluginId);
       },
       // Fires on every activation outcome (initial + each reload). Keeps the
       // provenance `loadError` in sync so a fix-and-save clears a stale error
@@ -2543,6 +2554,15 @@ export class PluginService {
       // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
         activation.ok = result.ok;
+        // Guarded to the live entry: a retired generation settling late must not
+        // describe the replacement that already took its place (#10899).
+        if (this.pluginWorkers.get(pluginId) === entry) {
+          if (result.ok) {
+            this.setWorkerStatus(pluginId, "ready", null, null);
+          } else {
+            this.setWorkerStatus(pluginId, "failed", "activation-failed", result.error);
+          }
+        }
         if (result.ok) {
           if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
             this.recordPluginLoadError(pluginId, plugin, null);
@@ -2567,10 +2587,21 @@ export class PluginService {
 
     const entry = { workerHost, bridge, revoke, cleanup: () => cleanup(), activation };
     this.pluginWorkers.set(pluginId, entry);
+    // Subscribed to the host's own lifecycle events rather than threaded through
+    // the bridge: the supervisor respawns a crashed worker without telling this
+    // service, so the process edges are only observable here (#12278).
+    const detachHealth = this.watchWorkerHealth(pluginId, entry);
+    this.setWorkerStatus(pluginId, "starting", null, null, { newGeneration: true });
 
     // Register the teardown disposer up front so a concurrent unloadPlugin()
     // during fork/activation tears the worker down through the normal cascade.
+    let cleanedUp = false;
     const cleanup = (): void => {
+      // One-shot: a late catch running after the entry was already replaced must
+      // not detach the SUCCESSOR's listeners or dispose its worker.
+      if (cleanedUp) return;
+      cleanedUp = true;
+      detachHealth();
       bridge.dispose();
       workerHost.dispose();
       revoke();
@@ -2584,6 +2615,23 @@ export class PluginService {
       await workerHost.start();
     } catch (err) {
       // Fork failure — no worker exists, so this is a hard activation failure.
+      //
+      // Guarded, because this catch also fires for a startup that was CANCELLED:
+      // an unload during the fork disposes the worker, which rejects `start()`.
+      // The unload has already dropped this instance's status, so writing here
+      // unguarded resurrects an orphan no later `unloadPlugin` can clear (it
+      // returns early once the id is gone from `plugins`) — and during a restart
+      // it would describe the replacement using its predecessor's disposal
+      // error. A protocol violation reported by the bridge keeps its own,
+      // sharper reason for the same reason.
+      if (!this.disposed && this.pluginWorkers.get(pluginId) === entry && !terminalFailure) {
+        this.setWorkerStatus(
+          pluginId,
+          "failed",
+          "fork-failed",
+          formatErrorMessage(err, "fork failed")
+        );
+      }
       cleanup();
       this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       console.error(`[PluginService] Failed to start worker for ${pluginId}:`, err);
@@ -2632,6 +2680,9 @@ export class PluginService {
       }
       console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
       if (err instanceof TimeoutError) {
+        if (this.pluginWorkers.get(pluginId) === entry) {
+          this.setWorkerStatus(pluginId, "failed", "activation-timeout", err.message);
+        }
         // A hung `activate()` leaves a worker burning CPU behind a host that has
         // already given up on it, and no message will ever arrive to retire it.
         // Isolated: a throw out of teardown must not replace the activation
@@ -4079,7 +4130,7 @@ export class PluginService {
     if (!this.devArtifactWatcherRegistry) {
       this.devArtifactWatcherRegistry = new PluginDevArtifactWatcher({
         reload: (pluginId) => this.reloadDevPlugin(pluginId),
-        onStateChange: (pluginId) => this.emitDevStatus(pluginId),
+        onStateChange: (pluginId) => this.emitRuntimeStatus(pluginId),
       });
     }
     return this.devArtifactWatcherRegistry;
@@ -4096,7 +4147,7 @@ export class PluginService {
       this.devSessions.set(pluginId, { reloadCount: 0, detail: null });
     }
     this.devArtifactWatchers.ensure(pluginId, pluginDir);
-    this.emitDevStatus(pluginId);
+    this.emitRuntimeStatus(pluginId);
   }
 
   /**
@@ -4117,48 +4168,249 @@ export class PluginService {
       this.devArtifactWatcherRegistry?.stop(pluginId);
       const had = this.devSessions.delete(pluginId);
       this.unloadPlugin(pluginId);
-      if (had) this.emitDevStatus(pluginId);
+      if (had) this.emitRuntimeStatus(pluginId);
     });
   }
 
-  /** Live state of every dev session, for a renderer that has just attached. */
-  listPluginDevStatuses(): PluginDevStatus[] {
-    const statuses: PluginDevStatus[] = [];
-    for (const pluginId of this.devSessions.keys()) {
-      const status = this.buildDevStatus(pluginId);
+  // ----- instance runtime health (#12278) ---------------------------------
+
+  /**
+   * Last published worker lifecycle per plugin instance. Deliberately keyed
+   * independently of {@link pluginWorkers}: a FAILED worker's entry is torn
+   * down immediately (crash loop, protocol violation), and dropping the status
+   * with it would erase the only account of why a mounted panel went dark. The
+   * status is removed by {@link unloadPlugin}, when the instance genuinely
+   * leaves the inventory.
+   */
+  private workerStatuses = new Map<string, PluginWorkerStatus>();
+
+  /**
+   * Monotonic worker-process id. Bumped for every fork — including the crash
+   * supervisor's own respawns, which `PluginService` never initiates — so a
+   * panel can tell "my backend was replaced" from "my backend is the one I
+   * mounted against". Distinct from `viewGeneration`, which counts published
+   * module URLs and does not move when only the backend is swapped.
+   */
+  private workerGenerationSeq = 0;
+
+  /** In-flight restarts, keyed by instance. Two panels of one plugin await one. */
+  private workerRestarts = new Map<string, Promise<void>>();
+
+  /**
+   * Record a worker lifecycle transition and publish it.
+   *
+   * `failed` latches against `stopped`: the teardown that FOLLOWS a terminal
+   * failure (`onTerminalFailure` calls `deactivateWorker`) must not overwrite
+   * the cause with the bland "deactivated" that ordinary idle disposal writes.
+   * Every other transition wins, so a restart's `starting` clears the failure.
+   */
+  private setWorkerStatus(
+    pluginId: string,
+    state: PluginWorkerState,
+    reason: PluginWorkerReason | null,
+    detail: string | null,
+    opts?: { newGeneration?: boolean }
+  ): void {
+    const prior = this.workerStatuses.get(pluginId);
+    if (state === "stopped" && prior?.state === "failed") return;
+    const generation = opts?.newGeneration
+      ? ++this.workerGenerationSeq
+      : (prior?.generation ?? ++this.workerGenerationSeq);
+    // A repeat of the same state under the same generation is not a transition;
+    // publishing it would remount every panel watching the generation.
+    if (
+      prior &&
+      prior.state === state &&
+      prior.generation === generation &&
+      prior.reason === reason &&
+      prior.detail === detail
+    ) {
+      return;
+    }
+    this.workerStatuses.set(pluginId, {
+      generation,
+      state,
+      stateSince: Date.now(),
+      reason,
+      detail,
+    });
+    this.emitRuntimeStatus(pluginId);
+  }
+
+  /**
+   * Subscribe to one worker host's lifecycle for the life of `entry`.
+   *
+   * Every handler identity-guards on the captured entry rather than checking
+   * presence: a replacement worker registered under the same plugin id must
+   * never be described by its predecessor's late events (#10899). Returns the
+   * detach function, which the entry's cleanup runs.
+   */
+  private watchWorkerHealth(
+    pluginId: string,
+    entry: { workerHost: PluginDevWorkerHost }
+  ): () => void {
+    const isCurrent = (): boolean => this.pluginWorkers.get(pluginId) === entry;
+    const onReady = (): void => {
+      if (!isCurrent()) return;
+      this.setWorkerStatus(pluginId, "activating", null, null);
+    };
+    const onExit = (code: number, expected: boolean): void => {
+      if (!isCurrent() || expected) return;
+      // The supervisor decides a tick later whether to respawn or trip the cap,
+      // so this is optimistic by design: `starting` is what the shell renders as
+      // "Reloading", and a crash-loop verdict overwrites it with `failed` before
+      // the user could act on it.
+      this.setWorkerStatus(pluginId, "starting", "crashed", `Worker exited (code ${code})`, {
+        newGeneration: true,
+      });
+    };
+    const onCrashLoop = (code: number): void => {
+      if (!isCurrent()) return;
+      this.setWorkerStatus(
+        pluginId,
+        "failed",
+        "crash-loop",
+        `Worker crashed repeatedly (code ${code}) and will not be restarted automatically`
+      );
+    };
+    const onProtocolViolation = (reason: string): void => {
+      if (!isCurrent()) return;
+      this.setWorkerStatus(pluginId, "failed", "protocol-violation", reason);
+    };
+    entry.workerHost.on("ready", onReady);
+    entry.workerHost.on("exit", onExit);
+    entry.workerHost.on("crash-loop", onCrashLoop);
+    entry.workerHost.on("protocol-violation", onProtocolViolation);
+    return () => {
+      entry.workerHost.off("ready", onReady);
+      entry.workerHost.off("exit", onExit);
+      entry.workerHost.off("crash-loop", onCrashLoop);
+      entry.workerHost.off("protocol-violation", onProtocolViolation);
+    };
+  }
+
+  /**
+   * Restart one plugin's backend, retiring the current generation and starting
+   * a fresh one. The narrow teardown ({@link deactivateWorker}) keeps the
+   * plugin's manifest contributions and its panels' registered kinds, so every
+   * panel on the instance rebinds to the new generation rather than closing.
+   *
+   * Concurrent callers share one restart: a plugin with three open panels whose
+   * user clicks "Restart plugin" in each gets one teardown, not three.
+   */
+  async restartPluginWorker(pluginId: string): Promise<PluginRuntimeStatus | null> {
+    const inFlight = this.workerRestarts.get(pluginId);
+    if (inFlight) {
+      await inFlight;
+      return this.buildRuntimeStatus(pluginId);
+    }
+    // Plain `Error`, like every other refusal this service raises — the IPC
+    // handler is the layer that owns user-facing `AppError` shaping.
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`Plugin "${pluginId}" isn't loaded`);
+    }
+    // A restart must not revive what the user deliberately turned off. The
+    // disabled set is a Set, not a list.
+    if (this.records.getDisabledIds().has(pluginId)) {
+      throw new Error(`Plugin "${pluginId}" is disabled`);
+    }
+    // Worker eligibility is the same predicate activation forks on, so it is
+    // read from the one place that encodes it: a builtin runs in-process, and a
+    // plugin with neither `main` nor a resolved command handler has no code for
+    // a worker to run — but a commands-only plugin DOES have a live worker
+    // (#12274) and must stay restartable. Refused BEFORE anything is published:
+    // a `starting` for a plugin no worker event can ever settle would strand
+    // every panel on it in "Reloading" until the stall banner fires.
+    if (!this.hasWorkerCode(pluginId, plugin)) {
+      throw new Error(`Plugin "${pluginId}" has no backend to restart`);
+    }
+    const run = (async (): Promise<void> => {
+      this.deactivateWorker(pluginId);
+      // No explicit `starting` here: `activateViaWorker` publishes one on a new
+      // generation as it forks, and doing it twice would bump the generation
+      // twice for a single restart. The `failed`/`stopped` this leaves standing
+      // in the gap is accurate — the old worker really is gone — and only the
+      // `stopped` case is latched, which a fresh `starting` clears.
+      //
+      // Never rejects by contract (#9428) — the outcome is read back off the
+      // status the activation path published.
+      await this.activatePlugin(pluginId);
+    })();
+    const settled = run.finally(() => {
+      if (this.workerRestarts.get(pluginId) === settled) this.workerRestarts.delete(pluginId);
+    });
+    void settled.catch(() => undefined);
+    this.workerRestarts.set(pluginId, settled);
+    await settled;
+    return this.buildRuntimeStatus(pluginId);
+  }
+
+  /** Live state of every tracked instance, for a renderer that has just attached. */
+  listPluginRuntimeStatuses(): PluginRuntimeStatus[] {
+    const statuses: PluginRuntimeStatus[] = [];
+    const ids = new Set([...this.devSessions.keys(), ...this.workerStatuses.keys()]);
+    for (const pluginId of ids) {
+      const status = this.buildRuntimeStatus(pluginId);
       if (status) statuses.push(status);
     }
     return statuses;
   }
 
-  private buildDevStatus(pluginId: string): PluginDevStatus | null {
+  private buildRuntimeStatus(pluginId: string): PluginRuntimeStatus | null {
     const session = this.devSessions.get(pluginId);
-    if (!session) return null;
-    const watcher = this.devArtifactWatcherRegistry?.stateOf(pluginId);
+    const worker = this.workerStatuses.get(pluginId) ?? null;
+    if (!session && !worker) return null;
+    const watcher = session ? this.devArtifactWatcherRegistry?.stateOf(pluginId) : undefined;
     return {
       pluginId,
       viewGeneration: this.plugins.get(pluginId)?.viewGeneration ?? null,
-      reloadCount: session.reloadCount,
-      watcher: watcher?.state ?? "waiting",
-      // The session's own last failure outranks the watcher's: a healthy watch
-      // that keeps loading a broken manifest is the case the author needs told.
-      detail: session.detail ?? watcher?.detail ?? null,
+      worker,
+      dev: session
+        ? {
+            reloadCount: session.reloadCount,
+            watcher: watcher?.state ?? "waiting",
+            // The session's own last failure outranks the watcher's: a healthy
+            // watch that keeps loading a broken manifest is the case the author
+            // needs told.
+            detail: session.detail ?? watcher?.detail ?? null,
+          }
+        : null,
     };
   }
 
-  private emitDevStatus(pluginId: string): void {
+  /**
+   * Publish one instance's health to the renderers entitled to see it.
+   *
+   * Scoped to the owning project for a project-local instance, matching the
+   * pull path (`plugin:runtime-statuses-get`) and the precedent every other
+   * project-local plugin event already follows. This is not just symmetry: the
+   * payload carries plugin-authored `detail` — activation errors, stack text,
+   * paths inside that project's checkout — and no other project's view has a
+   * panel on the instance to render it. An app-global id takes the full
+   * broadcast it has always taken, spelled out rather than routed through
+   * `broadcastToProjectRenderers`'s null widening so the common case reads as
+   * what it is.
+   */
+  private emitRuntimeStatus(pluginId: string): void {
     if (this.disposed) return;
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:dev-status-changed",
-      payload: { pluginId, status: this.buildDevStatus(pluginId) },
-    });
+    const event = {
+      name: "plugin:runtime-status-changed" as const,
+      payload: { pluginId, status: this.buildRuntimeStatus(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
   private setDevSessionDetail(pluginId: string, detail: string | null): void {
     const session = this.devSessions.get(pluginId);
     if (!session || session.detail === detail) return;
     session.detail = detail;
-    this.emitDevStatus(pluginId);
+    this.emitRuntimeStatus(pluginId);
   }
 
   /**
@@ -4290,7 +4542,7 @@ export class PluginService {
       // unconditionally so a fixed plugin clears the previous failure.
       session.detail = this.getPluginLoadError(pluginId)?.message ?? null;
     }
-    this.emitDevStatus(pluginId);
+    this.emitRuntimeStatus(pluginId);
     return true;
   }
 
@@ -4815,6 +5067,12 @@ export class PluginService {
     this.pluginsWithLoadTimeErrors.delete(pluginId);
     this.projectPluginLoadErrors.delete(pluginId);
 
+    // The instance is leaving the inventory, so its runtime status goes with it
+    // — unlike a worker teardown, which retains the status precisely because the
+    // plugin is still there to explain (#12278). Emitted after the delete so the
+    // renderer receives the `null` that drops it from the map.
+    if (this.workerStatuses.delete(pluginId)) this.emitRuntimeStatus(pluginId);
+
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
     this.logBuffers.delete(pluginId);
@@ -5042,6 +5300,9 @@ export class PluginService {
   private deactivateWorker(pluginId: string): boolean {
     const entry = this.pluginWorkers.get(pluginId);
     if (!entry) return false;
+    // No-ops when the worker already FAILED — the cause the user needs shown
+    // outranks the teardown that followed it (see `setWorkerStatus`).
+    this.setWorkerStatus(pluginId, "stopped", "deactivated", null);
     this.activatedPlugins.delete(pluginId);
     this.activationPromises.delete(pluginId);
     const cleanup = this.cleanupMap.get(pluginId);
