@@ -60,3 +60,7 @@ Load-bearing rules. Each encodes a lesson; breaking one reintroduces a known inc
 ## Deliberately out of scope for Daintree
 
 Payment, subscription storage, quota calculation, Supabase integration, OAuth URL construction, loopback callback handling, and any settings-based login. Each would duplicate an authority that lives in one of the other three projects and reopen the boundary this design closed. Daintree never decides which address is the RIGHT one — it constructs no account URL, infers none from a hostname, substitutes none, and hard-codes none. It does decide whether an address the engine chose to say is safe to hand to the system browser, which is invariant 8 and is a navigation question rather than an account one.
+
+### Message worktree
+
+Each native prompt carries a worktree snapshot captured in the submitting project view before IPC (`id`, `path`, and `branch`; `null` for an absent or unresolved selection). The engine uses this snapshot as the default for new work until another message updates it at a completed tool-batch boundary, so opening the panel in another worktree or switching during generation cannot move its launches. Message metadata survives queued feedback and recovery. Feedback to an existing job continues to use that job's recorded terminals and worktree unless the user redirects it. An agent name selects an agent type for fresh work; it does not authorize borrowing an unrelated open terminal.

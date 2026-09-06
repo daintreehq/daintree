@@ -336,3 +336,17 @@ describe("AssistantHostCommandSchema / EventSchema separation", () => {
     ).toBeNull();
   });
 });
+
+describe("prompt worktree context", () => {
+  it("preserves a send-time selection and distinguishes no selection from an older caller", () => {
+    const prompt = { type: "prompt", sessionId: "s1", text: "start the contest" };
+    const worktree = { id: "wt-b", path: "/repo/b", branch: "topic-b" };
+    expect(parseAssistantHostCommand({ ...prompt, worktree })).toEqual({ ...prompt, worktree });
+    expect(parseAssistantHostCommand({ ...prompt, worktree: null })).toEqual({
+      ...prompt,
+      worktree: null,
+    });
+    expect(parseAssistantHostCommand(prompt)).toEqual(prompt);
+    expect(parseAssistantHostCommand({ ...prompt, worktree: { id: "wt-b" } })).toBeNull();
+  });
+});
