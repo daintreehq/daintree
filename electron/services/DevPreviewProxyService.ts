@@ -29,6 +29,13 @@ const UPSTREAM_HOST = "localhost";
 // dev server mid-restart (or wedged) should surface a 502, not an indefinite spinner.
 const UPSTREAM_TIMEOUT_MS = 30_000;
 
+// Redirect statuses whose `Location` a browser will follow.
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+// Absolute (`http://host/x`) or protocol-relative (`//host/x`). Only these can carry the
+// guest off the proxy origin; a path-relative `Location` is resolved by the guest against
+// the proxy URL it asked for and is already correct.
+const ABSOLUTE_LOCATION_REGEX = /^(?:https?:)?\/\//i;
+
 // "Open in real browser" handoff token (#9101). The token is HMAC-signed,
 // single-use, bound to its issuing panel, and expires fast — it only has to
 // survive the round-trip from `shell.openExternal` to the browser's first
@@ -95,6 +102,14 @@ export interface DevPreviewProxyDiagnostic {
 export class DevPreviewProxyService {
   private server: http.Server | null = null;
   private proxy: ProxyServer | null = null;
+  // The origin pair each in-flight proxied request was dialled with, so the response
+  // hook rewrites against the upstream this request actually used. Resolving again on
+  // the response would risk a different port if the dev server restarted meanwhile.
+  // Weak keys: an aborted request is collected without an explicit delete.
+  private readonly inFlightOrigins = new WeakMap<
+    http.IncomingMessage,
+    { upstreamOrigin: string; proxyOrigin: string }
+  >();
   private actualPort = 0;
   private portFallback = false;
   private startPromise: Promise<number> | null = null;
@@ -167,6 +182,19 @@ export class DevPreviewProxyService {
       } else {
         res.destroy();
       }
+    });
+    // Keep a same-upstream absolute redirect on the panel's stable origin. Without this
+    // the guest follows `Location: http://localhost:<upstreamPort>/…` off the proxy
+    // origin, and the pane has to migrate it back — losing the route, and re-requesting
+    // a single-use callback in the process (#12297).
+    //
+    // Deliberately not httpxy's `autoRewrite`: that resolves a *relative* Location
+    // against the upstream root (so `Location: consume` from `/nested/once` becomes
+    // `/consume`) and preserves `https:` for a TLS upstream, which this plain-HTTP
+    // proxy does not serve. Emitted before the outgoing header copy, so mutating
+    // `proxyRes.headers` here is what reaches the guest.
+    proxy.on("proxyRes", (proxyRes, req) => {
+      this.rewriteSameUpstreamRedirect(proxyRes, req);
     });
     this.proxy = proxy;
 
@@ -251,8 +279,10 @@ export class DevPreviewProxyService {
       // cert (Vite/Next dev TLS); the upstream is always `localhost`, so this stays loopback-only
       // and never disables verification for a remote host (#9974).
       const scheme = resolution.isHttps ? "https" : "http";
+      const target = `${scheme}://${UPSTREAM_HOST}:${resolution.port}`;
+      this.rememberRequestOrigins(req, target);
       await this.proxy!.web(req, res, {
-        target: `${scheme}://${UPSTREAM_HOST}:${resolution.port}`,
+        target,
         ...(resolution.isHttps ? { secure: false } : {}),
       });
     } catch (err) {
@@ -260,6 +290,54 @@ export class DevPreviewProxyService {
       this.reportFailure(subdomain, "http", classified.cause, classified.code);
       this.send502(res, "The dev server isn't responding.");
     }
+  }
+
+  /** Snapshot the origins this request is being proxied between, for the response hook. */
+  private rememberRequestOrigins(req: http.IncomingMessage, target: string): void {
+    const host = req.headers.host;
+    if (!host) return;
+    let proxyOrigin: string;
+    let upstreamOrigin: string;
+    try {
+      // The proxy serves plain HTTP only, so the guest-facing origin is always http:.
+      proxyOrigin = new URL(`http://${host}`).origin;
+      upstreamOrigin = new URL(target).origin;
+    } catch {
+      return;
+    }
+    this.inFlightOrigins.set(req, { upstreamOrigin, proxyOrigin });
+  }
+
+  /**
+   * Rewrite a redirect that points back at the upstream this very request was dialled
+   * with, so it lands on the panel's stable origin instead. Scoped deliberately tight:
+   * only redirect statuses, only an absolute or protocol-relative `Location`, and only
+   * when its origin matches the recorded upstream exactly. A relative Location, a
+   * different port, or any external destination is forwarded byte-for-byte.
+   */
+  private rewriteSameUpstreamRedirect(
+    proxyRes: http.IncomingMessage,
+    req: http.IncomingMessage
+  ): void {
+    const origins = this.inFlightOrigins.get(req);
+    this.inFlightOrigins.delete(req);
+    if (!origins) return;
+    if (!REDIRECT_STATUSES.has(proxyRes.statusCode ?? 0)) return;
+
+    const location = proxyRes.headers.location;
+    if (typeof location !== "string" || !ABSOLUTE_LOCATION_REGEX.test(location)) return;
+
+    let destination: URL;
+    try {
+      // Base supplies the scheme for a protocol-relative `//host/path`, matching how a
+      // guest on the upstream origin would resolve it.
+      destination = new URL(location, origins.upstreamOrigin);
+    } catch {
+      return;
+    }
+    if (destination.origin !== origins.upstreamOrigin) return;
+
+    proxyRes.headers.location = `${origins.proxyOrigin}${destination.pathname}${destination.search}${destination.hash}`;
   }
 
   private async handleUpgrade(

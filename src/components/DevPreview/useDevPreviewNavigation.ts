@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import type { BrowserHistory } from "@shared/types/browser";
-import { normalizeBrowserUrl } from "../Browser/browserUtils";
+import type { NormalizeResult } from "../Browser/browserUtils";
 import {
   goBackBrowserHistory,
   goForwardBrowserHistory,
   pushBrowserHistory,
+  replaceBrowserHistoryPresent,
 } from "../Browser/historyUtils";
-import { computeDevServerUrl } from "./urlSync";
+import { computeDevServerUrl, normalizeDevPreviewUrl } from "./urlSync";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -107,18 +108,29 @@ export function useDevPreviewNavigation({
     // Hold navigation until the proxy port resolution settles, otherwise the pane would
     // briefly adopt the unstable direct-localhost origin before the proxy origin is known (#9100).
     if (proxyOrigin === undefined) return;
-    const nextUrl = devServerUrl
-      ? computeDevServerUrl(devServerUrl, currentUrl, proxyOrigin)
-      : false;
-    if (nextUrl !== false) {
-      // Adopting a different dev-server target (legacy mode follows the upstream
-      // port in place). The budget belongs to the target that exhausted it, so
-      // hand it back before the imperative effect loads the new one (#12296).
-      if (nextUrl !== currentUrl) {
-        clearRetryState();
-      }
-      setHistory((prev) => pushBrowserHistory(prev, nextUrl));
+    if (!devServerUrl) return;
+    // Adopting a different dev-server target hands the retry budget back: it belongs
+    // to the target that exhausted it, so the imperative effect loads the new one with
+    // a full budget (#12296). Decided against `currentUrl` — the URL this effect was
+    // scheduled with — because a state setter cannot run inside a state updater.
+    const adopted = computeDevServerUrl(devServerUrl, currentUrl, proxyOrigin);
+    if (adopted !== false && adopted !== currentUrl) {
+      clearRetryState();
     }
+    // Recompute against `prev.present` inside the updater: `currentUrl` is the trigger,
+    // but a migration queued behind a newer navigation must retarget that newer intent,
+    // not resurrect the URL this effect was scheduled with.
+    setHistory((prev) => {
+      const nextUrl = computeDevServerUrl(devServerUrl, prev.present, proxyOrigin);
+      if (nextUrl === false) return prev;
+      // In proxy mode this is a retarget of the entry we are on, not a new stop —
+      // pushing would leave the pre-migration origin sitting in the back stack and
+      // wipe the forward entries (#12297). Legacy mode keeps its push: there the
+      // dev server genuinely moved to a different origin.
+      return typeof proxyOrigin === "string"
+        ? replaceBrowserHistoryPresent(prev, nextUrl)
+        : pushBrowserHistory(prev, nextUrl);
+    });
   }, [devServerUrl, currentUrl, isUnconfigured, proxyOrigin, clearRetryState, setHistory]);
 
   useEffect(() => {
@@ -136,6 +148,14 @@ export function useDevPreviewNavigation({
     setBrowserZoom(id, zoomFactor);
   }, [id, zoomFactor, setBrowserZoom]);
 
+  // One policy for the address bar and for action-driven navigation, so the toolbar
+  // can never accept a URL the hook would reject (or vice versa). It is idempotent:
+  // re-normalizing an already-approved proxy URL returns it unchanged (#12297).
+  const validateUrl = useCallback(
+    (rawUrl: string): NormalizeResult => normalizeDevPreviewUrl(rawUrl, proxyOrigin),
+    [proxyOrigin]
+  );
+
   // Every explicit navigation action hands the retry budget back. A load start no
   // longer refills it (#12296), and the budget belongs to the target that
   // exhausted it — carrying it into a URL the user just asked for would make that
@@ -144,7 +164,7 @@ export function useDevPreviewNavigation({
   // own history update must not replenish anything.
   const handleNavigate = useCallback(
     (rawUrl: string) => {
-      const normalized = normalizeBrowserUrl(rawUrl);
+      const normalized = validateUrl(rawUrl);
       if (normalized.url) {
         // Only when the target actually changes. Re-submitting the URL already
         // showing pushes no history and starts no load, so resetting here would
@@ -158,7 +178,7 @@ export function useDevPreviewNavigation({
         setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
       }
     },
-    [currentUrl, clearRetryState, setHistory]
+    [currentUrl, clearRetryState, setHistory, validateUrl]
   );
 
   const handleBack = useCallback(() => {
@@ -382,6 +402,7 @@ export function useDevPreviewNavigation({
   }, [id, onHardReload]);
 
   return {
+    validateUrl,
     handleNavigate,
     handleBack,
     handleForward,
