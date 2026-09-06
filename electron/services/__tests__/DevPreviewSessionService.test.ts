@@ -90,7 +90,7 @@ function createPtyClientMock(options?: { spawnError?: Error }) {
         exitListeners.delete(callback as ExitListener);
       }
     }),
-    spawn: vi.fn((id: string, spawnOptions: { projectId?: string }) => {
+    spawn: vi.fn((id: string, spawnOptions: { projectId?: string; args?: string[] }) => {
       if (options?.spawnError) {
         throw options.spawnError;
       }
@@ -393,18 +393,64 @@ describe("DevPreviewSessionService", () => {
     expect(started.status).toBe("starting");
     expect(started.terminalId).toBeTruthy();
 
-    // Mid-stream detection sets needsInstall + status: "installing"
+    // Mid-stream detection arms needsInstall and surfaces the error, but the
+    // session stays "starting" — no install has begun yet (#12295).
     ptyClient.emitData(started.terminalId!, "Error: Cannot find module 'vite'\n");
 
     const afterData = service.getState({
       panelId: baseRequest.panelId,
       projectId: baseRequest.projectId,
     });
-    expect(afterData.status).toBe("installing");
+    expect(afterData.status).toBe("starting");
     expect(afterData.error?.type).toBe("missing-dependencies");
 
-    // Exit during "installing" triggers a guarded reinstall (not an error stop)
+    // Exit after that detection triggers a guarded reinstall (not an error stop)
     ptyClient.emitExit(started.terminalId!, 1);
+  });
+
+  // The wrapper shell exits normally when its child is signalled, so the raw
+  // signal is gone and node-pty reports signal 0 — the encoded 128+n status is
+  // the only evidence left (#12295).
+  it.skipIf(process.platform === "win32")(
+    "treats an encoded SIGINT exit with node-pty's signal 0 as a clean stop",
+    async () => {
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitExit(started.terminalId!, 130, 0);
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.status).toBe("stopped");
+      expect(state.error).toBeNull();
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps crash classification for an encoded SIGSEGV exit",
+    async () => {
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitExit(started.terminalId!, 139, 0);
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.status).toBe("error");
+      expect(state.error?.type).toBe("process-crash");
+    }
+  );
+
+  it("does not treat a plain nonzero exit as a signal", async () => {
+    const started = await service.ensure(baseRequest);
+    ptyClient.emitExit(started.terminalId!, 7, 0);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.message).toContain("7");
   });
 
   it("classifies compile-error exit from buffered output", async () => {

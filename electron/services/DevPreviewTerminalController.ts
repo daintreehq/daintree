@@ -3,11 +3,13 @@ import type { DevServerError } from "../../shared/utils/devServerErrors.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
-import { CRASH_SIGNALS, EXPECTED_TERMINATION_SIGNALS } from "./pty/terminalForensics.js";
+import { EXPECTED_TERMINATION_SIGNALS } from "./pty/terminalForensics.js";
 import {
   normalizeNextjsDevCommand,
   normalizeViteDevCommand,
+  type DevCommandBundlerConflict,
 } from "./DevPreviewCommandNormalizer.js";
+import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
 import { guardedReinstall, type CrashLoopGuardSession } from "./DevPreviewCrashLoopGuard.js";
 import { classifyDevPreviewExit } from "./DevPreviewOutputProcessor.js";
 import { capDiagnosticText, type DevPreviewDiagnosticInput } from "./DevPreviewDiagnosticsRing.js";
@@ -54,6 +56,13 @@ export interface TerminalControllerSession extends CrashLoopGuardSession {
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
+  /**
+   * Bumped by every stop, so a launch that is still awaiting port allocation or
+   * command normalization can tell that the session was stopped or deleted out
+   * from under it. `generation` cannot serve here: a stop leaves it untouched,
+   * and the post-install respawn runs outside the session lock.
+   */
+  launchEpoch: number;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   compiling: boolean;
@@ -127,6 +136,15 @@ export function detachTerminal<TSession extends TerminalControllerSession>(
   deps.terminalToSession.delete(session.terminalId);
   deps.ptyClient.setIpcDataMirror(session.terminalId, false);
   session.terminalId = null;
+}
+
+/**
+ * Cancel any launch still resolving its port or command. Every path that stops,
+ * replaces, or removes a session must call this — a launch with no terminal yet
+ * is invisible to the `terminalId` checks those paths otherwise rely on.
+ */
+export function invalidatePendingLaunch(session: TerminalControllerSession): void {
+  session.launchEpoch += 1;
 }
 
 export function clearStartupReplay(session: TerminalControllerSession): void {
@@ -233,6 +251,10 @@ export async function stopSessionTerminal<TSession extends TerminalControllerSes
   deps.clearCompiling(session);
   session.needsInstall = false;
   session.isRunningInstall = false;
+  // Before the no-terminal early return: a post-install respawn that is still
+  // resolving its command has no terminal yet, and is exactly what must not
+  // survive this stop.
+  invalidatePendingLaunch(session);
 
   const terminalId = session.terminalId;
   if (!terminalId) return;
@@ -354,11 +376,50 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
   await spawnSessionTerminal(session, deps);
 }
 
+/**
+ * Port allocation can now fail outright (every candidate busy on some address
+ * family), and the automatic post-install respawn calls this without a catch.
+ * Land a terminal error state instead of leaving an `installing` session with
+ * no terminal and an unhandled rejection.
+ */
 export async function spawnSessionTerminal<TSession extends TerminalControllerSession>(
   session: TSession,
   deps: TerminalControllerDeps<TSession>
 ): Promise<void> {
+  const startEpoch = session.launchEpoch;
+  const startGeneration = session.generation;
+  try {
+    await prepareAndSpawnSessionTerminal(session, deps);
+  } catch (error) {
+    if (deps.isDisposed()) return;
+    // Stopped or superseded while preparing — the owner of that transition has
+    // already published the state it wants.
+    if (session.launchEpoch !== startEpoch || session.generation !== startGeneration) return;
+    const message = formatErrorMessage(error, "Failed to start dev server");
+    deps.recordSessionDiagnostic(session, {
+      type: "spawn-failed",
+      message: capDiagnosticText(message),
+    });
+    detachTerminal(session, deps);
+    deps.updateSession(session, {
+      status: "error",
+      url: null,
+      predictedUrl: null,
+      error: { type: "unknown", message: `Failed to start dev server: ${message}` },
+      terminalId: null,
+      isRestarting: false,
+      phaseLabel: undefined,
+    });
+  }
+}
+
+async function prepareAndSpawnSessionTerminal<TSession extends TerminalControllerSession>(
+  session: TSession,
+  deps: TerminalControllerDeps<TSession>
+): Promise<void> {
   const terminalId = createTerminalId(session);
+  const startGeneration = session.generation;
+  const startEpoch = session.launchEpoch;
   const nextGeneration = session.generation + 1;
 
   const sessionKey = createSessionKey(session.projectId, session.panelId);
@@ -370,12 +431,40 @@ export async function spawnSessionTerminal<TSession extends TerminalControllerSe
     releasePort(deps.portRegistry, sessionKey);
     return;
   }
+  // Stopped or superseded while we allocated. The registry entry is sticky per
+  // sessionKey — stopSessionTerminal leaves it in place so a restart reuses the
+  // port — so a newer launch may already own this reservation. Releasing it here
+  // would hand its live port out again and skip the next stop's TIME_WAIT wait.
+  if (session.launchEpoch !== startEpoch) return;
   // Recorded with the generation this spawn is about to become, so the whole
   // spawn lifecycle (port-allocated → spawned → …) shares one generation.
   deps.recordDiagnostic(sessionKey, nextGeneration, { type: "port-allocated", port });
   const predictedUrl = `http://localhost:${port}`;
 
   const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
+
+  // Resolved before the spawn, not after: the command has to ride in the
+  // shell's own arguments so the PTY ends when it does. Both normalizers read
+  // package.json, so this is the second await in this function — re-check the
+  // guards a concurrent stop/restart or dispose could have tripped.
+  const normalizedCommand = await normalizeDevCommand(session, port, (conflict) =>
+    deps.recordDiagnostic(sessionKey, nextGeneration, {
+      type: "bundler-conflict",
+      message: capDiagnosticText(conflict.message),
+    })
+  );
+  if (deps.isDisposed()) {
+    releasePort(deps.portRegistry, sessionKey);
+    return;
+  }
+  // A newer spawn won the race; its reservation is the live one, so leave the
+  // registry alone and let it own the session.
+  if (session.generation !== startGeneration) return;
+  // Stopped or deleted while we resolved the command — the stop already
+  // released whatever it owned, so just abandon this launch.
+  if (session.launchEpoch !== startEpoch) return;
+
+  const launch = buildCommandLaunchShell(normalizedCommand, undefined, "exit");
 
   // Mark the dev-server spawn time for the crash-loop graduation check. Set
   // only here (the dev server), never in runInstall — an install is part of
@@ -408,6 +497,7 @@ export async function spawnSessionTerminal<TSession extends TerminalControllerSe
       restore: false,
       env: spawnEnv,
       isEphemeral: true,
+      ...(launch ? { shell: launch.shell, args: launch.args } : {}),
     });
     markPerformance(PERF_MARKS.DEVPREVIEW_TERMINAL_SPAWNED, {
       panelId: session.panelId,
@@ -448,30 +538,49 @@ export async function spawnSessionTerminal<TSession extends TerminalControllerSe
     return;
   }
 
-  const trimmedCommand = session.devCommand.trim();
-
-  const submitCommand = (cmd: string) => {
-    setTimeout(() => {
-      try {
-        if (deps.ptyClient.hasTerminal(terminalId)) {
-          deps.ptyClient.submit(terminalId, cmd);
-        }
-      } catch (err) {
-        console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
-      }
-    }, PTY_SUBMIT_AFTER_SPAWN_MS);
-  };
-
-  void normalizeNextjsDevCommand(trimmedCommand, session.cwd, session.turbopackEnabled)
-    .then((nextNormalized) => normalizeViteDevCommand(nextNormalized, session.cwd, port))
-    .then((normalizedCommand) => {
-      submitCommand(normalizedCommand);
-    })
-    .catch(() => {
-      submitCommand(trimmedCommand);
-    });
+  if (!launch) submitFallbackCommand(terminalId, normalizedCommand, deps);
 
   scheduleStartupReplay(session, deps);
+}
+
+/**
+ * Shells that can't host a startup wrapper (fish, nushell, an unrecognised
+ * Windows shell) launch bare and get the command typed in. They keep the
+ * pre-#12295 behaviour, including its blindness to the command's own exit.
+ */
+function submitFallbackCommand<TSession extends TerminalControllerSession>(
+  terminalId: string,
+  command: string,
+  deps: Pick<TerminalControllerDeps<TSession>, "ptyClient">
+): void {
+  setTimeout(() => {
+    try {
+      if (deps.ptyClient.hasTerminal(terminalId)) {
+        deps.ptyClient.submit(terminalId, command);
+      }
+    } catch (err) {
+      console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
+    }
+  }, PTY_SUBMIT_AFTER_SPAWN_MS);
+}
+
+async function normalizeDevCommand(
+  session: TerminalControllerSession,
+  port: number,
+  onConflict: (conflict: DevCommandBundlerConflict) => void
+): Promise<string> {
+  const trimmedCommand = session.devCommand.trim();
+  try {
+    const nextNormalized = await normalizeNextjsDevCommand(
+      trimmedCommand,
+      session.cwd,
+      session.turbopackEnabled,
+      onConflict
+    );
+    return await normalizeViteDevCommand(nextNormalized, session.cwd, port);
+  } catch {
+    return trimmedCommand;
+  }
 }
 
 export async function runInstall<TSession extends TerminalControllerSession>(
@@ -488,6 +597,7 @@ export async function runInstall<TSession extends TerminalControllerSession>(
   });
 
   const terminalId = createTerminalId(session);
+  const launch = buildCommandLaunchShell(installCommand, undefined, "exit");
   session.buffer = "";
   session.lastErrorKey = null;
   attachTerminal(session, terminalId, deps);
@@ -510,6 +620,7 @@ export async function runInstall<TSession extends TerminalControllerSession>(
       restore: false,
       env: session.env,
       isEphemeral: true,
+      ...(launch ? { shell: launch.shell, args: launch.args } : {}),
     });
   } catch (error) {
     session.isRunningInstall = false;
@@ -530,15 +641,7 @@ export async function runInstall<TSession extends TerminalControllerSession>(
     return;
   }
 
-  setTimeout(() => {
-    try {
-      if (deps.ptyClient.hasTerminal(terminalId)) {
-        deps.ptyClient.submit(terminalId, installCommand);
-      }
-    } catch (err) {
-      console.warn("[DevPreviewSessionService] Failed to submit install command:", err);
-    }
-  }, PTY_SUBMIT_AFTER_SPAWN_MS);
+  if (!launch) submitFallbackCommand(terminalId, installCommand, deps);
 }
 
 /**
@@ -549,6 +652,26 @@ export async function runInstall<TSession extends TerminalControllerSession>(
  * callers are expected to have already checked disposal/session-lookup/
  * terminal-id-match.
  */
+/**
+ * What killed the dev command, as a signal number. The wrapper shell exits
+ * normally with `128 + n` when its child took signal n, so by the time the PTY
+ * exit arrives the raw signal is gone and only the encoded status is left —
+ * without decoding it, a Ctrl-C reads as "exited with code 130" and a segfault
+ * loses its crash classification. node-pty reports signal 0 for an ordinary
+ * exit and that zero survives the whole exit path, so "no signal" has to mean
+ * falsy rather than undefined. Windows has no such encoding.
+ */
+function decodeExitSignal(exitCode: number, signal: number | undefined): number | undefined {
+  if (signal) return signal;
+  if (process.platform === "win32") return undefined;
+  return exitCode > 128 && exitCode < 192 ? exitCode - 128 : undefined;
+}
+
+function isExpectedTermination(exitCode: number, signal: number | undefined): boolean {
+  const decoded = decodeExitSignal(exitCode, signal);
+  return decoded !== undefined && EXPECTED_TERMINATION_SIGNALS.has(decoded);
+}
+
 export function handleDevPreviewTerminalExit<TSession extends TerminalControllerSession>(
   session: TSession,
   exitCode: number,
@@ -596,7 +719,7 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
   deps.recordSessionDiagnostic(session, {
     type: "terminal-exited",
     exitCode,
-    ...(signal !== undefined ? { signal } : {}),
+    ...(signal ? { signal } : {}),
   });
 
   if (session.needsInstall && session.installAttemptedGeneration !== session.generation) {
@@ -617,7 +740,7 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
     session.status === "error"
   ) {
     // Expected termination signals during startup/error = clean stop (user interrupted it)
-    if (signal !== undefined && EXPECTED_TERMINATION_SIGNALS.has(signal)) {
+    if (isExpectedTermination(exitCode, signal)) {
       deps.updateSession(session, {
         status: "stopped",
         url: null,
@@ -629,7 +752,11 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
       });
       return;
     }
-    const error = classifyDevPreviewExit(exitCode, signal, recentOutput) ?? {
+    const error = classifyDevPreviewExit(
+      exitCode,
+      decodeExitSignal(exitCode, signal),
+      recentOutput
+    ) ?? {
       type: "unknown",
       message: `Dev server exited with code ${exitCode}`,
     };
@@ -645,16 +772,18 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
     return;
   }
 
-  const crashError =
-    signal !== undefined && CRASH_SIGNALS.has(signal)
-      ? classifyDevPreviewExit(exitCode, signal, recentOutput)
-      : null;
+  // A server that was serving and then died is now observable (#12295). Only a
+  // clean or expected termination is a plain stop — anything else keeps the
+  // exit evidence so the pane doesn't quietly read as "stopped" after a crash.
+  const exitError = isExpectedTermination(exitCode, signal)
+    ? null
+    : classifyDevPreviewExit(exitCode, decodeExitSignal(exitCode, signal), recentOutput);
 
   deps.updateSession(session, {
-    status: "stopped",
+    status: exitError ? "error" : "stopped",
     url: null,
     predictedUrl: null,
-    error: crashError,
+    error: exitError,
     terminalId: null,
     isRestarting: false,
     phaseLabel: undefined,

@@ -435,9 +435,10 @@ export function buildAnsiBindStreamPlan(options: {
  * three of its four plants as misses against a perfectly healthy detector.
  *
  * Each row is graded on the type AND the status it routes to:
- * `missing-dependencies` is the one recoverable type and goes to `installing`,
- * every other type stops the session with `error`. A classifier that answered
- * `unknown` for everything would still be "detecting" and still fails here.
+ * `missing-dependencies` is the one recoverable type and leaves the session in
+ * a running state, every other type stops it with `error`. A classifier that
+ * answered `unknown` for everything would still be "detecting" and still fails
+ * here.
  */
 export function buildFailureStreamPlans(seed: number): DevPreviewStreamPlan[] {
   const failures: Array<{ text: string; type: DevServerErrorType }> = [
@@ -711,6 +712,9 @@ export interface DevPreviewMissCounts {
  * `detectDevServerError` sweep over the rolling buffer all run on every chunk,
  * and a single aggregate would let one of them be deleted for free.
  */
+/** A session that has not been stopped by the failure it just reported. */
+const RECOVERABLE_STATUSES: ReadonlySet<string> = new Set(["starting", "installing", "running"]);
+
 export function devPreviewPassMisses(
   plan: DevPreviewStreamPlan,
   result: DevPreviewPassResult,
@@ -743,10 +747,16 @@ export function devPreviewPassMisses(
       errorClassMisses += 1;
       continue;
     }
-    // `missing-dependencies` is the one recoverable type and must route to
-    // `installing`; every other type must stop the session.
-    const expectedStatus = expectedType === "missing-dependencies" ? "installing" : "error";
-    if (actual.status !== expectedStatus) errorClassMisses += 1;
+    // `missing-dependencies` is the one recoverable type: it arms the install
+    // and leaves the session running, because `installing` now means an install
+    // actually started rather than one that output merely predicted (#12295).
+    // Every other type must stop the session. Still two-sided: routing the
+    // recoverable type to `error`, or a terminal type anywhere else, both miss.
+    const statusOk =
+      expectedType === "missing-dependencies"
+        ? RECOVERABLE_STATUSES.has(actual.status)
+        : actual.status === "error";
+    if (!statusOk) errorClassMisses += 1;
   }
 
   return {

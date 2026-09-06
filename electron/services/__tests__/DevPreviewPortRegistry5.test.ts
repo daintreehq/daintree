@@ -43,7 +43,7 @@ vi.mock("node:net", () => {
     const srv = {
       unref: vi.fn(() => srv),
       once: vi.fn((_event: string, _cb: Cb) => srv),
-      listen: vi.fn((_port: number, _host: string, cb: Cb) => {
+      listen: vi.fn((_options: { port: number; host: string; ipv6Only?: boolean }, cb: Cb) => {
         cb();
         return srv;
       }),
@@ -188,12 +188,16 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
     const probeGate = new Promise<void>((resolve) => {
       releaseProbe = resolve;
     });
-    vi.mocked(net.createServer).mockImplementationOnce(() => {
+    // probePortFree opens one socket per probed address, so every socket this
+    // allocation attempt makes must be gated — a single mockImplementationOnce
+    // would leave the rest ungated and leak into the next test's first probe.
+    const defaultCreateServer = vi.mocked(net.createServer).getMockImplementation();
+    vi.mocked(net.createServer).mockImplementation(() => {
       type Cb = () => void;
       const srv = {
         unref: vi.fn(() => srv),
         once: vi.fn((_event: string, _cb: Cb) => srv),
-        listen: vi.fn((_port: number, _host: string, cb: Cb) => {
+        listen: vi.fn((_options: { port: number; host: string; ipv6Only?: boolean }, cb: Cb) => {
           probeGate.then(() => cb());
           return srv;
         }),
@@ -221,6 +225,7 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
 
     // No spawn should have fired for this disposed service.
     expect(ptyClient.spawn).not.toHaveBeenCalled();
+    if (defaultCreateServer) vi.mocked(net.createServer).mockImplementation(defaultCreateServer);
   });
 
   it("BUG-Y3: restart() after dispose() does not spawn a terminal", async () => {

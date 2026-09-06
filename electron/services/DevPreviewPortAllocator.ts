@@ -3,6 +3,108 @@ import net from "node:net";
 export const PORT_FREE_POLL_INTERVAL_MS = 200;
 export const PORT_FREE_TIMEOUT_MS = 15_000;
 
+const MAX_OS_ASSIGNED_ATTEMPTS = 10;
+
+type FamilyProbeResult = "free" | "busy" | "unavailable" | "error";
+
+// A bind failure is only evidence the port is taken when the kernel says so.
+// Everything else on the IPv6 leg means "this host has no usable IPv6", which
+// must not make an otherwise-free port look occupied.
+const IPV6_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+  "EAFNOSUPPORT",
+  "EADDRNOTAVAIL",
+  "ENOPROTOOPT",
+  "EINVAL",
+]);
+
+function classifyBindError(err: NodeJS.ErrnoException, ipv6Only: boolean): FamilyProbeResult {
+  if (err.code === "EADDRINUSE") return "busy";
+  if (ipv6Only && err.code && IPV6_UNAVAILABLE_CODES.has(err.code)) return "unavailable";
+  return "error";
+}
+
+/**
+ * Try to bind one address family and report what the kernel said. Binding
+ * `0.0.0.0` never also claims `::` (and whether `::` claims IPv4 depends on
+ * IPV6_V6ONLY), so the two families need independent probes — `ipv6Only` keeps
+ * the IPv6 leg from dual-claiming and confusing the two answers.
+ */
+function probeFamily(
+  port: number,
+  host: string,
+  ipv6Only: boolean,
+  signal?: AbortSignal
+): Promise<FamilyProbeResult> {
+  return new Promise<FamilyProbeResult>((resolve) => {
+    let settled = false;
+    let onAbort: () => void = () => {};
+    const settle = (value: FamilyProbeResult) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    if (signal?.aborted) {
+      settle("error");
+      return;
+    }
+    const srv = net.createServer();
+    srv.unref();
+    srv.once("error", (err) => settle(classifyBindError(err as NodeJS.ErrnoException, ipv6Only)));
+    onAbort = () => {
+      try {
+        srv.close();
+      } catch {
+        // server may already be closing
+      }
+      settle("error");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      srv.listen({ port, host, ipv6Only }, () => srv.close(() => settle("free")));
+    } catch {
+      settle("error");
+    }
+  });
+}
+
+/**
+ * Every address a local dev server might take. Node sets SO_REUSEADDR, so a
+ * wildcard bind succeeds while a *loopback* listener holds the same port —
+ * measured, not assumed: with `::1` held, both `0.0.0.0` and `::` still bind.
+ * The wildcards alone therefore miss exactly the servers that matter here
+ * (Vite binds `[::1]` on macOS — see #9752), so each address is probed.
+ */
+const PROBE_ADDRESSES: ReadonlyArray<{ host: string; ipv6: boolean }> = [
+  { host: "0.0.0.0", ipv6: false },
+  { host: "127.0.0.1", ipv6: false },
+  { host: "::", ipv6: true },
+  { host: "::1", ipv6: true },
+];
+
+/**
+ * True only when the port is bindable at every address this host can actually
+ * use. The IPv4-only check that shipped in #12295 handed out a port an
+ * `ipv6Only` `::1` listener was holding. A host with no usable IPv6 answers
+ * "unavailable" there, which is not the same as "occupied" and must not block
+ * allocation. Gap between close() and the dev server's eventual bind() is an
+ * intrinsic TOCTOU we accept.
+ */
+export async function probePortFree(port: number, signal?: AbortSignal): Promise<boolean> {
+  // Strictly sequential, each socket closed before the next opens. Running
+  // them together would have the wildcard probe hold the port while its own
+  // loopback probe binds, and Linux refuses that overlap — the allocator
+  // would then reject every port as busy, including ones nothing is using.
+  for (const { host, ipv6 } of PROBE_ADDRESSES) {
+    const result = await probeFamily(port, host, ipv6, signal);
+    if (signal?.aborted) return false;
+    if (result === "free") continue;
+    if (ipv6 && result === "unavailable") continue;
+    return false;
+  }
+  return true;
+}
+
 export async function allocatePort(
   portRegistry: Map<string, number>,
   sessionKey: string
@@ -17,32 +119,44 @@ export async function allocatePort(
     // Reserve before the async probe so concurrent allocatePort() calls for
     // different session keys can't pick the same candidate between probe and registration.
     portRegistry.set(sessionKey, candidate);
-    const available = await new Promise<boolean>((resolve) => {
-      const srv = net.createServer();
-      srv.unref();
-      srv.once("error", () => resolve(false));
-      // Gap between close() and the dev server's eventual bind() is an intrinsic TOCTOU we accept.
-      srv.listen(candidate, "0.0.0.0", () => srv.close(() => resolve(true)));
-    });
-    if (available) return candidate;
+    if (await probePortFree(candidate)) return candidate;
     releasePort(portRegistry, sessionKey);
   }
-  return new Promise<number>((resolve, reject) => {
+
+  // Fall back to an OS-assigned port. It is only IPv4-assigned, so it still
+  // needs the IPv6 leg checked, and another session may have reserved the same
+  // number while we were binding.
+  for (let attempt = 0; attempt < MAX_OS_ASSIGNED_ATTEMPTS; attempt++) {
+    const port = await requestOsAssignedPort();
+    if (port === null) continue;
+    if (new Set(portRegistry.values()).has(port)) continue;
+    portRegistry.set(sessionKey, port);
+    if (await probePortFree(port)) return port;
+    releasePort(portRegistry, sessionKey);
+  }
+  throw new Error("Failed to allocate port");
+}
+
+function requestOsAssignedPort(): Promise<number | null> {
+  return new Promise<number | null>((resolve) => {
+    let settled = false;
+    const settle = (value: number | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     const srv = net.createServer();
     srv.unref();
-    srv.once("error", (err) => reject(err));
-    srv.listen(0, "0.0.0.0", () => {
-      const addr = srv.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      srv.close(() => {
-        if (port) {
-          portRegistry.set(sessionKey, port);
-          resolve(port);
-        } else {
-          reject(new Error("Failed to allocate port"));
-        }
+    srv.once("error", () => settle(null));
+    try {
+      srv.listen({ port: 0, host: "0.0.0.0" }, () => {
+        const addr = srv.address();
+        const port = typeof addr === "object" && addr ? addr.port : 0;
+        srv.close(() => settle(port > 0 ? port : null));
       });
-    });
+    } catch {
+      settle(null);
+    }
   });
 }
 
@@ -55,7 +169,7 @@ export function releasePort(portRegistry: Map<string, number>, sessionKey: strin
  * on timeout or abort. Primarily addresses Windows TIME_WAIT after a force-kill
  * of a dev server — the kernel can hold the socket for up to ~240s, which
  * causes the next allocatePort/spawn to fail with EADDRINUSE on the same port.
- * Probes with the same listen() call allocatePort uses, so a "free" answer
+ * Probes with the same dual-family check allocatePort uses, so a "free" answer
  * here implies the allocator will also succeed (TOCTOU window aside).
  */
 export async function waitForPortFree(
@@ -75,40 +189,6 @@ export async function waitForPortFree(
     }
   }
   return false;
-}
-
-function probePortFree(port: number, signal: AbortSignal): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    let onAbort: () => void = () => {};
-    const settle = (value: boolean) => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      resolve(value);
-    };
-    if (signal.aborted) {
-      settle(false);
-      return;
-    }
-    const srv = net.createServer();
-    srv.unref();
-    srv.once("error", () => settle(false));
-    onAbort = () => {
-      try {
-        srv.close();
-      } catch {
-        // server may already be closing
-      }
-      settle(false);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      srv.listen(port, "0.0.0.0", () => srv.close(() => settle(true)));
-    } catch {
-      settle(false);
-    }
-  });
 }
 
 function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {

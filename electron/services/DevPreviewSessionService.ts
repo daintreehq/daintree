@@ -34,6 +34,7 @@ import {
   waitForRegisteredPortFree,
   runInstall,
   handleDevPreviewTerminalExit,
+  invalidatePendingLaunch,
   clearStartupReplay,
   isBenignMissingTerminalError,
   type TerminalControllerDeps,
@@ -76,6 +77,8 @@ interface DevPreviewSession extends DevPreviewSessionState {
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
+  /** See TerminalControllerSession.launchEpoch — bumped by every stop. */
+  launchEpoch: number;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   phaseLabel?: "Compiling";
@@ -437,6 +440,7 @@ export class DevPreviewSessionService {
           type: "command-invalid",
           message: capDiagnosticText(commandError),
         });
+        invalidatePendingLaunch(session);
         if (configChanged && session.terminalId) {
           await this.stopSessionTerminal(session, "invalid-command");
         }
@@ -451,8 +455,11 @@ export class DevPreviewSessionService {
         return;
       }
 
-      if (configChanged && session.terminalId) {
-        await this.stopSessionTerminal(session, "config-change");
+      if (configChanged) {
+        invalidatePendingLaunch(session);
+        if (session.terminalId) {
+          await this.stopSessionTerminal(session, "config-change");
+        }
       }
 
       await this.ensureSessionTerminal(session);
@@ -666,6 +673,10 @@ export class DevPreviewSessionService {
       // branch routes through stopSessionTerminal, but a stop arriving mid
       // backoff has no live terminal and would otherwise skip the abort.
       resetCrashLoopGuard(session);
+      // Unconditional: a post-install respawn still resolving its command has
+      // no terminal yet, so the branch below would not reach stopSessionTerminal
+      // and the launch would outlive the stop.
+      invalidatePendingLaunch(session);
 
       this.recordSessionDiagnostic(session, { type: "stop-requested", context: "stop" });
 
@@ -1099,6 +1110,7 @@ export class DevPreviewSessionService {
       needsInstall: false,
       isRunningInstall: false,
       installAttemptedGeneration: null,
+      launchEpoch: 0,
       startupReplayTimer: null,
       compiling: false,
       compilingTimer: null,

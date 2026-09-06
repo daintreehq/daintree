@@ -9,7 +9,7 @@ export interface ShellArgsOptions {
 
 const MACOS_INTERACTIVE_SHELL_STARTUP_DELAY_SECONDS = "0.05";
 
-const WINDOWS_PS_UTF8_BOOTSTRAP =
+export const WINDOWS_PS_UTF8_BOOTSTRAP =
   "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [System.Text.UTF8Encoding]::new($false)";
 
 function shellQuote(value: string): string {
