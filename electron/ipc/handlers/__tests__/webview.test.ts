@@ -18,6 +18,7 @@ const mockWebContents = vi.hoisted(() => ({
   isDestroyed: vi.fn(() => false),
   debugger: debuggerMock,
   executeJavaScript: vi.fn().mockResolvedValue([]),
+  getURL: vi.fn(() => "http://localhost:5173/"),
   once: vi.fn(),
   hostWebContents: null as unknown,
 }));
@@ -148,6 +149,7 @@ describe("registerWebviewHandlers", () => {
     // declared after it.
     mockDialogService.getPanelId.mockReturnValue("test-panel");
     mockWebContents.once.mockImplementation(() => {});
+    mockWebContents.getURL.mockReturnValue("http://localhost:5173/");
     debuggerMock.isAttached.mockReturnValue(false);
     debuggerMock.sendCommand.mockResolvedValue(undefined);
     webContentsMock.fromId.mockReturnValue(mockWebContents);
@@ -1007,6 +1009,90 @@ describe("registerWebviewHandlers", () => {
         ([cmd]: string[]) => cmd === "Runtime.enable"
       );
       expect(enableCalls).toHaveLength(2);
+    });
+
+    it("re-delivers a new document's startup messages after navigating while stopped", async () => {
+      // Navigation with capture off empties the guest's buffer without an
+      // executionContextsCleared anyone is listening for. Carrying the old
+      // document's bookkeeping across would skip the new page's startup logs.
+      mockWebContents.getURL.mockReturnValue("http://localhost:5173/");
+      replayOnRuntimeEnable([
+        { type: "log", args: [{ type: "string", value: "page-one" }], timestamp: 1000 },
+      ]);
+
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+
+      mockWebContents.getURL.mockReturnValue("http://localhost:5173/other");
+      replayOnRuntimeEnable([
+        { type: "log", args: [{ type: "string", value: "page-two boot" }], timestamp: 500 },
+      ]);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+
+      expect(consoleRows().map((row) => row.summaryText)).toEqual(["page-one", "page-two boot"]);
+    });
+
+    it("realigns after console.clear() empties the guest buffer", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      const listener = getMessageListener();
+
+      listener({}, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "before" }],
+        timestamp: 1000,
+      });
+      listener({}, "Runtime.consoleAPICalled", { type: "clear", args: [], timestamp: 1001 });
+      listener({}, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "after" }],
+        timestamp: 1002,
+      });
+      await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+
+      // The guest buffer now holds only the clear and what followed it, so a
+      // restart must skip exactly those two and admit nothing twice.
+      replayOnRuntimeEnable([
+        { type: "clear", args: [], timestamp: 1001 },
+        { type: "log", args: [{ type: "string", value: "after" }], timestamp: 1002 },
+        { type: "log", args: [{ type: "string", value: "fresh" }], timestamp: 2000 },
+      ]);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+
+      // The empty string is the `clear` event's own row. Emitting a blank row
+      // for console.clear() predates this change — `clear` is not even in
+      // CdpConsoleType — and is left alone here.
+      expect(consoleRows().map((row) => row.summaryText)).toEqual(["before", "", "after", "fresh"]);
+    });
+
+    it("keeps the session usable for a start queued behind a failed one", async () => {
+      // The first start's Runtime.enable fails while the guest survives. Its
+      // cleanup must not delete the session a queued start already holds, and
+      // must null the listener refs so that start rebinds rather than assuming
+      // listeners are live.
+      let failEnable = true;
+      debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+        if (cmd === "Runtime.enable" && failEnable) {
+          failEnable = false;
+          return Promise.reject(new Error("Target closed"));
+        }
+        return Promise.resolve();
+      });
+
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      debuggerMock.on.mockClear();
+      await getHandler("webview:start-console-capture")(null, 42, "pane-2");
+
+      expect(debuggerMock.on).toHaveBeenCalledWith("message", expect.any(Function));
+      const listener = getMessageListener();
+      listener({}, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "recovered" }],
+        timestamp: 1000,
+      });
+      expect(consoleRows().map((row) => row.summaryText)).toContain("recovered");
     });
 
     it("does not re-deliver replayed Log entries after a stop/start cycle", async () => {

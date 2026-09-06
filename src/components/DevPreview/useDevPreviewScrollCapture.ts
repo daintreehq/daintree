@@ -93,7 +93,16 @@ export function useDevPreviewScrollCapture({
           } catch {
             settledUrl = null;
           }
-          if (settledUrl !== null && settledUrl !== currentWebviewUrl) return;
+          if (settledUrl === null) {
+            // The tag is gone, so the document cannot be confirmed. A non-zero
+            // offset could not have come from a freshly blanked page, so it is
+            // safe to keep — this is the eviction capture doing its job. An
+            // unconfirmable zero is exactly the blank-page reading that must
+            // not be filed against the previous URL.
+            if (scrollY === 0) return;
+          } else if (settledUrl !== currentWebviewUrl) {
+            return;
+          }
           setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
         })
         .catch(() => {});

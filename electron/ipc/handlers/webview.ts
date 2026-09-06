@@ -41,6 +41,13 @@ interface CdpSession {
   consoleWatermark: ReplayWatermark;
   exceptionWatermark: ReplayWatermark;
   logEntryWatermark: ReplayWatermark;
+  /**
+   * Guest URL as of the last enable. A navigation while capture is stopped
+   * empties the guest's console buffer without an `executionContextsCleared`
+   * anyone is listening for, so the replay bookkeeping has to be checked
+   * against the document it was collected on.
+   */
+  lastKnownUrl: string | null;
   /** `destroyed` cleanup hook, held so teardown can detach it with the rest. */
   destroyListener: (() => void) | null;
   /**
@@ -136,6 +143,7 @@ function getOrCreateSession(wcId: number): CdpSession {
       consoleWatermark: createReplayWatermark(),
       exceptionWatermark: createReplayWatermark(),
       logEntryWatermark: createReplayWatermark(),
+      lastKnownUrl: null,
       destroyListener: null,
       transitionQueue: Promise.resolve(),
       logRateLimit: new Map(),
@@ -298,6 +306,14 @@ function releaseObjectIds(wcId: number, objectIds: Iterable<string>): void {
  * timestamps are epoch milliseconds that are neither unique (a burst shares a
  * millisecond) nor guaranteed to increase (a clock step can move them
  * backwards), and either property alone loses real rows.
+ *
+ * Known limit: V8's message storage is bounded and evicts from the front, so a
+ * page that logs more than its capacity while capture is stopped breaks the
+ * prefix assumption and the oldest of the new messages are skipped. Aligning
+ * through that needs per-event identity, which CDP does not give us; the
+ * alternative — admitting on doubt — duplicates visible rows instead. Both
+ * remain far better than the previous behaviour, which dropped every replayed
+ * message unconditionally.
  */
 interface ReplayWatermark {
   /** Events admitted from this stream since the buffer was last cleared. */
@@ -413,7 +429,13 @@ async function releaseObjectsForPane(
   );
 }
 
-function cleanupSession(wcId: number): void {
+/**
+ * Unbind a session's debugger listeners without discarding the session.
+ * Nulling the references matters: the start handler treats a non-null
+ * `messageListener` as "already bound", so leaving a stale reference behind
+ * would make the next start skip rebinding and capture silently nothing.
+ */
+function detachSessionListeners(wcId: number): void {
   const session = sessions.get(wcId);
   if (!session) return;
 
@@ -432,6 +454,15 @@ function cleanupSession(wcId: number): void {
     }
   }
 
+  session.messageListener = null;
+  session.detachListener = null;
+  session.destroyListener = null;
+  session.runtimeEnabled = false;
+  session.logEnabled = false;
+}
+
+function cleanupSession(wcId: number): void {
+  detachSessionListeners(wcId);
   sessions.delete(wcId);
 }
 
@@ -473,6 +504,27 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     wc: Electron.WebContents,
     session: CdpSession
   ): Promise<void> {
+    // The guest may have navigated while capture was stopped, which empties its
+    // console buffer. Without this the replay bookkeeping from the old document
+    // would skip the new one's startup messages — the exact loss this issue is
+    // about, just moved.
+    let currentUrl: string | null = null;
+    try {
+      currentUrl = wc.getURL();
+    } catch {
+      // Guest torn down mid-transition; leave the bookkeeping alone.
+    }
+    if (
+      currentUrl !== null &&
+      session.lastKnownUrl !== null &&
+      currentUrl !== session.lastKnownUrl
+    ) {
+      resetReplayWatermark(session.consoleWatermark);
+      resetReplayWatermark(session.exceptionWatermark);
+      resetReplayWatermark(session.logEntryWatermark);
+    }
+    if (currentUrl !== null) session.lastKnownUrl = currentUrl;
+
     if (!session.runtimeEnabled) {
       openReplayWindow(session.consoleWatermark, session.exceptionWatermark);
       try {
@@ -576,6 +628,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
               resetReplayWatermark(session.consoleWatermark);
               resetReplayWatermark(session.exceptionWatermark);
               resetReplayWatermark(session.logEntryWatermark);
+              try {
+                session.lastKnownUrl = wc.getURL();
+              } catch {
+                session.lastKnownUrl = null;
+              }
               // Reset group depth and drop stale handle ownership for all
               // panes. No release call: the guest already invalidated every
               // handle when the execution context went away.
@@ -659,9 +716,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     } catch (err) {
       // Setup failed after the listeners were bound. Unwind them when this call
       // is the only thing holding the session, so a guest that can never be
-      // instrumented is not left with dangling debugger listeners.
+      // instrumented is not left with dangling debugger listeners. The session
+      // object itself stays: another start may already be queued behind this
+      // one and holds a reference to it.
       if (boundListenersHere && !session.runtimeEnabled && session.paneIds.size <= 1) {
-        cleanupSession(webContentsId);
+        detachSessionListeners(webContentsId);
       }
       const message = formatErrorMessage(err, "CDP console capture start failed");
       const isExpected =
@@ -688,6 +747,15 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // the enable window is reconciled, so messages logged while capture was
     // stopped still arrive.
     if (!admitEvent(session.consoleWatermark)) return;
+
+    // Read the raw protocol type for this check: `clear` is not part of
+    // CdpConsoleType, so the cast below would hide it. console.clear() empties
+    // the guest's message storage and leaves only this event in it, so the
+    // replay prefix is now exactly one event long.
+    if (p.type === "clear") {
+      session.consoleWatermark.delivered = 1;
+      resetReplayWatermark(session.exceptionWatermark);
+    }
 
     const cdpType = (p.type ?? "log") as CdpConsoleType;
 
