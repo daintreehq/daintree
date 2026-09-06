@@ -225,7 +225,13 @@ const devWorkerMock = vi.hoisted(() => {
       bridges.push(this);
     }
   }
-  return { instances, bridges, startFailures, MockPluginDevWorkerHost, MockPluginDevWorkerMainBridge };
+  return {
+    instances,
+    bridges,
+    startFailures,
+    MockPluginDevWorkerHost,
+    MockPluginDevWorkerMainBridge,
+  };
 });
 vi.mock("../plugin/PluginDevWorkerHost.js", () => ({
   PluginDevWorkerHost: devWorkerMock.MockPluginDevWorkerHost,
@@ -1129,9 +1135,11 @@ describe("PluginService manifest command contributions (#9281)", () => {
 
     // Stand in for a reload: swap the live worker's bridge, as a respawn does.
     // A relay captured at build time would still be pointing at `first`.
-    const workers = (service as unknown as {
-      pluginWorkers: Map<string, { bridge: { invokeCommand: unknown } }>;
-    }).pluginWorkers;
+    const workers = (
+      service as unknown as {
+        pluginWorkers: Map<string, { bridge: { invokeCommand: unknown } }>;
+      }
+    ).pluginWorkers;
     const replacement = { invokeCommand: vi.fn(async () => "from the replacement") };
     workers.get("acme.cmd-nocache")!.bridge = replacement as never;
 
@@ -1293,7 +1301,12 @@ describe("PluginService manifest command contributions (#9281)", () => {
     await service.initialize();
 
     await expect(
-      service.dispatchHandler("acme.cmd-tsonly", "acme.cmd-tsonly.unbuilt", ctx("acme.cmd-tsonly"), [])
+      service.dispatchHandler(
+        "acme.cmd-tsonly",
+        "acme.cmd-tsonly.unbuilt",
+        ctx("acme.cmd-tsonly"),
+        []
+      )
     ).rejects.toThrow('Command "acme.cmd-tsonly.unbuilt" has no handler');
     expect(devWorkerMock.instances).toHaveLength(0);
   });
