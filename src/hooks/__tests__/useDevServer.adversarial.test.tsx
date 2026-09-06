@@ -909,6 +909,82 @@ describe("useDevServer adversarial races", () => {
     }
   });
 
+  // #12299: the downgrade effect used `prev >= 2`, so a compile signal arriving
+  // *after* Tier 3 had fired collapsed the 45s warning to Tier 1 — the opposite
+  // of the "Tier 3 still fires at 45s even mid-compile" rule it sits next to.
+  it("keeps Tier 3 when a compile signal arrives after the 45s mark (#12299)", async () => {
+    vi.useFakeTimers();
+    try {
+      ensureMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      let stateChangedHandler: ((payload: { state: DevPreviewSessionState }) => void) | null = null;
+      onStateChangedMock.mockImplementation(
+        (cb: (payload: { state: DevPreviewSessionState }) => void) => {
+          stateChangedHandler = cb;
+          return vi.fn();
+        }
+      );
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Run all three timers out with no compile signal at all.
+      await act(async () => {
+        vi.advanceTimersByTime(45000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(3);
+
+      // Only now does the backend report a compile. A 45s start that is still
+      // compiling is exactly the case Tier 3 exists to surface.
+      await act(async () => {
+        stateChangedHandler?.({
+          state: buildState({
+            panelId: "panel-1",
+            projectId: "project-1",
+            status: "starting",
+            terminalId: "term-project-1",
+            phaseLabel: "Compiling",
+          }),
+        });
+        await Promise.resolve();
+      });
+
+      expect(result.current.phaseLabel).toBe("Compiling");
+      expect(result.current.stuckTier).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("allows Tier 2 to fire normally when phaseLabel never reaches 'Compiling' (#9099)", async () => {
     vi.useFakeTimers();
     try {

@@ -8,27 +8,23 @@ type MockRequest = {
   destroy: ReturnType<typeof vi.fn>;
 };
 
-type WsListener = (...args: unknown[]) => void;
-type WsHeaders = Record<string, string>;
-type MockWebSocket = {
-  url: string;
-  subprotocols: string[];
-  headers: WsHeaders;
-  listeners: { open: WsListener[]; error: WsListener[]; close: WsListener[] };
-  once: ReturnType<typeof vi.fn>;
-  terminate: ReturnType<typeof vi.fn>;
-  emit: (event: "open" | "error" | "close", ...args: unknown[]) => void;
-};
-
-const { mockRequest, wsInstances, wsBehavior } = vi.hoisted(() => ({
+const { mockRequest, wsConstructed } = vi.hoisted(() => ({
   mockRequest:
     vi.fn<
       (url: string, options: Record<string, unknown>, callback: RequestCallback) => MockRequest
     >(),
-  wsInstances: [] as MockWebSocket[],
-  wsBehavior: {
-    mode: "error" as "error" | "open" | "throw" | "openOn" | "manual",
-    openOnUrl: "",
+  wsConstructed: [] as string[],
+}));
+
+// The readiness path must not reach for a socket at all. Recording construction
+// is what makes that assertable — a timing check cannot distinguish a fast
+// handshake from no handshake.
+vi.mock("ws", () => ({
+  default: class {
+    constructor(url: string) {
+      wsConstructed.push(url);
+      throw new Error("readiness must not open a WebSocket");
+    }
   },
 }));
 
@@ -41,65 +37,7 @@ vi.mock("node:https", () => ({
   request: mockRequest,
 }));
 
-vi.mock("ws", () => {
-  class WebSocketMock {
-    url: string;
-    subprotocols: string[];
-    headers: WsHeaders;
-    listeners: MockWebSocket["listeners"] = { open: [], error: [], close: [] };
-    once = vi.fn((event: "open" | "error" | "close", listener: WsListener) => {
-      this.listeners[event].push(listener);
-      return this;
-    });
-    terminate = vi.fn();
-    emit(event: "open" | "error" | "close", ...args: unknown[]) {
-      const listeners = this.listeners[event];
-      this.listeners[event] = [];
-      for (const listener of listeners) listener(...args);
-    }
-    constructor(url: string, protocolsOrOptions?: unknown, maybeOptions?: unknown) {
-      this.url = url;
-      const hasProtocols = Array.isArray(protocolsOrOptions);
-      this.subprotocols = hasProtocols ? (protocolsOrOptions as string[]) : [];
-      const options = (hasProtocols ? maybeOptions : protocolsOrOptions) as
-        { headers?: WsHeaders } | undefined;
-      this.headers = options?.headers ?? {};
-
-      if (wsBehavior.mode === "throw") {
-        throw new Error("invalid ws url");
-      }
-
-      wsInstances.push(this as unknown as MockWebSocket);
-
-      if (wsBehavior.mode === "manual") {
-        return;
-      }
-
-      const shouldOpen =
-        wsBehavior.mode === "open" ||
-        (wsBehavior.mode === "openOn" && url === wsBehavior.openOnUrl);
-
-      queueMicrotask(() => {
-        if (shouldOpen) {
-          this.emit("open");
-        } else {
-          this.emit("error", new Error("ws connect failed"));
-        }
-      });
-    }
-  }
-  return {
-    default: WebSocketMock,
-  };
-});
-
-import { waitForServerReady, probeHmrWebSocket } from "../DevPreviewReadinessProbe.js";
-
-function resetWsState() {
-  wsInstances.length = 0;
-  wsBehavior.mode = "error";
-  wsBehavior.openOnUrl = "";
-}
+import { waitForServerReady, READINESS_REQUEST_TIMEOUT_MS } from "../DevPreviewReadinessProbe.js";
 
 function mockResponseWithStatus(statusCode: number) {
   const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
@@ -145,7 +83,7 @@ function mockConnectionRefused() {
 describe("waitForServerReady", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetWsState();
+    wsConstructed.length = 0;
   });
 
   it("returns true on HTTP 200", async () => {
@@ -218,15 +156,139 @@ describe("waitForServerReady", () => {
       expect(result).toBe(true);
     });
 
-    it.each([100, 199, 400, 401, 404, 405, 499, 500, 502, 503, 599])(
-      "returns false on HTTP %i",
+    // #12299: a final 4xx proves the server is bound and serving. An auth-gated
+    // dev server or one with no route at `/` used to be retried until the 30s
+    // deadline and then reported as "did not respond".
+    it.each([400, 401, 403, 404, 405, 499])(
+      "accepts HTTP %i as a responding server",
       async (status) => {
         mockResponseWithStatus(status);
         const signal = new AbortController().signal;
         const result = await waitForServerReady("http://localhost:3000", signal, 100);
-        expect(result).toBe(false);
+        expect(result).toBe(true);
       }
     );
+
+    it("resolves a 404 on the first request rather than polling to the deadline", async () => {
+      mockResponseWithStatus(404);
+      const signal = new AbortController().signal;
+      const result = await waitForServerReady("http://localhost:3000", signal, 5000);
+      expect(result).toBe(true);
+      expect(mockRequest.mock.calls.length).toBe(1);
+    });
+
+    // 1xx is not a completed final response, and 5xx is a compiling shell.
+    it.each([100, 199, 500, 502, 503, 599])("returns false on HTTP %i", async (status) => {
+      mockResponseWithStatus(status);
+      const signal = new AbortController().signal;
+      const result = await waitForServerReady("http://localhost:3000", signal, 100);
+      expect(result).toBe(false);
+    });
+  });
+
+  describe("no WebSocket handshake on the ready path (#12299)", () => {
+    it("never constructs a WebSocket", async () => {
+      mockResponseWithStatus(200);
+      const signal = new AbortController().signal;
+      const result = await waitForServerReady("http://localhost:3000", signal, 5000);
+      expect(result).toBe(true);
+      // Recorded at construction rather than timed: a wall-clock assertion
+      // could not tell a fast handshake from no handshake at all.
+      expect(wsConstructed).toHaveLength(0);
+    });
+  });
+
+  describe("deadline enforcement (#12299)", () => {
+    it("clamps a request timeout to the remaining budget", async () => {
+      mockResponseWithStatus(200);
+      const signal = new AbortController().signal;
+      await waitForServerReady("http://localhost:3000", signal, 120);
+      const timeout = mockRequest.mock.calls[0]?.[1]?.timeout;
+      expect(timeout).toBeLessThanOrEqual(120);
+    });
+
+    it("uses the full per-request ceiling when the budget is large", async () => {
+      mockResponseWithStatus(200);
+      const signal = new AbortController().signal;
+      await waitForServerReady("http://localhost:3000", signal, 30000);
+      expect(mockRequest.mock.calls[0]?.[1]?.timeout).toBe(READINESS_REQUEST_TIMEOUT_MS);
+    });
+
+    it("shrinks the clamp as candidates consume the budget", async () => {
+      // Every candidate refuses, so all three run inside one round.
+      mockRequest.mockImplementation(
+        (_url: string, _options: Record<string, unknown>, _callback: RequestCallback) => {
+          const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+          setTimeout(() => {
+            const errorHandler = req.on.mock.calls.find((c: unknown[]) => c[0] === "error")?.[1] as
+              ((err: Error) => void) | undefined;
+            errorHandler?.(new Error("ECONNREFUSED"));
+          }, 20);
+          return req;
+        }
+      );
+      const signal = new AbortController().signal;
+      await waitForServerReady("http://localhost:3000", signal, 100);
+      const timeouts = mockRequest.mock.calls.map((call) => call[1]?.timeout as number);
+      expect(timeouts.length).toBeGreaterThanOrEqual(2);
+      expect(timeouts[1]).toBeLessThan(timeouts[0]);
+      for (const timeout of timeouts) expect(timeout).toBeLessThanOrEqual(100);
+    });
+  });
+
+  describe("attempt reporting (#12299)", () => {
+    it("reports the settled response with status, attempt and budget", async () => {
+      mockResponseWithStatus(200);
+      const attempts: Array<Record<string, unknown>> = [];
+      const signal = new AbortController().signal;
+      await waitForServerReady("http://localhost:3000", signal, 5000, {
+        onAttempt: (attempt) => attempts.push({ ...attempt }),
+      });
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        url: "http://localhost:3000/",
+        outcome: "reachable",
+        status: 200,
+        attempt: 1,
+      });
+      expect(attempts[0].remainingMs).toBeLessThanOrEqual(5000);
+    });
+
+    it("reports a retry cause rather than a status when the connection fails", async () => {
+      mockConnectionRefused();
+      const attempts: Array<Record<string, unknown>> = [];
+      const signal = new AbortController().signal;
+      await waitForServerReady("http://127.0.0.1:3000", signal, 120, {
+        onAttempt: (attempt) => attempts.push({ ...attempt }),
+      });
+      expect(attempts.length).toBeGreaterThanOrEqual(1);
+      expect(attempts[0]).toMatchObject({ outcome: "retry", cause: "connection-error" });
+      expect(attempts[0].status).toBeUndefined();
+    });
+
+    it("reports one row per candidate while the outcome is unchanged", async () => {
+      mockConnectionRefused();
+      const attempts: Array<Record<string, unknown>> = [];
+      const signal = new AbortController().signal;
+      // ~4 rounds x 3 candidates worth of requests, but every one settles the
+      // same way — the timeline must not carry a row for each.
+      await waitForServerReady("http://localhost:3000", signal, 2000, {
+        onAttempt: (attempt) => attempts.push({ ...attempt }),
+      });
+      expect(mockRequest.mock.calls.length).toBeGreaterThan(4);
+      expect(attempts).toHaveLength(3);
+      expect(new Set(attempts.map((a) => a.url)).size).toBe(3);
+    });
+
+    it("reports again when a candidate's outcome changes", async () => {
+      mockResponseSequence([503, 503, 200, 200]);
+      const attempts: Array<Record<string, unknown>> = [];
+      const signal = new AbortController().signal;
+      await waitForServerReady("http://127.0.0.1:3000", signal, 5000, {
+        onAttempt: (attempt) => attempts.push({ ...attempt }),
+      });
+      expect(attempts.map((a) => a.outcome)).toEqual(["server-error", "reachable"]);
+    });
   });
 
   describe("5xx memory", () => {
@@ -291,154 +353,86 @@ describe("waitForServerReady", () => {
       expect(result).toBe(true);
       expect(mockRequest.mock.calls.length).toBeGreaterThanOrEqual(5);
     });
-  });
 
-  describe("HMR WebSocket handshake", () => {
-    it("opens WS probe after HTTP succeeds", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "error";
+    // #12299: an alias that 5xxes every round must not starve the aliases that
+    // answer. Arming the confirmation deliberately does NOT end the round, so
+    // every address family stays reachable (#9752).
+    it("does not let one permanently-5xx alias starve the healthy ones", async () => {
+      mockRequest.mockImplementation(
+        (url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
+          const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+          callback({ statusCode: url.includes("localhost") ? 502 : 200, resume: vi.fn() });
+          return req;
+        }
+      );
       const signal = new AbortController().signal;
-      const result = await waitForServerReady("http://localhost:3000", signal, 5000);
+      // Round 1 arms 127.0.0.1 and [::1]; round 2 confirms one of them. The
+      // 502 on localhost must not clear their progress every round.
+      const result = await waitForServerReady("http://localhost:3000", signal, 900);
       expect(result).toBe(true);
-      expect(wsInstances.length).toBe(3);
-    });
-
-    it("returns true even when all WS candidates fail (opportunistic)", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "error";
-      const signal = new AbortController().signal;
-      const result = await waitForServerReady("http://localhost:3000", signal, 5000);
-      expect(result).toBe(true);
-    });
-
-    it("spoofs Origin header on every WS candidate", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "error";
-      const signal = new AbortController().signal;
-      await waitForServerReady("http://localhost:3000", signal, 5000);
-      for (const instance of wsInstances) {
-        expect(instance.headers.Origin).toBe("http://localhost:3000");
-      }
-    });
-
-    it("uses vite-hmr subprotocol on the root WS path", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "error";
-      const signal = new AbortController().signal;
-      await waitForServerReady("http://localhost:3000", signal, 5000);
-      const root = wsInstances.find((ws) => ws.url === "ws://localhost:3000/");
-      expect(root).toBeDefined();
-      expect(root?.subprotocols).toEqual(["vite-hmr"]);
-    });
-
-    it("probes all three HMR endpoints", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "error";
-      const signal = new AbortController().signal;
-      await waitForServerReady("http://localhost:3000", signal, 5000);
-      const urls = wsInstances.map((ws) => ws.url).sort();
-      expect(urls).toEqual([
-        "ws://localhost:3000/",
-        "ws://localhost:3000/_next/webpack-hmr",
-        "ws://localhost:3000/ws",
+      // Every address family was dialled before any confirmation (#9752).
+      const round1 = mockRequest.mock.calls.slice(0, 3).map((call) => call[0]);
+      expect(round1).toEqual([
+        "http://localhost:3000/",
+        "http://127.0.0.1:3000/",
+        "http://[::1]:3000/",
       ]);
     });
 
-    it("derives wss:// scheme from https:// HTTP URL", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "error";
+    // The whole point of the latch: a compiling shell 5xxes on every alias, and
+    // a brief window where they all answer 200 must not read as recovery.
+    it("does not confirm through a sibling alias inside the arming round", async () => {
+      let round = 0;
+      mockRequest.mockImplementation(
+        (_url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
+          const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+          // Round 1: every alias 500. Round 2: every alias 200.
+          round += 1;
+          callback({ statusCode: round <= 3 ? 500 : 200, resume: vi.fn() });
+          return req;
+        }
+      );
       const signal = new AbortController().signal;
-      await waitForServerReady("https://localhost:3000", signal, 5000);
-      expect(wsInstances.every((ws) => ws.url.startsWith("wss://"))).toBe(true);
+      // 900ms covers rounds 1 and 2 but not a third, so the only way to resolve
+      // true would be confirming inside round 2 itself.
+      const result = await waitForServerReady("http://localhost:3000", signal, 900);
+      expect(result).toBe(false);
     });
 
-    it("terminates all sockets after settlement", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "error";
+    it("confirms in the round after the one that armed it", async () => {
+      let round = 0;
+      mockRequest.mockImplementation(
+        (_url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
+          const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+          round += 1;
+          callback({ statusCode: round <= 3 ? 500 : 200, resume: vi.fn() });
+          return req;
+        }
+      );
       const signal = new AbortController().signal;
-      await waitForServerReady("http://localhost:3000", signal, 5000);
-      for (const instance of wsInstances) {
-        expect(instance.terminate).toHaveBeenCalled();
-      }
-    });
-
-    it("survives a synchronous WS constructor throw", async () => {
-      mockResponseWithStatus(200);
-      wsBehavior.mode = "throw";
-      const signal = new AbortController().signal;
-      const result = await waitForServerReady("http://localhost:3000", signal, 5000);
+      const result = await waitForServerReady("http://localhost:3000", signal, 1400);
       expect(result).toBe(true);
     });
-  });
-});
 
-describe("probeHmrWebSocket", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    resetWsState();
-  });
+    // The confirming success may need to be separated from a 5xx seen by an
+    // EARLIER wait: a ready marker replaces the in-flight probe, and the
+    // replacement must not forget the compiling shell (#8294, #9317).
+    it("carries a prior 5xx into a replacement wait", async () => {
+      mockResponseWithStatus(200);
+      const signal = new AbortController().signal;
+      const result = await waitForServerReady("http://127.0.0.1:3000", signal, 300, {
+        seenServerError: true,
+      });
+      expect(result).toBe(false);
+    });
 
-  it("resolves true when any candidate opens", async () => {
-    wsBehavior.mode = "openOn";
-    wsBehavior.openOnUrl = "ws://localhost:3000/_next/webpack-hmr";
-    const signal = new AbortController().signal;
-    const result = await probeHmrWebSocket("http://localhost:3000", signal);
-    expect(result).toBe(true);
-  });
-
-  it("resolves false when all candidates error", async () => {
-    wsBehavior.mode = "error";
-    const signal = new AbortController().signal;
-    const result = await probeHmrWebSocket("http://localhost:3000", signal);
-    expect(result).toBe(false);
-  });
-
-  it("resolves false when signal is already aborted", async () => {
-    wsBehavior.mode = "open";
-    const controller = new AbortController();
-    controller.abort();
-    const result = await probeHmrWebSocket("http://localhost:3000", controller.signal);
-    expect(result).toBe(false);
-    expect(wsInstances.length).toBe(0);
-  });
-
-  it("resolves false on invalid URL", async () => {
-    wsBehavior.mode = "open";
-    const signal = new AbortController().signal;
-    const result = await probeHmrWebSocket("not-a-url", signal);
-    expect(result).toBe(false);
-  });
-
-  it("resolves false when all WS constructors throw", async () => {
-    wsBehavior.mode = "throw";
-    const signal = new AbortController().signal;
-    const result = await probeHmrWebSocket("http://localhost:3000", signal);
-    expect(result).toBe(false);
-  });
-
-  it("does not double-count error+close on the same failed socket", async () => {
-    // Regression: ws emits both "error" and "close" on a failed connection.
-    // Without per-socket guarding, two failed sockets (4 events) would settle
-    // the probe to false before the third (successful) socket fires "open".
-    wsBehavior.mode = "manual";
-    const signal = new AbortController().signal;
-    const probePromise = probeHmrWebSocket("http://localhost:3000", signal);
-
-    // Let the constructor loop complete (synchronous), then drive events.
-    await Promise.resolve();
-    expect(wsInstances.length).toBe(3);
-
-    // Two sockets fail with both error then close (the ws-native sequence).
-    wsInstances[0].emit("error", new Error("refused"));
-    wsInstances[0].emit("close");
-    wsInstances[1].emit("error", new Error("refused"));
-    wsInstances[1].emit("close");
-
-    // Third socket opens successfully — guard must have kept pending > 0 so
-    // settle(false) wasn't called prematurely.
-    wsInstances[2].emit("open");
-
-    const result = await probePromise;
-    expect(result).toBe(true);
+    it("resolves normally when no earlier probe saw a 5xx", async () => {
+      mockResponseWithStatus(200);
+      const signal = new AbortController().signal;
+      const result = await waitForServerReady("http://127.0.0.1:3000", signal, 300, {
+        seenServerError: false,
+      });
+      expect(result).toBe(true);
+    });
   });
 });

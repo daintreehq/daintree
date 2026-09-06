@@ -505,6 +505,253 @@ describe("DevPreviewSessionService adversarial", () => {
     expect(vi.mocked(http.request).mock.calls.length).toBeGreaterThan(callsBeforeSecondMarker);
   });
 
+  // #12299: the predicted-port path polls the allocator's URL but never sets
+  // pendingUrl (two recovery paths read that field as "a URL was seen in
+  // output"), so marker acceleration was gated off for the whole common case
+  // where the framework prints its ready line before its URL line.
+  it("lets a readiness marker accelerate a predicted-port poll with no URL in output", async () => {
+    const impl = ((_: unknown, __: unknown, _cb: (res: MockIncomingMessage) => void) => {
+      const req: MockRequest = {
+        on: (event, handler) => {
+          if (event === "error") setTimeout(() => handler(new Error("ECONNREFUSED")), 0);
+          return req;
+        },
+        end: () => {},
+        destroy: () => {},
+      };
+      return req;
+    }) as unknown as typeof http.request;
+    vi.mocked(http.request).mockImplementation(impl);
+
+    // No URL is ever detected — only the ready marker.
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("ready in")) return { buffer, readyMarker: true };
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    // Let the predicted-port poll start and settle into its poll interval.
+    await vi.advanceTimersByTimeAsync(50);
+    const callsBeforeMarker = vi.mocked(http.request).mock.calls.length;
+    expect(callsBeforeMarker).toBeGreaterThan(0);
+
+    ptyClient.emitData(started.terminalId!, "VITE v6.0.0  ready in 200 ms");
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(vi.mocked(http.request).mock.calls.length).toBeGreaterThan(callsBeforeMarker);
+  });
+
+  // The terminal must stay attached for this to reach the guard at all — a
+  // stopped session is filtered out much earlier, and stop() clears
+  // predictedUrl too. An output error is the case that leaves predictedUrl set
+  // and readinessAbort null on a live terminal.
+  it("ignores a readiness marker when no readiness poll is in flight", async () => {
+    const impl = ((_: unknown, __: unknown, _cb: (res: MockIncomingMessage) => void) => {
+      const req: MockRequest = {
+        on: (event, handler) => {
+          if (event === "error") setTimeout(() => handler(new Error("ECONNREFUSED")), 0);
+          return req;
+        },
+        end: () => {},
+        destroy: () => {},
+      };
+      return req;
+    }) as unknown as typeof http.request;
+    vi.mocked(http.request).mockImplementation(impl);
+
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("ready in")) return { buffer, readyMarker: true };
+      if (data.includes("Cannot find module")) {
+        return {
+          buffer,
+          error: { type: "missing-dependencies", message: "Cannot find module 'x'" },
+        };
+      }
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    await vi.advanceTimersByTimeAsync(50);
+
+    // Aborts the poll and nulls readinessAbort, without exiting the terminal.
+    ptyClient.emitData(started.terminalId!, "Error: Cannot find module 'x'");
+    await vi.advanceTimersByTimeAsync(10);
+    const callsAfterError = vi.mocked(http.request).mock.calls.length;
+
+    ptyClient.emitData(started.terminalId!, "VITE v6.0.0  ready in 200 ms");
+    await vi.advanceTimersByTimeAsync(50);
+
+    // predictedUrl is still set, so only the liveness check stops the marker
+    // from resurrecting a probe the error deliberately cancelled.
+    expect(vi.mocked(http.request).mock.calls.length).toBe(callsAfterError);
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.error?.type).toBe("missing-dependencies");
+  });
+
+  // #12299: the 5xx latch is carried across re-probes within a launch, so it
+  // must die with the launch. Inheriting it would make a healthy restart wait an
+  // extra poll round for a compiling shell the previous launch saw.
+  it("does not inherit a previous launch's 5xx history across a restart", async () => {
+    let status = 500;
+    const impl = ((_: unknown, __: unknown, cb: (res: MockIncomingMessage) => void) => {
+      const req: MockRequest = {
+        on: () => req,
+        end: () => setTimeout(() => cb({ statusCode: status, resume: () => {} }), 0),
+        destroy: () => {},
+      };
+      return req;
+    }) as unknown as typeof http.request;
+    vi.mocked(http.request).mockImplementation(impl);
+
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("localhost:3000")) return { buffer, url: "http://localhost:3000/" };
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    ptyClient.emitData(started.terminalId!, "Local: http://localhost:3000/");
+    // Let the launch observe a 5xx and latch it.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+    ).toBe("starting");
+
+    // A restart is a new launch; its server is healthy from the first response.
+    status = 200;
+    await service.restart({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+    const restarted = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    ptyClient.emitData(restarted.terminalId!, "Local: http://localhost:3000/");
+
+    // Under an inherited latch the first 200 would only arm a confirmation and
+    // this would still be "starting" until another poll round.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+    ).toBe("running");
+  });
+
+  // #12299: every marker- or URL-triggered re-probe used to hand
+  // waitForServerReady a fresh READINESS_TIMEOUT_MS, so the 30s the error
+  // message quotes could stretch to a multiple of itself. One budget per launch.
+  it("does not extend the readiness budget across re-probes", async () => {
+    const impl = ((_: unknown, __: unknown, _cb: (res: MockIncomingMessage) => void) => {
+      const req: MockRequest = {
+        on: (event, handler) => {
+          if (event === "error") setTimeout(() => handler(new Error("ECONNREFUSED")), 0);
+          return req;
+        },
+        end: () => {},
+        destroy: () => {},
+      };
+      return req;
+    }) as unknown as typeof http.request;
+    vi.mocked(http.request).mockImplementation(impl);
+
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("localhost:3001")) return { buffer, url: "http://localhost:3001/" };
+      if (data.includes("localhost:3000")) return { buffer, url: "http://localhost:3000/" };
+      if (data.includes("ready in")) return { buffer, readyMarker: true };
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    await vi.advanceTimersByTimeAsync(50);
+
+    // Each of these replaces the in-flight wait. Under the old code every one
+    // of them restarted the 30s clock.
+    ptyClient.emitData(started.terminalId!, "Local: http://localhost:3000/");
+    await vi.advanceTimersByTimeAsync(10_000);
+    ptyClient.emitData(started.terminalId!, "VITE v6.0.0  ready in 200 ms");
+    await vi.advanceTimersByTimeAsync(10_000);
+    ptyClient.emitData(started.terminalId!, "Port taken, using http://localhost:3001/");
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    // Still inside the original 30s — the launch has not given up yet.
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+    ).toBe("starting");
+
+    // Crossing the ORIGINAL deadline ends it, rather than a fourth fresh 30s.
+    await vi.advanceTimersByTimeAsync(3_000);
+    const after = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(after.status).toBe("error");
+    expect(after.error?.message).toContain("did not respond");
+  });
+
+  // #12299: the readiness budget is per launch, but an output error aborts the
+  // poll without ending the launch. If the spent deadline survived, the next
+  // probe would inherit ~0ms and report "did not respond within 30 seconds"
+  // without having waited at all.
+  it("does not charge a new readiness probe for time spent in an error state", async () => {
+    let failHttp = true;
+    const impl = ((_: unknown, __: unknown, cb: (res: MockIncomingMessage) => void) => {
+      const req: MockRequest = {
+        on: (event, handler) => {
+          if (event === "error" && failHttp) {
+            setTimeout(() => handler(new Error("ECONNREFUSED")), 0);
+          }
+          return req;
+        },
+        end: () => {
+          if (!failHttp) setTimeout(() => cb({ statusCode: 200, resume: () => {} }), 0);
+        },
+        destroy: () => {},
+      };
+      return req;
+    }) as unknown as typeof http.request;
+    vi.mocked(http.request).mockImplementation(impl);
+
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("localhost:3000")) return { buffer, url: "http://localhost:3000/" };
+      if (data.includes("Cannot find module")) {
+        return {
+          buffer,
+          error: { type: "missing-dependencies", message: "Cannot find module 'x'" },
+        };
+      }
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    await vi.advanceTimersByTimeAsync(50);
+
+    // An output error aborts the in-flight poll but leaves the launch alive.
+    ptyClient.emitData(started.terminalId!, "Error: Cannot find module 'x'");
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The session then sits in that state for longer than the whole budget.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // A URL now shows up (a replay after remount, or the server recovering),
+    // but the server needs several seconds before it answers. A probe charged
+    // the spent budget would have given up long before that — so the wait here
+    // is what proves the budget was genuinely restored, not merely non-zero.
+    ptyClient.emitData(started.terminalId!, "Local: http://localhost:3000/");
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+    ).toBe("starting");
+
+    failHttp = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("running");
+    expect(state.url).toBe("http://localhost:3000/");
+  });
+
   it("suppresses late state changes after dispose while stop is still waiting for the terminal to die", async () => {
     const started = await service.ensure(baseRequest);
     const terminalId = started.terminalId!;

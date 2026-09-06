@@ -155,6 +155,16 @@ export type DevPreviewUpstreamResolution =
 // evict the lifecycle history.
 export type DevPreviewDiagnosticEventType = DevPreviewDiagnosticEvent["type"];
 
+/**
+ * What one settled readiness request observed. `reachable` means the server
+ * produced a final HTTP response — including 401/403/404, which prove the
+ * server is bound and serving. `server-error` is 5xx, which a framework emits
+ * from a still-compiling shell, so it is deliberately not `reachable`.
+ */
+export type DevPreviewReadinessOutcome = "reachable" | "server-error" | "retry";
+
+export type DevPreviewReadinessRetryCause = "connection-error" | "request-timeout" | "bad-status";
+
 interface DevPreviewDiagnosticEventBase {
   at: number;
   seq: number;
@@ -172,15 +182,36 @@ export type DevPreviewDiagnosticEvent = DevPreviewDiagnosticEventBase &
     | { type: "port-conflict"; port: number }
     | { type: "spawned"; terminalId: string; port: number }
     | { type: "spawn-failed"; message: string }
+    | { type: "command-submitted"; via: "shell-args" | "pty-write" }
+    | { type: "first-output" }
     | { type: "install-started"; command: string }
     | { type: "install-completed" }
     | { type: "install-failed"; message: string }
     | { type: "url-detected"; url: string }
+    | { type: "candidate-url-chosen"; url: string; source: "predicted" | "output" }
+    | { type: "marker-recognized"; marker: "ready" | "compile" }
+    // One settled HTTP readiness request. Recorded only when its outcome for
+    // that candidate changes, so a 30s poll against a refused port leaves one
+    // row per candidate rather than sixty — the transitions are the story, and
+    // lifecycle events must not be evicted to record repetition.
+    | {
+        type: "readiness-http-attempt";
+        url: string;
+        outcome: DevPreviewReadinessOutcome;
+        status?: number;
+        cause?: DevPreviewReadinessRetryCause;
+        attempt: number;
+        elapsedMs: number;
+        remainingMs: number;
+      }
     | { type: "readiness-probe-succeeded"; url: string }
     | { type: "readiness-probe-timed-out"; url: string; timeoutMs: number }
     | { type: "readiness-probe-failed"; message: string }
     | { type: "compile-started" }
-    | { type: "compile-cleared" }
+    // `reason` keeps the observation honest: "ready-marker" is a framework
+    // completion line we actually saw, "silence" is only the absence of further
+    // compile markers. The UI must not present the latter as "finished".
+    | { type: "compile-cleared"; reason: "silence" | "ready-marker" }
     | { type: "output-error"; errorType: string; message: string }
     | { type: "restart-requested"; mode: "restart" | "clear-cache" | "reinstall" }
     | { type: "stop-requested"; context: string }

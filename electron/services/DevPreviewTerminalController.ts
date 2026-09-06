@@ -53,6 +53,12 @@ export interface TerminalControllerSession extends CrashLoopGuardSession {
   pendingUrl: string | null;
   readinessAbort: AbortController | null;
   markerSeen: boolean;
+  /** False until this launch's terminal has produced any output. */
+  sawOutput: boolean;
+  /** See DevPreviewSession.readinessDeadline — one budget per launch. */
+  readinessDeadline: number | null;
+  /** See DevPreviewSession.readinessSaw5xx — latched for one launch only. */
+  readinessSaw5xx: boolean;
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
@@ -241,6 +247,8 @@ export async function stopSessionTerminal<TSession extends TerminalControllerSes
   clearStartupReplay(session);
   session.readinessAbort?.abort();
   session.readinessAbort = null;
+  session.readinessDeadline = null;
+  session.readinessSaw5xx = false;
   // Cancel a pending crash-loop backoff: otherwise the deferred re-install
   // fires after the terminal is gone (and, on the delete paths, after the
   // session is removed), spawning an orphan PTY on a stopped session.
@@ -341,6 +349,13 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
       }
 
       if ((session.status === "starting" || session.status === "installing") && !session.url) {
+        // Replayed output can start a readiness probe. Any budget left over
+        // from this terminal's earlier, abandoned probe would otherwise be
+        // charged to it — potentially a spent one, failing it instantly.
+        if (!session.readinessAbort) {
+          session.readinessDeadline = null;
+          session.readinessSaw5xx = false;
+        }
         await replayRecentOutput(terminalId, deps);
       }
 
@@ -358,6 +373,8 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
     detachTerminal(session, deps);
     session.readinessAbort?.abort();
     session.readinessAbort = null;
+    session.readinessDeadline = null;
+    session.readinessSaw5xx = false;
     session.pendingUrl = null;
     session.markerSeen = false;
     session.needsInstall = false;
@@ -474,6 +491,9 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
   session.buffer = "";
   session.lastErrorKey = null;
   session.markerSeen = false;
+  session.sawOutput = false;
+  session.readinessDeadline = null;
+  session.readinessSaw5xx = false;
   session.predictedUrl = predictedUrl;
   deps.clearCompiling(session);
   attachTerminal(session, terminalId, deps);
@@ -505,6 +525,12 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
       terminalId,
     });
     deps.recordSessionDiagnostic(session, { type: "spawned", terminalId, port });
+    // The command rides in the shell's own arguments when a launch shell was
+    // built, so the spawn *is* the submission. Without one it is typed into the
+    // PTY later, and only submitFallbackCommand knows when that happened.
+    if (launch) {
+      deps.recordSessionDiagnostic(session, { type: "command-submitted", via: "shell-args" });
+    }
 
     // predictedUrl is the allocator-derived starting point for the readiness
     // poller — it's accurate for frameworks that honor env.PORT or the
@@ -518,6 +544,11 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
 
       const abort = new AbortController();
       session.readinessAbort = abort;
+      deps.recordSessionDiagnostic(session, {
+        type: "candidate-url-chosen",
+        url: capDiagnosticText(predictedUrl),
+        source: "predicted",
+      });
       deps.pollServerReadiness(session, predictedUrl, abort.signal, nextGeneration);
     }, 0);
   } catch (error) {
@@ -538,7 +569,12 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
     return;
   }
 
-  if (!launch) submitFallbackCommand(terminalId, normalizedCommand, deps);
+  if (!launch) {
+    submitFallbackCommand(terminalId, normalizedCommand, deps, () => {
+      if (session.terminalId !== terminalId) return;
+      deps.recordSessionDiagnostic(session, { type: "command-submitted", via: "pty-write" });
+    });
+  }
 
   scheduleStartupReplay(session, deps);
 }
@@ -551,12 +587,16 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
 function submitFallbackCommand<TSession extends TerminalControllerSession>(
   terminalId: string,
   command: string,
-  deps: Pick<TerminalControllerDeps<TSession>, "ptyClient">
+  deps: Pick<TerminalControllerDeps<TSession>, "ptyClient">,
+  onSubmitted?: () => void
 ): void {
   setTimeout(() => {
     try {
       if (deps.ptyClient.hasTerminal(terminalId)) {
         deps.ptyClient.submit(terminalId, command);
+        // Called after the write, not before it: the timeline must say the
+        // command was submitted only when it actually was.
+        onSubmitted?.();
       }
     } catch (err) {
       console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
@@ -681,6 +721,8 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
   clearStartupReplay(session);
   session.readinessAbort?.abort();
   session.readinessAbort = null;
+  session.readinessDeadline = null;
+  session.readinessSaw5xx = false;
   session.pendingUrl = null;
   session.markerSeen = false;
   deps.clearCompiling(session);
