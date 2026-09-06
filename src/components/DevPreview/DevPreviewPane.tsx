@@ -343,6 +343,11 @@ export function DevPreviewPane({
       }
     };
 
+    // dom-ready as well as did-finish-load, matching the finish boundary the load
+    // overlay and its watchdog share: did-finish-load waits on the window load
+    // event, so a single hanging subresource left this spinner covering a usable
+    // document with nothing to time it out (#12296).
+    webview.addEventListener("dom-ready", handleRecoveryFinishLoad);
     webview.addEventListener("did-finish-load", handleRecoveryFinishLoad);
 
     try {
@@ -354,6 +359,7 @@ export function DevPreviewPane({
     }
 
     return () => {
+      webview.removeEventListener("dom-ready", handleRecoveryFinishLoad);
       webview.removeEventListener("did-finish-load", handleRecoveryFinishLoad);
     };
   }, [isRecoveringFromEviction, webviewElement]);
@@ -494,14 +500,22 @@ export function DevPreviewPane({
     if (!webview) return false;
     setWebviewLoadError(null);
     clearRetryState();
-    try {
-      const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
-      safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
-        context: "Reloading dev preview ignoring cache",
-      });
-      return true;
-    } catch {
-      // No WebContents id — the guest was never attached, or is already gone.
+    // The cache-ignoring reload runs in the main process against a *registered*
+    // panel, and registration is itself gated on the guest reaching dom-ready
+    // (useWebviewDialog). For a guest that never got there the IPC resolves
+    // without reloading anything — so `isWebviewReady` routes between the two
+    // paths here rather than gating recovery altogether, which is what made
+    // crash-before-ready unrecoverable (#12296).
+    if (isWebviewReady) {
+      try {
+        const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+        safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
+          context: "Reloading dev preview ignoring cache",
+        });
+        return true;
+      } catch {
+        // No WebContents id — the guest is detached or already gone.
+      }
     }
     try {
       webview.reload();
@@ -511,7 +525,7 @@ export function DevPreviewPane({
     }
     remountWebview();
     return true;
-  }, [id, setWebviewLoadError, clearRetryState, remountWebview]);
+  }, [isWebviewReady, id, setWebviewLoadError, clearRetryState, remountWebview]);
 
   // Clear the crash banner only once recovery is under way — clearing first meant a
   // reload that returned early left the user with no crash state and no reload.

@@ -265,6 +265,51 @@ describe("useDevPreviewNavigation — history handlers", () => {
     act(() => result.current.handleForward());
     expect(setHistory).not.toHaveBeenCalled();
   });
+
+  // A load start no longer refills the connection-retry budget (#12296), so every
+  // explicit navigation has to hand it back — otherwise a target that exhausted
+  // its five retries makes the next URL's first transient failure terminal.
+  it("handleNavigate resets the retry budget for the new target", () => {
+    const clearRetryState = vi.fn();
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams({ clearRetryState })));
+    act(() => result.current.handleNavigate("localhost:5173/app"));
+    expect(clearRetryState).toHaveBeenCalledTimes(1);
+  });
+
+  it("handleNavigate leaves the retry budget alone when the URL is rejected", () => {
+    const clearRetryState = vi.fn();
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams({ clearRetryState })));
+    act(() => result.current.handleNavigate("   "));
+    expect(clearRetryState).not.toHaveBeenCalled();
+  });
+
+  it("handleBack and handleForward reset the retry budget only when they navigate", () => {
+    const clearRetryState = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewNavigation(
+        baseParams({ clearRetryState, canGoBack: false, canGoForward: false })
+      )
+    );
+    act(() => result.current.handleBack());
+    act(() => result.current.handleForward());
+    expect(clearRetryState).not.toHaveBeenCalled();
+
+    const { result: navigable } = renderHook(() =>
+      useDevPreviewNavigation(baseParams({ clearRetryState, canGoBack: true, canGoForward: true }))
+    );
+    act(() => navigable.current.handleBack());
+    act(() => navigable.current.handleForward());
+    expect(clearRetryState).toHaveBeenCalledTimes(2);
+  });
+
+  it("handleReload and handleRetryWebviewLoad reset the retry budget", () => {
+    const clearRetryState = vi.fn();
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams({ clearRetryState })));
+    act(() => result.current.handleReload());
+    expect(clearRetryState).toHaveBeenCalledTimes(1);
+    act(() => result.current.handleRetryWebviewLoad());
+    expect(clearRetryState).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("useDevPreviewNavigation — reload/cancel/retry", () => {

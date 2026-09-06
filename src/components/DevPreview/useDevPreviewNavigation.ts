@@ -130,29 +130,38 @@ export function useDevPreviewNavigation({
     setBrowserZoom(id, zoomFactor);
   }, [id, zoomFactor, setBrowserZoom]);
 
+  // Every explicit navigation action hands the retry budget back. A load start no
+  // longer refills it (#12296), and the budget belongs to the target that
+  // exhausted it — carrying it into a URL the user just asked for would make that
+  // navigation's first transient failure terminal. Deliberately done in the
+  // action handlers rather than an effect on `currentUrl`: the error document's
+  // own history update must not replenish anything.
   const handleNavigate = useCallback(
     (rawUrl: string) => {
       const normalized = normalizeBrowserUrl(rawUrl);
       if (normalized.url) {
+        clearRetryState();
         // Push history only; the imperative navigation effect drives loadURL now
         // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
         setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
       }
     },
-    [setHistory]
+    [clearRetryState, setHistory]
   );
 
   const handleBack = useCallback(() => {
     if (canGoBack) {
+      clearRetryState();
       setHistory((prev) => goBackBrowserHistory(prev));
     }
-  }, [canGoBack, setHistory]);
+  }, [canGoBack, clearRetryState, setHistory]);
 
   const handleForward = useCallback(() => {
     if (canGoForward) {
+      clearRetryState();
       setHistory((prev) => goForwardBrowserHistory(prev));
     }
-  }, [canGoForward, setHistory]);
+  }, [canGoForward, clearRetryState, setHistory]);
 
   // A user-initiated reload is a fresh attempt: hand back the retry budget. Load
   // start no longer refills it on its own, so without this an exhausted panel would
