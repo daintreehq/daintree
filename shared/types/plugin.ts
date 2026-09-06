@@ -3532,24 +3532,66 @@ export interface ProjectPluginStagedEvent {
 export type PluginDevWatcherState = "watching" | "waiting" | "degraded";
 
 /**
- * Live state of one `daintree-plugin dev` session (#12277).
+ * Lifecycle of one plugin's backend worker, as a mounted panel sees it (#12278).
  *
- * Deliberately a per-plugin snapshot rather than a reload notification: the
- * point is that whatever reads it — a panel, a worker diagnostic — agrees on
- * which generation is live, which a fire-and-forget "reloaded" event cannot
- * give you. New facets of a session's health belong here as additional fields
- * on the same channel (#12278's worker health is the next one), not as a
- * second channel.
+ * Every user-installed plugin (dev and prod alike) runs its `activate()` inside
+ * a forked `utilityProcess`. Until now nothing told a panel what that process
+ * was doing, so a worker that crashed left the panel rendering stale content
+ * with no way to understand it. These are the states the shell renders on the
+ * plugin's behalf, and they come from explicit lifecycle edges only:
+ *
+ * - `starting` — a worker process exists (or is being forked) but has not yet
+ *   completed its `ready` handshake. Also the state a crash respawn lands in,
+ *   which is what the shell renders as "Reloading".
+ * - `activating` — the handshake landed; the plugin's `activate()` is running.
+ * - `ready` — activation committed. It describes a settled activation, NOT
+ *   continuous proof of responsiveness: a worker that wedges on a request
+ *   afterwards still reads `ready`, because nothing on this channel probes it.
+ * - `failed` — terminal for this generation. Nothing will recover it on its own;
+ *   `reason` says why, and the user's way out is a restart.
+ * - `stopped` — no worker, deliberately: idle-disposed by governance, or
+ *   deactivated. Distinct from `failed`, which is an accident.
+ *
+ * Never inferred from `PluginDevWorkerHost.isReady()`, which only reports that a
+ * child process object exists — true long before `activate()` has run and still
+ * true for a worker whose activation failed.
  */
-export interface PluginDevStatus {
-  /** Plugin instance id — the key every contribution carries. */
-  pluginId: string;
+export type PluginWorkerState = "stopped" | "starting" | "activating" | "ready" | "failed";
+
+/**
+ * Why a worker is in its current state. Closed by design: each member names a
+ * real producer in `PluginService`, so a renderer can branch on the cause
+ * without parsing `detail`, which is free-form and may carry plugin-authored
+ * text.
+ */
+export type PluginWorkerReason =
+  | "fork-failed"
+  | "crashed"
+  | "crash-loop"
+  | "activation-failed"
+  | "activation-timeout"
+  | "protocol-violation"
+  | "deactivated";
+
+export interface PluginWorkerStatus {
   /**
-   * The view generation this plugin's panel kinds are currently published
-   * under, i.e. the `__dtv-N` segment in their `componentPath`. `null` while
-   * the plugin is not loaded (a reload whose manifest did not parse).
+   * Monotonic id of the worker PROCESS, bumped on every fork including the
+   * supervisor's own crash respawns. Deliberately not `viewGeneration`, which
+   * counts published module URLs and does not move when only the backend is
+   * replaced — a panel needs to know its backend was swapped even though its
+   * module specifier did not change.
    */
-  viewGeneration: number | null;
+  generation: number;
+  state: PluginWorkerState;
+  /** When the worker entered {@link state}, for the shell's stalled-recovery gate. */
+  stateSince: number;
+  reason: PluginWorkerReason | null;
+  /** Free-form cause. May contain plugin-authored text — never render it raw. */
+  detail: string | null;
+}
+
+/** The `daintree-plugin dev` half of a runtime status (#12277). */
+export interface PluginDevSessionStatus {
   /** Completed artifact reloads this session, for the "did my save land?" read. */
   reloadCount: number;
   watcher: PluginDevWatcherState;
@@ -3558,10 +3600,45 @@ export interface PluginDevStatus {
 }
 
 /**
- * `plugin:dev-status-changed` — one session's current state, replacing any
- * prior state for that plugin. A `null` status means the session ended.
+ * Live runtime state of one plugin instance (#12277, #12278).
+ *
+ * Deliberately a per-plugin snapshot rather than a change notification: the
+ * point is that whatever reads it — a panel, a worker diagnostic — agrees on
+ * which generation is live, which a fire-and-forget "reloaded" event cannot
+ * give you. New facets of an instance's health belong here as additional fields
+ * on the same channel, not as a second channel.
+ *
+ * The two halves are independent and either may be absent:
+ * - `worker: null` — this instance has no utility-process backend at all (a
+ *   builtin, which activates in-process, or a plugin that has never been
+ *   activated). It is NOT the same as `state: "stopped"`, which means a
+ *   worker-backed plugin currently has none.
+ * - `dev: null` — not a `daintree-plugin dev` session, i.e. every installed and
+ *   project-owned plugin.
  */
-export interface PluginDevStatusChangedEvent {
+export interface PluginRuntimeStatus {
+  /** Plugin instance id — the key every contribution carries. */
   pluginId: string;
-  status: PluginDevStatus | null;
+  /**
+   * The view generation this plugin's panel kinds are currently published
+   * under, i.e. the `__dtv-N` segment in their `componentPath`. `null` while
+   * the plugin is not loaded (a reload whose manifest did not parse).
+   */
+  viewGeneration: number | null;
+  worker: PluginWorkerStatus | null;
+  dev: PluginDevSessionStatus | null;
+}
+
+/**
+ * `plugin:runtime-status-changed` — one instance's current state, replacing any
+ * prior state for that plugin. A `null` status means the instance left the
+ * inventory entirely (unloaded, uninstalled, dev session ended).
+ *
+ * A worker that FAILED keeps its status after its entry is torn down: the
+ * teardown is what the user needs explained, so dropping the status with the
+ * worker would erase the only account of why the panel went dark.
+ */
+export interface PluginRuntimeStatusChangedEvent {
+  pluginId: string;
+  status: PluginRuntimeStatus | null;
 }

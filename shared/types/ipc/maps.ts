@@ -1980,7 +1980,7 @@ export interface IpcEventMap {
   // Carries the whole per-plugin snapshot, so the receiver never has to
   // reconstruct which generation is live from a sequence of notifications; a
   // `null` status means the session ended.
-  "plugin:dev-status-changed": import("../plugin.js").PluginDevStatusChangedEvent;
+  "plugin:runtime-status-changed": import("../plugin.js").PluginRuntimeStatusChangedEvent;
 
   // A project's `.daintree/plugins/` folder holds valid manifests and has no
   // trust decision on record (main → renderer, project-scoped). The ONLY signal
@@ -2154,8 +2154,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
-  // `daintree-plugin dev` session state (global broadcast)
-  | "plugin:dev-status-changed"
+  // Plugin instance runtime health: worker lifecycle + dev session (global broadcast)
+  | "plugin:runtime-status-changed"
   // Project-local plugin trust + inventory (project-scoped send)
   | "plugin:project-trust-prompt"
   | "plugin:project-plugins-changed"

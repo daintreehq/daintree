@@ -24,7 +24,17 @@ import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallbac
 import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
+import { cn } from "@/lib/utils";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import {
+  usePluginRuntimeStatus,
+  usePluginRuntimeStatusStore,
+} from "@/store/pluginRuntimeStatusStore";
+import {
+  PluginViewRuntimeStatus,
+  presentWorkerStatus,
+  useWorkerStall,
+} from "@/components/Plugin/PluginViewRuntimeStatus";
 import {
   PLUGIN_STYLE_ROOT_PROPS,
   preparePluginStyles,
@@ -98,6 +108,23 @@ export interface PluginViewContentProps {
    * tracked.
    */
   panelRemovedSignal?: AbortSignal;
+  /**
+   * The panel's CURRENT accepted state, re-read at the moment recovery starts
+   * (#12278).
+   *
+   * `initialArgs` is frozen at first render on purpose — within one mount the
+   * view owns its state, and a live prop would hand any view that persists
+   * derived state a render loop. But a recovery is a *new* attempt, and
+   * restoring the bag the panel was opened with would silently discard
+   * everything the view persisted since. A host backed by a panel record
+   * supplies this so recovery restores the latest accepted state; one without a
+   * record (project surfaces) omits it and recovery reuses the mount snapshot.
+   *
+   * "Accepted" is the honest word: `persistState` admits a patch into a
+   * debounced save path, so this is what the store holds, not what reached disk
+   * — which is why nothing in the recovery UI promises the user a saved panel.
+   */
+  readRecoveryState?: () => { state?: Record<string, unknown>; version?: number } | null;
 }
 
 /**
@@ -387,6 +414,7 @@ export function makePluginViewContent(
     onRequestClose,
     worktreeId,
     panelRemovedSignal: panelRemovedSignalOverride,
+    readRecoveryState,
   }: PluginViewContentProps) {
     // Frozen at the first render of this mount rather than forwarded live.
     // `extensionState` reaches this component straight off the panel record, so
@@ -396,10 +424,13 @@ export function makePluginViewContent(
     // handing any view that persists state derived from `initialArgs` a render
     // loop. The bag exists to restore a view on its NEXT mount; within one
     // mount the view owns its state.
-    const [mountArgs] = useState(() => initialArgs);
+    // Replaced only by `replaceAttempt` — a recovery is a new attempt, not the
+    // same mount, so re-reading the latest accepted state there does not reopen
+    // the live-prop hazard this freeze exists to close.
+    const [mountArgs, setMountArgs] = useState(() => initialArgs);
     // Frozen with the bag it describes: a live version against a frozen bag
     // would tell the view its state had migrated when what it holds has not.
-    const [mountStateVersion] = useState(() => stateVersion);
+    const [mountStateVersion, setMountStateVersion] = useState(() => stateVersion);
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array. Each `lazy()` wrapper caches its
     // import result on its own payload, so a chunk-load failure is sticky for
@@ -491,37 +522,151 @@ export function makePluginViewContent(
     const handleRenderError = useCallback(
       (error: Error) => {
         lastErrorWasImportStage.current = isImportStageFailure(error);
+        // Abort BEFORE reporting, and for the same reason `handleReset` does it
+        // on retry: the thrown-away view instance is finished either way, so
+        // anything it tied to `disposeSignal` has to cancel now rather than keep
+        // fetching and subscribing until the user happens to click Try again or
+        // Close. Read through the ref so a post-retry controller is the one that
+        // gets aborted (#12278).
+        controllerRef.current?.abort();
         reportViewRenderFailed(panelId, { kindId, pluginId });
       },
       [panelId]
     );
 
+    /**
+     * Discard the current mount attempt and start a fresh one.
+     *
+     * The single path for both recoveries, because they need identical
+     * machinery and differ only in what triggers them: the user retrying a view
+     * that threw, and a restarted backend the view has to rebind to. Keeping
+     * them as one function is what stops the two from drifting into subtly
+     * different teardown.
+     */
+    const replaceAttempt = useCallback(
+      (requestRecoveryPath: boolean): void => {
+        // Abort the outgoing view's signal before swapping in a fresh controller
+        // — the prior view instance is being discarded, so any fetches or
+        // subscriptions it tied to `disposeSignal` must cancel now rather than
+        // linger until the whole subtree unmounts (#10512 review). Read through
+        // the ref so the CURRENT controller is the one aborted even when a prior
+        // attempt already swapped it.
+        controllerRef.current?.abort();
+        // Fresh controller for the retry so the new lazy import sees an
+        // unaborted signal; the mirror effect propagates it to controllerRef.
+        setController(new AbortController());
+        // Restore what the panel most recently persisted rather than the bag it
+        // was opened with — recovery is not supposed to cost the user their
+        // work. Absent for hosts with no panel record, which keep the mount
+        // snapshot.
+        const recovered = readRecoveryState?.();
+        if (recovered) {
+          setMountArgs(recovered.state);
+          setMountStateVersion(recovered.version);
+        }
+        // Ask main for a fresh view generation only when the module fetch is
+        // what failed (#11728) — a new `lazy()` wrapper alone cannot recover
+        // that, because the poisoned entry belongs to the specifier, not the
+        // wrapper. Activation failures and render throws still just remount.
+        setLazyView(() => createLazyView(requestRecoveryPath));
+        setRetryCount((c) => c + 1);
+        // The retry is under way, so the panel is no longer failed — it is
+        // loading. Clearing here (rather than waiting for the next commit) keeps
+        // a worker from seeing a stale `render-failed` for as long as the import
+        // takes.
+        clearViewRenderFailure(panelId);
+      },
+      [panelId, readRecoveryState]
+    );
+
     const handleReset = (): void => {
-      // Abort the outgoing view's signal before swapping in a fresh controller —
-      // the prior view instance is being discarded on retry, so any fetches or
-      // subscriptions it tied to `disposeSignal` must cancel now rather than
-      // linger until the whole subtree unmounts (#10512 review).
-      controller.abort();
-      // Fresh controller for the retry so the new lazy import sees an unaborted
-      // signal; the mirror effect propagates it to controllerRef for teardown.
-      setController(new AbortController());
-      // Ask main for a fresh view generation only when the module fetch is what
-      // failed (#11728) — a new `lazy()` wrapper alone cannot recover that,
-      // because the poisoned entry belongs to the specifier, not the wrapper.
-      // Activation failures and render throws still just remount.
-      setLazyView(() => createLazyView(lastErrorWasImportStage.current));
-      setRetryCount((c) => c + 1);
-      // The retry is under way, so the panel is no longer failed — it is loading.
-      // Clearing here (rather than waiting for the next commit) keeps a worker
-      // from seeing a stale `render-failed` for as long as the import takes.
-      clearViewRenderFailure(panelId);
+      replaceAttempt(lastErrorWasImportStage.current);
     };
+
+    // Warm the runtime-health mirror at mount. Idempotent and module-level, so
+    // every panel of every plugin shares one subscription and one hydration.
+    const initRuntimeStatus = usePluginRuntimeStatusStore((s) => s.init);
+    useEffect(() => initRuntimeStatus(), [initRuntimeStatus]);
+    const worker = usePluginRuntimeStatus(pluginId)?.worker ?? null;
+    const inFlight = worker?.state === "starting" || worker?.state === "activating";
+    // Only a transient state can stall. A `ready` or `failed` worker is settled,
+    // and arming a timer on it would escalate a healthy panel after 30 seconds.
+    const stalled = useWorkerStall(inFlight ? worker.stateSince : null);
+    const presentation = presentWorkerStatus(worker, stalled);
+
+    /**
+     * Worker generation this attempt is bound to.
+     *
+     * A ref, not state: it must be read and written inside the effect that
+     * decides whether to rebind, and re-rendering on it would achieve nothing.
+     * `null` until a `ready` worker has been seen at all, so the FIRST
+     * observation adopts the generation silently — a panel that mounts against
+     * an already-running backend must not treat that backend as a replacement
+     * and immediately remount itself.
+     */
+    const boundWorkerGeneration = useRef<number | null>(null);
+    useEffect(() => {
+      if (!worker || worker.state !== "ready") return;
+      const previous = boundWorkerGeneration.current;
+      boundWorkerGeneration.current = worker.generation;
+      if (previous === null || previous === worker.generation) return;
+      // A different generation is ready: the backend this view was talking to is
+      // gone and a new one is live. Every panel on the instance runs this from
+      // the same broadcast, which is what makes them move together — no
+      // main-side panel registry is involved (#12278).
+      replaceAttempt(false);
+    }, [worker, replaceAttempt]);
+
+    const [restarting, setRestarting] = useState(false);
+    // Guards the settle: a panel closed mid-restart must not set state on a
+    // subtree React has already torn down.
+    const restartAliveRef = useRef(true);
+    useEffect(() => {
+      restartAliveRef.current = true;
+      return () => {
+        restartAliveRef.current = false;
+      };
+    }, []);
+    const handleRestartPlugin = useCallback(() => {
+      const restart = window.electron?.plugin?.restartWorker;
+      if (typeof restart !== "function") return;
+      setRestarting(true);
+      void restart(pluginId)
+        .catch(() => {
+          // The banner is driven by the pushed status, not by this call's
+          // outcome: a restart that ran and failed again republishes `failed`,
+          // which is the state the user needs to see either way.
+        })
+        .finally(() => {
+          if (restartAliveRef.current) setRestarting(false);
+        });
+      // `pluginId` is a factory-scope constant, not a reactive value.
+    }, []);
+
+    // Stale content stays visible behind a terminal failure — it is the last
+    // thing the plugin actually produced, and blanking it loses context the user
+    // may still want to read — but it stops being interactive. Clicking a
+    // control whose backend is gone does nothing and reports nothing, which
+    // reads as the app being broken rather than the plugin.
+    const contentInert = presentation.kind === "unavailable";
 
     return (
       // Outside the boundary, not inside: the fallback is rendered BY the
       // boundary, so a provider nested within it would be unmounted exactly when
       // the fallback needs the close callback.
       <PluginViewCloseContext.Provider value={closeContextValue}>
+        {/* The host-owned layer, outside the boundary AND the Suspense: a
+            backend failure is the host's to report, and nesting the report
+            inside the subtree it describes would let a crashed view take its own
+            explanation down with it (#11231, #12278). It is deliberately NOT
+            inside the plugin's style root either, so a plugin stylesheet cannot
+            restyle the control that recovers from it. */}
+        <PluginViewRuntimeStatus
+          presentation={presentation}
+          panelDisplayName={displayName}
+          onRestartPlugin={handleRestartPlugin}
+          restarting={restarting}
+        />
         <ErrorBoundary
           variant="component"
           // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
@@ -545,7 +690,11 @@ export function makePluginViewContent(
             }
           >
             <ContentFadeIn
-              className="flex flex-col flex-1 min-h-0 w-full"
+              className={cn(
+                "flex flex-col flex-1 min-h-0 w-full",
+                contentInert && "pointer-events-none opacity-60"
+              )}
+              aria-hidden={contentInert || undefined}
               ref={styleRootRef}
               {...PLUGIN_STYLE_ROOT_PROPS}
             >

@@ -1270,6 +1270,14 @@ export interface GeneratedIpcInvokeMap {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
     result: void;
   };
+  "plugin:restart-worker": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginRuntimeStatus | null;
+  };
+  "plugin:runtime-statuses-get": {
+    args: [];
+    result: import("../plugin.js").PluginRuntimeStatus[];
+  };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
     result: import("./pluginAudit.js").PluginAuditConfig;

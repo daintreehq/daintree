@@ -544,6 +544,9 @@ export interface GeneratedElectronAPI {
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
+    getRuntimeStatuses(
+      ...args: IpcInvokeMap["plugin:runtime-statuses-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:runtime-statuses-get"]["result"]>;
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
@@ -586,6 +589,9 @@ export interface GeneratedElectronAPI {
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
+    restartWorker(
+      ...args: IpcInvokeMap["plugin:restart-worker"]["args"]
+    ): Promise<IpcInvokeMap["plugin:restart-worker"]["result"]>;
     revealSecretSetting(
       ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;

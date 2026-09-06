@@ -314,6 +314,62 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("hands the content a recovery reader that reads the CURRENT accepted state (#12278)", async () => {
+    // Recovery must not cost the user the work the view persisted since the
+    // panel opened. `initialArgs` is frozen at mount by design, so restoring it
+    // on a backend restart would silently roll the panel back to the bag it was
+    // opened with — the reader is what closes that gap, and it has to read at
+    // call time rather than capture at render time.
+    //
+    // The content layer is stubbed rather than the lazy view: `readRecoveryState`
+    // is a prop the host hands the CONTENT, and the content never forwards it to
+    // the plugin's own view (a plugin has no business reading panel persistence).
+    const contentProps: Array<Record<string, unknown>> = [];
+    vi.doMock("@/components/Plugin/PluginViewContent", () => ({
+      makePluginViewContent: () =>
+        function CapturingContent(props: Record<string, unknown>) {
+          contentProps.push(props);
+          return <div data-testid="plugin-content" />;
+        },
+    }));
+
+    try {
+      const { setPanelStoreAccessor } = await import("@/store/storeAccessors");
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      const panel = { extensionState: { tab: "overview" } };
+      setPanelStoreAccessor(
+        () =>
+          ({ panelsById: { "panel-recover": panel }, panelIds: [], tabGroups: new Map() }) as never
+      );
+
+      render(
+        <Host
+          id="panel-recover"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+          extensionState={{ tab: "overview" }}
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-content")).toBeTruthy());
+      const read = contentProps[contentProps.length - 1]!.readRecoveryState as () => {
+        state?: Record<string, unknown>;
+      } | null;
+      expect(read).toBeTypeOf("function");
+
+      // The view persisted after mounting. The reader must see THAT, not the
+      // bag the host rendered with.
+      panel.extensionState = { tab: "logs" };
+      expect(read()?.state).toEqual({ tab: "logs" });
+    } finally {
+      vi.doUnmock("@/components/Plugin/PluginViewContent");
+    }
+  });
+
   it("passes the panel's own worktreeId to the mounted view (#11297)", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
     vi.doMock("react", async () => {

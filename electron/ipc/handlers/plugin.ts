@@ -89,6 +89,7 @@ import type {
   PluginWorktreeStatus,
   PluginActivationResult,
   PluginPanelLifecycleEvent,
+  PluginRuntimeStatus,
   ProjectSurfaceSnapshot,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
@@ -805,6 +806,63 @@ async function handleActivateForView(
     });
   }
   return result.recoveryComponentPath;
+}
+
+/**
+ * Every tracked instance's current runtime health (#12278).
+ *
+ * The push channel is authoritative; this exists for the gap a push cannot
+ * cover. `pushSnapshotTo` fires on `did-finish-load`, but the renderer store
+ * initializes from a leaf component that may mount long after that, and the
+ * preload buffers nothing — so a panel restored into an already-running window
+ * would otherwise sit on an empty map until the plugin's next transition, which
+ * for a worker that died before the panel mounted never comes.
+ *
+ * Project instances are filtered to their owning project. A renderer has no
+ * panel on another project's instance, so withholding it costs nothing.
+ */
+async function handleRuntimeStatusesGet(ctx: IpcContext): Promise<PluginRuntimeStatus[]> {
+  const statuses = (await getPluginService()).listPluginRuntimeStatuses();
+  return statuses.filter((status) => {
+    const owningProjectId = projectIdFromPluginInstanceKey(status.pluginId);
+    return owningProjectId === null || owningProjectId === ctx.projectId;
+  });
+}
+
+/**
+ * Retire a plugin's backend generation and start a fresh one (#12278).
+ *
+ * The panel-level recovery of last resort: the worker is gone or wedged, and
+ * the plugin's contributions survive the teardown, so every panel on the
+ * instance rebinds to the new generation instead of closing. Concurrent
+ * requests from sibling panels are coalesced by the service into one restart.
+ *
+ * Returns the resulting status rather than throwing on a failed activation —
+ * "the restart ran and the backend failed again" is a legitimate outcome the
+ * banner must render, not an error dialog.
+ */
+async function handleRestartWorker(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<PluginRuntimeStatus | null> {
+  // Same ownership rule as `activateForView`: without it a renderer could
+  // restart — and thereby start the worker for — another project's plugin.
+  const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (owningProjectId === null && pluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin restart rejected for "${pluginId}": malformed project instance key`,
+      userMessage: "That plugin could not be identified.",
+    });
+  }
+  if (owningProjectId !== null && owningProjectId !== ctx.projectId) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin restart rejected for "${pluginId}": sender belongs to a different project`,
+      userMessage: "That plugin belongs to a different project.",
+    });
+  }
+  return (await getPluginService()).restartPluginWorker(pluginId);
 }
 
 /**
@@ -1708,6 +1766,12 @@ export const pluginNamespace = defineIpcNamespace({
       handleReportPanelLifecycle,
       { withContext: true }
     ),
+    getRuntimeStatuses: op(PLUGIN_METHOD_CHANNELS.getRuntimeStatuses, handleRuntimeStatusesGet, {
+      withContext: true,
+    }),
+    restartWorker: op(PLUGIN_METHOD_CHANNELS.restartWorker, handleRestartWorker, {
+      withContext: true,
+    }),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet),
     recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),

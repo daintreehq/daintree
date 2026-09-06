@@ -90,7 +90,7 @@ function makeBroadcaster(): PluginContributionBroadcaster {
     isDisposed: () => false,
     listPluginActions: () => actions,
     initPromise: Promise.resolve(),
-    listPluginDevStatuses: () => [],
+    listPluginRuntimeStatuses: () => [],
     isReplacingPlugin: () => false,
   });
 }
@@ -516,7 +516,7 @@ describe("pushSnapshotTo", () => {
       isDisposed: () => true,
       listPluginActions: () => actions,
       initPromise: Promise.resolve(),
-      listPluginDevStatuses: () => [],
+      listPluginRuntimeStatuses: () => [],
       isReplacingPlugin: () => false,
     });
     await disposed.pushSnapshotTo(wc as unknown as Electron.WebContents);

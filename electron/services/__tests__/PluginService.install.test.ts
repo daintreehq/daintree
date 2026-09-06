@@ -919,7 +919,13 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
   }
 
   function devStatus(service: PluginService) {
-    return service.listPluginDevStatuses().find((s) => s.pluginId === DEV_ID);
+    // The dev facets moved under `dev` when the channel broadened to carry
+    // production worker health too (#12278); `viewGeneration` stayed at the root
+    // because it describes the instance, not the session. Flattened here so the
+    // assertions below keep reading the way they were written.
+    const status = service.listPluginRuntimeStatuses().find((s) => s.pluginId === DEV_ID);
+    if (!status || !status.dev) return undefined;
+    return { ...status.dev, viewGeneration: status.viewGeneration };
   }
 
   it("opens a session on load and reports the live view generation", async () => {

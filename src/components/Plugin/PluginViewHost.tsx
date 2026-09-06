@@ -4,7 +4,10 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { logWarn } from "@/utils/logger";
-import { persistPanelExtensionStateThroughAccessor } from "@/store/storeAccessors";
+import {
+  getPanelStoreSnapshot,
+  persistPanelExtensionStateThroughAccessor,
+} from "@/store/storeAccessors";
 import {
   decodePanelExtensionState,
   panelExtensionStateVersionMessage,
@@ -116,6 +119,27 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         persistPanelExtensionStateThroughAccessor(panelId, patch),
       [panelId]
     );
+    // What recovery restores, read at the moment it starts rather than at mount
+    // (#12278). The props above are a snapshot of the record as of THIS render,
+    // and a view that persisted state after mounting has moved on from them —
+    // restoring those on a restart would quietly undo the user's work. Read
+    // through the accessor for the same reason `persistState` is: this
+    // component is a leaf and must not subscribe to what it writes.
+    //
+    // Runs the same version guard as the mount path, so a bag written by a
+    // newer build of the plugin is withheld on recovery exactly as it is on
+    // open, rather than smuggled in through the back door.
+    const readRecoveryState = useCallback(() => {
+      const panel = getPanelStoreSnapshot()?.panelsById[panelId];
+      if (!panel) return null;
+      const decodedRecovery = decodePanelExtensionState({
+        state: panel.extensionState,
+        persistedVersion: panel.extensionStateVersion,
+        declaredVersion: stateVersion,
+      });
+      if (!decodedRecovery.ok) return null;
+      return { state: decodedRecovery.state, version: decodedRecovery.version };
+    }, [panelId]);
     return (
       // ContentPanel owns click-to-focus, the focus-registry entry, and the pane
       // chrome, exactly as it does for every other non-PTY kind (#11228). It sits
@@ -141,6 +165,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             initialArgs={decoded.state}
             stateVersion={decoded.version}
             persistState={persistState}
+            readRecoveryState={readRecoveryState}
             onRequestClose={handleRequestClose}
             worktreeId={panelProps.worktreeId}
           />

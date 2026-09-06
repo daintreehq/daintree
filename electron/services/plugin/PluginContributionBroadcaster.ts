@@ -209,8 +209,8 @@ interface PluginContributionBroadcasterDeps {
   listPluginActions: () => PluginActionDescriptor[];
   /** Resolves once startup load + activation has settled (or dispose ran). */
   initPromise: Promise<void>;
-  /** Live `daintree-plugin dev` sessions, for the cold-start replay (#12277). */
-  listPluginDevStatuses: () => import("../../../shared/types/plugin.js").PluginDevStatus[];
+  /** Live per-instance runtime health, for the cold-start replay (#12277, #12278). */
+  listPluginRuntimeStatuses: () => import("../../../shared/types/plugin.js").PluginRuntimeStatus[];
   /**
    * True while a plugin is being replaced in place (a dev rebuild reconcile).
    * The unload half of a replacement empties the registries for one turn, and a
@@ -624,11 +624,12 @@ export class PluginContributionBroadcaster {
         name: "plugin:recipes-changed",
         payload: { recipes: getPluginRecipes(), complete: false },
       },
-      // Not project-scoped: a dev session is a global plugin by construction,
-      // and a view that missed the live event has no other way to learn which
-      // generation is running.
-      ...this.deps.listPluginDevStatuses().map((status) => ({
-        name: "plugin:dev-status-changed",
+      // Not project-scoped: the payload is health metadata keyed by instance id,
+      // and a view with no panel on that instance simply renders nothing for it.
+      // A view that missed the live event has no other way to learn which
+      // generation is running, or that its backend already died.
+      ...this.deps.listPluginRuntimeStatuses().map((status) => ({
+        name: "plugin:runtime-status-changed",
         payload: { pluginId: status.pluginId, status },
       })),
     ];
