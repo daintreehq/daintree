@@ -41,7 +41,7 @@ vi.mock("node:net", () => {
         handlers[event].push(cb);
         return srv;
       }),
-      listen: vi.fn((_port: number, _host: string, cb: Cb) => {
+      listen: vi.fn((_options: { port: number; host: string; ipv6Only?: boolean }, cb: Cb) => {
         cb();
         return srv;
       }),
@@ -289,11 +289,11 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
     // The same port should be reused after restart.
     expect(second.predictedUrl).toBe(portBefore);
     // allocatePort returned early from registry (no allocation probe), but
-    // restart now also calls waitForPortFree which probes once to confirm the
-    // old PTY released the port before respawning. One additional probe call
-    // is expected; allocatePort itself still does no extra work.
+    // restart now also calls waitForPortFree, which confirms the old PTY
+    // released the port on every address a dev server could hold it — one
+    // socket per PROBE_ADDRESSES entry. allocatePort itself does no extra work.
     const callsAfterRestart = vi.mocked(net.createServer).mock.calls.length;
-    expect(callsAfterRestart).toBe(callsAfterEnsure + 1);
+    expect(callsAfterRestart).toBe(callsAfterEnsure + 4);
   });
 
   // ── Positive baseline ──────────────────────────────────────────────────────

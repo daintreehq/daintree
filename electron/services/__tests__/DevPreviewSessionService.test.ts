@@ -90,7 +90,7 @@ function createPtyClientMock(options?: { spawnError?: Error }) {
         exitListeners.delete(callback as ExitListener);
       }
     }),
-    spawn: vi.fn((id: string, spawnOptions: { projectId?: string }) => {
+    spawn: vi.fn((id: string, spawnOptions: { projectId?: string; args?: string[] }) => {
       if (options?.spawnError) {
         throw options.spawnError;
       }
@@ -393,17 +393,18 @@ describe("DevPreviewSessionService", () => {
     expect(started.status).toBe("starting");
     expect(started.terminalId).toBeTruthy();
 
-    // Mid-stream detection sets needsInstall + status: "installing"
+    // Mid-stream detection arms needsInstall and surfaces the error, but the
+    // session stays "starting" — no install has begun yet (#12295).
     ptyClient.emitData(started.terminalId!, "Error: Cannot find module 'vite'\n");
 
     const afterData = service.getState({
       panelId: baseRequest.panelId,
       projectId: baseRequest.projectId,
     });
-    expect(afterData.status).toBe("installing");
+    expect(afterData.status).toBe("starting");
     expect(afterData.error?.type).toBe("missing-dependencies");
 
-    // Exit during "installing" triggers a guarded reinstall (not an error stop)
+    // Exit after that detection triggers a guarded reinstall (not an error stop)
     ptyClient.emitExit(started.terminalId!, 1);
   });
 

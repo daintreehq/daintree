@@ -44,6 +44,23 @@ function mockHttpResponse(statusCode: number) {
   vi.mocked(https.request).mockImplementation(impl);
 }
 
+function mockHttpError() {
+  const impl = ((_: unknown, __: unknown, ___: unknown) => {
+    let errorHandler: ((error: Error) => void) | undefined;
+    const req: MockRequest = {
+      on: (event, handler) => {
+        if (event === "error") errorHandler = handler as (error: Error) => void;
+        return req;
+      },
+      end: () => errorHandler?.(new Error("ECONNREFUSED")),
+      destroy: () => {},
+    };
+    return req;
+  }) as unknown as typeof http.request;
+  vi.mocked(http.request).mockImplementation(impl);
+  vi.mocked(https.request).mockImplementation(impl);
+}
+
 function createPtyClientMock() {
   const dataListeners = new Set<DataListener>();
   const exitListeners = new Set<ExitListener>();
@@ -58,7 +75,7 @@ function createPtyClientMock() {
       if (event === "data") dataListeners.delete(callback as DataListener);
       if (event === "exit") exitListeners.delete(callback as ExitListener);
     }),
-    spawn: vi.fn((id: string, spawnOptions: { projectId?: string }) => {
+    spawn: vi.fn((id: string, spawnOptions: { projectId?: string; args?: string[] }) => {
       terminals.set(id, { projectId: spawnOptions.projectId, hasPty: true });
     }),
     kill: vi.fn((id: string) => {
@@ -135,6 +152,9 @@ describe("DevPreviewSessionService — cross-worktree snapshot", () => {
   });
 
   it("getAllSessions returns every live session", async () => {
+    // No server answers, so nothing can graduate out of "starting" while the
+    // second ensure awaits command normalization.
+    mockHttpError();
     await service.ensure(baseRequest);
     await service.ensure({ ...baseRequest, panelId: "panel-2", worktreeId: "wt-2" });
 

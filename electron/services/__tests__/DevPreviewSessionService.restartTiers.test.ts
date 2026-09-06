@@ -46,7 +46,7 @@ function createPtyClientMock() {
       if (event === "data") dataListeners.delete(callback as DataListener);
       if (event === "exit") exitListeners.delete(callback as ExitListener);
     }),
-    spawn: vi.fn((id: string, spawnOptions: { projectId?: string }) => {
+    spawn: vi.fn((id: string, spawnOptions: { projectId?: string; args?: string[] }) => {
       terminals.set(id, { projectId: spawnOptions.projectId, hasPty: true });
     }),
     kill: vi.fn((id: string) => {
@@ -77,6 +77,18 @@ function createPtyClientMock() {
       for (const callback of dataListeners) callback(id, data);
     },
   };
+}
+
+/**
+ * The install command now rides in the spawned shell's own arguments so the PTY
+ * ends when the install does (#12295) — it is no longer typed into the shell.
+ */
+function spawnedCommandFor(
+  spawn: { mock: { calls: Array<[string, { args?: string[] }]> } },
+  terminalId: string
+): string {
+  const call = spawn.mock.calls.find(([id]) => id === terminalId);
+  return call?.[1].args?.join("\n") ?? "";
 }
 
 describe("DevPreviewSessionService — tiered restart", () => {
@@ -206,11 +218,9 @@ describe("DevPreviewSessionService — tiered restart", () => {
       // spawn = 2). The dev server is NOT respawned until the install exits 0.
       expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
 
-      await vi.waitFor(() => {
-        expect(ptyClient.submit).toHaveBeenCalledWith(expect.any(String), "bun install");
-      });
-
       const installTerminalId = result.terminalId!;
+      expect(spawnedCommandFor(ptyClient.spawn, installTerminalId)).toContain("bun install");
+
       ptyClient.emitExit(installTerminalId, 0);
       // spawnSessionTerminal awaits port allocation before calling spawn.
       await vi.waitFor(() => {
@@ -237,9 +247,7 @@ describe("DevPreviewSessionService — tiered restart", () => {
       await service.ensure(ensureRequest());
       const result = await service.reinstallAndRestart(request());
 
-      await vi.waitFor(() => {
-        expect(ptyClient.submit).toHaveBeenCalledWith(result.terminalId, "bun install");
-      });
+      expect(spawnedCommandFor(ptyClient.spawn, result.terminalId!)).toContain("bun install");
     });
 
     it("does not respawn the dev server when the install exits nonzero", async () => {

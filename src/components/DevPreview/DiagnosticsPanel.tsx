@@ -48,6 +48,8 @@ export function describeDiagnosticEvent(event: DevPreviewDiagnosticEvent): {
       return { label: "Config changed", detail: event.changed.join(", ") };
     case "command-invalid":
       return { label: "Command invalid", detail: event.message };
+    case "bundler-conflict":
+      return { label: "Bundler preference not applied", detail: event.message };
     case "port-allocated":
       return { label: "Port allocated", detail: `port ${event.port}` };
     case "port-conflict":

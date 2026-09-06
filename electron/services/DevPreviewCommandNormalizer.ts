@@ -6,6 +6,7 @@ export { getInvalidCommandMessage } from "../../shared/utils/devCommandValidatio
 
 export const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
 export const TURBOPACK_FLAG_RE = /--turbo(?:pack)?\b/;
+export const WEBPACK_FLAG_RE = /--webpack\b/;
 export const PKG_SCRIPT_RE =
   /^(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun(?:\s+run)?)\s+(\S+)$/;
 // Compound/piped/commented commands can't be safely rewritten -- appending
@@ -88,39 +89,92 @@ export function stripTurbopackFlag(command: string): string {
     .trim();
 }
 
-export async function normalizeNextjsDevCommand(
-  command: string,
-  cwd: string,
-  turbopackEnabled = true
-): Promise<string> {
-  if (!turbopackEnabled) return stripTurbopackFlag(command);
-  const nextMajor = await resolveNextMajorVersion(cwd);
-  if (nextMajor === null || nextMajor < 15) return stripTurbopackFlag(command);
-
-  if (TURBOPACK_FLAG_RE.test(command)) return command;
-  if (SHELL_CONTROL_RE.test(command)) return command;
-
-  if (NEXT_DEV_DIRECT_RE.test(command)) {
-    return `${command} --turbopack`;
-  }
-
-  const scriptMatch = PKG_SCRIPT_RE.exec(command);
-  if (!scriptMatch) return command;
-
-  const scriptName = scriptMatch[1];
+async function readPackageScript(cwd: string, scriptName: string): Promise<string | null> {
   try {
     const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
     const pkg = JSON.parse(pkgRaw);
     const scriptBody = pkg?.scripts?.[scriptName];
-    if (typeof scriptBody === "string" && NEXT_DEV_DIRECT_RE.test(scriptBody)) {
-      if (TURBOPACK_FLAG_RE.test(scriptBody)) return command;
-      return `${command}${scriptFlagSeparator(command)}--turbopack`;
-    }
+    return typeof scriptBody === "string" ? scriptBody : null;
   } catch {
-    // No package.json or invalid — leave command unchanged
+    return null;
+  }
+}
+
+/** Emitted when the user's command already names a bundler the preference contradicts. */
+export interface DevCommandBundlerConflict {
+  type: "bundler-conflict";
+  message: string;
+}
+
+/**
+ * Reconcile the project's Turbopack preference with whatever bundler flags the
+ * command already carries, across three Next.js eras: pre-15 has no
+ * `--turbopack` flag at all, 15 accepts it as an opt-in, and 16 makes Turbopack
+ * the default so opting *out* is what needs a flag (`--webpack`). Next 16 also
+ * exits 1 on `--webpack --turbopack` ("Pass either `webpack` or `turbopack`,
+ * not both"), so an explicit bundler flag always wins over the preference —
+ * emitting the fatal pair would be worse than ignoring a toggle.
+ */
+export async function normalizeNextjsDevCommand(
+  command: string,
+  cwd: string,
+  turbopackEnabled = true,
+  onConflict?: (conflict: DevCommandBundlerConflict) => void
+): Promise<string> {
+  // The renderer pre-injects --turbopack with no version awareness
+  // (src/utils/devServerDetection.ts), so a disabled preference has to strip
+  // the flag on every exit path, not merely decline to add one.
+  const applyPreference = (value: string) => (turbopackEnabled ? value : stripTurbopackFlag(value));
+
+  const nextMajor = await resolveNextMajorVersion(cwd);
+  const supportsTurbopackFlag = nextMajor !== null && nextMajor >= 15;
+  const turbopackIsDefault = nextMajor !== null && nextMajor >= 16;
+  if (!supportsTurbopackFlag) return stripTurbopackFlag(command);
+  if (SHELL_CONTROL_RE.test(command)) return applyPreference(command);
+
+  // PKG_SCRIPT_RE is anchored, so `npm run dev -- --turbopack` — what the
+  // renderer produces — matches no script. Retry without the turbo flag so the
+  // script body can still be inspected for a conflicting `--webpack`.
+  const scriptMatch =
+    PKG_SCRIPT_RE.exec(command) ?? PKG_SCRIPT_RE.exec(stripTurbopackFlag(command));
+  let resolved = command;
+  if (scriptMatch) {
+    const scriptBody = await readPackageScript(cwd, scriptMatch[1]);
+    if (scriptBody === null) return applyPreference(command);
+    // Mirrors normalizeViteDevCommand: appending to `npm run dev` puts the flag
+    // on the last command of a compound body, not on `next dev`.
+    if (SHELL_CONTROL_RE.test(scriptBody)) return applyPreference(command);
+    resolved = scriptBody;
+  }
+  if (!NEXT_DEV_DIRECT_RE.test(resolved)) return applyPreference(command);
+
+  const outerHasTurbopack = TURBOPACK_FLAG_RE.test(command);
+  const hasTurbopack = outerHasTurbopack || TURBOPACK_FLAG_RE.test(resolved);
+  const hasWebpack = WEBPACK_FLAG_RE.test(command) || WEBPACK_FLAG_RE.test(resolved);
+  const separator = scriptMatch !== null ? scriptFlagSeparator(command) : " ";
+
+  if (hasWebpack) {
+    if (turbopackEnabled) {
+      onConflict?.({
+        type: "bundler-conflict",
+        message: "Command already sets --webpack; the Turbopack preference was not applied.",
+      });
+    }
+    // Only the outer flag is ours to remove — rewriting a package script's own
+    // flags would change what every other consumer of that script runs.
+    return outerHasTurbopack ? stripTurbopackFlag(command) : command;
   }
 
-  return command;
+  if (!turbopackEnabled) {
+    const stripped = stripTurbopackFlag(command);
+    // Stripping alone stopped opting out in Next 16: Turbopack runs by default
+    // there, so honouring the preference means naming the other bundler.
+    if (!turbopackIsDefault) return stripped;
+    return `${stripped}${separator}--webpack`;
+  }
+
+  if (hasTurbopack || turbopackIsDefault) return command;
+  return `${command}${separator}--turbopack`;
 }
 
 // Vite, SvelteKit, Astro, and Nuxt all ignore process.env.PORT — the only

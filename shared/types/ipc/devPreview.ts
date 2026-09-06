@@ -167,6 +167,7 @@ export type DevPreviewDiagnosticEvent = DevPreviewDiagnosticEventBase &
     | { type: "ensure-requested"; configChanged: boolean }
     | { type: "config-changed"; changed: string[] }
     | { type: "command-invalid"; message: string }
+    | { type: "bundler-conflict"; message: string }
     | { type: "port-allocated"; port: number }
     | { type: "port-conflict"; port: number }
     | { type: "spawned"; terminalId: string; port: number }

@@ -462,7 +462,10 @@ describe("DevPreviewSessionService adversarial", () => {
       panelId: baseRequest.panelId,
       projectId: baseRequest.projectId,
     });
-    expect(state.status).toBe("installing");
+    // Missing dependencies are observed, not yet acted on — the install only
+    // starts once the command exits, so the session is still "starting".
+    expect(state.status).toBe("starting");
+    expect(state.error?.type).toBe("missing-dependencies");
   });
 
   it("lets a fresh URL's readiness marker accelerate again after a prior marker", async () => {

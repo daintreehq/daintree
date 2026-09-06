@@ -102,8 +102,15 @@ function createPtyClientMock() {
   };
 }
 
-async function flushMicrotasks(): Promise<void> {
-  for (let i = 0; i < 16; i++) await Promise.resolve();
+// Captured before vi.useFakeTimers() swaps the global. spawnSessionTerminal
+// awaits command normalization, which reads package.json — real threadpool I/O
+// that neither a microtask flush nor a faked timer can advance.
+const realSetTimeout = globalThis.setTimeout;
+
+async function flushAsyncWork(): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+  }
 }
 
 describe("DevPreviewSessionService crash-loop guard", () => {
@@ -169,7 +176,7 @@ describe("DevPreviewSessionService crash-loop guard", () => {
     // Install succeeds -> handleExit respawns the dev server (awaits port
     // allocation, which reuses the registered port -> microtask resolution).
     ptyClient.emitExit(installTerminalId, 0);
-    await flushMicrotasks();
+    await flushAsyncWork();
     return currentTerminalId();
   }
 
@@ -350,7 +357,7 @@ describe("DevPreviewSessionService crash-loop guard", () => {
     // no fresh PTY, still stopped — until the user restarts explicitly.
     const spawnsBeforeEnsure = ptyClient.spawn.mock.calls.length;
     const reEnsured = await service.ensure(baseRequest);
-    await flushMicrotasks();
+    await flushAsyncWork();
 
     expect(reEnsured.status).toBe("stopped");
     expect(reEnsured.crashLoopStopped).toBe(true);

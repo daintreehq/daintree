@@ -189,9 +189,12 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
   deps.clearCompiling(session);
 
   if (result.error.type === "missing-dependencies") {
+    // Arm the install the next terminal exit will run — but stay honest about
+    // what has actually happened. `installing` belongs to runInstall; claiming
+    // it here showed users an install that had not begun (#12295).
     session.needsInstall = true;
     deps.updateSession(session, {
-      status: "installing",
+      status: "starting",
       error: result.error,
       isRestarting: false,
     });

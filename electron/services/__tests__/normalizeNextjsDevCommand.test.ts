@@ -225,6 +225,123 @@ describe("normalizeNextjsDevCommand", () => {
       );
     });
   });
+
+  // Next 16 flipped the default: `next dev` is Turbopack unless --webpack says
+  // otherwise, and --webpack alongside --turbo/--turbopack is a fatal CLI error.
+  describe("Next.js 16 (Turbopack is the default)", () => {
+    beforeEach(() => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+    });
+
+    it("does not inject --turbopack — it is already the default", async () => {
+      expect(await normalizeNextjsDevCommand("next dev", CWD)).toBe("next dev");
+    });
+
+    it("does not inject into a package script either", async () => {
+      mockPkg({ dev: "next dev" });
+      expect(await normalizeNextjsDevCommand("npm run dev", CWD)).toBe("npm run dev");
+    });
+
+    it("appends --webpack when the preference is off, since stripping no longer opts out", async () => {
+      expect(await normalizeNextjsDevCommand("next dev", CWD, false)).toBe("next dev --webpack");
+    });
+
+    it("appends -- --webpack for an npm script when the preference is off", async () => {
+      mockPkg({ dev: "next dev" });
+      expect(await normalizeNextjsDevCommand("npm run dev", CWD, false)).toBe(
+        "npm run dev -- --webpack"
+      );
+    });
+
+    it("appends --webpack with no separator for pnpm/yarn/bun", async () => {
+      mockPkg({ dev: "next dev" });
+      expect(await normalizeNextjsDevCommand("pnpm dev", CWD, false)).toBe("pnpm dev --webpack");
+      expect(await normalizeNextjsDevCommand("yarn dev", CWD, false)).toBe("yarn dev --webpack");
+      expect(await normalizeNextjsDevCommand("bun run dev", CWD, false)).toBe(
+        "bun run dev --webpack"
+      );
+    });
+
+    it("replaces a pre-injected --turbopack with --webpack when the preference is off", async () => {
+      expect(await normalizeNextjsDevCommand("next dev --turbopack", CWD, false)).toBe(
+        "next dev --webpack"
+      );
+    });
+
+    it("leaves an explicit --turbo spelling alone when the preference is on", async () => {
+      expect(await normalizeNextjsDevCommand("next dev --turbo", CWD)).toBe("next dev --turbo");
+    });
+
+    it("does not double-append --webpack", async () => {
+      expect(await normalizeNextjsDevCommand("next dev --webpack", CWD, false)).toBe(
+        "next dev --webpack"
+      );
+    });
+  });
+
+  describe("explicit --webpack never gains a conflicting turbo flag", () => {
+    it.each([15, 16])("leaves 'next dev --webpack' alone on Next %i", async (major) => {
+      mockResolveNextMajorVersion.mockResolvedValue(major);
+      expect(await normalizeNextjsDevCommand("next dev --webpack", CWD)).toBe("next dev --webpack");
+    });
+
+    it("does not append --turbopack to a script body that sets --webpack", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(15);
+      mockPkg({ dev: "next dev --webpack" });
+      expect(await normalizeNextjsDevCommand("npm run dev", CWD)).toBe("npm run dev");
+    });
+
+    it("strips a pre-injected turbo flag that would pair with the script's --webpack", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+      mockPkg({ dev: "next dev --webpack" });
+      expect(await normalizeNextjsDevCommand("npm run dev -- --turbopack", CWD)).toBe(
+        "npm run dev"
+      );
+    });
+
+    it("strips the turbo flag from a direct command that also names --webpack", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+      expect(await normalizeNextjsDevCommand("next dev --webpack --turbopack", CWD)).toBe(
+        "next dev --webpack"
+      );
+    });
+
+    it("reports the conflict when the preference asked for Turbopack", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+      const onConflict = vi.fn();
+      await normalizeNextjsDevCommand("next dev --webpack", CWD, true, onConflict);
+      expect(onConflict).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "bundler-conflict" })
+      );
+    });
+
+    it("stays quiet when the preference agrees with the explicit --webpack", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+      const onConflict = vi.fn();
+      await normalizeNextjsDevCommand("next dev --webpack", CWD, false, onConflict);
+      expect(onConflict).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("compound package scripts are never rewritten", () => {
+    it("leaves 'npm run dev' alone when the script body is compound", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(15);
+      mockPkg({ dev: "next dev && echo done" });
+      expect(await normalizeNextjsDevCommand("npm run dev", CWD)).toBe("npm run dev");
+    });
+
+    it("leaves a compound script body alone on Next 16 with the preference off", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+      mockPkg({ dev: "next dev; echo done" });
+      expect(await normalizeNextjsDevCommand("npm run dev", CWD, false)).toBe("npm run dev");
+    });
+
+    it("leaves a piped script body alone", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(15);
+      mockPkg({ dev: "next dev | tee log" });
+      expect(await normalizeNextjsDevCommand("npm run dev", CWD)).toBe("npm run dev");
+    });
+  });
 });
 
 describe("extractPort", () => {
