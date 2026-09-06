@@ -34,9 +34,13 @@ type MockWebviewElement = HTMLElement & {
   setMockLoading: (value: boolean) => void;
 };
 
+// Opt-in for the next guest to report a load already in flight, so the pane's
+// mount-time readiness probe leaves it unready (#12296).
+let nextWebviewStartsLoading = false;
+
 function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   let currentUrl = element.getAttribute("src") ?? "http://localhost:5173/";
-  let loading = false;
+  let loading = nextWebviewStartsLoading;
   const webview = element as MockWebviewElement;
 
   const syncUrlFromAttribute = () => {
@@ -335,6 +339,12 @@ function emitWebviewEvent(
   webview.dispatchEvent(event);
 }
 
+// The mocked `window.electron` needs a cast to be reachable at all; doing it once
+// here keeps it out of every individual test.
+function getElectronMock(): { webview: Record<string, unknown> } {
+  return (window as unknown as { electron: { webview: Record<string, unknown> } }).electron;
+}
+
 function getWebviewElement(container: HTMLElement): MockWebviewElement {
   const webview = container.querySelector("webview");
   if (!webview) {
@@ -458,8 +468,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("hard-reloads the focused webview guest when onReloadShortcut fires for this panel (#9497)", async () => {
     let reloadCb: ((payload: { panelId: string }) => void) | undefined;
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
       reloadCb = cb;
       return vi.fn();
@@ -489,8 +498,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("unsubscribes from onReloadShortcut on unmount (#9497)", () => {
     const unsubscribe = vi.fn();
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onReloadShortcut = vi.fn(() => unsubscribe);
 
     const { unmount } = render(<DevPreviewPane {...baseProps} />);
@@ -501,8 +509,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("closes this panel when onCloseShortcut fires for it, and ignores other panels (#10859)", async () => {
     let closeCb: ((payload: { panelId: string }) => void) | undefined;
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onCloseShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
       closeCb = cb;
       return vi.fn();
@@ -537,8 +544,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("unsubscribes from onCloseShortcut on unmount (#10859)", () => {
     const unsubscribe = vi.fn();
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onCloseShortcut = vi.fn(() => unsubscribe);
 
     const { unmount } = render(<DevPreviewPane {...baseProps} />);
@@ -2241,8 +2247,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("keeps the unresponsive banner visible while the URL is unchanged", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2263,8 +2268,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     it("clears the unresponsive banner when the guest becomes responsive again", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
       let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2290,8 +2294,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("does not clear a crashed banner when a stale responsive event arrives", () => {
       let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         responsiveCb = cb;
         return vi.fn();
@@ -2314,8 +2317,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("ignores unresponsive events targeting a different panel", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2917,18 +2919,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     // mount-time readiness probe leaves isWebviewReady false — the state of a
     // renderer that dies during its first load, before dom-ready ever fires.
     const renderNeverReadyPane = () => {
-      const decorating = document.createElement;
-      document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
-        const element = decorating(tagName, options);
-        if (String(tagName).toLowerCase() === "webview") {
-          (element as MockWebviewElement).setMockLoading(true);
-        }
-        return element;
-      }) as typeof document.createElement;
+      nextWebviewStartsLoading = true;
       try {
         return render(<DevPreviewPane {...baseProps} />);
       } finally {
-        document.createElement = decorating;
+        nextWebviewStartsLoading = false;
       }
     };
 
@@ -3106,8 +3101,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("hands the retry budget back when the user reloads after exhaustion", () => {
       let reloadCb: ((payload: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
         reloadCb = cb;
         return vi.fn();
@@ -3219,8 +3213,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
 
     it("reloads a guest that crashed before its first dom-ready", () => {
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
 
       const { container } = renderNeverReadyPane();
@@ -3242,8 +3235,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
 
     it("uses the cache-ignoring reload once the guest has reached dom-ready", () => {
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
 
       const { container } = renderNeverReadyPane();
@@ -3264,8 +3256,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("clears the crash banner only once the reload is actually issued", () => {
       let reloadCb: ((payload: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
         reloadCb = cb;
         return vi.fn();
@@ -3296,8 +3287,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("recreates the guest when it can no longer be reloaded in place", () => {
       let reloadCb: ((payload: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
         reloadCb = cb;
         return vi.fn();
