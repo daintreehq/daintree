@@ -69,15 +69,19 @@ const COMPILE_MARKERS_GLOBAL = COMPILE_MARKERS.map(toGlobal);
  * appears twice — an HMR update already in the carry and a fresh one in the new
  * chunk — the leading match ends inside the carry and would mask the one that
  * actually just landed.
+ *
+ * Not strictly exactly-once: a pattern ending in `\d+` can match again when the
+ * next chunk extends the digits ("ready in 8" then "7 ms"). That costs one extra
+ * diagnostic row and nothing else — `markerSeen` already makes a repeated ready
+ * marker inert, and compile markers are debounced by their own timers.
  */
-function matchesAcrossBoundary(patterns: RegExp[], carry: string, chunk: string): boolean {
-  if (chunk.length === 0) return false;
-  const window = carry + chunk;
+function matchesAcrossBoundary(patterns: RegExp[], window: string, boundary: number): boolean {
+  if (window.length <= boundary) return false;
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(window)) !== null) {
-      if (match.index + match[0].length > carry.length) {
+      if (match.index + match[0].length > boundary) {
         pattern.lastIndex = 0;
         return true;
       }
@@ -107,16 +111,18 @@ export class UrlDetector {
     const preferredUrl = urls.length > 0 ? this.selectPreferredUrl(urls) : null;
     const error = detectDevServerError(newBuffer);
 
-    // Stripped separately so the boundary offset stays exact — stripping the
-    // concatenation would shift it by however many escape bytes the carry held.
-    const strippedCarry = stripAnsiAndOscCodes(buffer.slice(-MARKER_CARRY_MAX));
+    // Strip the joined window, not each half: an escape sequence can itself be
+    // split by the transport ("\x1b[3" + "2m"), and stripping the halves apart
+    // leaves that residue sitting inside the very marker we are trying to match.
+    // The boundary is then derived from the chunk side, which is intact. If a
+    // straddling escape did get removed, the boundary lands slightly early and
+    // the match is accepted — erring toward one duplicate rather than a miss.
+    const carry = buffer.slice(-MARKER_CARRY_MAX);
+    const strippedWindow = stripAnsiAndOscCodes(carry + data);
     const strippedChunk = stripAnsiAndOscCodes(data);
-    const readyMarker = matchesAcrossBoundary(READY_MARKERS_GLOBAL, strippedCarry, strippedChunk);
-    const compileMarker = matchesAcrossBoundary(
-      COMPILE_MARKERS_GLOBAL,
-      strippedCarry,
-      strippedChunk
-    );
+    const boundary = Math.max(0, strippedWindow.length - strippedChunk.length);
+    const readyMarker = matchesAcrossBoundary(READY_MARKERS_GLOBAL, strippedWindow, boundary);
+    const compileMarker = matchesAcrossBoundary(COMPILE_MARKERS_GLOBAL, strippedWindow, boundary);
 
     return {
       url: preferredUrl,

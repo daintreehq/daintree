@@ -483,6 +483,20 @@ describe("UrlDetector", () => {
         expect(results.some((r) => r.readyMarker)).toBe(true);
       });
 
+      // The escape SEQUENCE itself straddles the boundary, so neither half
+      // contains a complete one. Stripping the halves independently leaves
+      // "\x1b[0m" embedded between the glyph and "Ready", and the marker is
+      // lost for good.
+      it("detects a marker when an escape sequence straddles the boundary", () => {
+        const results = feed(["\x1b[32m✓\x1b[0", "m Ready in 87ms"]);
+        expect(results.some((r) => r.readyMarker)).toBe(true);
+      });
+
+      it("detects a compile marker when an escape straddles the boundary", () => {
+        const results = feed(["\x1b[36mcompil\x1b[3", "6ming..."]);
+        expect(results.some((r) => r.compileMarker)).toBe(true);
+      });
+
       it("does not report a marker that lies wholly in the carried tail", () => {
         const first = detector.scanOutput(READY_LINE, "");
         expect(first.readyMarker).toBe(true);

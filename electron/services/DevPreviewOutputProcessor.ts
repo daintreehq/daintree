@@ -22,6 +22,8 @@ export interface OutputProcessorSession {
   markerSeen: boolean;
   /** False until this launch's terminal has produced any output. */
   sawOutput: boolean;
+  /** See DevPreviewSession.readinessDeadline — one budget per launch. */
+  readinessDeadline: number | null;
   generation: number;
   isRunningInstall: boolean;
   needsInstall: boolean;
@@ -220,6 +222,10 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
   session.readinessAbort = null;
   session.pendingUrl = null;
   session.markerSeen = false;
+  // This abort ends the probe without ending the launch, so nothing downstream
+  // will clear the budget. Leaving it set would charge the next probe for time
+  // spent sitting in an error state.
+  session.readinessDeadline = null;
   deps.clearCompiling(session);
 
   if (result.error.type === "missing-dependencies") {

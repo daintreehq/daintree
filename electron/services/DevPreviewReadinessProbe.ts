@@ -136,12 +136,25 @@ async function probeUrl(
  * to "running" (#8294, #9317). The confirming round ends the candidate loop so
  * two loopback aliases in one pass cannot satisfy both halves back to back.
  */
+export interface WaitForServerReadyOptions {
+  onAttempt?: (attempt: ReadinessAttempt) => void;
+  /**
+   * Seeds the 5xx latch from an earlier probe of the same launch. A ready
+   * marker or a new URL aborts the in-flight wait and starts another one;
+   * without this the replacement forgets that the server has been serving a
+   * compiling shell, and its next transient 200 publishes "running" — the exact
+   * bug #8294 and #9317 fixed.
+   */
+  seenServerError?: boolean;
+}
+
 export async function waitForServerReady(
   url: string,
   signal: AbortSignal,
   timeoutMs = READINESS_TIMEOUT_MS,
-  onAttempt?: (attempt: ReadinessAttempt) => void
+  options: WaitForServerReadyOptions = {}
 ): Promise<boolean> {
+  const { onAttempt, seenServerError = false } = options;
   const deadline = performance.now() + timeoutMs;
   let useHttps: boolean;
   const urls = buildReadinessUrls(url);
@@ -161,7 +174,7 @@ export async function waitForServerReady(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const probeSignal = AbortSignal.any([signal, timeoutSignal]);
 
-  let hasSeen5xx = false;
+  let hasSeen5xx = seenServerError;
   let awaitingConfirmation = false;
   let attempt = 0;
   // Last reported outcome per candidate. A poll against a refused port settles
@@ -209,12 +222,12 @@ export async function waitForServerReady(
           if (signal.aborted) return false;
           return true;
         }
-        // First success after a 5xx only arms the confirmation. End the round
-        // here so the confirming observation lands after a poll interval —
-        // a sibling candidate answering in the same pass proves nothing about
-        // whether the compile finished.
+        // First success after a 5xx only arms the confirmation; a later
+        // observation has to confirm it. Deliberately NOT breaking out of the
+        // round: skipping the remaining candidates starves an alias that is the
+        // only one answering when a sibling 5xxes every round, and the address
+        // families must all stay reachable (#9752).
         awaitingConfirmation = true;
-        break;
       }
     }
 

@@ -83,6 +83,8 @@ interface DevPreviewSession extends DevPreviewSessionState {
    * so the 30s the UI promises could stretch to a multiple of itself.
    */
   readinessDeadline: number | null;
+  /** True once any probe in this launch saw a 5xx; see waitForServerReady. */
+  readinessSaw5xx: boolean;
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
@@ -1118,6 +1120,7 @@ export class DevPreviewSessionService {
       markerSeen: false,
       sawOutput: false,
       readinessDeadline: null,
+      readinessSaw5xx: false,
       needsInstall: false,
       isRunningInstall: false,
       installAttemptedGeneration: null,
@@ -1423,23 +1426,35 @@ export class DevPreviewSessionService {
     // One budget per launch. A ready marker or a newly detected URL restarts
     // the probe, and each restart used to get a full READINESS_TIMEOUT_MS —
     // so the deadline the error message quotes was not the one being enforced.
-    if (session.readinessDeadline === null) {
-      session.readinessDeadline = performance.now() + READINESS_TIMEOUT_MS;
+    // An already-spent deadline belongs to a probe that has since been
+    // abandoned — an output error aborts the poll without ending the launch,
+    // and re-attaching a live terminal replays its output minutes later. Reusing
+    // it would hand the new probe ~0ms and report "did not respond within 30
+    // seconds" without having waited at all.
+    const now = performance.now();
+    if (session.readinessDeadline === null || session.readinessDeadline <= now) {
+      session.readinessDeadline = now + READINESS_TIMEOUT_MS;
     }
     const remainingMs = Math.max(1, Math.round(session.readinessDeadline - performance.now()));
 
-    void waitForServerReady(url, signal, remainingMs, (attempt) => {
-      if (signal.aborted || session.generation !== generation) return;
-      this.recordSessionDiagnostic(session, {
-        type: "readiness-http-attempt",
-        url: sanitizeDiagnosticUrl(attempt.url),
-        outcome: attempt.outcome,
-        ...(attempt.status !== undefined ? { status: attempt.status } : {}),
-        ...(attempt.cause !== undefined ? { cause: attempt.cause } : {}),
-        attempt: attempt.attempt,
-        elapsedMs: attempt.elapsedMs,
-        remainingMs: attempt.remainingMs,
-      });
+    void waitForServerReady(url, signal, remainingMs, {
+      seenServerError: session.readinessSaw5xx,
+      onAttempt: (attempt) => {
+        if (signal.aborted || session.generation !== generation) return;
+        // Latched for the whole launch: a marker or a new URL replaces this
+        // wait, and the replacement must not forget the compiling shell.
+        if (attempt.outcome === "server-error") session.readinessSaw5xx = true;
+        this.recordSessionDiagnostic(session, {
+          type: "readiness-http-attempt",
+          url: sanitizeDiagnosticUrl(attempt.url),
+          outcome: attempt.outcome,
+          ...(attempt.status !== undefined ? { status: attempt.status } : {}),
+          ...(attempt.cause !== undefined ? { cause: attempt.cause } : {}),
+          attempt: attempt.attempt,
+          elapsedMs: attempt.elapsedMs,
+          remainingMs: attempt.remainingMs,
+        });
+      },
     })
       .then((ready) => {
         if (signal.aborted || session.generation !== generation) return;
@@ -1448,6 +1463,7 @@ export class DevPreviewSessionService {
         session.pendingUrl = null;
         session.readinessAbort = null;
         session.readinessDeadline = null;
+        session.readinessSaw5xx = false;
 
         if (ready) {
           session.needsInstall = false;
@@ -1495,6 +1511,7 @@ export class DevPreviewSessionService {
         session.pendingUrl = null;
         session.readinessAbort = null;
         session.readinessDeadline = null;
+        session.readinessSaw5xx = false;
 
         const message = formatErrorMessage(err, "Dev server readiness check failed");
         console.warn("[DevPreviewSessionService] Readiness poll error:", {
