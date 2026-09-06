@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useEffect } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntimeStatus, PluginWorkerStatus } from "@shared/types/plugin";
@@ -25,21 +26,36 @@ vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({
     children,
     className,
-    "aria-hidden": ariaHidden,
+    inert,
   }: {
     children: React.ReactNode;
     className?: string;
-    "aria-hidden"?: boolean;
+    inert?: boolean;
   }) => (
-    <div data-testid="plugin-content" className={className} aria-hidden={ariaHidden}>
+    <div data-testid="plugin-content" className={className} inert={inert}>
       {children}
     </div>
   ),
 }));
+/**
+ * Records the callbacks the content hands the boundary, so a test can drive the
+ * throw/reset pair the real `ErrorBoundary` would fire. Hoisted because the
+ * factory below runs before the module body.
+ */
+const boundaryCallbacks = vi.hoisted(
+  () => ({}) as { onError?: (e: Error) => void; onReset?: () => void }
+);
+
 vi.mock("@/components/ErrorBoundary", async () => {
   const { Component } = await import("react");
-  class FakeBoundary extends Component<{ children: React.ReactNode }> {
+  class FakeBoundary extends Component<{
+    children: React.ReactNode;
+    onError?: (e: Error) => void;
+    onReset?: () => void;
+  }> {
     render(): React.ReactNode {
+      boundaryCallbacks.onError = this.props.onError;
+      boundaryCallbacks.onReset = this.props.onReset;
       return this.props.children;
     }
   }
@@ -140,7 +156,7 @@ describe("mounted panel learns its backend died (#12278)", () => {
     // The plugin's own content is the whole panel when there is nothing wrong;
     // a banner over a healthy view would be noise on every panel.
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByTestId("plugin-content").getAttribute("aria-hidden")).toBe(null);
+    expect(screen.getByTestId("plugin-content").hasAttribute("inert")).toBe(false);
   });
 
   it("surfaces a terminal worker failure the plugin never reported", async () => {
@@ -158,10 +174,10 @@ describe("mounted panel learns its backend died (#12278)", () => {
 
     const content = screen.getByTestId("plugin-content");
     // Still there — it is the last thing the plugin produced, and blanking it
-    // would lose context the user may want to read.
+    // would lose context the user may want to read. `inert` rather than
+    // `pointer-events-none`, which leaves every control tabbable.
     expect(screen.getByTestId("plugin-view")).toBeTruthy();
-    expect(content.className).toContain("pointer-events-none");
-    expect(content.getAttribute("aria-hidden")).toBe("true");
+    expect(content.hasAttribute("inert")).toBe(true);
   });
 
   it("names the cause from the closed reason, never the free-form detail", async () => {
@@ -184,9 +200,11 @@ describe("mounted panel learns its backend died (#12278)", () => {
     await mountContent();
     await pushStatus(worker({ state: "starting", reason: "crashed" }));
 
-    const banner = await screen.findByRole("status");
-    expect(banner.textContent).toContain("Reloading plugin");
-    // T1 ambient chrome: nothing is being asked of the user yet.
+    const ambient = await screen.findByRole("status");
+    expect(ambient.textContent).toContain("Reloading");
+    // T1 ambient chrome: nothing is being asked of the user yet, so no banner
+    // and no action.
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: /Restart plugin/ })).toBeNull();
   });
 
@@ -246,6 +264,79 @@ describe("mounted panel learns its backend died (#12278)", () => {
     // Recovery is not supposed to cost the user the work they persisted since
     // the panel opened.
     await waitFor(() => expect(readRecoveryState).toHaveBeenCalled());
+  });
+
+  it("remounts the view on a rebind rather than reusing the resolved component", async () => {
+    // A fresh `lazy()` wrapper does NOT remount anything on its own: React
+    // compares the RESOLVED type, so a wrapper resolving to the same module
+    // export reuses the existing fiber. The view would keep its state and its
+    // `deps: []` subscriptions while `replaceAttempt` had already aborted the
+    // `disposeSignal` those subscriptions were tied to — resources torn down,
+    // component never rebuilt. The boundary's `key` is what makes it real, so
+    // this double returns ONE stable component identity across every wrapper.
+    const mounts: string[] = [];
+    function StableView() {
+      useEffect(() => {
+        mounts.push("mount");
+      }, []);
+      return <div data-testid="plugin-view" />;
+    }
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      // ONE identity for every wrapper, which is the whole point.
+      return { ...actual, lazy: () => StableView };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+      render(<Content panelId="panel-rebind" />);
+      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+      await pushStatus(worker({ generation: 1, state: "ready" }));
+      const mountsBefore = mounts.length;
+
+      await pushStatus(worker({ generation: 2, state: "ready" }));
+
+      await waitFor(() => expect(mounts.length).toBeGreaterThan(mountsBefore));
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("replaces a failed view when a healthy backend appears for the first time", async () => {
+    // The initial activation is what failed, so this panel never observed a
+    // `ready` at all. Treating "first observation" as "nothing to do" would
+    // clear the banner and leave the user staring at the original error with a
+    // healthy backend behind it.
+    const lazyCalls = { count: 0 };
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () => {
+          lazyCalls.count += 1;
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+      render(<Content panelId="panel-first-ready" />);
+      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+
+      act(() => boundaryCallbacks.onError?.(new Error("activation blew up")));
+      const callsAfterThrow = lazyCalls.count;
+
+      await pushStatus(worker({ generation: 4, state: "ready" }));
+
+      await waitFor(() => expect(lazyCalls.count).toBeGreaterThan(callsAfterThrow));
+    } finally {
+      vi.doUnmock("react");
+    }
   });
 
   it("shows no banner at all while nothing is known about the backend", async () => {

@@ -845,6 +845,15 @@ async function handleRestartWorker(
   ctx: IpcContext,
   pluginId: string
 ): Promise<PluginRuntimeStatus | null> {
+  // `op` performs no runtime argument validation, so a malformed call would
+  // otherwise reach `startsWith` on a non-string and surface as a TypeError.
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin restart rejected: invalid instance id`,
+      userMessage: "That plugin could not be identified.",
+    });
+  }
   // Same ownership rule as `activateForView`: without it a renderer could
   // restart — and thereby start the worker for — another project's plugin.
   const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
@@ -862,7 +871,20 @@ async function handleRestartWorker(
       userMessage: "That plugin belongs to a different project.",
     });
   }
-  return (await getPluginService()).restartPluginWorker(pluginId);
+  try {
+    return await (await getPluginService()).restartPluginWorker(pluginId);
+  } catch (err) {
+    // The service raises plain `Error`s for its refusals (not loaded, disabled,
+    // no backend). This is the layer that owns the user-facing shape, so they
+    // reach the renderer with a code and a message worth rendering rather than
+    // as an opaque rejection.
+    if (err instanceof AppError) throw err;
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin restart failed for "${pluginId}": ${formatErrorMessage(err, "restart failed")}`,
+      userMessage: "That plugin couldn't be restarted.",
+    });
+  }
 }
 
 /**

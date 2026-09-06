@@ -647,7 +647,6 @@ describe("makePluginViewContent", () => {
       const first = signals[0]!;
       expect(first.aborted).toBe(false);
       const callsBeforeReset = lazyCalls.count;
-      const resetKeyBeforeReset = boundaryProps.last!.resetKeys?.[0];
 
       // Drive the very callback the boundary's "Try again" invokes. Going
       // through `onReset` rather than a thrown render keeps this deterministic:
@@ -669,10 +668,11 @@ describe("makePluginViewContent", () => {
       expect(first.aborted).toBe(true);
       expect(second.aborted).toBe(false);
       // ...and the module is genuinely re-imported rather than the controller
-      // merely being swapped: a fresh `lazy()` ref, and a bumped reset key so
-      // the boundary clears its error state.
+      // merely being swapped: a fresh `lazy()` ref. The boundary clears its
+      // error state by being remounted on a new `key` (#12278) rather than
+      // through `resetKeys`, which it no longer takes — a fresh wrapper alone
+      // does not remount a view whose resolved type is unchanged.
       expect(lazyCalls.count).toBeGreaterThan(callsBeforeReset);
-      expect(boundaryProps.last!.resetKeys?.[0]).not.toBe(resetKeyBeforeReset);
 
       // Kind removal must abort the CURRENT controller, resolved through the ref
       // at call time rather than the one captured when the effect was set up.

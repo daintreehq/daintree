@@ -350,6 +350,33 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
     await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify({ name: id, version: "1.0.0" }));
   }
 
+  /** A loaded plugin that actually has a utility-process backend to restart. */
+  function workerBackedPlugin(id: string) {
+    return {
+      manifest: { name: id },
+      isBuiltin: false,
+      resolvedMain: path.join(pluginsRoot, id, "dist", "index.js"),
+    };
+  }
+
+  it("refuses a builtin, which activates in-process and has no worker", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    internals(service).plugins.set("daintree.github", {
+      manifest: { name: "daintree.github" },
+      isBuiltin: true,
+      resolvedMain: "/builtin/index.js",
+    });
+
+    // Refused BEFORE anything is published: a `starting` no worker event can
+    // ever settle would strand every panel on it in "Reloading".
+    await expect(service.restartPluginWorker("daintree.github")).rejects.toThrow(
+      /no backend to restart/
+    );
+    expect(statusOf(service, "daintree.github")).toBeUndefined();
+
+    service.dispose();
+  });
+
   it("refuses a plugin that isn't loaded", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     await expect(service.restartPluginWorker("acme.missing")).rejects.toThrow(/isn't loaded/);
@@ -359,7 +386,7 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
   it("refuses a disabled plugin rather than reviving what the user turned off", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     await writePlugin("acme.off");
-    internals(service).plugins.set("acme.off", { manifest: { name: "acme.off" } });
+    internals(service).plugins.set("acme.off", workerBackedPlugin("acme.off"));
     (
       service as unknown as { records: { setEnabled(id: string, enabled: boolean): void } }
     ).records.setEnabled("acme.off", false);
@@ -371,7 +398,7 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
 
   it("coalesces concurrent restarts so sibling panels share one", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
-    internals(service).plugins.set("acme.prod", { manifest: { name: "acme.prod" } });
+    internals(service).plugins.set("acme.prod", workerBackedPlugin("acme.prod"));
     const activate = vi
       .spyOn(service, "activatePlugin")
       .mockImplementation(async () => undefined);
@@ -388,19 +415,27 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
     service.dispose();
   });
 
-  it("publishes a fresh starting generation so every panel rebinds together", async () => {
+  it("clears a previous failure once the fresh generation starts", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
-    internals(service).plugins.set("acme.prod", { manifest: { name: "acme.prod" } });
+    internals(service).plugins.set("acme.prod", workerBackedPlugin("acme.prod"));
     internals(service).setWorkerStatus("acme.prod", "failed", "crash-loop", null, {
       newGeneration: true,
     });
     const failedGeneration = statusOf(service, "acme.prod")?.worker?.generation;
-    vi.spyOn(service, "activatePlugin").mockImplementation(async () => undefined);
+    // Stands in for `activateViaWorker`, which publishes `starting` on a new
+    // generation as it forks. The restart deliberately does NOT publish one
+    // itself — doing both bumped the generation twice per restart.
+    vi.spyOn(service, "activatePlugin").mockImplementation(async () => {
+      internals(service).setWorkerStatus("acme.prod", "starting", null, null, {
+        newGeneration: true,
+      });
+    });
 
     await service.restartPluginWorker("acme.prod");
 
     const worker = statusOf(service, "acme.prod")?.worker;
     expect(worker?.state).toBe("starting");
+    // The panels bound to the failed backend see a generation they are not on.
     expect(worker?.generation).toBeGreaterThan(failedGeneration as number);
 
     service.dispose();
@@ -408,7 +443,7 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
 
   it("returns the resulting status rather than throwing when the backend fails again", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
-    internals(service).plugins.set("acme.prod", { manifest: { name: "acme.prod" } });
+    internals(service).plugins.set("acme.prod", workerBackedPlugin("acme.prod"));
     // `activatePlugin` never rejects by contract (#9428) — the outcome is read
     // back off the published status, which is what the banner renders.
     vi.spyOn(service, "activatePlugin").mockImplementation(async () => {

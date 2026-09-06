@@ -514,13 +514,27 @@ export function makePluginViewContent(
     // when the node commits and invokes the returned cleanup when it unmounts,
     // which is exactly the lifetime the observer registration wants — and it
     // rides the existing mount/retry cycle rather than adding a second one.
-    const styleRootRef = useCallback(
-      (node: HTMLDivElement | null) => registerPluginStyleRoot(node),
-      []
-    );
+    const contentNodeRef = useRef<HTMLDivElement | null>(null);
+    const styleRootRef = useCallback((node: HTMLDivElement | null) => {
+      contentNodeRef.current = node;
+      return registerPluginStyleRoot(node);
+    }, []);
+    /** Focus lands here when the content it was inside goes inert. */
+    const statusRef = useRef<HTMLDivElement | null>(null);
+
+    /**
+     * Whether the boundary is currently showing its fallback.
+     *
+     * Tracked here because the boundary does not expose it, and the rebind path
+     * below has to know: `ErrorBoundary.componentDidUpdate` calls `onReset`
+     * whenever `resetKeys` change WHILE it is showing an error, and `retryCount`
+     * is that key.
+     */
+    const boundaryShowingError = useRef(false);
 
     const handleRenderError = useCallback(
       (error: Error) => {
+        boundaryShowingError.current = true;
         lastErrorWasImportStage.current = isImportStageFailure(error);
         // Abort BEFORE reporting, and for the same reason `handleReset` does it
         // on retry: the thrown-away view instance is finished either way, so
@@ -545,6 +559,9 @@ export function makePluginViewContent(
      */
     const replaceAttempt = useCallback(
       (requestRecoveryPath: boolean): void => {
+        // The attempt being built is new, so whatever the last one threw is no
+        // longer on screen once it commits.
+        boundaryShowingError.current = false;
         // Abort the outgoing view's signal before swapping in a fresh controller
         // — the prior view instance is being discarded, so any fetches or
         // subscriptions it tied to `disposeSignal` must cancel now rather than
@@ -608,8 +625,21 @@ export function makePluginViewContent(
     useEffect(() => {
       if (!worker || worker.state !== "ready") return;
       const previous = boundWorkerGeneration.current;
+      // Already bound to this backend. Checked before the write, so a repeated
+      // `ready` for one generation can never replace the attempt twice — which
+      // is also what keeps the failed-view branch below from looping.
+      if (previous === worker.generation) return;
       boundWorkerGeneration.current = worker.generation;
-      if (previous === null || previous === worker.generation) return;
+      // The first `ready` this panel has seen, on a view that is fine: adopt the
+      // generation silently. A panel mounting against an already-running backend
+      // must not read that backend as a replacement and throw its view away.
+      //
+      // A FAILED view is the exception, and the case that made this branch
+      // conditional rather than unconditional: when the initial activation is
+      // what failed, this panel never observed a `ready` at all, so treating
+      // "first observation" as "nothing to do" would clear the banner and leave
+      // the user staring at the original error with the backend now healthy.
+      if (previous === null && !boundaryShowingError.current) return;
       // A different generation is ready: the backend this view was talking to is
       // gone and a new one is live. Every panel on the instance runs this from
       // the same broadcast, which is what makes them move together — no
@@ -650,6 +680,18 @@ export function makePluginViewContent(
     // reads as the app being broken rather than the plugin.
     const contentInert = presentation.kind === "unavailable";
 
+    // `inert` blanks focus inside the subtree, which would drop the user on
+    // `document.body` with no way back. Move them onto the host-owned status
+    // instead — but ONLY when focus was actually in there, so a panel going dark
+    // in the background never steals focus from what the user is doing.
+    useEffect(() => {
+      if (!contentInert) return;
+      const content = contentNodeRef.current;
+      const active = document.activeElement;
+      if (!content || !active || !content.contains(active)) return;
+      statusRef.current?.focus({ preventScroll: true });
+    }, [contentInert]);
+
     return (
       // Outside the boundary, not inside: the fallback is rendered BY the
       // boundary, so a provider nested within it would be unmounted exactly when
@@ -661,13 +703,31 @@ export function makePluginViewContent(
             explanation down with it (#11231, #12278). It is deliberately NOT
             inside the plugin's style root either, so a plugin stylesheet cannot
             restyle the control that recovers from it. */}
-        <PluginViewRuntimeStatus
-          presentation={presentation}
-          panelDisplayName={displayName}
-          onRestartPlugin={handleRestartPlugin}
-          restarting={restarting}
-        />
+        <div ref={statusRef} tabIndex={-1} className="outline-hidden">
+          <PluginViewRuntimeStatus
+            presentation={presentation}
+            panelDisplayName={displayName}
+            onRestartPlugin={handleRestartPlugin}
+            restarting={restarting}
+          />
+        </div>
         <ErrorBoundary
+          // The attempt counter is the boundary's KEY, not its `resetKeys`.
+          //
+          // A fresh `lazy()` wrapper alone does not remount anything: React
+          // compares the RESOLVED type, so a wrapper that resolves to the same
+          // module export reuses the existing fiber — the view keeps its state
+          // and its `deps: []` subscriptions while `replaceAttempt` has already
+          // aborted the `disposeSignal` those subscriptions were tied to. That
+          // combination is worse than not recovering at all. Remounting the
+          // whole boundary subtree is what makes an attempt genuinely new.
+          //
+          // It also gives attempt replacement a single owner. `resetKeys` made
+          // `componentDidUpdate` call `onReset` whenever the key changed while
+          // the fallback was up — so a backend rebind landing on a crashed view
+          // built the attempt twice. A remounted boundary starts with no error,
+          // so there is nothing left for an auto-reset to do.
+          key={retryCount}
           variant="component"
           // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
           // it that way), so prefixing pluginId again doubled it.
@@ -675,7 +735,6 @@ export function makePluginViewContent(
           fallback={PluginViewFallback}
           onError={handleRenderError}
           onReset={handleReset}
-          resetKeys={[retryCount]}
         >
           <Suspense
             fallback={
@@ -690,11 +749,14 @@ export function makePluginViewContent(
             }
           >
             <ContentFadeIn
-              className={cn(
-                "flex flex-col flex-1 min-h-0 w-full",
-                contentInert && "pointer-events-none opacity-60"
-              )}
-              aria-hidden={contentInert || undefined}
+              className={cn("flex flex-col flex-1 min-h-0 w-full", contentInert && "opacity-60")}
+              // Native `inert`, not `pointer-events-none` + `aria-hidden`: the
+              // CSS pair stops the mouse but leaves every control tabbable and
+              // Enter-activatable, and `aria-hidden` around a focused element is
+              // the exact shape Chromium refuses to hide. `inert` removes the
+              // subtree from focus, hit-testing and the accessibility tree in one
+              // go, which is the whole claim being made about stale content.
+              inert={contentInert}
               ref={styleRootRef}
               {...PLUGIN_STYLE_ROOT_PROPS}
             >

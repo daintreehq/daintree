@@ -2538,7 +2538,15 @@ export class PluginService {
         terminalFailure = true;
         // Guarded to the live entry: a replacement worker must not be torn down
         // by its predecessor's failure.
-        if (this.pluginWorkers.get(pluginId) === entry) this.deactivateWorker(pluginId);
+        if (this.pluginWorkers.get(pluginId) !== entry) return;
+        // Published HERE rather than from the host listener in
+        // `watchWorkerHealth`. The bridge subscribes to `protocol-violation` in
+        // its constructor, so it runs first: it fails the activation (which
+        // publishes `activation-failed`) and tears the entry down, and by the
+        // time the health listener gets its turn its identity guard fails. The
+        // violation would otherwise be reported as "it threw while starting up".
+        this.setWorkerStatus(pluginId, "failed", "protocol-violation", null);
+        this.deactivateWorker(pluginId);
       },
       // Fires on every activation outcome (initial + each reload). Keeps the
       // provenance `loadError` in sync so a fix-and-save clears a stale error
@@ -2607,7 +2615,23 @@ export class PluginService {
       await workerHost.start();
     } catch (err) {
       // Fork failure — no worker exists, so this is a hard activation failure.
-      this.setWorkerStatus(pluginId, "failed", "fork-failed", formatErrorMessage(err, "fork failed"));
+      //
+      // Guarded, because this catch also fires for a startup that was CANCELLED:
+      // an unload during the fork disposes the worker, which rejects `start()`.
+      // The unload has already dropped this instance's status, so writing here
+      // unguarded resurrects an orphan no later `unloadPlugin` can clear (it
+      // returns early once the id is gone from `plugins`) — and during a restart
+      // it would describe the replacement using its predecessor's disposal
+      // error. A protocol violation reported by the bridge keeps its own,
+      // sharper reason for the same reason.
+      if (!this.disposed && this.pluginWorkers.get(pluginId) === entry && !terminalFailure) {
+        this.setWorkerStatus(
+          pluginId,
+          "failed",
+          "fork-failed",
+          formatErrorMessage(err, "fork failed")
+        );
+      }
       cleanup();
       this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       console.error(`[PluginService] Failed to start worker for ${pluginId}:`, err);
@@ -4282,7 +4306,8 @@ export class PluginService {
     }
     // Plain `Error`, like every other refusal this service raises — the IPC
     // handler is the layer that owns user-facing `AppError` shaping.
-    if (!this.plugins.has(pluginId)) {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
       throw new Error(`Plugin "${pluginId}" isn't loaded`);
     }
     // A restart must not revive what the user deliberately turned off. The
@@ -4290,12 +4315,21 @@ export class PluginService {
     if (this.records.getDisabledIds().has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" is disabled`);
     }
+    // Builtins activate in-process and a plugin without a `main` has no backend
+    // at all, so neither has a worker to retire. Refused BEFORE anything is
+    // published: a `starting` for a plugin no worker event can ever settle would
+    // strand every panel on it in "Reloading" until the stall banner fires.
+    if (plugin.isBuiltin || !plugin.resolvedMain) {
+      throw new Error(`Plugin "${pluginId}" has no backend to restart`);
+    }
     const run = (async (): Promise<void> => {
       this.deactivateWorker(pluginId);
-      // Cleared explicitly: `deactivateWorker` leaves the last generation's
-      // `stopped`/`failed` behind, and a restart that fails to fork must not
-      // read as the previous failure still standing.
-      this.setWorkerStatus(pluginId, "starting", null, null, { newGeneration: true });
+      // No explicit `starting` here: `activateViaWorker` publishes one on a new
+      // generation as it forks, and doing it twice would bump the generation
+      // twice for a single restart. The `failed`/`stopped` this leaves standing
+      // in the gap is accurate — the old worker really is gone — and only the
+      // `stopped` case is latched, which a fresh `starting` clears.
+      //
       // Never rejects by contract (#9428) — the outcome is read back off the
       // status the activation path published.
       await this.activatePlugin(pluginId);
@@ -4303,6 +4337,7 @@ export class PluginService {
     const settled = run.finally(() => {
       if (this.workerRestarts.get(pluginId) === settled) this.workerRestarts.delete(pluginId);
     });
+    void settled.catch(() => undefined);
     this.workerRestarts.set(pluginId, settled);
     await settled;
     return this.buildRuntimeStatus(pluginId);

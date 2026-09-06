@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { PlugZap, RotateCw } from "lucide-react";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import type { PluginWorkerStatus } from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 /**
  * How long a worker may sit in a transient state before the shell stops calling
@@ -111,22 +111,22 @@ function failureCopy(worker: PluginWorkerStatus): { title: string; description: 
  * no further event is coming.
  */
 export function useWorkerStall(since: number | null): boolean {
-  const [stalled, setStalled] = useState(false);
+  // The TIMESTAMP that stalled, not a bare boolean. A boolean is still holding
+  // the previous attempt's `true` on the first render after a fresh `since`
+  // arrives — only the passive effect clears it — so a brand-new attempt would
+  // paint, and announce, the stalled UI for a frame.
+  const [stalledSince, setStalledSince] = useState<number | null>(null);
   useEffect(() => {
-    if (since === null) {
-      setStalled(false);
-      return;
-    }
+    if (since === null) return;
     const elapsed = Date.now() - since;
     if (elapsed >= PLUGIN_WORKER_STALL_MS) {
-      setStalled(true);
+      setStalledSince(since);
       return;
     }
-    setStalled(false);
-    const timer = setTimeout(() => setStalled(true), PLUGIN_WORKER_STALL_MS - elapsed);
+    const timer = setTimeout(() => setStalledSince(since), PLUGIN_WORKER_STALL_MS - elapsed);
     return () => clearTimeout(timer);
   }, [since]);
-  return stalled;
+  return since !== null && stalledSince === since;
 }
 
 export interface PluginViewRuntimeStatusProps {
@@ -161,17 +161,19 @@ export function PluginViewRuntimeStatus({
   if (presentation.kind === "content") return null;
 
   if (presentation.kind === "reloading") {
-    // T1 ambient chrome: a respawn is under way and nothing is asked of the
-    // user, so this states the fact and offers nothing to click.
+    // T1 ambient pane chrome, deliberately NOT an `InlineStatusBanner`: a
+    // respawn is routine, self-recovering, and asks nothing of the user, so the
+    // tiers rule puts it below a banner. A tinted, titled banner on every crash
+    // respawn would train the user to ignore the one that matters.
     return (
-      <InlineStatusBanner
-        icon={RotateCw}
-        severity="info"
+      <div
         role="status"
-        ariaLive="polite"
-        title="Reloading plugin"
-        description={`${panelDisplayName} is reconnecting to its plugin.`}
-      />
+        aria-live="polite"
+        className="flex items-center gap-1.5 px-3 py-1 text-2xs text-text-secondary"
+      >
+        <SpinningIcon icon={RotateCw} active className="size-3" />
+        <span>Reloading {panelDisplayName}</span>
+      </div>
     );
   }
 
@@ -179,10 +181,10 @@ export function PluginViewRuntimeStatus({
     return (
       <InlineStatusBanner
         icon={RotateCw}
-        severity="warning"
-        role="status"
-        ariaLive="polite"
-        title="Plugin is taking a while to start"
+        // T3, per the tiers rule: an auto-recovering state that stalls past the
+        // threshold escalates to an error banner carrying a recovery action.
+        severity="error"
+        title="Plugin isn't finishing its restart"
         // Deliberately not "the plugin has died": nothing here proves that. The
         // wait is unusual and the user is offered a way out; that is the whole
         // claim.
@@ -218,9 +220,3 @@ export function PluginViewRuntimeStatus({
     />
   );
 }
-
-/**
- * Re-exported so the content layer's own gating reads from one place rather
- * than re-deriving a second loading threshold.
- */
-export const PLUGIN_RESTART_FEEDBACK_MS = UI_DOHERTY_THRESHOLD;
