@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  getViewportPreset,
-  getEffectiveViewportSize,
-  computeFitScale,
-} from "@/panels/dev-preview/viewportPresets";
-import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
+import { getEffectiveViewportSize, computeFitScale } from "@/panels/dev-preview/viewportPresets";
+import { applyDevPreviewEmulation } from "./viewportEmulation";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ViewportPresetId } from "@shared/types/panel";
 
 interface UseDevPreviewViewportParams {
@@ -15,10 +12,6 @@ interface UseDevPreviewViewportParams {
   viewportFit: boolean;
   isWebviewReady: boolean;
   webviewElement: Electron.WebviewTag | null;
-  // Shared with useDevPreviewLoadLifecycle, which re-applies emulation after
-  // cross-origin navigation — the parent owns this ref so both hooks see the
-  // same seeded user agent.
-  originalUaRef: React.MutableRefObject<string | null>;
   setViewportPreset: (id: string, preset: ViewportPresetId | undefined) => void;
   setViewportRotated: (id: string, rotated: boolean) => void;
   setViewportDpr: (id: string, dpr: 1 | 2 | 3) => void;
@@ -41,7 +34,6 @@ export function useDevPreviewViewport({
   viewportFit,
   isWebviewReady,
   webviewElement,
-  originalUaRef,
   setViewportPreset,
   setViewportRotated,
   setViewportDpr,
@@ -108,47 +100,52 @@ export function useDevPreviewViewport({
       : 1;
 
   // Apply device emulation when viewport preset, rotation, or DPR changes.
-  // Uses enableDeviceEmulation which drives CSS media queries and window.innerWidth
-  // without a page reload, preserving in-page state across preset switches.
+  // The main process calls enableDeviceEmulation, which drives CSS media
+  // queries and window.innerWidth without a page reload, preserving in-page
+  // state across preset switches.
   const prevEmulationKeyRef = useRef<string | null>(null);
   const hasAppliedEmulationRef = useRef(false);
+  // Applying is an async IPC round trip now, so two fast preset switches can
+  // resolve out of order. Only the newest request may record what is applied.
+  const emulationSeqRef = useRef(0);
   useEffect(() => {
     if (!isWebviewReady || !webviewElement) return;
     const emulationKey = `${viewportPreset ?? "none"}-${viewportRotated}-${viewportDpr}`;
     if (prevEmulationKeyRef.current === emulationKey) return;
-    const hadPrevious = hasAppliedEmulationRef.current;
-
-    const wc = getDevPreviewWebContents(webviewElement);
-    if (!wc) return;
-
-    try {
-      if (viewportPreset) {
-        if (originalUaRef.current === null) {
-          // eslint-disable-next-line react-compiler/react-compiler -- originalUaRef is a parent-owned ref threaded in as a hook param; the compiler can't see through the boundary that it's a stable ref, not a prop
-          originalUaRef.current = wc.getUserAgent();
-        }
-        wc.setUserAgent(getViewportPreset(viewportPreset).userAgent);
-        wc.enableDeviceEmulation(
-          buildEmulationParams(viewportPreset, viewportRotated, viewportDpr)!
-        );
-        prevEmulationKeyRef.current = emulationKey;
-        hasAppliedEmulationRef.current = true;
-      } else if (hadPrevious) {
-        try {
-          wc.disableDeviceEmulation();
-        } catch {
-          // disableDeviceEmulation may throw if emulation was never enabled
-        }
-        if (originalUaRef.current) {
-          wc.setUserAgent(originalUaRef.current);
-        }
-        prevEmulationKeyRef.current = emulationKey;
-        hasAppliedEmulationRef.current = false;
-      }
-    } catch {
-      // WebContents not available (webview detached)
+    // Clearing emulation that was never applied is a no-op, but the key still
+    // has to advance so a later switch back to the same desktop state is not
+    // mistaken for a repeat.
+    if (!viewportPreset && !hasAppliedEmulationRef.current) {
+      prevEmulationKeyRef.current = emulationKey;
+      return;
     }
-  }, [viewportPreset, viewportRotated, viewportDpr, isWebviewReady, webviewElement, originalUaRef]);
+
+    // eslint-disable-next-line react-compiler/react-compiler -- refs mutated inside an effect the compiler cannot prove is not render-phase
+    const seq = ++emulationSeqRef.current;
+    let applied: Promise<void>;
+    try {
+      applied = applyDevPreviewEmulation(
+        webviewElement,
+        id,
+        viewportPreset,
+        viewportRotated,
+        viewportDpr
+      );
+    } catch {
+      // getWebContentsId() throws on a detached webview; the next ready
+      // transition re-runs this effect against the replacement guest.
+      return;
+    }
+
+    safeFireAndForget(
+      applied.then(() => {
+        if (emulationSeqRef.current !== seq) return;
+        prevEmulationKeyRef.current = emulationKey;
+        hasAppliedEmulationRef.current = viewportPreset !== undefined;
+      }),
+      { context: "Applying dev-preview device emulation" }
+    );
+  }, [id, viewportPreset, viewportRotated, viewportDpr, isWebviewReady, webviewElement]);
 
   return {
     effectiveViewport,

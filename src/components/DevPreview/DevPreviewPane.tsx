@@ -259,8 +259,6 @@ export function DevPreviewPane({
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
   const [guestWebContentsId, setGuestWebContentsId] = useState<number | undefined>(undefined);
-  // Store the original guest UA so we can restore it when clearing a preset
-  const originalUaRef = useRef<string | null>(null);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
 
   const isMountedRef = useRef(true);
@@ -429,7 +427,6 @@ export function DevPreviewPane({
     zoomFactor,
     evictingRef,
     lastSetUrlRef,
-    originalUaRef,
     setHistory,
     setBlockedNav: dispatchBlockedNav,
     onRenderProcessGone: handleRenderProcessGone,
@@ -700,7 +697,6 @@ export function DevPreviewPane({
     viewportFit,
     isWebviewReady,
     webviewElement,
-    originalUaRef,
     setViewportPreset,
     setViewportRotated,
     setViewportDpr,
@@ -1028,7 +1024,11 @@ export function DevPreviewPane({
                 className={cn(
                   "relative",
                   viewportPreset
-                    ? "rounded-lg border border-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
+                    ? // Outline, not border: this element carries the preset's
+                      // exact width/height and box-sizing is border-box, so a
+                      // 1px border would shave 2px off the content box the
+                      // guest is emulated at (#12298).
+                      "rounded-lg outline outline-1 -outline-offset-1 outline-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
                     : "h-full"
                 )}
                 style={

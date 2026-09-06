@@ -4,8 +4,8 @@ import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import type { BrowserHistory } from "@shared/types/browser";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { DEV_PREVIEW_PROXY_STATUS_TEXT } from "@shared/utils/devPreviewProxy";
-import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
-import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
+import { applyDevPreviewEmulation } from "./viewportEmulation";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pushBrowserHistory } from "../Browser/historyUtils";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import type { BlockedNavAction } from "./BlockedNavBanner";
@@ -72,7 +72,6 @@ interface UseDevPreviewLoadLifecycleParams {
   zoomFactor: number;
   evictingRef: React.RefObject<boolean>;
   lastSetUrlRef: React.MutableRefObject<string>;
-  originalUaRef: React.MutableRefObject<string | null>;
   setHistory: React.Dispatch<React.SetStateAction<BrowserHistory>>;
   setBlockedNav: React.Dispatch<BlockedNavAction>;
   onRenderProcessGone?: (details: { reason: string; exitCode: number }) => void;
@@ -98,7 +97,6 @@ export function useDevPreviewLoadLifecycle({
   zoomFactor,
   evictingRef,
   lastSetUrlRef,
-  originalUaRef,
   setHistory,
   setBlockedNav,
   onRenderProcessGone,
@@ -344,36 +342,28 @@ export function useDevPreviewLoadLifecycle({
         proxyRetryRef.current = null;
       }
 
-      // Device emulation and the UA override do NOT persist across
-      // cross-origin navigation (renderer process swap), so re-apply both
-      // here. Without this, navigating within the preview silently drops
-      // the emulated viewport and the spoofed user agent.
+      // Device emulation does not persist across cross-origin navigation
+      // (renderer process swap), so re-apply it here. Without this, navigating
+      // within the preview silently drops the emulated viewport. Only re-apply
+      // while a preset is active: clearing is driven by the toolbar, and main
+      // already restored the guest's own user agent when the preset was
+      // cleared, so a redundant clear on every load would be noise.
       const activePreset = viewportPresetRef.current;
-      const activeRotated = viewportRotatedRef.current;
-      const activeDpr = viewportDprRef.current;
-      try {
-        const wc = getDevPreviewWebContents(webview);
-        if (wc) {
-          if (originalUaRef.current === null) {
-            originalUaRef.current = wc.getUserAgent();
-          }
-          if (activePreset) {
-            wc.setUserAgent(getViewportPreset(activePreset).userAgent);
-            const params = buildEmulationParams(activePreset, activeRotated, activeDpr);
-            if (params) {
-              wc.enableDeviceEmulation(params);
-            }
-          } else if (originalUaRef.current !== null) {
-            wc.setUserAgent(originalUaRef.current);
-            try {
-              wc.disableDeviceEmulation();
-            } catch {
-              // disableDeviceEmulation may throw if emulation was never enabled
-            }
-          }
+      if (activePreset) {
+        try {
+          safeFireAndForget(
+            applyDevPreviewEmulation(
+              webview,
+              id,
+              activePreset,
+              viewportRotatedRef.current,
+              viewportDprRef.current
+            ),
+            { context: "Re-applying dev-preview device emulation after navigation" }
+          );
+        } catch {
+          // getWebContentsId() throws on a detached webview.
         }
-      } catch {
-        // WebContents not available (webview detached)
       }
     };
 
@@ -687,7 +677,6 @@ export function useDevPreviewLoadLifecycle({
     setHistory,
     setBlockedNav,
     id,
-    originalUaRef,
     onRenderProcessGone,
   ]);
 
@@ -701,14 +690,6 @@ export function useDevPreviewLoadLifecycle({
     const handleDomReady = () => {
       setIsWebviewReady(true);
       webview.setZoomFactor(zoomFactor);
-      try {
-        const wc = getDevPreviewWebContents(webview);
-        if (wc && originalUaRef.current === null) {
-          originalUaRef.current = wc.getUserAgent();
-        }
-      } catch {
-        // WebContents not available yet
-      }
       // The watchdog and the blocking "Loading preview" overlay share this one
       // finish boundary. dom-ready is DOMContentLoaded: the document is committed
       // and usable, while did-finish-load/did-stop-loading additionally wait on the
@@ -747,14 +728,6 @@ export function useDevPreviewLoadLifecycle({
       if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
         setIsWebviewReady(true);
         webview.setZoomFactor(zoomFactor);
-        try {
-          const wc = getDevPreviewWebContents(webview);
-          if (wc && originalUaRef.current === null) {
-            originalUaRef.current = wc.getUserAgent();
-          }
-        } catch {
-          // WebContents not available
-        }
         // dom-ready already fired before this listener attached. Run scroll
         // restore here so the position survives tab switches and other
         // re-renders that don't trigger another dom-ready.
@@ -781,7 +754,7 @@ export function useDevPreviewLoadLifecycle({
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [id, zoomFactor, webviewElement, originalUaRef]);
+  }, [id, zoomFactor, webviewElement]);
 
   useEffect(() => {
     return () => {

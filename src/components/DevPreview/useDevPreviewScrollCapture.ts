@@ -72,14 +72,14 @@ export function useDevPreviewScrollCapture({
       const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
       window.electron.webview
         .getScrollPosition(wcId)
-        .then((scrollY: number) => {
+        .then((scrollY: number | null) => {
           if (scrollCaptureGenerationRef.current !== captureGeneration) return;
-          // Guard `> 0`: a CDP error returns 0, and the user being at top of
-          // page has nothing worth restoring — both cases should leave any
-          // prior stored position untouched rather than clobber it.
-          if (typeof scrollY === "number" && Number.isFinite(scrollY) && scrollY > 0) {
-            setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
-          }
+          // `null` is the read-failed sentinel — leave any prior stored
+          // position alone. A successful `0` is a real position and must
+          // overwrite, or scrolling back to the top before eviction leaves a
+          // stale offset that a remount restores (#12298).
+          if (scrollY === null || !Number.isFinite(scrollY)) return;
+          setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
         })
         .catch(() => {});
     },

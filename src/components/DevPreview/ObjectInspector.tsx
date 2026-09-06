@@ -5,6 +5,13 @@ import { cn } from "@/lib/utils";
 interface ObjectInspectorProps {
   arg: CdpRemoteArg;
   webContentsId?: number;
+  /**
+   * Pane and row that own this handle. Main attributes the descendant handles
+   * an expansion returns to that row, so they are released with it rather than
+   * outliving the row on screen (#12298).
+   */
+  paneId: string;
+  rowId: number;
   isStale?: boolean;
   depth?: number;
 }
@@ -35,11 +42,15 @@ function PrimitiveValue({ arg }: { arg: CdpRemoteArg & { type: "primitive" } }) 
 function PropertyTree({
   properties,
   webContentsId,
+  paneId,
+  rowId,
   isStale,
   depth,
 }: {
   properties: CdpPropertyDescriptor[];
   webContentsId?: number;
+  paneId: string;
+  rowId: number;
   isStale?: boolean;
   depth: number;
 }) {
@@ -56,6 +67,8 @@ function PropertyTree({
             <ObjectInspector
               arg={prop.value}
               webContentsId={webContentsId}
+              paneId={paneId}
+              rowId={rowId}
               isStale={isStale}
               depth={depth + 1}
             />
@@ -71,6 +84,8 @@ function PropertyTree({
 export function ObjectInspector({
   arg,
   webContentsId,
+  paneId,
+  rowId,
   isStale = false,
   depth = 0,
 }: ObjectInspectorProps) {
@@ -104,6 +119,8 @@ export function ObjectInspector({
     try {
       const result = await window.electron.webview.getConsoleProperties(
         webContentsId,
+        paneId,
+        rowId,
         arg.objectId
       );
       setProperties(result.properties);
@@ -114,7 +131,7 @@ export function ObjectInspector({
     } finally {
       setIsLoading(false);
     }
-  }, [isExpanded, properties, arg, webContentsId, isStale, depth]);
+  }, [isExpanded, properties, arg, webContentsId, paneId, rowId, isStale, depth]);
 
   if (arg.type === "primitive") {
     return <PrimitiveValue arg={arg} />;
@@ -160,6 +177,8 @@ export function ObjectInspector({
         <PropertyTree
           properties={properties}
           webContentsId={webContentsId}
+          paneId={paneId}
+          rowId={rowId}
           isStale={isStale}
           depth={depth}
         />

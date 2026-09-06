@@ -1,0 +1,227 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeviceEmulationRequest } from "../../../../shared/types/ipc/webviewEmulation.js";
+
+interface MockGuest {
+  isDestroyed: () => boolean;
+  getUserAgent: ReturnType<typeof vi.fn>;
+  setUserAgent: ReturnType<typeof vi.fn>;
+  enableDeviceEmulation: ReturnType<typeof vi.fn>;
+  disableDeviceEmulation: ReturnType<typeof vi.fn>;
+  once: ReturnType<typeof vi.fn>;
+  debugger: {
+    isAttached: () => boolean;
+    attach: ReturnType<typeof vi.fn>;
+    sendCommand: ReturnType<typeof vi.fn>;
+  };
+}
+
+const guestRegistry = vi.hoisted(() => new Map<number, MockGuest>());
+const dialogService = vi.hoisted(() => ({
+  getPanelId: vi.fn<(webContentsId: number) => string | undefined>(),
+}));
+
+vi.mock("electron", () => ({
+  webContents: {
+    fromId: vi.fn((webContentsId: number) => guestRegistry.get(webContentsId)),
+  },
+}));
+
+vi.mock("../../../services/WebviewDialogService.js", () => ({
+  getWebviewDialogService: () => dialogService,
+}));
+
+function makeGuest(overrides: Partial<MockGuest> = {}): MockGuest {
+  return {
+    isDestroyed: () => false,
+    getUserAgent: vi.fn(() => "Daintree/1.0 Electron desktop UA"),
+    setUserAgent: vi.fn(),
+    enableDeviceEmulation: vi.fn(),
+    disableDeviceEmulation: vi.fn(),
+    once: vi.fn(),
+    debugger: {
+      isAttached: () => true,
+      attach: vi.fn(),
+      sendCommand: vi.fn(() => Promise.resolve()),
+    },
+    ...overrides,
+  };
+}
+
+const IPHONE_PARAMS = {
+  screenPosition: "mobile" as const,
+  screenSize: { width: 393, height: 852 },
+  viewPosition: { x: 0, y: 0 },
+  deviceScaleFactor: 3,
+  viewSize: { width: 393, height: 852 },
+  scale: 1,
+};
+
+const MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 19_4 like Mac OS X) Mobile/15E148";
+
+function applyRequest(overrides: Partial<DeviceEmulationRequest> = {}): DeviceEmulationRequest {
+  return {
+    webContentsId: 7,
+    panelId: "panel-a",
+    emulation: { params: IPHONE_PARAMS, userAgent: MOBILE_UA, touch: true },
+    ...overrides,
+  };
+}
+
+async function getHandler() {
+  const { webviewEmulationNamespace } = await import("../webviewEmulation.js");
+  return webviewEmulationNamespace.ops.setDeviceEmulation.handler as (
+    payload: DeviceEmulationRequest
+  ) => Promise<void>;
+}
+
+function cdpCalls(guest: MockGuest) {
+  return guest.debugger.sendCommand.mock.calls as Array<[string, Record<string, unknown>]>;
+}
+
+describe("webviewEmulation handler", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    guestRegistry.clear();
+    dialogService.getPanelId.mockReset();
+    dialogService.getPanelId.mockReturnValue("panel-a");
+  });
+
+  it("applies viewport metrics and the spoofed user agent to the registered guest", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+
+    const handler = await getHandler();
+    await handler(applyRequest());
+
+    expect(guest.setUserAgent).toHaveBeenCalledWith(MOBILE_UA);
+    expect(guest.enableDeviceEmulation).toHaveBeenCalledWith(IPHONE_PARAMS);
+  });
+
+  it("emulates touch and the coarse pointer/no-hover media features", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+
+    const handler = await getHandler();
+    await handler(applyRequest());
+
+    const calls = cdpCalls(guest);
+    expect(calls).toContainEqual([
+      "Emulation.setTouchEmulationEnabled",
+      { enabled: true, maxTouchPoints: 5 },
+    ]);
+    expect(calls).toContainEqual([
+      "Emulation.setEmitTouchEventsForMouse",
+      { enabled: true, configuration: "mobile" },
+    ]);
+    const media = calls.find(([cmd]) => cmd === "Emulation.setEmulatedMedia");
+    expect(media?.[1]).toEqual({
+      features: [
+        { name: "pointer", value: "coarse" },
+        { name: "any-pointer", value: "coarse" },
+        { name: "hover", value: "none" },
+        { name: "any-hover", value: "none" },
+      ],
+    });
+  });
+
+  it("restores the guest's own user agent and native metrics on a null payload", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+
+    await handler(applyRequest());
+    await handler(applyRequest({ emulation: null }));
+
+    expect(guest.disableDeviceEmulation).toHaveBeenCalledTimes(1);
+    expect(guest.setUserAgent).toHaveBeenLastCalledWith("Daintree/1.0 Electron desktop UA");
+    expect(cdpCalls(guest)).toContainEqual([
+      "Emulation.setTouchEmulationEnabled",
+      { enabled: false, maxTouchPoints: 1 },
+    ]);
+    expect(
+      cdpCalls(guest).filter(([cmd, params]) => {
+        return cmd === "Emulation.setEmulatedMedia" && (params as { features: [] }).features;
+      })
+    ).toContainEqual(["Emulation.setEmulatedMedia", { features: [] }]);
+  });
+
+  it("captures the original user agent only once across repeated applies", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+
+    await handler(applyRequest());
+    await handler(
+      applyRequest({ emulation: { params: IPHONE_PARAMS, userAgent: "other", touch: true } })
+    );
+    await handler(applyRequest({ emulation: null }));
+
+    expect(guest.getUserAgent).toHaveBeenCalledTimes(1);
+    expect(guest.setUserAgent).toHaveBeenLastCalledWith("Daintree/1.0 Electron desktop UA");
+  });
+
+  it("does not re-issue touch commands when the touch state is unchanged", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+
+    await handler(applyRequest());
+    await handler(applyRequest());
+
+    const touchCalls = cdpCalls(guest).filter(
+      ([cmd]) => cmd === "Emulation.setTouchEmulationEnabled"
+    );
+    expect(touchCalls).toHaveLength(1);
+  });
+
+  it("still applies viewport metrics when the touch CDP commands fail", async () => {
+    const guest = makeGuest();
+    guest.debugger.sendCommand.mockRejectedValue(new Error("Target closed"));
+    guestRegistry.set(7, guest);
+
+    const handler = await getHandler();
+    await handler(applyRequest());
+
+    expect(guest.enableDeviceEmulation).toHaveBeenCalledWith(IPHONE_PARAMS);
+  });
+
+  it("survives a guest that never had emulation enabled", async () => {
+    const guest = makeGuest({
+      disableDeviceEmulation: vi.fn(() => {
+        throw new Error("Device emulation is not enabled");
+      }),
+    });
+    guestRegistry.set(7, guest);
+
+    const handler = await getHandler();
+    await expect(handler(applyRequest({ emulation: null }))).resolves.toBeUndefined();
+  });
+
+  it("ignores a guest registered to a different panel", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+    dialogService.getPanelId.mockReturnValue("panel-b");
+
+    const handler = await getHandler();
+    await handler(applyRequest());
+
+    expect(guest.enableDeviceEmulation).not.toHaveBeenCalled();
+    expect(guest.setUserAgent).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unregistered guest", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+    dialogService.getPanelId.mockReturnValue(undefined);
+
+    const handler = await getHandler();
+    await handler(applyRequest());
+
+    expect(guest.enableDeviceEmulation).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the guest is gone", async () => {
+    const handler = await getHandler();
+    await expect(handler(applyRequest())).resolves.toBeUndefined();
+  });
+});

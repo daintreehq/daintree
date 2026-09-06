@@ -1141,9 +1141,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stopConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
     /** Clear tracked object references for a webview panel */
     clearConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
-    /** Fetch properties for a CDP remote object */
+    /**
+     * Fetch properties for a CDP remote object. `paneId`/`rowId` name the
+     * console row that owns the handle, so main can attribute the nested
+     * handles this returns and release them when that row is evicted.
+     */
     getConsoleProperties(
       webContentsId: number,
+      paneId: string,
+      rowId: number,
       objectId: string
     ): Promise<import("./webviewConsole.js").CdpGetPropertiesResult>;
     /** Subscribe to structured console messages */
@@ -1156,8 +1162,19 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     /** Reload a webview bypassing HTTP cache */
     reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
-    /** Read the current scroll position from Blink layout — works on frozen pages */
-    getScrollPosition(webContentsId: number): Promise<number>;
+    /**
+     * Read the current scroll position from Blink layout — works on frozen
+     * pages. Resolves `null` when the position could not be read at all, which
+     * callers must distinguish from a genuine `0` (page is at the top).
+     */
+    getScrollPosition(webContentsId: number): Promise<number | null>;
+    /**
+     * Apply (or, with `emulation: null`, clear) device emulation on a webview
+     * guest: viewport metrics, DPR, user agent and touch/pointer traits.
+     */
+    setDeviceEmulation(
+      payload: import("./webviewEmulation.js").DeviceEmulationRequest
+    ): Promise<void>;
     /** Capture the panel's webview viewport as a PNG, returned base64-encoded */
     captureScreenshot(
       panelId: string

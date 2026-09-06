@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { SerializedConsoleRow, CdpConsoleType } from "@shared/types/ipc/webviewConsole";
+import { MAX_CONSOLE_ROWS } from "@shared/config/devPreviewConsole";
 
 export type ConsoleLevel = "log" | "info" | "warning" | "error";
 
@@ -23,7 +24,9 @@ export const ZERO_COUNTS: ConsoleCounts = Object.freeze({
   warnCount: 0,
 }) as ConsoleCounts;
 
-const MAX_MESSAGES = 500;
+// Shared with the main-process console handler, which mirrors this cap to
+// decide when a row's CDP object handles can be released.
+const MAX_MESSAGES = MAX_CONSOLE_ROWS;
 
 interface ConsoleCaptureState {
   messages: Map<string, ConsoleMessage[]>;

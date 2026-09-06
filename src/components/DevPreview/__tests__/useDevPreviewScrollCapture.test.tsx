@@ -135,8 +135,33 @@ describe("useDevPreviewScrollCapture — captureScrollViaCdp (frozen-safe) path"
     });
   });
 
-  it("does not persist a CDP-returned 0 (error-path guard), unlike the executeJavaScript path", async () => {
+  it("persists a successful 0 so a return to the top overwrites a stale offset", async () => {
     getScrollPositionMock.mockResolvedValue(0);
+    const webview = makeWebview();
+    const setDevPreviewScrollPosition = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewScrollCapture({
+        id: PANE_ID,
+        status: "running",
+        webviewElement: null,
+        setDevPreviewScrollPosition,
+      })
+    );
+
+    await act(async () => {
+      result.current.captureScrollViaCdp(webview);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setDevPreviewScrollPosition).toHaveBeenCalledWith(PANE_ID, {
+      url: "http://localhost:3000/page",
+      scrollY: 0,
+    });
+  });
+
+  it("leaves any stored position untouched when the read fails (null sentinel)", async () => {
+    getScrollPositionMock.mockResolvedValue(null);
     const webview = makeWebview();
     const setDevPreviewScrollPosition = vi.fn();
     const { result } = renderHook(() =>
