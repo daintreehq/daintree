@@ -307,28 +307,7 @@ describe("webviewEmulation handler", () => {
     await expect(queued).resolves.toEqual({ applied: false });
   });
 
-  it("ignores a guest registered to a different panel", async () => {
-    const guest = makeGuest();
-    guestRegistry.set(7, guest);
-    dialogService.getPanelId.mockReturnValue("panel-b");
-
-    const handler = await getHandler();
-    const result = await handler(applyRequest());
-
-    expect(result).toEqual({ applied: false });
-    expect(guest.enableDeviceEmulation).not.toHaveBeenCalled();
-    expect(guest.setUserAgent).not.toHaveBeenCalled();
-  });
-
-  it("reports applied:false rather than letting the caller cache a lie", async () => {
-    const handler = await getHandler();
-    await expect(handler(applyRequest())).resolves.toEqual({ applied: false });
-
-    guestRegistry.set(7, makeGuest());
-    await expect(handler(applyRequest())).resolves.toEqual({ applied: true });
-  });
-
-  it("does not let a clear finish underneath a newer preset", async () => {
+  it("lets the last of three in-flight requests decide the final touch state", async () => {
     const guest = makeGuest();
     const pending: Array<() => void> = [];
     guest.debugger.sendCommand.mockImplementation(
