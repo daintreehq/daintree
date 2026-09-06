@@ -934,6 +934,13 @@ export type AssistantHostEventType = AssistantHostEvent["type"];
 // Daintree → engine commands
 // ============================================================================
 
+/** Worktree captured at message submission. */
+export interface AssistantPromptWorktree {
+  id: string;
+  path: string;
+  branch: string;
+}
+
 /**
  * Submit a user prompt.
  *
@@ -946,6 +953,8 @@ export interface AssistantPromptCommand {
   type: "prompt";
   sessionId: string;
   text: string;
+  /** null means no selected worktree; omission is reserved for older callers. */
+  worktree?: AssistantPromptWorktree | null;
 }
 
 /** Answer an outstanding `approval:requested`. */
