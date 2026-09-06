@@ -1426,15 +1426,11 @@ export class DevPreviewSessionService {
     // One budget per launch. A ready marker or a newly detected URL restarts
     // the probe, and each restart used to get a full READINESS_TIMEOUT_MS —
     // so the deadline the error message quotes was not the one being enforced.
-    // An already-spent deadline belongs to a probe that has since been
-    // abandoned — an output error aborts the poll without ending the launch,
-    // and re-attaching a live terminal replays its output minutes later. Reusing
-    // it would hand the new probe ~0ms and report "did not respond within 30
-    // seconds" without having waited at all.
-    const now = performance.now();
-    if (session.readinessDeadline === null || session.readinessDeadline <= now) {
-      session.readinessDeadline = now + READINESS_TIMEOUT_MS;
-    }
+    // Renewal is tied to lifecycle transitions that abandon a probe, never to
+    // the clock: "the deadline has passed, so start another one" cannot tell an
+    // abandoned budget from a live wait whose timeout has yet to fire, and a URL
+    // arriving at each expiry would then buy 30s forever.
+    session.readinessDeadline ??= performance.now() + READINESS_TIMEOUT_MS;
     const remainingMs = Math.max(1, Math.round(session.readinessDeadline - performance.now()));
 
     void waitForServerReady(url, signal, remainingMs, {

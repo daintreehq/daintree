@@ -70,10 +70,14 @@ const COMPILE_MARKERS_GLOBAL = COMPILE_MARKERS.map(toGlobal);
  * chunk — the leading match ends inside the carry and would mask the one that
  * actually just landed.
  *
- * Not strictly exactly-once: a pattern ending in `\d+` can match again when the
- * next chunk extends the digits ("ready in 8" then "7 ms"). That costs one extra
- * diagnostic row and nothing else — `markerSeen` already makes a repeated ready
- * marker inert, and compile markers are debounced by their own timers.
+ * Not strictly exactly-once. A pattern ending in `\d+` re-matches when the next
+ * chunk extends the digits ("ready in 8" then "7 ms"), and a straddling escape
+ * shifts the boundary early enough to re-report a marker that sits wholly in the
+ * carry. Both cost an extra `marker-recognized` row; a repeated ready marker is
+ * otherwise inert (`markerSeen` gates acceleration, and clearing an already
+ * clear compile phase is a no-op), while a repeated compile marker can re-arm
+ * the Compiling label for its debounce window. Cheap enough to accept, and far
+ * cheaper than missing the marker outright.
  */
 function matchesAcrossBoundary(patterns: RegExp[], window: string, boundary: number): boolean {
   if (window.length <= boundary) return false;
@@ -114,13 +118,20 @@ export class UrlDetector {
     // Strip the joined window, not each half: an escape sequence can itself be
     // split by the transport ("\x1b[3" + "2m"), and stripping the halves apart
     // leaves that residue sitting inside the very marker we are trying to match.
-    // The boundary is then derived from the chunk side, which is intact. If a
-    // straddling escape did get removed, the boundary lands slightly early and
-    // the match is accepted — erring toward one duplicate rather than a miss.
+    //
+    // When nothing straddles, the two halves strip independently and their
+    // lengths give the boundary exactly. When something does, the joined strip
+    // is shorter, and deriving the boundary from the intact chunk side puts it
+    // slightly early — which re-reports a marker rather than losing one. That is
+    // the right direction to err, and it is now confined to actual straddles.
     const carry = buffer.slice(-MARKER_CARRY_MAX);
     const strippedWindow = stripAnsiAndOscCodes(carry + data);
     const strippedChunk = stripAnsiAndOscCodes(data);
-    const boundary = Math.max(0, strippedWindow.length - strippedChunk.length);
+    const strippedCarry = stripAnsiAndOscCodes(carry);
+    const boundary =
+      strippedCarry.length + strippedChunk.length === strippedWindow.length
+        ? strippedCarry.length
+        : Math.max(0, strippedWindow.length - strippedChunk.length);
     const readyMarker = matchesAcrossBoundary(READY_MARKERS_GLOBAL, strippedWindow, boundary);
     const compileMarker = matchesAcrossBoundary(COMPILE_MARKERS_GLOBAL, strippedWindow, boundary);
 

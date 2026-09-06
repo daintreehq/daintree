@@ -591,6 +591,51 @@ describe("DevPreviewSessionService adversarial", () => {
     expect(state.error?.type).toBe("missing-dependencies");
   });
 
+  // #12299: the 5xx latch is carried across re-probes within a launch, so it
+  // must die with the launch. Inheriting it would make a healthy restart wait an
+  // extra poll round for a compiling shell the previous launch saw.
+  it("does not inherit a previous launch's 5xx history across a restart", async () => {
+    let status = 500;
+    const impl = ((_: unknown, __: unknown, cb: (res: MockIncomingMessage) => void) => {
+      const req: MockRequest = {
+        on: () => req,
+        end: () => setTimeout(() => cb({ statusCode: status, resume: () => {} }), 0),
+        destroy: () => {},
+      };
+      return req;
+    }) as unknown as typeof http.request;
+    vi.mocked(http.request).mockImplementation(impl);
+
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("localhost:3000")) return { buffer, url: "http://localhost:3000/" };
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    ptyClient.emitData(started.terminalId!, "Local: http://localhost:3000/");
+    // Let the launch observe a 5xx and latch it.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+    ).toBe("starting");
+
+    // A restart is a new launch; its server is healthy from the first response.
+    status = 200;
+    await service.restart({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+    const restarted = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    ptyClient.emitData(restarted.terminalId!, "Local: http://localhost:3000/");
+
+    // Under an inherited latch the first 200 would only arm a confirmation and
+    // this would still be "starting" until another poll round.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+    ).toBe("running");
+  });
+
   // #12299: every marker- or URL-triggered re-probe used to hand
   // waitForServerReady a fresh READINESS_TIMEOUT_MS, so the 30s the error
   // message quotes could stretch to a multiple of itself. One budget per launch.
@@ -686,10 +731,18 @@ describe("DevPreviewSessionService adversarial", () => {
     // The session then sits in that state for longer than the whole budget.
     await vi.advanceTimersByTimeAsync(60_000);
 
-    // A URL now shows up (a replay after remount, or the server recovering).
-    failHttp = false;
+    // A URL now shows up (a replay after remount, or the server recovering),
+    // but the server needs several seconds before it answers. A probe charged
+    // the spent budget would have given up long before that — so the wait here
+    // is what proves the budget was genuinely restored, not merely non-zero.
     ptyClient.emitData(started.terminalId!, "Local: http://localhost:3000/");
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+    ).toBe("starting");
+
+    failHttp = false;
+    await vi.advanceTimersByTimeAsync(1_000);
 
     const state = service.getState({
       panelId: baseRequest.panelId,

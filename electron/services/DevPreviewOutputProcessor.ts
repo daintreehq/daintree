@@ -24,6 +24,8 @@ export interface OutputProcessorSession {
   sawOutput: boolean;
   /** See DevPreviewSession.readinessDeadline — one budget per launch. */
   readinessDeadline: number | null;
+  /** See DevPreviewSession.readinessSaw5xx — latched for one launch only. */
+  readinessSaw5xx: boolean;
   generation: number;
   isRunningInstall: boolean;
   needsInstall: boolean;
@@ -223,9 +225,11 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
   session.pendingUrl = null;
   session.markerSeen = false;
   // This abort ends the probe without ending the launch, so nothing downstream
-  // will clear the budget. Leaving it set would charge the next probe for time
-  // spent sitting in an error state.
+  // will clear its state. Leaving the budget set would charge the next probe for
+  // time spent sitting in an error state, and leaving the latch set would make
+  // it wait an extra round for a 5xx only the abandoned probe ever saw.
   session.readinessDeadline = null;
+  session.readinessSaw5xx = false;
   deps.clearCompiling(session);
 
   if (result.error.type === "missing-dependencies") {

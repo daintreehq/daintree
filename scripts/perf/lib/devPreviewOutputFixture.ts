@@ -487,6 +487,7 @@ export function createDevPreviewSession(
     markerSeen: false,
     sawOutput: false,
     readinessDeadline: null,
+    readinessSaw5xx: false,
     generation: 1,
     isRunningInstall: false,
     needsInstall: false,

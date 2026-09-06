@@ -357,7 +357,7 @@ describe("waitForServerReady", () => {
     // #12299: an alias that 5xxes every round must not starve the aliases that
     // answer. Arming the confirmation deliberately does NOT end the round, so
     // every address family stays reachable (#9752).
-    it("keeps probing siblings after a 5xx arms the confirmation", async () => {
+    it("does not let one permanently-5xx alias starve the healthy ones", async () => {
       mockRequest.mockImplementation(
         (url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
           const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
@@ -366,15 +366,52 @@ describe("waitForServerReady", () => {
         }
       );
       const signal = new AbortController().signal;
-      const result = await waitForServerReady("http://localhost:3000", signal, 300);
+      // Round 1 arms 127.0.0.1 and [::1]; round 2 confirms one of them. The
+      // 502 on localhost must not clear their progress every round.
+      const result = await waitForServerReady("http://localhost:3000", signal, 900);
       expect(result).toBe(true);
-      // localhost 502 latches; 127.0.0.1 200 arms the confirmation; [::1] 200
-      // confirms it — a permanently sick alias cannot veto the healthy ones.
-      expect(mockRequest.mock.calls.map((call) => call[0])).toEqual([
+      // Every address family was dialled before any confirmation (#9752).
+      const round1 = mockRequest.mock.calls.slice(0, 3).map((call) => call[0]);
+      expect(round1).toEqual([
         "http://localhost:3000/",
         "http://127.0.0.1:3000/",
         "http://[::1]:3000/",
       ]);
+    });
+
+    // The whole point of the latch: a compiling shell 5xxes on every alias, and
+    // a brief window where they all answer 200 must not read as recovery.
+    it("does not confirm through a sibling alias inside the arming round", async () => {
+      let round = 0;
+      mockRequest.mockImplementation(
+        (_url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
+          const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+          // Round 1: every alias 500. Round 2: every alias 200.
+          round += 1;
+          callback({ statusCode: round <= 3 ? 500 : 200, resume: vi.fn() });
+          return req;
+        }
+      );
+      const signal = new AbortController().signal;
+      // 900ms covers rounds 1 and 2 but not a third, so the only way to resolve
+      // true would be confirming inside round 2 itself.
+      const result = await waitForServerReady("http://localhost:3000", signal, 900);
+      expect(result).toBe(false);
+    });
+
+    it("confirms in the round after the one that armed it", async () => {
+      let round = 0;
+      mockRequest.mockImplementation(
+        (_url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
+          const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+          round += 1;
+          callback({ statusCode: round <= 3 ? 500 : 200, resume: vi.fn() });
+          return req;
+        }
+      );
+      const signal = new AbortController().signal;
+      const result = await waitForServerReady("http://localhost:3000", signal, 1400);
+      expect(result).toBe(true);
     });
 
     // The confirming success may need to be separated from a 5xx seen by an

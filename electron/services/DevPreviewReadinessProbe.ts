@@ -174,8 +174,15 @@ export async function waitForServerReady(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const probeSignal = AbortSignal.any([signal, timeoutSignal]);
 
+  // The 5xx latch is global — a compiling shell answers 500 on every alias of
+  // the same port, so one 5xx is evidence about the server, not one address.
+  // The confirmation is per candidate and remembers WHICH ROUND armed it, which
+  // is what makes the confirming success land a poll interval later. Tracking it
+  // globally instead either lets a sibling alias confirm in the same pass (no
+  // temporal separation at all) or lets one permanently-500 alias reset the
+  // confirmation every round and starve the healthy ones (#9752).
   let hasSeen5xx = seenServerError;
-  let awaitingConfirmation = false;
+  const armedAtRound = new Map<string, number>();
   let attempt = 0;
   // Last reported outcome per candidate. A poll against a refused port settles
   // identically every 500ms; reporting only changes keeps the timeline to one
@@ -216,18 +223,23 @@ export async function waitForServerReady(
 
       if (result.outcome === "server-error") {
         hasSeen5xx = true;
-        awaitingConfirmation = false;
+        // Only this candidate regressed. Clearing every candidate's progress
+        // would let one permanently-sick alias veto the others forever.
+        armedAtRound.delete(candidateUrl);
       } else if (result.outcome === "reachable") {
-        if (!hasSeen5xx || awaitingConfirmation) {
+        if (!hasSeen5xx) {
           if (signal.aborted) return false;
           return true;
         }
-        // First success after a 5xx only arms the confirmation; a later
-        // observation has to confirm it. Deliberately NOT breaking out of the
-        // round: skipping the remaining candidates starves an alias that is the
-        // only one answering when a sibling 5xxes every round, and the address
-        // families must all stay reachable (#9752).
-        awaitingConfirmation = true;
+        const armed = armedAtRound.get(candidateUrl);
+        if (armed !== undefined && attempt > armed) {
+          if (signal.aborted) return false;
+          return true;
+        }
+        // First success after a 5xx only arms the confirmation, and it cannot
+        // confirm itself in the round that armed it. The round keeps going so
+        // every address family stays reachable.
+        if (armed === undefined) armedAtRound.set(candidateUrl, attempt);
       }
     }
 

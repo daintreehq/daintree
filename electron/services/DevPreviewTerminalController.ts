@@ -57,6 +57,8 @@ export interface TerminalControllerSession extends CrashLoopGuardSession {
   sawOutput: boolean;
   /** See DevPreviewSession.readinessDeadline — one budget per launch. */
   readinessDeadline: number | null;
+  /** See DevPreviewSession.readinessSaw5xx — latched for one launch only. */
+  readinessSaw5xx: boolean;
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
@@ -245,6 +247,8 @@ export async function stopSessionTerminal<TSession extends TerminalControllerSes
   clearStartupReplay(session);
   session.readinessAbort?.abort();
   session.readinessAbort = null;
+  session.readinessDeadline = null;
+  session.readinessSaw5xx = false;
   // Cancel a pending crash-loop backoff: otherwise the deferred re-install
   // fires after the terminal is gone (and, on the delete paths, after the
   // session is removed), spawning an orphan PTY on a stopped session.
@@ -345,6 +349,13 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
       }
 
       if ((session.status === "starting" || session.status === "installing") && !session.url) {
+        // Replayed output can start a readiness probe. Any budget left over
+        // from this terminal's earlier, abandoned probe would otherwise be
+        // charged to it — potentially a spent one, failing it instantly.
+        if (!session.readinessAbort) {
+          session.readinessDeadline = null;
+          session.readinessSaw5xx = false;
+        }
         await replayRecentOutput(terminalId, deps);
       }
 
@@ -362,6 +373,8 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
     detachTerminal(session, deps);
     session.readinessAbort?.abort();
     session.readinessAbort = null;
+    session.readinessDeadline = null;
+    session.readinessSaw5xx = false;
     session.pendingUrl = null;
     session.markerSeen = false;
     session.needsInstall = false;
@@ -480,6 +493,7 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
   session.markerSeen = false;
   session.sawOutput = false;
   session.readinessDeadline = null;
+  session.readinessSaw5xx = false;
   session.predictedUrl = predictedUrl;
   deps.clearCompiling(session);
   attachTerminal(session, terminalId, deps);
@@ -707,6 +721,8 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
   clearStartupReplay(session);
   session.readinessAbort?.abort();
   session.readinessAbort = null;
+  session.readinessDeadline = null;
+  session.readinessSaw5xx = false;
   session.pendingUrl = null;
   session.markerSeen = false;
   deps.clearCompiling(session);
