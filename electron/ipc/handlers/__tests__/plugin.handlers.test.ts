@@ -33,6 +33,8 @@ const mockGetProjectPluginVisibility = vi.fn();
 const mockSetProjectPluginVisibility = vi.fn();
 const mockSetPluginVisibilityDefault = vi.fn();
 const mockReloadProjectPlugins = vi.fn();
+const mockRestartPluginWorker = vi.fn();
+const mockListPluginRuntimeStatuses = vi.fn();
 
 // plugin:invoke resolves the sender's project/worktree through the registry
 // (#11297). Mocked so a test can register a sender without standing up a real
@@ -92,6 +94,8 @@ vi.mock("../../../services/PluginService.js", () => ({
     setProjectPluginVisibility: (...args: unknown[]) => mockSetProjectPluginVisibility(...args),
     setPluginVisibilityDefault: (...args: unknown[]) => mockSetPluginVisibilityDefault(...args),
     reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
+    restartPluginWorker: (...args: unknown[]) => mockRestartPluginWorker(...args),
+    listPluginRuntimeStatuses: (...args: unknown[]) => mockListPluginRuntimeStatuses(...args),
   },
 }));
 
@@ -157,6 +161,7 @@ import {
   clearAllPluginContributionScopes,
   setPluginContributionScope,
 } from "../../../services/plugin/PluginContributionBroadcaster.js";
+import { PLUGIN_METHOD_CHANNELS } from "../plugin.preload.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -170,6 +175,8 @@ beforeEach(() => {
   mockGetFocusedWindow.mockReturnValue(null);
   mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
   mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.my-plugin" });
+  mockRestartPluginWorker.mockReset().mockResolvedValue(null);
+  mockListPluginRuntimeStatuses.mockReset().mockReturnValue([]);
   mockNetFetch.mockReset();
   // Default: the sender is not a registered project view, so plugin:invoke
   // resolves a null project / no window — the pre-#11297 context shape.
@@ -185,11 +192,13 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    // 52 → 53 for #12214's `plugin:validate-manifest`, the on-disk manifest
-    // check behind the `plugin.validate` action. 53 → 55 for #12278's
-    // `plugin:runtime-statuses-get` and `plugin:restart-worker`, the health
-    // snapshot a panel hydrates from and the restart it recovers with.
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(55);
+    // Derived rather than a magic number: every typed op is one entry of
+    // PLUGIN_METHOD_CHANNELS, and the `+ 1` is `plugin:invoke`, which stays on
+    // raw `ipcMain.handle` outside the typed namespace. A hardcoded total goes
+    // stale the next time a channel is added and reddens a shard belonging to
+    // whoever added it; the named assertions below are what pin the channels
+    // this branch is actually about.
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(Object.keys(PLUGIN_METHOD_CHANNELS).length + 1);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:runtime-statuses-get",
@@ -3025,5 +3034,71 @@ describe("cross-project plugin control", () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
     await getHandler("plugin:actions-unregister")({ sender: { id: 1 } }, INSTANCE_A, "refresh");
     expect(mockUnregisterPluginAction).toHaveBeenCalledWith(INSTANCE_A, "refresh");
+  });
+
+  it("refuses to restart another project's plugin backend", async () => {
+    // A restart STARTS the worker for an instance that may not be running at
+    // all, so an unguarded call is a way to run another project's plugin code
+    // on this project's say-so — the same reach `activate-for-view` closes.
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:restart-worker")({ sender: { id: 1 } }, INSTANCE_A)
+    ).rejects.toThrow(/different project/);
+    expect(mockRestartPluginWorker).not.toHaveBeenCalled();
+  });
+
+  it("restarts the sender's own project instance", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    await getHandler("plugin:restart-worker")({ sender: { id: 1 } }, INSTANCE_A);
+    expect(mockRestartPluginWorker).toHaveBeenCalledWith(INSTANCE_A);
+  });
+
+  it("leaves an app-global plugin id unconstrained by the sender's project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await getHandler("plugin:restart-worker")({ sender: { id: 1 } }, "acme.dashboard");
+    expect(mockRestartPluginWorker).toHaveBeenCalledWith("acme.dashboard");
+  });
+
+  it.each([
+    // Same shapes the action guards cover: the separator at offset zero parses
+    // to null, which without a check would read as "app-global" and skip the
+    // ownership test. Rejected one layer earlier here — `isSafePluginInstanceId`
+    // runs first and neither shape is a legal instance id — so the handler's own
+    // malformed branch is belt-and-braces behind it. Either way nothing reaches
+    // the service.
+    "project____acme.dashboard",
+    "project__",
+  ])("rejects the malformed project plugin id %j on restart", async (bad) => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(getHandler("plugin:restart-worker")({ sender: { id: 1 } }, bad)).rejects.toThrow(
+      /invalid instance id|malformed project instance key/
+    );
+    expect(mockRestartPluginWorker).not.toHaveBeenCalled();
+  });
+
+  it("withholds another project's instance from the runtime-status pull", async () => {
+    // The push path is scoped the same way, so a renderer never learns about an
+    // instance it has no panel on — and never receives that instance's
+    // plugin-authored `detail` text.
+    mockListPluginRuntimeStatuses.mockReturnValue([
+      { pluginId: INSTANCE_A, viewGeneration: 1, worker: null, dev: null },
+      {
+        pluginId: `project__${PROJECT_B}__acme.dashboard`,
+        viewGeneration: 1,
+        worker: null,
+        dev: null,
+      },
+      { pluginId: "acme.dashboard", viewGeneration: 1, worker: null, dev: null },
+    ]);
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+
+    const statuses = (await getHandler("plugin:runtime-statuses-get")({
+      sender: { id: 1 },
+    })) as Array<{ pluginId: string }>;
+
+    expect(statuses.map((s) => s.pluginId)).toEqual([
+      `project__${PROJECT_B}__acme.dashboard`,
+      "acme.dashboard",
+    ]);
   });
 });

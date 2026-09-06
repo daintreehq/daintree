@@ -4315,11 +4315,14 @@ export class PluginService {
     if (this.records.getDisabledIds().has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" is disabled`);
     }
-    // Builtins activate in-process and a plugin without a `main` has no backend
-    // at all, so neither has a worker to retire. Refused BEFORE anything is
-    // published: a `starting` for a plugin no worker event can ever settle would
-    // strand every panel on it in "Reloading" until the stall banner fires.
-    if (plugin.isBuiltin || !plugin.resolvedMain) {
+    // Worker eligibility is the same predicate activation forks on, so it is
+    // read from the one place that encodes it: a builtin runs in-process, and a
+    // plugin with neither `main` nor a resolved command handler has no code for
+    // a worker to run — but a commands-only plugin DOES have a live worker
+    // (#12274) and must stay restartable. Refused BEFORE anything is published:
+    // a `starting` for a plugin no worker event can ever settle would strand
+    // every panel on it in "Reloading" until the stall banner fires.
+    if (!this.hasWorkerCode(pluginId, plugin)) {
       throw new Error(`Plugin "${pluginId}" has no backend to restart`);
     }
     const run = (async (): Promise<void> => {
@@ -4376,12 +4379,31 @@ export class PluginService {
     };
   }
 
+  /**
+   * Publish one instance's health to the renderers entitled to see it.
+   *
+   * Scoped to the owning project for a project-local instance, matching the
+   * pull path (`plugin:runtime-statuses-get`) and the precedent every other
+   * project-local plugin event already follows. This is not just symmetry: the
+   * payload carries plugin-authored `detail` — activation errors, stack text,
+   * paths inside that project's checkout — and no other project's view has a
+   * panel on the instance to render it. An app-global id takes the full
+   * broadcast it has always taken, spelled out rather than routed through
+   * `broadcastToProjectRenderers`'s null widening so the common case reads as
+   * what it is.
+   */
   private emitRuntimeStatus(pluginId: string): void {
     if (this.disposed) return;
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:runtime-status-changed",
+    const event = {
+      name: "plugin:runtime-status-changed" as const,
       payload: { pluginId, status: this.buildRuntimeStatus(pluginId) },
-    });
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
   private setDevSessionDetail(pluginId: string, detail: string | null): void {

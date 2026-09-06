@@ -622,7 +622,40 @@ export function makePluginViewContent(
     useEffect(() => {
       if (worker?.state === "ready") setEverReady(true);
     }, [worker?.state]);
-    const presentation = presentWorkerStatus(worker, stalled, everReady);
+    const [restarting, setRestarting] = useState(false);
+    // Guards the settle: a panel closed mid-restart must not set state on a
+    // subtree React has already torn down.
+    const restartAliveRef = useRef(true);
+    useEffect(() => {
+      restartAliveRef.current = true;
+      return () => {
+        restartAliveRef.current = false;
+      };
+    }, []);
+    const handleRestartPlugin = useCallback(() => {
+      const restart = window.electron?.plugin?.restartWorker;
+      if (typeof restart !== "function") return;
+      setRestarting(true);
+      void restart(pluginId)
+        .catch(() => {
+          // The banner is driven by the pushed status, not by this call's
+          // outcome: a restart that ran and failed again republishes `failed`,
+          // which is the state the user needs to see either way.
+        })
+        .finally(() => {
+          if (restartAliveRef.current) setRestarting(false);
+        });
+      // `pluginId` is a factory-scope constant, not a reactive value.
+    }, []);
+
+    // `restarting` joins `everReady` in the gate because the two answer the same
+    // question — is this a recovery or a first load. On a panel whose INITIAL
+    // activation failed, `everReady` is false forever, so without this the
+    // `starting` the restart publishes would fall through to `kind: "content"`:
+    // the banner would unmount mid-restart, taking the button's own pending
+    // state with it, and `contentInert` would lift and re-arm the dead
+    // backend's stale controls for the whole round trip.
+    const presentation = presentWorkerStatus(worker, stalled, everReady || restarting);
 
     /**
      * Worker generation this attempt is bound to.
@@ -659,32 +692,6 @@ export function makePluginViewContent(
       // main-side panel registry is involved (#12278).
       replaceAttempt(false);
     }, [worker, replaceAttempt]);
-
-    const [restarting, setRestarting] = useState(false);
-    // Guards the settle: a panel closed mid-restart must not set state on a
-    // subtree React has already torn down.
-    const restartAliveRef = useRef(true);
-    useEffect(() => {
-      restartAliveRef.current = true;
-      return () => {
-        restartAliveRef.current = false;
-      };
-    }, []);
-    const handleRestartPlugin = useCallback(() => {
-      const restart = window.electron?.plugin?.restartWorker;
-      if (typeof restart !== "function") return;
-      setRestarting(true);
-      void restart(pluginId)
-        .catch(() => {
-          // The banner is driven by the pushed status, not by this call's
-          // outcome: a restart that ran and failed again republishes `failed`,
-          // which is the state the user needs to see either way.
-        })
-        .finally(() => {
-          if (restartAliveRef.current) setRestarting(false);
-        });
-      // `pluginId` is a factory-scope constant, not a reactive value.
-    }, []);
 
     // Stale content stays visible behind a terminal failure — it is the last
     // thing the plugin actually produced, and blanking it loses context the user

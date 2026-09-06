@@ -1976,10 +1976,13 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
-  // Live state of a `daintree-plugin dev` session (main → renderer, #12277).
-  // Carries the whole per-plugin snapshot, so the receiver never has to
-  // reconstruct which generation is live from a sequence of notifications; a
-  // `null` status means the session ended.
+  // Live health of one plugin instance — worker lifecycle plus dev session
+  // (main → renderer, #12277/#12278). Carries the whole per-instance snapshot,
+  // so the receiver never has to reconstruct which generation is live from a
+  // sequence of notifications; a `null` status means the instance is no longer
+  // tracked. Sent via `broadcastToProjectRenderers` for a project-local
+  // instance so a project's backend errors and paths stay in its own views;
+  // an app-global instance widens to the full broadcast.
   "plugin:runtime-status-changed": import("../plugin.js").PluginRuntimeStatusChangedEvent;
 
   // A project's `.daintree/plugins/` folder holds valid manifests and has no
@@ -2154,7 +2157,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
-  // Plugin instance runtime health: worker lifecycle + dev session (global broadcast)
+  // Plugin instance runtime health: worker lifecycle + dev session (global
+  // broadcast for an app-global instance, project-scoped send for a project one)
   | "plugin:runtime-status-changed"
   // Project-local plugin trust + inventory (project-scoped send)
   | "plugin:project-trust-prompt"

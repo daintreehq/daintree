@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntimeStatus, PluginWorkerStatus } from "@shared/types/plugin";
+import { PLUGIN_WORKER_STALL_MS } from "../pluginWorkerPresentation";
 import type { PluginViewContentConfig } from "../PluginViewContent";
 
 /**
@@ -375,6 +376,92 @@ describe("mounted panel learns its backend died (#12278)", () => {
 
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reports the round trip when a first-activation failure is being restarted", async () => {
+    await mountContent();
+    // The initial activation is what failed, so `everReady` is false and stays
+    // false — the exact panel the restart button exists for.
+    await pushStatus(worker({ generation: 1, state: "failed", reason: "activation-failed" }));
+
+    let settleRestart: (() => void) | undefined;
+    restartWorkerMock.mockReturnValue(
+      new Promise<null>((resolve) => {
+        settleRestart = () => resolve(null);
+      })
+    );
+    const button = await screen.findByRole("button", { name: /Restart plugin/ });
+    await act(async () => {
+      button.click();
+    });
+
+    // The `starting` the restart publishes is gated on `everReady`, which this
+    // panel can never satisfy. Without the in-flight restart feeding that gate
+    // it falls through to bare content and the user's own click goes completely
+    // unreported until the restart either succeeds or fails again.
+    await pushStatus(worker({ generation: 2, state: "starting" }));
+
+    const ambient = screen.getByRole("status");
+    expect(ambient.textContent).toContain("Reloading");
+
+    await act(async () => {
+      settleRestart?.();
+    });
+  });
+
+  it("escalates a restart that never finishes to an actionable banner", async () => {
+    await mountContent();
+    const t0 = Date.now();
+    vi.useFakeTimers();
+    try {
+      await pushStatus(worker({ generation: 1, state: "ready", stateSince: t0 }));
+      await pushStatus(worker({ generation: 2, state: "starting", stateSince: t0 }));
+
+      // Below the threshold this is still T1 ambient chrome — a respawn is
+      // routine and asks nothing of the user.
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByRole("status").textContent).toContain("Reloading");
+
+      await act(async () => {
+        vi.advanceTimersByTime(PLUGIN_WORKER_STALL_MS + 1);
+      });
+
+      const banner = screen.getByRole("alert");
+      expect(banner.textContent).toContain("Plugin isn't finishing its restart");
+      // A presentation threshold, not a health verdict: nothing here proves the
+      // backend died, so the copy must not say it did.
+      expect(banner.textContent).not.toContain("died");
+      expect(screen.getByRole("button", { name: /Restart plugin/ })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not paint the stalled banner for a frame when a fresh attempt starts", async () => {
+    await mountContent();
+    const t0 = Date.now();
+    vi.useFakeTimers();
+    try {
+      await pushStatus(worker({ generation: 1, state: "ready", stateSince: t0 }));
+      await pushStatus(worker({ generation: 2, state: "starting", stateSince: t0 }));
+      await act(async () => {
+        vi.advanceTimersByTime(PLUGIN_WORKER_STALL_MS + 1);
+      });
+      expect(screen.getByRole("alert")).toBeTruthy();
+
+      // `useWorkerStall` stores the stalled TIMESTAMP rather than a boolean for
+      // exactly this: a boolean would still be holding the previous attempt's
+      // `true` on the first render after a new `stateSince` arrives, so a
+      // brand-new generation would announce itself as already stalled.
+      await pushStatus(
+        worker({ generation: 3, state: "starting", stateSince: t0 + PLUGIN_WORKER_STALL_MS + 1 })
+      );
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByRole("status").textContent).toContain("Reloading");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows no banner at all while nothing is known about the backend", async () => {

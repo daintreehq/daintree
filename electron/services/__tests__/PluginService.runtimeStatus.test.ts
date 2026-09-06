@@ -44,7 +44,13 @@ vi.mock("../../window/windowRef.js", () => ({
   getMainWindow: vi.fn(() => null),
   setProjectViewManager: vi.fn(),
 }));
-vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
+vi.mock("../../ipc/utils.js", () => {
+  const broadcastToRenderer = vi.fn();
+  return {
+    broadcastToRenderer,
+    broadcastToProjectRenderers: vi.fn(),
+  };
+});
 vi.mock("../../store.js", () => ({ store: storeMock }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: { getCurrentProject: vi.fn(() => null) } }));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
@@ -102,7 +108,7 @@ vi.mock("../plugin-capability/instances.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { broadcastToRenderer } from "../../ipc/utils.js";
+import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import type { PluginRuntimeStatus, PluginWorkerState } from "../../../shared/types/plugin.js";
 
 let tmpDir: string;
@@ -114,6 +120,7 @@ beforeEach(async () => {
   await fs.mkdir(pluginsRoot, { recursive: true });
   storeMock._state.clear();
   vi.mocked(broadcastToRenderer).mockClear();
+  vi.mocked(broadcastToProjectRenderers).mockClear();
 });
 
 afterEach(async () => {
@@ -138,6 +145,7 @@ interface RuntimeInternals {
   pluginWorkers: Map<string, unknown>;
   workerStatuses: Map<string, unknown>;
   plugins: Map<string, unknown>;
+  commandModulePaths: Map<string, string>;
 }
 
 function internals(service: PluginService): RuntimeInternals {
@@ -245,6 +253,46 @@ describe("plugin runtime status — the projection panels read (#12278)", () => 
     // mounted against" by this number alone — `viewGeneration` does not move
     // when only the worker is swapped.
     expect(second).toBeGreaterThan(first as number);
+
+    service.dispose();
+  });
+});
+
+describe("runtime-status broadcast scope (#12278)", () => {
+  const PROJECT = "a".repeat(64);
+  const INSTANCE = `project__${PROJECT}__acme.dashboard`;
+
+  it("keeps a project instance's health inside its own project's views", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    internals(service).setWorkerStatus(INSTANCE, "failed", "activation-failed", "/Users/x/secret", {
+      newGeneration: true,
+    });
+
+    // Scoped, not global: the payload carries plugin-authored `detail` — error
+    // text and paths out of that project's checkout — and no other project's
+    // view has a panel on the instance to render it. Same rule the pull handler
+    // applies, and the one every other project-local plugin event follows.
+    const scoped = vi
+      .mocked(broadcastToProjectRenderers)
+      .mock.calls.filter(
+        ([, , event]) =>
+          (event as { name: string } | undefined)?.name === "plugin:runtime-status-changed"
+      );
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0][0]).toBe(PROJECT);
+    expect(publishedStatuses()).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("broadcasts an app-global instance's health to every view", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    internals(service).setWorkerStatus("acme.prod", "starting", null, null, {
+      newGeneration: true,
+    });
+
+    expect(publishedStatuses().map((p) => p.pluginId)).toEqual(["acme.prod"]);
+    expect(vi.mocked(broadcastToProjectRenderers)).not.toHaveBeenCalled();
 
     service.dispose();
   });
@@ -375,6 +423,51 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
       /no backend to restart/
     );
     expect(statusOf(service, "daintree.github")).toBeUndefined();
+
+    service.dispose();
+  });
+
+  /**
+   * A plugin with no `main` at all, whose manifest commands are backed by real
+   * handler modules. Since #12274 that plugin forks a worker like any other, so
+   * the restart gate must not read "no `main`" as "no backend".
+   */
+  function commandsOnlyPlugin(id: string) {
+    return {
+      manifest: { name: id, contributes: { commands: [{ id: "refresh" }] } },
+      isBuiltin: false,
+      resolvedMain: null,
+    };
+  }
+
+  it("restarts a commands-only plugin, which has a worker despite having no main", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    internals(service).plugins.set("acme.commands", commandsOnlyPlugin("acme.commands"));
+    // The probe's own output: a resolved handler module is what makes the
+    // plugin worker-backed (#12274).
+    internals(service).commandModulePaths.set(
+      "acme.commands.refresh",
+      path.join(pluginsRoot, "acme.commands", "src", "refresh.js")
+    );
+    const activate = vi.spyOn(service, "activatePlugin").mockImplementation(async () => undefined);
+
+    await service.restartPluginWorker("acme.commands");
+
+    expect(activate).toHaveBeenCalledWith("acme.commands");
+
+    service.dispose();
+  });
+
+  it("refuses a plugin with neither a main nor a resolvable command module", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    // A command DESCRIPTOR with nothing behind it — the file is missing, or its
+    // only sibling is `.ts` — forks no worker, so there is nothing to retire.
+    internals(service).plugins.set("acme.hollow", commandsOnlyPlugin("acme.hollow"));
+
+    await expect(service.restartPluginWorker("acme.hollow")).rejects.toThrow(
+      /no backend to restart/
+    );
+    expect(statusOf(service, "acme.hollow")).toBeUndefined();
 
     service.dispose();
   });

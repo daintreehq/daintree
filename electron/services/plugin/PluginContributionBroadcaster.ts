@@ -15,6 +15,7 @@ import {
   hasProjectPluginVisibilityOverrides,
   isPluginVisibleInProject,
 } from "./projectPluginVisibility.js";
+import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import type { PluginActionDescriptor, PluginScopeKey } from "../../../shared/types/plugin.js";
 
 /**
@@ -624,14 +625,22 @@ export class PluginContributionBroadcaster {
         name: "plugin:recipes-changed",
         payload: { recipes: getPluginRecipes(), complete: false },
       },
-      // Not project-scoped: the payload is health metadata keyed by instance id,
-      // and a view with no panel on that instance simply renders nothing for it.
-      // A view that missed the live event has no other way to learn which
-      // generation is running, or that its backend already died.
-      ...this.deps.listPluginRuntimeStatuses().map((status) => ({
-        name: "plugin:runtime-status-changed",
-        payload: { pluginId: status.pluginId, status },
-      })),
+      // Narrowed by instance ownership, not by `forProject`: a runtime status is
+      // health metadata about a backend, so what governs it is which project the
+      // instance belongs to, not whether the project chose to show the plugin's
+      // contributions — a hidden plugin whose worker died still owes its own
+      // project's views the news. The same filter runs on the pull path
+      // (`plugin:runtime-statuses-get`), so replay and pull agree.
+      ...this.deps
+        .listPluginRuntimeStatuses()
+        .filter((status) => {
+          const owner = projectIdFromPluginInstanceKey(status.pluginId);
+          return owner === null || owner === target;
+        })
+        .map((status) => ({
+          name: "plugin:runtime-status-changed",
+          payload: { pluginId: status.pluginId, status },
+        })),
     ];
     for (const event of events) {
       try {
