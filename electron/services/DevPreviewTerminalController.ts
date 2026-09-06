@@ -427,10 +427,15 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
   // dispose() can fire while allocatePort awaits its net probe. Guard here
   // so we don't spawn a terminal on a disposed service; roll back the
   // reservation to avoid a stale portRegistry entry after disposal cleared it.
-  if (deps.isDisposed() || session.launchEpoch !== startEpoch) {
+  if (deps.isDisposed()) {
     releasePort(deps.portRegistry, sessionKey);
     return;
   }
+  // Stopped or superseded while we allocated. The registry entry is sticky per
+  // sessionKey — stopSessionTerminal leaves it in place so a restart reuses the
+  // port — so a newer launch may already own this reservation. Releasing it here
+  // would hand its live port out again and skip the next stop's TIME_WAIT wait.
+  if (session.launchEpoch !== startEpoch) return;
   // Recorded with the generation this spawn is about to become, so the whole
   // spawn lifecycle (port-allocated → spawned → …) shares one generation.
   deps.recordDiagnostic(sessionKey, nextGeneration, { type: "port-allocated", port });

@@ -13,6 +13,23 @@ vi.mock("node:fs/promises", () => ({
   readFile: (...args: unknown[]) => mockReadFile(...(args as [string, string])),
 }));
 
+const portGate = vi.hoisted(() => ({ pending: null as Promise<void> | null, reached: false }));
+
+// Holds the reservation open across the allocate await, the way a real net
+// probe does, so a cancellation can land while the port is already registered.
+vi.mock("../DevPreviewPortAllocator.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../DevPreviewPortAllocator.js")>();
+  return {
+    ...actual,
+    allocatePort: async (registry: Map<string, number>, key: string) => {
+      const port = await actual.allocatePort(registry, key);
+      portGate.reached = true;
+      if (portGate.pending) await portGate.pending;
+      return port;
+    },
+  };
+});
+
 import {
   invalidatePendingLaunch,
   spawnSessionTerminal,
@@ -114,9 +131,22 @@ function gateReadFile(): () => void {
   return open;
 }
 
+function gatePortAllocation(): () => void {
+  let open!: () => void;
+  portGate.pending = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return () => {
+    portGate.pending = null;
+    open();
+  };
+}
+
 describe("dev preview launch cancellation", () => {
   beforeEach(() => {
     mockReadFile.mockReset();
+    portGate.pending = null;
+    portGate.reached = false;
   });
 
   it("abandons a launch whose session was stopped while its command was resolving", async () => {
@@ -153,6 +183,47 @@ describe("dev preview launch cancellation", () => {
     releaseNormalization();
     await launch;
 
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  // stopSessionTerminal deliberately keeps the registry entry so a restart
+  // reuses the port, so by the time this launch resumes the reservation may
+  // belong to the launch that replaced it.
+  it("leaves the port reservation alone when the launch was superseded mid-allocation", async () => {
+    const releaseAllocation = gatePortAllocation();
+
+    const session = makeSession();
+    const { deps, spawn } = makeDeps();
+    const key = createSessionKey("project-1", "panel-1");
+
+    const launch = spawnSessionTerminal(session, deps);
+    await vi.waitFor(() => expect(portGate.reached).toBe(true));
+
+    invalidatePendingLaunch(session);
+    releaseAllocation();
+    await launch;
+
+    expect(deps.portRegistry.get(key)).toBe(4321);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rolls the reservation back when the service was disposed mid-allocation", async () => {
+    const releaseAllocation = gatePortAllocation();
+
+    const session = makeSession();
+    const { deps: baseDeps, spawn } = makeDeps();
+    let disposed = false;
+    const deps = { ...baseDeps, isDisposed: () => disposed };
+    const key = createSessionKey("project-1", "panel-1");
+
+    const launch = spawnSessionTerminal(session, deps);
+    await vi.waitFor(() => expect(portGate.reached).toBe(true));
+
+    disposed = true;
+    releaseAllocation();
+    await launch;
+
+    expect(deps.portRegistry.has(key)).toBe(false);
     expect(spawn).not.toHaveBeenCalled();
   });
 
