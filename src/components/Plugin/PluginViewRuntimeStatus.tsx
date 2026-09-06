@@ -38,7 +38,12 @@ export type PluginWorkerPresentation =
  */
 export function presentWorkerStatus(
   worker: PluginWorkerStatus | null,
-  stalled: boolean
+  stalled: boolean,
+  /**
+   * Whether this panel has ever seen its backend reach `ready`. A transient
+   * state before that is a FIRST activation, not a recovery.
+   */
+  everReady: boolean
 ): PluginWorkerPresentation {
   if (!worker) return { kind: "content" };
   switch (worker.state) {
@@ -46,9 +51,13 @@ export function presentWorkerStatus(
       return { kind: "content" };
     case "starting":
     case "activating":
-      // A first activation is covered by the Suspense skeleton the lazy import
-      // already drives; this branch is the one that matters *after* mount, when
-      // a crashed worker is being respawned under a panel showing stale content.
+      // A first activation is already covered by the Suspense skeleton the lazy
+      // import drives, and this layer sits OUTSIDE that Suspense — so without
+      // the `everReady` gate a freshly opened panel paints "Reloading" beside
+      // its own skeleton, reporting one wait twice. This branch is the one that
+      // matters after mount, when a crashed worker is being respawned under a
+      // panel still showing stale content.
+      if (!everReady) return { kind: "content" };
       return stalled ? { kind: "stalled" } : { kind: "reloading" };
     case "stopped":
       return {

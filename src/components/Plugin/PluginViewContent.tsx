@@ -517,10 +517,19 @@ export function makePluginViewContent(
     const contentNodeRef = useRef<HTMLDivElement | null>(null);
     const styleRootRef = useCallback((node: HTMLDivElement | null) => {
       contentNodeRef.current = node;
-      return registerPluginStyleRoot(node);
+      const unregister = registerPluginStyleRoot(node);
+      // Cleared in the cleanup, not by a `null` call: React 19 invokes a
+      // callback ref's returned cleanup INSTEAD of re-calling it with null, so
+      // without this the ref would pin a detached subtree until the next mount.
+      return () => {
+        contentNodeRef.current = null;
+        unregister();
+      };
     }, []);
     /** Focus lands here when the content it was inside goes inert. */
     const statusRef = useRef<HTMLDivElement | null>(null);
+    /** Whether focus is currently somewhere inside the plugin's own content. */
+    const focusWasInsideContent = useRef(false);
 
     /**
      * Whether the boundary is currently showing its fallback.
@@ -609,7 +618,14 @@ export function makePluginViewContent(
     // Only a transient state can stall. A `ready` or `failed` worker is settled,
     // and arming a timer on it would escalate a healthy panel after 30 seconds.
     const stalled = useWorkerStall(inFlight ? worker.stateSince : null);
-    const presentation = presentWorkerStatus(worker, stalled);
+    // Latched, never lowered: once this panel has had a working backend, a
+    // transient state is a recovery rather than a first load, and stays one even
+    // if the backend never comes back.
+    const [everReady, setEverReady] = useState(false);
+    useEffect(() => {
+      if (worker?.state === "ready") setEverReady(true);
+    }, [worker?.state]);
+    const presentation = presentWorkerStatus(worker, stalled, everReady);
 
     /**
      * Worker generation this attempt is bound to.
@@ -684,11 +700,19 @@ export function makePluginViewContent(
     // `document.body` with no way back. Move them onto the host-owned status
     // instead — but ONLY when focus was actually in there, so a panel going dark
     // in the background never steals focus from what the user is doing.
+    //
+    // Ownership is tracked as it happens rather than read back afterwards: this
+    // effect runs after the commit that applied `inert`, by which point the
+    // browser may already have blurred the descendant and `document.activeElement`
+    // reads as `body`.
     useEffect(() => {
       if (!contentInert) return;
       const content = contentNodeRef.current;
       const active = document.activeElement;
-      if (!content || !active || !content.contains(active)) return;
+      const hadFocus =
+        focusWasInsideContent.current || (!!content && !!active && content.contains(active));
+      if (!hadFocus) return;
+      focusWasInsideContent.current = false;
       statusRef.current?.focus({ preventScroll: true });
     }, [contentInert]);
 
@@ -703,7 +727,11 @@ export function makePluginViewContent(
             explanation down with it (#11231, #12278). It is deliberately NOT
             inside the plugin's style root either, so a plugin stylesheet cannot
             restyle the control that recovers from it. */}
-        <div ref={statusRef} tabIndex={-1} className="outline-hidden">
+        {/* Focusable so the rescue below has somewhere to put focus when the
+            content it was inside goes inert. The ring is deliberately NOT
+            suppressed: focus arrives here programmatically, and a visible ring
+            is what tells the user where it went. */}
+        <div ref={statusRef} tabIndex={-1}>
           <PluginViewRuntimeStatus
             presentation={presentation}
             panelDisplayName={displayName}
@@ -757,6 +785,18 @@ export function makePluginViewContent(
               // subtree from focus, hit-testing and the accessibility tree in one
               // go, which is the whole claim being made about stale content.
               inert={contentInert}
+              onFocus={() => {
+                focusWasInsideContent.current = true;
+              }}
+              onBlur={(e) => {
+                // Not while going inert: applying the attribute is itself what
+                // blurred the descendant, and clearing here would erase the very
+                // fact the rescue above needs.
+                if (contentInert) return;
+                if (!e.currentTarget.contains(e.relatedTarget)) {
+                  focusWasInsideContent.current = false;
+                }
+              }}
               ref={styleRootRef}
               {...PLUGIN_STYLE_ROOT_PROPS}
             >

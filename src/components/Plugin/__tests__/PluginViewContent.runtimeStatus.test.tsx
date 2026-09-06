@@ -198,7 +198,10 @@ describe("mounted panel learns its backend died (#12278)", () => {
 
   it("reports a respawn as an ambient reload rather than an error", async () => {
     await mountContent();
-    await pushStatus(worker({ state: "starting", reason: "crashed" }));
+    // A backend that WAS working — otherwise this is a first activation, which
+    // the Suspense skeleton already owns.
+    await pushStatus(worker({ generation: 1, state: "ready" }));
+    await pushStatus(worker({ generation: 2, state: "starting", reason: "crashed" }));
 
     const ambient = await screen.findByRole("status");
     expect(ambient.textContent).toContain("Reloading");
@@ -337,6 +340,17 @@ describe("mounted panel learns its backend died (#12278)", () => {
     } finally {
       vi.doUnmock("react");
     }
+  });
+
+  it("leaves a first activation to the skeleton rather than reporting it twice", async () => {
+    await mountContent();
+
+    // This layer sits outside Suspense, so an ungated transient state would
+    // paint "Reloading" beside the panel's own loading skeleton.
+    await pushStatus(worker({ generation: 1, state: "activating" }));
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("shows no banner at all while nothing is known about the backend", async () => {
