@@ -91,14 +91,18 @@ const PROBE_ADDRESSES: ReadonlyArray<{ host: string; ipv6: boolean }> = [
  * intrinsic TOCTOU we accept.
  */
 export async function probePortFree(port: number, signal?: AbortSignal): Promise<boolean> {
-  const results = await Promise.all(
-    PROBE_ADDRESSES.map(({ host, ipv6 }) => probeFamily(port, host, ipv6, signal))
-  );
-  if (signal?.aborted) return false;
-  return results.every(
-    (result, index) =>
-      result === "free" || (PROBE_ADDRESSES[index].ipv6 && result === "unavailable")
-  );
+  // Strictly sequential, each socket closed before the next opens. Running
+  // them together would have the wildcard probe hold the port while its own
+  // loopback probe binds, and Linux refuses that overlap — the allocator
+  // would then reject every port as busy, including ones nothing is using.
+  for (const { host, ipv6 } of PROBE_ADDRESSES) {
+    const result = await probeFamily(port, host, ipv6, signal);
+    if (signal?.aborted) return false;
+    if (result === "free") continue;
+    if (ipv6 && result === "unavailable") continue;
+    return false;
+  }
+  return true;
 }
 
 export async function allocatePort(

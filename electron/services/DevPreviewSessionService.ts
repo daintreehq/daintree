@@ -76,6 +76,8 @@ interface DevPreviewSession extends DevPreviewSessionState {
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
+  /** See TerminalControllerSession.launchEpoch — bumped by every stop. */
+  launchEpoch: number;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   phaseLabel?: "Compiling";
@@ -1099,6 +1101,7 @@ export class DevPreviewSessionService {
       needsInstall: false,
       isRunningInstall: false,
       installAttemptedGeneration: null,
+      launchEpoch: 0,
       startupReplayTimer: null,
       compiling: false,
       compilingTimer: null,

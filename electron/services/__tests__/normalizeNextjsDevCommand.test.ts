@@ -323,6 +323,58 @@ describe("normalizeNextjsDevCommand", () => {
     });
   });
 
+  describe("a script that owns the turbo flag is never paired with --webpack", () => {
+    it.each(["next dev --turbopack", "next dev --turbo"])(
+      "leaves 'npm run dev' alone on Next 16 with the preference off when the script is %s",
+      async (scriptBody) => {
+        mockResolveNextMajorVersion.mockResolvedValue(16);
+        mockPkg({ dev: scriptBody });
+        // Appending --webpack here would run `next dev --turbopack --webpack`,
+        // which Next 16 rejects outright.
+        expect(await normalizeNextjsDevCommand("npm run dev", CWD, false)).toBe("npm run dev");
+      }
+    );
+
+    it.each(["pnpm dev", "yarn dev", "bun run dev"])("does the same for %s", async (command) => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+      mockPkg({ dev: "next dev --turbopack" });
+      expect(await normalizeNextjsDevCommand(command, CWD, false)).toBe(command);
+    });
+
+    it("reports the conflict so the ignored preference is visible", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(16);
+      mockPkg({ dev: "next dev --turbopack" });
+      const onConflict = vi.fn();
+      await normalizeNextjsDevCommand("npm run dev", CWD, false, onConflict);
+      expect(onConflict).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "bundler-conflict" })
+      );
+    });
+  });
+
+  describe("flag stripping respects token boundaries", () => {
+    it("does not mangle a longer flag that merely starts with --turbopack", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(14);
+      expect(await normalizeNextjsDevCommand("next dev --turbopack-root ./app", CWD)).toBe(
+        "next dev --turbopack-root ./app"
+      );
+    });
+
+    it("keeps npm's forwarding separator when other args survive the strip", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(14);
+      expect(await normalizeNextjsDevCommand("npm run dev -- --turbopack --port 3010", CWD)).toBe(
+        "npm run dev -- --port 3010"
+      );
+    });
+
+    it("drops the separator when the turbo flag was all it forwarded", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(14);
+      expect(await normalizeNextjsDevCommand("npm run dev -- --turbopack", CWD)).toBe(
+        "npm run dev"
+      );
+    });
+  });
+
   describe("compound package scripts are never rewritten", () => {
     it("leaves 'npm run dev' alone when the script body is compound", async () => {
       mockResolveNextMajorVersion.mockResolvedValue(15);

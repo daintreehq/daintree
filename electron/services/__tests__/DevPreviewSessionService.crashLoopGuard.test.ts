@@ -113,6 +113,20 @@ async function flushAsyncWork(): Promise<void> {
   }
 }
 
+/**
+ * Wait on real time for `predicate`, leaving the fake backoff timers alone.
+ * A fixed tick count would let a slow worker read "normalization still
+ * pending" as "the guard stopped the respawn".
+ */
+async function waitForReal(predicate: () => boolean, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => realSetTimeout(resolve, 10));
+  }
+  return predicate();
+}
+
 describe("DevPreviewSessionService crash-loop guard", () => {
   const baseRequest = {
     panelId: "panel-1",
@@ -175,8 +189,9 @@ describe("DevPreviewSessionService crash-loop guard", () => {
     }
     // Install succeeds -> handleExit respawns the dev server (awaits port
     // allocation, which reuses the registered port -> microtask resolution).
+    const spawnsBeforeRespawn = ptyClient.spawn.mock.calls.length;
     ptyClient.emitExit(installTerminalId, 0);
-    await flushAsyncWork();
+    await waitForReal(() => ptyClient.spawn.mock.calls.length > spawnsBeforeRespawn);
     return currentTerminalId();
   }
 

@@ -56,6 +56,13 @@ export interface TerminalControllerSession extends CrashLoopGuardSession {
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
+  /**
+   * Bumped by every stop, so a launch that is still awaiting port allocation or
+   * command normalization can tell that the session was stopped or deleted out
+   * from under it. `generation` cannot serve here: a stop leaves it untouched,
+   * and the post-install respawn runs outside the session lock.
+   */
+  launchEpoch: number;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   compiling: boolean;
@@ -235,6 +242,10 @@ export async function stopSessionTerminal<TSession extends TerminalControllerSes
   deps.clearCompiling(session);
   session.needsInstall = false;
   session.isRunningInstall = false;
+  // Before the no-terminal early return: a post-install respawn that is still
+  // resolving its command has no terminal yet, and is exactly what must not
+  // survive this stop.
+  session.launchEpoch += 1;
 
   const terminalId = session.terminalId;
   if (!terminalId) return;
@@ -356,12 +367,45 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
   await spawnSessionTerminal(session, deps);
 }
 
+/**
+ * Port allocation can now fail outright (every candidate busy on some address
+ * family), and the automatic post-install respawn calls this without a catch.
+ * Land a terminal error state instead of leaving an `installing` session with
+ * no terminal and an unhandled rejection.
+ */
 export async function spawnSessionTerminal<TSession extends TerminalControllerSession>(
+  session: TSession,
+  deps: TerminalControllerDeps<TSession>
+): Promise<void> {
+  try {
+    await prepareAndSpawnSessionTerminal(session, deps);
+  } catch (error) {
+    if (deps.isDisposed()) return;
+    const message = formatErrorMessage(error, "Failed to start dev server");
+    deps.recordSessionDiagnostic(session, {
+      type: "spawn-failed",
+      message: capDiagnosticText(message),
+    });
+    detachTerminal(session, deps);
+    deps.updateSession(session, {
+      status: "error",
+      url: null,
+      predictedUrl: null,
+      error: { type: "unknown", message: `Failed to start dev server: ${message}` },
+      terminalId: null,
+      isRestarting: false,
+      phaseLabel: undefined,
+    });
+  }
+}
+
+async function prepareAndSpawnSessionTerminal<TSession extends TerminalControllerSession>(
   session: TSession,
   deps: TerminalControllerDeps<TSession>
 ): Promise<void> {
   const terminalId = createTerminalId(session);
   const startGeneration = session.generation;
+  const startEpoch = session.launchEpoch;
   const nextGeneration = session.generation + 1;
 
   const sessionKey = createSessionKey(session.projectId, session.panelId);
@@ -397,6 +441,9 @@ export async function spawnSessionTerminal<TSession extends TerminalControllerSe
   // A newer spawn won the race; its reservation is the live one, so leave the
   // registry alone and let it own the session.
   if (session.generation !== startGeneration) return;
+  // Stopped or deleted while we resolved the command — the stop already
+  // released whatever it owned, so just abandon this launch.
+  if (session.launchEpoch !== startEpoch) return;
 
   const launch = buildCommandLaunchShell(normalizedCommand, undefined, "exit");
 
@@ -587,16 +634,23 @@ export async function runInstall<TSession extends TerminalControllerSession>(
  * terminal-id-match.
  */
 /**
- * The wrapper shell exits normally with `128 + n` when the dev command it ran
- * was killed by signal n, so the raw signal is gone by the time the PTY exit
- * reaches us. Decode that POSIX convention — otherwise a user's Ctrl-C on the
- * dev server reads as "exited with code 130" rather than a clean stop. Windows
- * has no such encoding, so the raw signal stays the only source there.
+ * What killed the dev command, as a signal number. The wrapper shell exits
+ * normally with `128 + n` when its child took signal n, so by the time the PTY
+ * exit arrives the raw signal is gone and only the encoded status is left —
+ * without decoding it, a Ctrl-C reads as "exited with code 130" and a segfault
+ * loses its crash classification. node-pty reports signal 0 for an ordinary
+ * exit and that zero survives the whole exit path, so "no signal" has to mean
+ * falsy rather than undefined. Windows has no such encoding.
  */
+function decodeExitSignal(exitCode: number, signal: number | undefined): number | undefined {
+  if (signal) return signal;
+  if (process.platform === "win32") return undefined;
+  return exitCode > 128 && exitCode < 192 ? exitCode - 128 : undefined;
+}
+
 function isExpectedTermination(exitCode: number, signal: number | undefined): boolean {
-  if (signal !== undefined) return EXPECTED_TERMINATION_SIGNALS.has(signal);
-  if (process.platform === "win32") return false;
-  return exitCode > 128 && EXPECTED_TERMINATION_SIGNALS.has(exitCode - 128);
+  const decoded = decodeExitSignal(exitCode, signal);
+  return decoded !== undefined && EXPECTED_TERMINATION_SIGNALS.has(decoded);
 }
 
 export function handleDevPreviewTerminalExit<TSession extends TerminalControllerSession>(
@@ -646,7 +700,7 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
   deps.recordSessionDiagnostic(session, {
     type: "terminal-exited",
     exitCode,
-    ...(signal !== undefined ? { signal } : {}),
+    ...(signal ? { signal } : {}),
   });
 
   if (session.needsInstall && session.installAttemptedGeneration !== session.generation) {
@@ -679,7 +733,11 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
       });
       return;
     }
-    const error = classifyDevPreviewExit(exitCode, signal, recentOutput) ?? {
+    const error = classifyDevPreviewExit(
+      exitCode,
+      decodeExitSignal(exitCode, signal),
+      recentOutput
+    ) ?? {
       type: "unknown",
       message: `Dev server exited with code ${exitCode}`,
     };
@@ -700,7 +758,7 @@ export function handleDevPreviewTerminalExit<TSession extends TerminalController
   // exit evidence so the pane doesn't quietly read as "stopped" after a crash.
   const exitError = isExpectedTermination(exitCode, signal)
     ? null
-    : classifyDevPreviewExit(exitCode, signal, recentOutput);
+    : classifyDevPreviewExit(exitCode, decodeExitSignal(exitCode, signal), recentOutput);
 
   deps.updateSession(session, {
     status: exitError ? "error" : "stopped",

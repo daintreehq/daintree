@@ -5,8 +5,8 @@ import { scriptFlagSeparator } from "../../shared/utils/devCommandValidation.js"
 export { getInvalidCommandMessage } from "../../shared/utils/devCommandValidation.js";
 
 export const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
-export const TURBOPACK_FLAG_RE = /--turbo(?:pack)?\b/;
-export const WEBPACK_FLAG_RE = /--webpack\b/;
+export const TURBOPACK_FLAG_RE = /--turbo(?:pack)?(?![\w-])/;
+export const WEBPACK_FLAG_RE = /--webpack(?![\w-])/;
 export const PKG_SCRIPT_RE =
   /^(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun(?:\s+run)?)\s+(\S+)$/;
 // Compound/piped/commented commands can't be safely rewritten -- appending
@@ -83,10 +83,15 @@ export async function extractPort(command: string, cwd: string): Promise<number 
 }
 
 export function stripTurbopackFlag(command: string): string {
-  return command
-    .replace(/\s+--\s+--turbo(?:pack)?\b/, "") // " -- --turbopack" (pkg manager form)
-    .replace(/\s+--turbo(?:pack)?\b/, "") // " --turbopack" (direct form)
-    .trim();
+  return (
+    command
+      // `\b` also matched a longer flag that merely starts with the same
+      // letters — stripping it turned `--turbopack-root` into `-root`.
+      .replace(/\s+--turbo(?:pack)?(?![\w-])/g, "")
+      // Drop npm's forwarding separator only when nothing is left to forward.
+      .replace(/\s+--\s*$/, "")
+      .trim()
+  );
 }
 
 async function readPackageScript(cwd: string, scriptName: string): Promise<string | null> {
@@ -170,6 +175,19 @@ export async function normalizeNextjsDevCommand(
     // Stripping alone stopped opting out in Next 16: Turbopack runs by default
     // there, so honouring the preference means naming the other bundler.
     if (!turbopackIsDefault) return stripped;
+    // ...but only when nothing else still asks for Turbopack. A flag inside the
+    // package script survives the strip, and adding --webpack beside it is the
+    // fatal pair. Rewriting package.json to resolve it is not ours to do.
+    if (
+      TURBOPACK_FLAG_RE.test(stripped) ||
+      (scriptMatch !== null && TURBOPACK_FLAG_RE.test(resolved))
+    ) {
+      onConflict?.({
+        type: "bundler-conflict",
+        message: `The "${scriptMatch?.[1] ?? "dev"}" script sets Turbopack itself; the preference was not applied.`,
+      });
+      return stripped;
+    }
     return `${stripped}${separator}--webpack`;
   }
 

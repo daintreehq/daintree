@@ -88,7 +88,14 @@ function spawnedCommandFor(
   terminalId: string
 ): string {
   const call = spawn.mock.calls.find(([id]) => id === terminalId);
-  return call?.[1].args?.join("\n") ?? "";
+  const args = call?.[1].args ?? [];
+  // PowerShell launches carry the script as a UTF-16LE base64 -EncodedCommand,
+  // so a plain join would never reveal the command text.
+  const encodedIndex = args.indexOf("-EncodedCommand");
+  if (encodedIndex >= 0 && args[encodedIndex + 1]) {
+    return Buffer.from(args[encodedIndex + 1], "base64").toString("utf16le");
+  }
+  return args.join("\n");
 }
 
 describe("DevPreviewSessionService — tiered restart", () => {

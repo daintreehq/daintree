@@ -64,7 +64,10 @@ class RealPtyClient {
     });
     proc.onExit(({ exitCode, signal }) => {
       entry.alive = false;
-      for (const listener of this.exitListeners) listener(id, exitCode, signal || undefined);
+      // Forwarded exactly as production does (TerminalExitHandler: `signal ??
+      // undefined`), so node-pty's `signal: 0` for a normal exit reaches the
+      // service. Collapsing it to undefined here hid the Ctrl-C bug.
+      for (const listener of this.exitListeners) listener(id, exitCode, signal ?? undefined);
     });
   }
 
@@ -101,8 +104,20 @@ class RealPtyClient {
     return this.terminals.get(id)?.proc.pid;
   }
 
-  killAll(): void {
+  async killAll(): Promise<void> {
+    const pending = [...this.terminals.values()].filter((entry) => entry.alive);
+    const exits = pending.map(
+      (entry) =>
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 3000);
+          entry.proc.onExit(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        })
+    );
     for (const id of this.terminals.keys()) this.kill(id);
+    await Promise.all(exits);
     this.terminals.clear();
   }
 }
@@ -141,7 +156,13 @@ function writeNpmFixture(dir: string, options: { failing?: boolean } = {}): void
       name: "fixture",
       version: "1.0.0",
       private: true,
-      ...(options.failing ? { scripts: { preinstall: "exit 3" } } : {}),
+      ...(options.failing
+        ? {
+            scripts: {
+              preinstall: `node -e "require('fs').writeFileSync('preinstall-ran','1')" && exit 3`,
+            },
+          }
+        : {}),
     })
   );
 }
@@ -170,6 +191,29 @@ async function waitForStatus(
   throw new Error(`Timed out waiting for dev-preview state. Last: ${JSON.stringify(last)}`);
 }
 
+function readPgid(pid: number): number | null {
+  const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 750,
+  });
+  if (result.status !== 0 || result.error) return null;
+  const pgid = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(pgid) && pgid > 0 ? pgid : null;
+}
+
+async function waitForDevPid(cwd: string): Promise<number> {
+  const pidFile = path.join(cwd, "dev.pid");
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(pidFile)) {
+      const pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+      if (Number.isFinite(pid) && pid > 0) return pid;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("dev command never published its pid");
+}
+
 function readPgids(pid: number): { shellPgid: number; foregroundPgid: number } | null {
   const result = spawnSync("ps", ["-o", "pgid=,tpgid=", "-p", String(pid)], {
     encoding: "utf8",
@@ -183,9 +227,11 @@ function readPgids(pid: number): { shellPgid: number; foregroundPgid: number } |
   return { shellPgid, foregroundPgid };
 }
 
-afterEach(() => {
+afterEach(async () => {
   while (services.length > 0) services.pop()?.dispose();
-  while (clients.length > 0) clients.pop()?.killAll();
+  // Await termination before removing fixtures: a surviving npm or dev server
+  // still writing into the directory races the rmSync below.
+  while (clients.length > 0) await clients.pop()?.killAll();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -211,41 +257,53 @@ describePosix("dev preview command completion (real PTY)", () => {
   }, 30_000);
 
   it("treats a dev command that exits 0 before serving as a failure to start", async () => {
-    const cwd = makeProject({ "dev.js": `process.exit(0);` });
+    const cwd = makeProject({
+      "dev.js": `require("fs").writeFileSync("ran", "1"); process.exit(0);`,
+    });
     const { service } = startService();
     const request = { panelId: "panel-2", projectId: "project-1" };
 
     await service.ensure({ ...request, cwd, devCommand: "node dev.js" });
 
     const final = await waitForStatus(service, request, (state) => state.status === "error");
+    // Without the marker this would also pass if `node` never launched at all.
+    expect(fs.existsSync(path.join(cwd, "ran"))).toBe(true);
+    expect(final.error?.message).toContain("code 0");
     expect(final.url).toBeNull();
   }, 30_000);
 
+  // Supporting invariant rather than a regression test for the exit bug: it
+  // asserts the wrapper is still a real interactive shell, which is what makes
+  // Ctrl-C reach the dev server instead of the wrapper.
   it("keeps a real interactive parent shell that hands the foreground to the dev command", async () => {
-    const cwd = makeProject({ "dev.js": `setTimeout(() => process.exit(0), 8000);` });
+    const cwd = makeProject({
+      "dev.js": `require("fs").writeFileSync("dev.pid", String(process.pid)); setTimeout(() => process.exit(0), 15000);`,
+    });
     const { client, service } = startService();
     const request = { panelId: "panel-3", projectId: "project-1" };
 
     const state = await service.ensure({ ...request, cwd, devCommand: "node dev.js" });
-    const pid = client.pidFor(state.terminalId ?? "");
-    expect(pid).toBeGreaterThan(0);
+    const shellPid = client.pidFor(state.terminalId ?? "");
+    expect(shellPid).toBeGreaterThan(0);
+
+    const devPid = await waitForDevPid(cwd);
+    const devPgid = readPgid(devPid);
+    expect(devPgid).toBeGreaterThan(0);
 
     let snapshot: ReturnType<typeof readPgids> = null;
     const deadline = Date.now() + 8_000;
     while (Date.now() < deadline) {
-      snapshot = readPgids(pid!);
-      if (snapshot && snapshot.shellPgid > 0 && snapshot.foregroundPgid > 0) {
-        if (snapshot.shellPgid !== snapshot.foregroundPgid) break;
-      }
+      snapshot = readPgids(shellPid!);
+      if (snapshot && snapshot.foregroundPgid === devPgid) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    // Job control is on, so the shell is genuinely interactive and the dev
-    // command owns its own foreground process group — Ctrl-C reaches the
-    // server, not the wrapper.
-    expect(snapshot).toBeTruthy();
+    // Job control is on and the foreground group is the dev command's own —
+    // not the shell's, and not some helper a login profile happened to run.
+    expect(snapshot?.shellPgid).toBeGreaterThan(0);
+    expect(snapshot?.foregroundPgid).toBe(devPgid);
     expect(snapshot?.foregroundPgid).not.toBe(snapshot?.shellPgid);
-  }, 30_000);
+  }, 40_000);
 
   it("detects a serving dev server exiting nonzero after it was already running", async () => {
     const cwd = makeProject({
@@ -318,42 +376,36 @@ if (fs.existsSync("package-lock.json")) {
       (state) => state.status === "error" && state.error?.type === "missing-dependencies",
       60_000
     );
+    // npm reports its own exit code, but the marker proves the failure came
+    // from the fixture's preinstall script rather than npm never running.
+    expect(fs.existsSync(path.join(cwd, "preinstall-ran"))).toBe(true);
     expect(final.error?.message).toContain("Dependency installation failed");
+    expect(final.terminalId).toBeNull();
     expect(service.getDiagnostics(request).events.map((event) => event.type)).toContain(
       "install-failed"
     );
   }, 90_000);
 
   it("reports a clean stop when the user interrupts the dev command", async () => {
-    const cwd = makeProject({ "dev.js": `setInterval(() => {}, 1000);` });
-    const { client, service } = startService();
+    const cwd = makeProject({
+      "dev.js": `require("fs").writeFileSync("dev.pid", String(process.pid)); setInterval(() => {}, 1000);`,
+    });
+    const { service } = startService();
     const request = { panelId: "panel-7", projectId: "project-1" };
 
-    const state = await service.ensure({ ...request, cwd, devCommand: "node dev.js" });
-    const pid = client.pidFor(state.terminalId ?? "");
+    await service.ensure({ ...request, cwd, devCommand: "node dev.js" });
 
-    // Wait for the child to own the foreground, then deliver a real SIGINT to
-    // it exactly as the TTY line discipline would on Ctrl-C.
-    let foreground = 0;
-    const deadline = Date.now() + 8_000;
-    while (Date.now() < deadline) {
-      const snapshot = readPgids(pid!);
-      if (
-        snapshot &&
-        snapshot.foregroundPgid > 0 &&
-        snapshot.foregroundPgid !== snapshot.shellPgid
-      ) {
-        foreground = snapshot.foregroundPgid;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    expect(foreground).toBeGreaterThan(0);
-    process.kill(-foreground, "SIGINT");
+    // Signal the dev command's own process group, so this can't be satisfied by
+    // interrupting some startup helper instead of the server.
+    const devPid = await waitForDevPid(cwd);
+    const devPgid = readPgid(devPid);
+    expect(devPgid).toBeGreaterThan(0);
+    process.kill(-devPgid!, "SIGINT");
 
-    // The wrapper survives the interrupt and exits 128+SIGINT, which must read
-    // as a stop rather than a crash.
+    // The wrapper survives the interrupt and exits 128+SIGINT with no raw
+    // signal of its own, which must still read as a stop rather than a crash.
     const final = await waitForStatus(service, request, (state) => state.status === "stopped");
     expect(final.error).toBeNull();
-  }, 30_000);
+    expect(final.terminalId).toBeNull();
+  }, 40_000);
 });
