@@ -34,7 +34,8 @@ import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import {
   RAIL_SLOT,
   RESOURCE_ITEM_HEIGHT_PX,
-  RESOURCE_RAIL_SLOT_BOX,
+  RESOURCE_RAIL,
+  RESOURCE_RAIL_SLOT,
   RESOURCE_ROW_STATE_MARK,
 } from "./GitHubDropdownSkeletons";
 import { deriveRowModel, describeWorktree, type ForgeRowPrimaryAction } from "./forgeRowModel";
@@ -323,7 +324,10 @@ export function GitHubListItem({
             repeating them here made the row announce each of them twice. */}
         <span className="sr-only">{primaryActionHint}</span>
         {onToggleSelect ? (
-          <span className={cn("group/icon relative w-4 h-4", RESOURCE_ROW_STATE_MARK)}>
+          <span
+            data-state-mark
+            className={cn("group/icon relative w-4 h-4", RESOURCE_ROW_STATE_MARK)}
+          >
             {/* State icon: visible by default, hidden on hover or when selection active */}
             <span
               className={cn(
@@ -359,6 +363,7 @@ export function GitHubListItem({
           </span>
         ) : (
           <span
+            data-state-mark
             className={cn(RESOURCE_ROW_STATE_MARK, stateColor)}
             role="img"
             aria-label={stateLabel}
@@ -414,7 +419,7 @@ export function GitHubListItem({
                 fixed identity slot, which sits immediately before the always-present
                 menu. That is what keeps avatars (and CI glyphs) in one column down
                 the list instead of sliding left whenever a neighbour appears. */}
-            <div data-rail className="flex items-center gap-1.5 shrink-0">
+            <div data-rail className={RESOURCE_RAIL}>
               {restAssignees.length > 0 && (
                 <span
                   data-rail-slot="count"
@@ -437,7 +442,7 @@ export function GitHubListItem({
                       <TooltipTrigger asChild>
                         <span
                           data-rail-slot="ci"
-                          className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT_BOX.ci)}
+                          className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.ci.box)}
                           role="img"
                           aria-label={ciTooltip}
                         >
@@ -463,7 +468,7 @@ export function GitHubListItem({
                   <TooltipTrigger asChild>
                     <span
                       data-rail-slot="assignee"
-                      className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT_BOX.assignee)}
+                      className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.assignee.box)}
                       role="img"
                       aria-label={assigneeLabel}
                     >
@@ -492,7 +497,7 @@ export function GitHubListItem({
                       // Emphasis comes from the secondary ink, not from an
                       // opacity wash: 55% put it under the 3:1 floor a
                       // graphical control has to clear.
-                      RESOURCE_RAIL_SLOT_BOX.menu,
+                      RESOURCE_RAIL_SLOT.menu.box,
                       "rounded text-text-secondary",
                       "hover:bg-overlay-medium hover:text-text-primary",
                       "transition-[background-color,color] duration-150 ease-out",

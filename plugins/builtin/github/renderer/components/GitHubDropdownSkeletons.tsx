@@ -22,50 +22,52 @@ export const MAX_SKELETON_ITEMS = 6;
  */
 export const RESOURCE_ROW_STATE_MARK = "shrink-0 mt-1";
 
+/** The trailing rail itself, so neither side can respace it on its own. */
+export const RESOURCE_RAIL = "flex items-center gap-1.5 shrink-0";
+
 /** The trailing rail's shared slot frame, so rows share a right edge. */
 export const RAIL_SLOT = "shrink-0 flex items-center justify-center";
 
-export interface ResourceRailSlot {
-  id: "count" | "assignee" | "ci" | "menu";
-  /** The box the slot holds open. Empty when its width is its own content. */
-  box: string;
-  /** The bone the skeleton draws, absent for a slot it cannot reserve. */
-  bone?: string;
-}
+/**
+ * Every slot the trailing rail can hold, and the only definition of each.
+ *
+ * `box` is the width the slot holds open; `bone` is what the loading row draws
+ * inside it. A slot whose width is whatever it happens to contain carries an
+ * empty `box` and no `bone` — there is no fixed width there to reserve.
+ */
+export const RESOURCE_RAIL_SLOT = {
+  count: { box: "", bone: null },
+  assignee: { box: "w-4", bone: "w-4 h-4 rounded-full" },
+  ci: { box: "w-4 h-3.5", bone: "w-3.5 h-3.5 rounded-full" },
+  // `rounded-lg` is what a bare `rounded` already renders here — the design
+  // contract overrides `--radius` — named so the step is legible, and so the
+  // class stays visible to `component-contract/no-raw-radius`, which does not
+  // resolve identifiers and so cannot see into this table.
+  menu: { box: "w-6 h-6 -me-1", bone: "w-6 h-6 rounded-lg" },
+} as const satisfies Record<string, { box: string; bone: string | null }>;
+
+export type ResourceRailSlotId = keyof typeof RESOURCE_RAIL_SLOT;
 
 /**
- * The trailing rail, in render order, per resource type — every slot the row
- * can draw, whether or not the skeleton reserves it.
+ * The rail in render order, per resource type — every slot the row can draw,
+ * whether or not the loading row reserves it.
  *
  * The rail is strictly type-partitioned: `GitHubListItem` empties `assignees`
  * for a PR and gates the check glyph on the item being one, so neither type
  * ever draws the other's slots.
  *
- * `count` carries no bone. It has no fixed width and needs a second assignee
- * to appear at all, so reserving it would cost every title the space of a
- * count most rows never show. It stays in the list because its position is the
- * invariant that keeps avatars in one column — variable width to the LEFT of
- * the fixed identity slot — and because a rail child registered nowhere is
- * exactly how this drifted before.
+ * `count` is listed but never reserved. It has no fixed width and needs a
+ * second assignee to appear at all, so holding a box open for it would cost
+ * every title the space of a count most rows never show. It stays in the order
+ * because its position is the invariant that keeps avatars in one column —
+ * variable width to the LEFT of the fixed identity slot, which is itself
+ * immediately before the always-present menu — and because a rail child
+ * registered nowhere is exactly how this drifted in the first place.
  */
-export const RESOURCE_RAIL_SLOTS: Record<"issue" | "pr", readonly ResourceRailSlot[]> = {
-  issue: [
-    { id: "count", box: "" },
-    { id: "assignee", box: "w-4", bone: "w-4 h-4 rounded-full" },
-    { id: "menu", box: "w-6 h-6 -me-1", bone: "w-6 h-6 rounded" },
-  ],
-  pr: [
-    { id: "ci", box: "w-4 h-3.5", bone: "w-3.5 h-3.5 rounded-full" },
-    { id: "menu", box: "w-6 h-6 -me-1", bone: "w-6 h-6 rounded" },
-  ],
-};
-
-/** Each slot's box by id, for the row that draws one slot at a time. */
-export const RESOURCE_RAIL_SLOT_BOX = {
-  assignee: "w-4",
-  ci: "w-4 h-3.5",
-  menu: "w-6 h-6 -me-1",
-} as const;
+export const RESOURCE_RAIL_ORDER = {
+  issue: ["count", "assignee", "menu"],
+  pr: ["ci", "menu"],
+} as const satisfies Record<"issue" | "pr", readonly ResourceRailSlotId[]>;
 
 /**
  * An issue's state mark is a circle (`CircleDot`/`CheckCircle2`); a PR's never
@@ -84,6 +86,13 @@ export const RESOURCE_STATE_BONE = {
  */
 export const FORGE_OPTION_ROW =
   "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] border border-transparent";
+
+/**
+ * The 20px line box `text-sm` gives the loaded option's text. A bone has no
+ * line box of its own, so the loading row has to stand one up or every row
+ * comes up 4px short of the option it stands in for.
+ */
+export const FORGE_OPTION_LINE = "h-5 flex items-center flex-1 min-w-0";
 
 function normalizeCount(count?: number | null): number {
   if (count == null || !Number.isFinite(count)) return MAX_SKELETON_ITEMS;
@@ -221,27 +230,26 @@ export function GitHubResourceRowsSkeleton({ count, immediate, type }: ResourceR
           style={{ height: `${RESOURCE_ITEM_HEIGHT_PX}px` }}
         >
           <div
+            data-state-mark
             className={cn("w-4 h-4 bg-muted", RESOURCE_ROW_STATE_MARK, RESOURCE_STATE_BONE[type])}
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 h-6">
               <div className="h-4 bg-muted rounded flex-1" />
-              {/* Every rail slot the loaded row reserves, from the one list
+              {/* Every rail slot the loaded row reserves, from the one order
                   that names them. One short and the title bar jumps the
                   moment data lands — which is the bug this row shipped for
                   three releases. */}
-              <div data-rail className="flex items-center gap-1.5 shrink-0">
-                {RESOURCE_RAIL_SLOTS[type]
-                  .filter((slot) => slot.bone)
-                  .map((slot) => (
-                    <span
-                      key={slot.id}
-                      data-rail-slot={slot.id}
-                      className={cn(RAIL_SLOT, slot.box)}
-                    >
+              <div data-rail className={RESOURCE_RAIL}>
+                {RESOURCE_RAIL_ORDER[type].map((id) => {
+                  const slot = RESOURCE_RAIL_SLOT[id];
+                  if (!slot.bone) return null;
+                  return (
+                    <span key={id} data-rail-slot={id} className={cn(RAIL_SLOT, slot.box)}>
                       <span className={cn("bg-muted", slot.bone)} />
                     </span>
-                  ))}
+                  );
+                })}
               </div>
             </div>
             <div className="flex items-center gap-1.5 mt-1 h-4">
@@ -273,12 +281,10 @@ export function ForgeOptionRowsSkeleton({ count, immediate }: SkeletonProps) {
       {Array.from({ length: renderCount }).map((_, i) => (
         <div key={i} className={cn(FORGE_OPTION_ROW, pulseClass)}>
           <div className="w-3 h-3 rounded-full bg-muted shrink-0" />
-          {/* An empty bone has no line box, so without the loaded row's own
-              20px one to sit in, every row would come up short. */}
-          <div className="h-5 flex items-center flex-1 min-w-0">
+          <div data-option-line className={FORGE_OPTION_LINE}>
             <div
               className={cn(
-                "h-4 bg-muted rounded",
+                "h-4 bg-muted rounded-lg",
                 OPTION_BONE_WIDTHS[i % OPTION_BONE_WIDTHS.length]
               )}
             />

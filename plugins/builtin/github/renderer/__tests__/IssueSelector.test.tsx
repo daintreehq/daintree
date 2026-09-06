@@ -91,9 +91,11 @@ describe("IssueSelector", () => {
     expect(skeletonRows.length).toBeGreaterThan(0);
     // And they are this popover's single-line option, not the dropdown's 64px
     // two-line resource row this used to borrow (#12294).
+    expect(skeletonRows).toHaveLength(3);
     for (const row of skeletonRows) {
-      for (const token of FORGE_OPTION_ROW.split(" ")) {
-        expect(row.className).toContain(token);
+      const present = Array.from(row.classList);
+      for (const token of FORGE_OPTION_ROW.split(" ").filter(Boolean)) {
+        expect(present).toContain(token);
       }
       expect(row.getAttribute("style")).toBeNull();
     }

@@ -7,7 +7,11 @@ import { Activity, type ReactNode } from "react";
 import { GitHubListItem } from "../components/GitHubListItem";
 import {
   GitHubResourceRowsSkeleton,
-  RESOURCE_RAIL_SLOTS,
+  RAIL_SLOT,
+  RESOURCE_ITEM_HEIGHT_PX,
+  RESOURCE_RAIL,
+  RESOURCE_RAIL_ORDER,
+  RESOURCE_RAIL_SLOT,
   RESOURCE_ROW_STATE_MARK,
   RESOURCE_STATE_BONE,
 } from "../components/GitHubDropdownSkeletons";
@@ -898,89 +902,137 @@ describe("GitHubListItem", () => {
 
 /**
  * The skeleton and the row are two drawings of one layout, and for three
- * releases only one of them was maintained: #12294. `RESOURCE_RAIL_SLOTS` is
- * now the single list of what the rail holds, so these read it rather than
- * restating it — a test that pastes its own copy of the answer is just a third
- * copy that drifts.
+ * releases only one of them was maintained: #12294. `RESOURCE_RAIL_SLOT` and
+ * `RESOURCE_RAIL_ORDER` are now the single answer to what the rail holds, so
+ * these read them rather than restating them — a test that pastes its own copy
+ * of the answer is just a third copy that drifts.
  */
 describe("skeleton/row parity (#12294)", () => {
-  const railSlotIds = (root: HTMLElement): (string | null)[] =>
-    Array.from(root.querySelector("[data-rail]")?.children ?? []).map((child) =>
-      child.getAttribute("data-rail-slot")
-    );
+  const railOf = (root: HTMLElement): HTMLElement => {
+    const rails = root.querySelectorAll("[data-rail]");
+    // One rail per row. Scoping to it keeps a nested marker from standing in
+    // for the real slot and masking a wrong box on the one that lays out.
+    expect(rails).toHaveLength(1);
+    return rails[0] as HTMLElement;
+  };
 
-  const railSlotClasses = (root: HTMLElement): Record<string, string> =>
-    Object.fromEntries(
-      Array.from(root.querySelectorAll("[data-rail-slot]")).map((slot) => [
-        slot.getAttribute("data-rail-slot"),
-        slot.className,
-      ])
+  /** The rail's DIRECT children — anything deeper is content, not a slot. */
+  const slotsOf = (root: HTMLElement): Map<string | null, Element> => {
+    const entries = Array.from(railOf(root).children).map(
+      (child) => [child.getAttribute("data-rail-slot"), child] as const
     );
+    expect(new Set(entries.map(([id]) => id)).size).toBe(entries.length);
+    return new Map(entries);
+  };
+
+  const slotIds = (root: HTMLElement): (string | null)[] =>
+    Array.from(railOf(root).children).map((child) => child.getAttribute("data-rail-slot"));
+
+  /** Whole tokens only — `toContain` on the string would accept `w-40` for `w-4`. */
+  const expectTokens = (el: Element, classes: string) => {
+    const present = Array.from(el.classList);
+    for (const token of classes.split(" ").filter(Boolean)) {
+      expect(present).toContain(token);
+    }
+  };
+
+  const skeleton = (type: "issue" | "pr") =>
+    render(<GitHubResourceRowsSkeleton count={1} type={type} />);
 
   /** A row of each type carrying every slot its rail can draw. */
-  const maximal = {
-    issue: (
+  const maximal: { issue: Issue; pr: PR } = {
+    issue: {
+      ...baseIssue,
+      assignees: [
+        { login: "alice", avatarUrl: "a.png", rawData: null },
+        { login: "bob", avatarUrl: "b.png", rawData: null },
+      ],
+    },
+    pr: { ...basePR, ciStatus: "success" },
+  };
+
+  const loaded = (type: "issue" | "pr", extra: Record<string, unknown> = {}) =>
+    render(
       <GitHubListItem
-        item={{
-          ...baseIssue,
-          assignees: [
-            { login: "alice", avatarUrl: "a.png", rawData: null },
-            { login: "bob", avatarUrl: "b.png", rawData: null },
-          ],
-        }}
-        type="issue"
+        item={maximal[type]}
+        type={type}
+        worktree={makeWorktree({ [type === "issue" ? "issueNumber" : "prNumber"]: 1 })}
+        {...extra}
       />
-    ),
-    pr: <GitHubListItem item={{ ...basePR, ciStatus: "success" }} type="pr" />,
-  } as const;
+    );
 
   for (const type of ["issue", "pr"] as const) {
-    it(`renders every ${type} rail slot the shared list names, in that order`, () => {
-      const { container } = render(maximal[type]);
-      expect(railSlotIds(container)).toEqual(RESOURCE_RAIL_SLOTS[type].map((slot) => slot.id));
+    const order = RESOURCE_RAIL_ORDER[type];
+
+    it(`renders every ${type} rail slot the shared order names, and nothing else`, () => {
+      expect(slotIds(loaded(type).container)).toEqual([...order]);
     });
 
-    it(`reserves the ${type} slots the loading row can reserve, at the row's own widths`, () => {
-      const row = render(maximal[type]);
-      const rowClasses = railSlotClasses(row.container);
-      row.unmount();
+    it(`keeps the ${type} menu last, so the identity column cannot slide`, () => {
+      // Everything of variable width sits to the LEFT of the identity slot,
+      // which sits immediately before the always-present menu. Reordering the
+      // count past the menu keeps the old adjacency test green but moves the
+      // avatar column the moment a count appears.
+      expect(order[order.length - 1]).toBe("menu");
+      expect(order.indexOf("menu")).toBe(order.length - 1);
+    });
 
-      const { container } = render(<GitHubResourceRowsSkeleton count={1} type={type} />);
-      const reserved = RESOURCE_RAIL_SLOTS[type].filter((slot) => slot.bone);
+    it(`reserves every fixed-width ${type} slot at the row's own box`, () => {
+      const rowSlots = slotsOf(loaded(type).container);
+      const boneSlots = slotsOf(skeleton(type).container);
 
-      expect(railSlotIds(container)).toEqual(reserved.map((slot) => slot.id));
-      for (const slot of reserved) {
-        // The box the row holds open, drawn by the loading row too — not a
-        // literal either file gets to change on its own.
-        for (const token of slot.box.split(" ")) {
-          expect(rowClasses[slot.id]).toContain(token);
-          expect(railSlotClasses(container)[slot.id]).toContain(token);
+      for (const id of order) {
+        const slot = RESOURCE_RAIL_SLOT[id];
+        if (!slot.box) {
+          // Nothing to hold open: its width is whatever it ends up carrying.
+          expect(slot.bone).toBeNull();
+          expect(boneSlots.has(id)).toBe(false);
+          continue;
         }
+        // A slot with a fixed width MUST be reserved. Deriving this from the
+        // box rather than from `bone` is the point — reading `bone` on both
+        // sides would let deleting one delete the expectation that caught it.
+        expect(slot.bone).not.toBeNull();
+        expectTokens(rowSlots.get(id)!, `${RAIL_SLOT} ${slot.box}`);
+        expectTokens(boneSlots.get(id)!, `${RAIL_SLOT} ${slot.box}`);
       }
     });
 
-    it(`places the ${type} state mark where the loaded row places it`, () => {
-      const row = render(maximal[type]);
-      const mark =
-        row.container.querySelector('[role="img"][aria-label$="request"]') ??
-        row.container.querySelector('[role="img"][aria-label$="issue"]');
-      for (const token of RESOURCE_ROW_STATE_MARK.split(" ")) {
-        expect(mark?.className).toContain(token);
-      }
-      row.unmount();
+    it(`spaces the ${type} rail identically on both sides`, () => {
+      expectTokens(railOf(loaded(type).container), RESOURCE_RAIL);
+      expectTokens(railOf(skeleton(type).container), RESOURCE_RAIL);
+    });
 
-      const { container } = render(<GitHubResourceRowsSkeleton count={1} type={type} />);
-      const bone = container.querySelector(".bg-muted")!;
-      for (const token of RESOURCE_ROW_STATE_MARK.split(" ")) {
-        expect(bone.className).toContain(token);
+    it(`places the ${type} state mark where every loaded branch places it`, () => {
+      // The dropdown always passes `onToggleSelect`, so the selection wrapper
+      // is the branch that actually ships — testing only the other one would
+      // have missed the offset this issue was filed for.
+      for (const extra of [{}, { onToggleSelect: vi.fn() }]) {
+        const row = loaded(type, extra);
+        expectTokens(row.container.querySelector("[data-state-mark]")!, RESOURCE_ROW_STATE_MARK);
+        row.unmount();
       }
-      // An issue's mark is a circle and a PR's never is, so the loading mark
-      // must not draw the other one's shape.
-      expect(bone.className).toContain(RESOURCE_STATE_BONE[type]);
+
+      const bone = skeleton(type).container.querySelector("[data-state-mark]")!;
+      expectTokens(bone, RESOURCE_ROW_STATE_MARK);
+      expectTokens(bone, RESOURCE_STATE_BONE[type]);
+    });
+
+    it(`draws both ${type} rows to the height Virtuoso lays them out on`, () => {
+      const row = loaded(type).container.querySelector("[role='row']") as HTMLElement;
+      expect(row.style.height).toBe(`${RESOURCE_ITEM_HEIGHT_PX}px`);
+      const bone = skeleton(type).container.querySelector(
+        '[aria-hidden="true"] > div'
+      ) as HTMLElement;
+      expect(bone.style.height).toBe(`${RESOURCE_ITEM_HEIGHT_PX}px`);
     });
   }
 
-  it("draws a different state-mark shape for each type", () => {
-    expect(RESOURCE_STATE_BONE.issue).not.toBe(RESOURCE_STATE_BONE.pr);
+  it("draws the loading mark round only for the type whose glyph is round", () => {
+    // Anchored to the glyphs, not to each other: `CircleDot`/`CheckCircle2`
+    // are circles and none of `getPrStateGlyph`'s four are, so asserting only
+    // that the two differ would be satisfied by swapping them.
+    expect(RESOURCE_STATE_BONE.issue).toBe("rounded-full");
+    expect(RESOURCE_STATE_BONE.pr).not.toBe("rounded-full");
   });
 });

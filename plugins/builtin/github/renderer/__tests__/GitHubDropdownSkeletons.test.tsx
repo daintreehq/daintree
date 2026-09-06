@@ -7,9 +7,11 @@ import {
   GitHubResourceListSkeleton,
   CommitListSkeleton,
   ForgeOptionRowsSkeleton,
+  FORGE_OPTION_LINE,
   FORGE_OPTION_ROW,
   RESOURCE_ITEM_HEIGHT_PX,
-  RESOURCE_RAIL_SLOTS,
+  RESOURCE_RAIL_ORDER,
+  RESOURCE_RAIL_SLOT,
   COMMIT_ITEM_HEIGHT_PX,
   MAX_SKELETON_ITEMS,
 } from "../components/GitHubDropdownSkeletons";
@@ -95,9 +97,7 @@ describe("GitHubResourceListSkeleton", () => {
       const ids = Array.from(container.querySelectorAll("[data-rail-slot]")).map((slot) =>
         slot.getAttribute("data-rail-slot")
       );
-      expect(ids).toEqual(
-        RESOURCE_RAIL_SLOTS[type].filter((slot) => slot.bone).map((slot) => slot.id)
-      );
+      expect(ids).toEqual(RESOURCE_RAIL_ORDER[type].filter((id) => RESOURCE_RAIL_SLOT[id].bone));
       unmount();
     }
   });
@@ -166,10 +166,13 @@ describe("ForgeOptionRowsSkeleton", () => {
     const rows = container.querySelectorAll('[aria-hidden="true"] > div');
     expect(rows).toHaveLength(3);
     for (const row of rows) {
-      for (const token of FORGE_OPTION_ROW.split(" ")) {
-        expect(row.className).toContain(token);
-      }
+      expectTokens(row, FORGE_OPTION_ROW);
+      // No inline height: the option sizes to its own content, unlike the
+      // 64px resource row this used to borrow.
       expect(row.getAttribute("style")).toBeNull();
+      // The line box the loaded option gets from `text-sm` and a bone has
+      // none of. Without it every row comes up 4px short.
+      expectTokens(row.querySelector("[data-option-line]")!, FORGE_OPTION_LINE);
     }
   });
 
@@ -187,3 +190,11 @@ describe("ForgeOptionRowsSkeleton", () => {
     expect(row?.className).not.toContain("animate-pulse-delayed");
   });
 });
+
+/** Whole tokens only — a substring check would accept `w-40` for `w-4`. */
+function expectTokens(el: Element, classes: string) {
+  const present = Array.from(el.classList);
+  for (const token of classes.split(" ").filter(Boolean)) {
+    expect(present).toContain(token);
+  }
+}

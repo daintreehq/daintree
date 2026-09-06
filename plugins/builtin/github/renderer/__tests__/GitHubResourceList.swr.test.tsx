@@ -533,17 +533,32 @@ describe("GitHubResourceList SWR behavior", () => {
     expect(screen.getByTestId("skeleton")).toBeTruthy();
   });
 
-  it("tells the skeleton which resource it is loading (#12294)", async () => {
-    // The rail an issue reserves is not the one a PR reserves, so a skeleton
-    // that is not told the type cannot reserve either of them correctly.
-    mockListIssues.mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve(makeResponse([makeIssue(1)])), 100))
-    );
+  it.each(["issue", "pr"] as const)(
+    "tells the skeleton it is loading %s (#12294)",
+    async (type) => {
+      // The rail an issue reserves is not the one a PR reserves, so a skeleton
+      // that is not told the type cannot reserve either of them correctly.
+      // Both types run: hardcoding one at the call site would pass a test that
+      // only ever asked for the other.
+      const fetcher = type === "issue" ? mockListIssues : mockListPRs;
+      let release!: (page: Page<Issue>) => void;
+      fetcher.mockImplementation(
+        () =>
+          new Promise<Page<Issue>>((resolve) => {
+            release = resolve;
+          })
+      );
 
-    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+      render(<GitHubResourceList type={type} projectPath="/test/proj" />);
 
-    expect(screen.getByTestId("skeleton").getAttribute("data-type")).toBe("pr");
-  });
+      await waitFor(() => expect(fetcher).toHaveBeenCalled());
+      expect(screen.getByTestId("skeleton").getAttribute("data-type")).toBe(type);
+
+      // Settle it: a request left pending outlives the test and surfaces as an
+      // unhandled rejection in whichever file happens to run next.
+      await act(async () => release(makeResponse([makeIssue(1)])));
+    }
+  );
 
   it("shows cached data immediately on warm remount (no skeleton)", async () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
