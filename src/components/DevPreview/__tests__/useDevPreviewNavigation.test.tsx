@@ -51,6 +51,7 @@ function baseParams(overrides: Partial<Parameters<typeof useDevPreviewNavigation
     setIsLoading: vi.fn(),
     setWebviewLoadError: vi.fn(),
     clearLoadTimers: vi.fn(),
+    clearRetryState: vi.fn(),
     isConsoleOpen: false,
     setDevPreviewConsoleOpen: vi.fn(),
     onHardReload: vi.fn(),

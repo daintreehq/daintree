@@ -26,6 +26,18 @@ const LOCALHOST_SUFFIX = ".localhost";
 export const DEV_PREVIEW_BOOTSTRAP_PATH = "/_daintree/bootstrap";
 
 /**
+ * HTTP/1.1 reason phrase the proxy stamps on the 502 it generates itself when the
+ * upstream dev server is down or unregistered (#12296). The renderer's only
+ * renderer-side view of a response status is `did-frame-navigate`, which carries
+ * `httpResponseCode` and `httpStatusText` but no headers — so the reason phrase is
+ * how a proxy-generated 502 announces its provenance. Chromium preserves an
+ * arbitrary HTTP/1.1 reason phrase verbatim, and the proxy is a plain Node `http`
+ * server, so this survives the round trip. A 502 forwarded from the developer's own
+ * app carries that app's reason phrase instead and must render normally.
+ */
+export const DEV_PREVIEW_PROXY_STATUS_TEXT = "Daintree Preview Proxy Upstream Unavailable";
+
+/**
  * Reduce an arbitrary id to a DNS-label-safe token: lowercased, every character outside
  * `[a-z0-9-]` collapsed to a hyphen, capped at 24 chars (well under the 63-char DNS label
  * limit, even combined as `dp-<a>-<b>`). Lowercasing is essential, not cosmetic — hostnames

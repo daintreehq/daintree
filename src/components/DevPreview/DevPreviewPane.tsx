@@ -245,6 +245,10 @@ export function DevPreviewPane({
   // re-bound to navigation state — Electron's SrcAttribute observer would turn
   // each guest navigation into a redundant full reload (#9940).
   const [webviewSeedUrl, setWebviewSeedUrl] = useState(history.present);
+  // Bumped to force a fresh guest when in-place reload cannot reach the current
+  // one — a renderer that died before it was ever attached has no WebContents to
+  // reload, and recovery must not silently do nothing (#12296).
+  const [webviewInstanceKey, setWebviewInstanceKey] = useState(0);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
@@ -470,23 +474,51 @@ export function DevPreviewPane({
     setConsoleTerminalId(terminalId);
   }, [terminalId]);
 
-  const performReload = useCallback(() => {
+  // Recreate the guest from scratch. `src` is seed-only (#9940), so re-seed it to
+  // the URL we actually want before the remount rather than letting the new element
+  // rewind to the mount-time URL.
+  const remountWebview = useCallback(() => {
+    setWebviewSeedUrl(currentUrl);
+    setIsWebviewReady(false);
+    setWebviewInstanceKey((key) => key + 1);
+  }, [currentUrl, setIsWebviewReady]);
+
+  // Returns whether a reload was actually initiated. Deliberately not gated on
+  // `isWebviewReady`: that is exactly the state of a renderer that crashed before
+  // its first dom-ready, and gating there made both auto-recovery and the manual
+  // Reload action silent no-ops (#12296). Falls back through the in-place reload
+  // paths to a full remount so the only "nothing happened" outcome is having no
+  // guest mounted at all.
+  const performReload = useCallback((): boolean => {
     const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return;
+    if (!webview) return false;
     setWebviewLoadError(null);
+    clearRetryState();
     try {
       const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
       safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
         context: "Reloading dev preview ignoring cache",
       });
+      return true;
     } catch {
-      webview.reload();
+      // No WebContents id — the guest was never attached, or is already gone.
     }
-  }, [isWebviewReady, id, setWebviewLoadError]);
+    try {
+      webview.reload();
+      return true;
+    } catch {
+      // In-place reload is unavailable on a guest that never attached.
+    }
+    remountWebview();
+    return true;
+  }, [id, setWebviewLoadError, clearRetryState, remountWebview]);
 
+  // Clear the crash banner only once recovery is under way — clearing first meant a
+  // reload that returned early left the user with no crash state and no reload.
   const handleHardReload = useCallback(() => {
-    resetCrashHistory();
-    performReload();
+    if (performReload()) {
+      resetCrashHistory();
+    }
   }, [resetCrashHistory, performReload]);
 
   // Keep crashReloadRef in sync so onRenderProcessGone can call performReload
@@ -532,6 +564,7 @@ export function DevPreviewPane({
     setIsLoading,
     setWebviewLoadError,
     clearLoadTimers,
+    clearRetryState,
     isConsoleOpen,
     setDevPreviewConsoleOpen,
     onHardReload: handleHardReload,
@@ -1030,6 +1063,7 @@ export function DevPreviewPane({
                     }
                   >
                     <webview
+                      key={webviewInstanceKey}
                       ref={setWebviewNode}
                       // Seed-only: never re-bind to navigation state (#9940).
                       src={effectiveWebviewSeedUrl}

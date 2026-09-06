@@ -36,6 +36,7 @@ interface UseDevPreviewNavigationParams {
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setWebviewLoadError: React.Dispatch<React.SetStateAction<WebviewLoadError | null>>;
   clearLoadTimers: () => void;
+  clearRetryState: () => void;
   isConsoleOpen: boolean;
   setDevPreviewConsoleOpen: (id: string, open: boolean) => void;
   onHardReload: () => void;
@@ -72,6 +73,7 @@ export function useDevPreviewNavigation({
   setIsLoading,
   setWebviewLoadError,
   clearLoadTimers,
+  clearRetryState,
   isConsoleOpen,
   setDevPreviewConsoleOpen,
   onHardReload,
@@ -152,10 +154,14 @@ export function useDevPreviewNavigation({
     }
   }, [canGoForward, setHistory]);
 
+  // A user-initiated reload is a fresh attempt: hand back the retry budget. Load
+  // start no longer refills it on its own, so without this an exhausted panel would
+  // stay exhausted for the rest of its life (#12296).
   const handleReload = useCallback(() => {
     setWebviewLoadError(null);
+    clearRetryState();
     webviewRef.current?.reload();
-  }, [setWebviewLoadError, webviewRef]);
+  }, [clearRetryState, setWebviewLoadError, webviewRef]);
 
   const handleCancelLoad = useCallback(() => {
     clearLoadTimers();
@@ -170,6 +176,7 @@ export function useDevPreviewNavigation({
 
   const handleRetryWebviewLoad = useCallback(() => {
     setWebviewLoadError(null);
+    clearRetryState();
     setIsLoading(true);
     if (currentUrl) {
       // Swallow ERR_ABORTED-class rejections — did-fail-load is the source
@@ -181,7 +188,7 @@ export function useDevPreviewNavigation({
     } else {
       webviewRef.current?.reload();
     }
-  }, [currentUrl, setWebviewLoadError, setIsLoading, webviewRef]);
+  }, [currentUrl, clearRetryState, setWebviewLoadError, setIsLoading, webviewRef]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;

@@ -7,7 +7,10 @@ import {
   DevPreviewProxyService,
   type DevPreviewProxyDiagnostic,
 } from "../DevPreviewProxyService.js";
-import { DEV_PREVIEW_PROXY_PORT } from "../../../shared/utils/devPreviewProxy.js";
+import {
+  DEV_PREVIEW_PROXY_PORT,
+  DEV_PREVIEW_PROXY_STATUS_TEXT,
+} from "../../../shared/utils/devPreviewProxy.js";
 
 // A self-signed cert/key for `localhost`, valid for 100 years, used to stand up a real TLS
 // upstream so the proxy's HTTPS path (#9974) is exercised end-to-end. The proxy dials with
@@ -118,6 +121,7 @@ const canBindIpv6Only = await new Promise<boolean>((resolve) => {
 
 interface ProxyResponse {
   status: number;
+  statusText: string;
   body: string;
   headers: http.IncomingHttpHeaders;
 }
@@ -136,7 +140,14 @@ function request(
       (res) => {
         let body = "";
         res.on("data", (chunk) => (body += chunk));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            statusText: res.statusMessage ?? "",
+            body,
+            headers: res.headers,
+          })
+        );
       }
     );
     req.on("error", reject);
@@ -391,6 +402,35 @@ describe("DevPreviewProxyService", () => {
 
     const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
     expect(res.status).toBe(502);
+  });
+
+  it("stamps its own 502s with the provenance reason phrase (#12296)", async () => {
+    // The renderer only sees the status code and the reason phrase, so this is
+    // how a proxy-generated 502 identifies itself against one forwarded from the
+    // developer's own app.
+    proxy = new DevPreviewProxyService(() => null);
+    const proxyPort = await proxy.start();
+
+    const res = await request(proxyPort, `dp-missing.localhost:${proxyPort}`);
+    expect(res.status).toBe(502);
+    expect(res.statusText).toBe(DEV_PREVIEW_PROXY_STATUS_TEXT);
+  });
+
+  it("forwards an upstream 502 without the provenance reason phrase (#12296)", async () => {
+    upstream = http.createServer((_req, res) => {
+      res.writeHead(502, "Bad Gateway", { "Content-Type": "text/html" });
+      res.end("<h1>App error page</h1>");
+    });
+    await new Promise<void>((resolve) => upstream!.listen(0, "127.0.0.1", resolve));
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
+    const proxyPort = await proxy.start();
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+    expect(res.status).toBe(502);
+    expect(res.statusText).not.toBe(DEV_PREVIEW_PROXY_STATUS_TEXT);
+    expect(res.body).toContain("App error page");
   });
 
   it("exposes the bound port and is idempotent on start", async () => {

@@ -3,6 +3,7 @@ import { usePanelStore } from "@/store";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import type { BrowserHistory } from "@shared/types/browser";
 import { isDevPreviewPanel } from "@shared/types/panel";
+import { DEV_PREVIEW_PROXY_STATUS_TEXT } from "@shared/utils/devPreviewProxy";
 import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
 import { pushBrowserHistory } from "../Browser/historyUtils";
@@ -124,6 +125,17 @@ export function useDevPreviewLoadLifecycle({
   // the three events fire sequentially within one microtask pump.
   const pendingHttpErrorRef = useRef(false);
 
+  // Companion latch for a failed main-frame navigation. When a main-frame load
+  // fails, Chromium commits its own internal error document and replays the whole
+  // lifecycle for it — the observed sequence is
+  // did-start-loading → did-fail-load → dom-ready → did-finish-load → did-stop-loading
+  // — so those trailing events are evidence about the interstitial, not about the
+  // requested URL. did-fail-load latches the failure here and, unlike the HTTP
+  // latch, it is not consumed on did-finish-load: it describes the document
+  // currently committed, so only the next did-start-loading — a genuinely new
+  // navigation — clears it (#12296).
+  const pendingNetErrorRef = useRef(false);
+
   // Bounded auto-retry for a proxy 5xx. The dev server can restart in place
   // (e.g. config-change full reload) while Daintree still reports status
   // "running", so the webview never remounts and there's no recovery signal
@@ -180,6 +192,7 @@ export function useDevPreviewLoadLifecycle({
     failLoadRetryCountRef.current = 0;
     proxyRetryCountRef.current = 0;
     pendingHttpErrorRef.current = false;
+    pendingNetErrorRef.current = false;
     setReconnectAttempt(0);
   }, []);
 
@@ -236,6 +249,7 @@ export function useDevPreviewLoadLifecycle({
       failLoadRetryCountRef.current = 0;
       proxyRetryCountRef.current = 0;
       pendingHttpErrorRef.current = false;
+      pendingNetErrorRef.current = false;
       if (reason === "clean-exit") return;
       setWebviewLoadError(null);
       onRenderProcessGone?.({ reason, exitCode });
@@ -245,9 +259,11 @@ export function useDevPreviewLoadLifecycle({
       setIsLoading(true);
       setWebviewLoadError(null);
       setReconnectAttempt(0);
-      // Fresh navigation: drop any stale HTTP-error latch. did-frame-navigate,
-      // which fires after this for the same navigation, re-sets it if needed.
+      // Fresh navigation: drop any stale error latches. did-frame-navigate and
+      // did-fail-load, which fire after this for the same navigation, re-set them
+      // if needed.
       pendingHttpErrorRef.current = false;
+      pendingNetErrorRef.current = false;
       // Cancel a pending proxy auto-retry — this load supersedes it. The retry
       // count is intentionally preserved so a still-failing upstream keeps
       // walking up the backoff; it resets only on a genuine successful load.
@@ -262,7 +278,11 @@ export function useDevPreviewLoadLifecycle({
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
       }
-      failLoadRetryCountRef.current = 0;
+      // The connection-refused retry count is deliberately preserved here, exactly
+      // like proxyRetryCountRef above: the scheduled retry issues its own loadURL,
+      // which fires this handler, so resetting made MAX_RETRIES unreachable and the
+      // backoff loop endless (#12296). It resets on a confirmed successful load, on
+      // a crash, and when a user-initiated action calls clearRetryState.
       loadTimeoutRef.current = setTimeout(() => {
         loadTimeoutRef.current = null;
         try {
@@ -301,6 +321,13 @@ export function useDevPreviewLoadLifecycle({
       // the latch so the next genuine successful load clears the overlay.
       if (pendingHttpErrorRef.current) {
         pendingHttpErrorRef.current = false;
+        return;
+      }
+
+      // The requested navigation failed: this event belongs to Chromium's error
+      // document, so it is not evidence that anything loaded. Keep the overlay and
+      // the retry budget intact (#12296).
+      if (pendingNetErrorRef.current) {
         return;
       }
 
@@ -355,6 +382,11 @@ export function useDevPreviewLoadLifecycle({
       if (e.errorCode === -3) return;
       // Ignore subframe failures — they don't affect the main-frame load state
       if (!e.isMainFrame) return;
+
+      // Everything past here either surfaces an error overlay or schedules a retry,
+      // and in both cases Chromium is about to commit its error document. Latch the
+      // failure so that document's own lifecycle events don't clear it (#12296).
+      pendingNetErrorRef.current = true;
 
       setIsLoading(false);
       if (loadTimeoutRef.current) {
@@ -502,8 +534,15 @@ export function useDevPreviewLoadLifecycle({
       // the raw text/plain 502 body. Latch a main-frame 502 here and surface the
       // styled overlay; the guards in did-navigate/did-finish-load keep it from
       // being cleared. 4xx (bootstrap 403/405) and other 5xx pass through.
+      //
+      // The status code alone is ambiguous: the proxy also forwards an upstream
+      // 502 untouched, and hiding the app's own error page behind the outage
+      // overlay costs the developer the debugging information (#12296). So match
+      // the proxy's provenance marker — the custom HTTP/1.1 reason phrase
+      // send502 stamps on the responses it generates itself — not the bare status.
       if (!e.isMainFrame) return;
       if (e.httpResponseCode !== 502) return;
+      if (e.httpStatusText !== DEV_PREVIEW_PROXY_STATUS_TEXT) return;
       pendingHttpErrorRef.current = true;
       setIsLoading(false);
       setReconnectAttempt(0);
@@ -556,9 +595,10 @@ export function useDevPreviewLoadLifecycle({
       // Suppress about:blank navigations triggered by eviction
       if (navigatedUrl === "about:blank" && evictingRef.current) return;
       setBlockedNav({ type: "DISMISS" });
-      // A main-frame 5xx (proxy 502) was just committed via did-frame-navigate;
-      // keep the overlay rather than clearing it for this "successful" load.
-      if (!pendingHttpErrorRef.current) {
+      // A main-frame 5xx (proxy 502) was just committed via did-frame-navigate, or
+      // the navigation failed and this is the error document committing; keep the
+      // overlay rather than clearing it for either "successful" load (#12296).
+      if (!pendingHttpErrorRef.current && !pendingNetErrorRef.current) {
         setWebviewLoadError(null);
         setReconnectAttempt(0);
         proxyRetryCountRef.current = 0;
@@ -566,13 +606,15 @@ export function useDevPreviewLoadLifecycle({
           clearTimeout(proxyRetryRef.current);
           proxyRetryRef.current = null;
         }
-      }
-      // A confirmed new main-frame navigation means we're past any previous failure;
-      // reset the retry budget so stale exhaustion doesn't block future attempts.
-      failLoadRetryCountRef.current = 0;
-      if (failLoadRetryRef.current) {
-        clearTimeout(failLoadRetryRef.current);
-        failLoadRetryRef.current = null;
+        // A confirmed new main-frame navigation means we're past any previous
+        // failure; reset the retry budget so stale exhaustion doesn't block future
+        // attempts. Gated on the document actually being the requested one — the
+        // error document's own commit would otherwise refill the budget forever.
+        failLoadRetryCountRef.current = 0;
+        if (failLoadRetryRef.current) {
+          clearTimeout(failLoadRetryRef.current);
+          failLoadRetryRef.current = null;
+        }
       }
       if (navigatedUrl !== lastSetUrlRef.current) {
         setHistory((prev) => pushBrowserHistory(prev, navigatedUrl));
@@ -667,10 +709,17 @@ export function useDevPreviewLoadLifecycle({
       } catch {
         // WebContents not available yet
       }
+      // The watchdog and the blocking "Loading preview" overlay share this one
+      // finish boundary. dom-ready is DOMContentLoaded: the document is committed
+      // and usable, while did-finish-load/did-stop-loading additionally wait on the
+      // window load event — so a single hung image used to clear the only timer
+      // guarding an overlay that then stayed up forever (#12296). A hung main
+      // document never reaches dom-ready and still hits the timeout.
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
       }
+      setIsLoading(false);
 
       const currentPanel = usePanelStore.getState().getTerminal(id);
       const saved =
