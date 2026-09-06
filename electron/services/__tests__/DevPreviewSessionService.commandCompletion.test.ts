@@ -277,7 +277,7 @@ describePosix("dev preview command completion (real PTY)", () => {
   // Ctrl-C reach the dev server instead of the wrapper.
   it("keeps a real interactive parent shell that hands the foreground to the dev command", async () => {
     const cwd = makeProject({
-      "dev.js": `require("fs").writeFileSync("dev.pid", String(process.pid)); setTimeout(() => process.exit(0), 15000);`,
+      "dev.js": `require("fs").writeFileSync("dev.pid", String(process.pid)); setTimeout(() => process.exit(0), 12000);`,
     });
     const { client, service } = startService();
     const request = { panelId: "panel-3", projectId: "project-1" };
@@ -306,12 +306,17 @@ describePosix("dev preview command completion (real PTY)", () => {
   }, 40_000);
 
   it("detects a serving dev server exiting nonzero after it was already running", async () => {
+    // The server exits on a sentinel rather than a timer: a busy CI worker
+    // could otherwise blow past `running` before the test ever observed it.
     const cwd = makeProject({
       "dev.js": `
+const fs = require("fs");
 const http = require("http");
 const server = http.createServer((_, res) => res.end("ok"));
 server.listen(Number(process.env.PORT), () => console.log("ready on " + process.env.PORT));
-setTimeout(() => { server.close(); process.exit(7); }, 3000);
+setInterval(() => {
+  if (fs.existsSync("stop")) { server.close(); process.exit(7); }
+}, 50);
 `,
     });
     const { service } = startService();
@@ -320,6 +325,7 @@ setTimeout(() => { server.close(); process.exit(7); }, 3000);
     await service.ensure({ ...request, cwd, devCommand: "node dev.js" });
     await waitForStatus(service, request, (state) => state.status === "running");
 
+    fs.writeFileSync(path.join(cwd, "stop"), "1");
     const final = await waitForStatus(service, request, (state) => state.status === "error");
     expect(final.error?.message).toContain("7");
     expect(final.url).toBeNull();
@@ -334,6 +340,9 @@ if (fs.existsSync("package-lock.json")) {
   const http = require("http");
   const server = http.createServer((_, res) => res.end("ok"));
   server.listen(Number(process.env.PORT), () => console.log("ready"));
+  setInterval(() => {
+    if (fs.existsSync("stop")) { server.close(); process.exit(0); }
+  }, 50);
 } else {
   console.error("Error: Cannot find module 'react'");
   process.exit(1);
