@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useState } from "react";
 import { renderHook, act } from "@testing-library/react";
 import { useDevPreviewNavigation } from "../useDevPreviewNavigation";
 import { initializeBrowserHistory } from "../../Browser/historyUtils";
@@ -561,6 +562,141 @@ describe("useDevPreviewNavigation — persistence effects", () => {
     );
     const updaterCalls = setHistory.mock.calls.filter((call) => typeof call[0] === "function");
     expect(updaterCalls.length).toBeGreaterThan(0);
+  });
+});
+
+// #12297 — the pane must never lose the route when it crosses onto the proxy origin,
+// and its address bar must accept the origin it is itself displaying. These need a
+// harness that actually owns history state, so the migration effect converges instead
+// of being observed one updater at a time.
+describe("useDevPreviewNavigation — proxy-origin routing (#12297)", () => {
+  const PROXY = "http://dp-proj-panel.localhost:43000";
+  const UPSTREAM = "http://localhost:5173";
+
+  function renderStateful(init: {
+    present: string;
+    past?: string[];
+    future?: string[];
+    devServerUrl?: string | null;
+    proxyOrigin?: string | null;
+  }) {
+    const initial: BrowserHistory = {
+      past: init.past ?? [],
+      present: init.present,
+      future: init.future ?? [],
+    };
+    const seen = { history: initial };
+    const rendered = renderHook(() => {
+      const [history, setHistory] = useState<BrowserHistory>(initial);
+      seen.history = history;
+      return useDevPreviewNavigation(
+        baseParams({
+          history,
+          setHistory,
+          currentUrl: history.present,
+          canGoBack: history.past.length > 0,
+          canGoForward: history.future.length > 0,
+          devServerUrl: init.devServerUrl ?? null,
+          proxyOrigin: init.proxyOrigin ?? null,
+        })
+      );
+    });
+    return { ...rendered, seen };
+  }
+
+  it("accepts the panel's own proxy origin from the address bar", () => {
+    // The reported bug: this returned "Only localhost URLs are allowed" and never navigated.
+    const { result, seen } = renderStateful({ present: `${PROXY}/`, proxyOrigin: PROXY });
+    act(() => result.current.handleNavigate(`${PROXY}/typed-route?x=1#f`));
+    expect(seen.history.present).toBe(`${PROXY}/typed-route?x=1#f`);
+    expect(result.current.validateUrl(`${PROXY}/typed-route`).error).toBeUndefined();
+  });
+
+  it("retargets a typed raw upstream URL onto the proxy origin in one commit", () => {
+    const { result, seen } = renderStateful({
+      present: `${PROXY}/`,
+      devServerUrl: `${UPSTREAM}/`,
+      proxyOrigin: PROXY,
+    });
+    act(() => result.current.handleNavigate(`${UPSTREAM}/once?a=1#b`));
+
+    // The route survives, and history never holds the raw upstream origin — so the pane
+    // never gates the webview out and never remounts it against a stale seed.
+    expect(seen.history.present).toBe(`${PROXY}/once?a=1#b`);
+    expect(seen.history.past).toEqual([`${PROXY}/`]);
+    expect(seen.history.past).not.toContain(`${UPSTREAM}/once?a=1#b`);
+  });
+
+  it("refuses a foreign host without touching history", () => {
+    const { result, seen } = renderStateful({ present: `${PROXY}/`, proxyOrigin: PROXY });
+    act(() => result.current.handleNavigate("http://example.com/x"));
+    act(() => result.current.handleNavigate("http://dp-proj-other.localhost:43000/x"));
+    expect(seen.history.present).toBe(`${PROXY}/`);
+    expect(seen.history.past).toEqual([]);
+  });
+
+  it("exposes a validator that tracks the panel's own proxy origin", () => {
+    const { result } = renderStateful({ present: `${PROXY}/`, proxyOrigin: PROXY });
+    expect(result.current.validateUrl(`${PROXY}/x`).url).toBe(`${PROXY}/x`);
+    expect(
+      result.current.validateUrl("http://dp-proj-other.localhost:43000/x").url
+    ).toBeUndefined();
+    // Same policy the toolbar submits through, so the two can never disagree.
+    expect(result.current.validateUrl(`${UPSTREAM}/x`).url).toBe(`${PROXY}/x`);
+  });
+
+  it("migrates a stale raw-upstream entry onto the proxy origin without stranding it in the back stack", () => {
+    const { seen } = renderStateful({
+      present: `${UPSTREAM}/consume?token=audit-single-use#done`,
+      past: [`${PROXY}/start`],
+      future: [`${PROXY}/ahead`],
+      devServerUrl: `${UPSTREAM}/`,
+      proxyOrigin: PROXY,
+    });
+
+    expect(seen.history.present).toBe(`${PROXY}/consume?token=audit-single-use#done`);
+    // Replacement, not a push: Back still returns to /start and Forward still works.
+    expect(seen.history.past).toEqual([`${PROXY}/start`]);
+    expect(seen.history.future).toEqual([`${PROXY}/ahead`]);
+  });
+
+  it("settles once on the proxy origin instead of re-migrating", () => {
+    const { seen, rerender } = renderStateful({
+      present: `${UPSTREAM}/settings`,
+      devServerUrl: `${UPSTREAM}/`,
+      proxyOrigin: PROXY,
+    });
+    const settled = seen.history;
+    rerender();
+    expect(seen.history.present).toBe(`${PROXY}/settings`);
+    expect(seen.history).toBe(settled);
+  });
+
+  it("still pushes in legacy mode, where a port shift is a genuine new origin", () => {
+    const { seen } = renderStateful({
+      present: "http://localhost:3000/dashboard",
+      devServerUrl: "http://localhost:3001/",
+      proxyOrigin: null,
+    });
+    expect(seen.history.present).toBe("http://localhost:3001/dashboard");
+    expect(seen.history.past).toEqual(["http://localhost:3000/dashboard"]);
+  });
+
+  it("keeps back/forward on the proxy origin after a retargeted navigation", () => {
+    const { result, seen } = renderStateful({
+      present: `${PROXY}/start`,
+      devServerUrl: `${UPSTREAM}/`,
+      proxyOrigin: PROXY,
+    });
+    act(() => result.current.handleNavigate(`${UPSTREAM}/once`));
+    expect(seen.history.present).toBe(`${PROXY}/once`);
+
+    act(() => result.current.handleBack());
+    expect(seen.history.present).toBe(`${PROXY}/start`);
+    expect(seen.history.future).toEqual([`${PROXY}/once`]);
+
+    act(() => result.current.handleForward());
+    expect(seen.history.present).toBe(`${PROXY}/once`);
   });
 });
 

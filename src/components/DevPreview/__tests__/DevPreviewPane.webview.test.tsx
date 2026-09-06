@@ -5,7 +5,10 @@ import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { DEV_PREVIEW_PROXY_STATUS_TEXT } from "@shared/utils/devPreviewProxy";
+import {
+  buildDevPreviewProxyOrigin,
+  DEV_PREVIEW_PROXY_STATUS_TEXT,
+} from "@shared/utils/devPreviewProxy";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -19,6 +22,16 @@ type MockWebContents = {
   enableDeviceEmulation: ReturnType<typeof vi.fn>;
   disableDeviceEmulation: ReturnType<typeof vi.fn>;
 };
+
+/**
+ * One entry per `<webview>` element React actually created. `srcWrites` are seed writes
+ * (React setting the attribute); `loadURLs` are imperative navigations. The mock's
+ * `loadURL` also writes `src`, so without separating the two by origin a test cannot
+ * tell a fresh guest's seed from a corrective load — which is the exact distinction
+ * #12297 turns on.
+ */
+type GuestRecord = { srcWrites: string[]; loadURLs: string[] };
+const guestLog: GuestRecord[] = [];
 
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
@@ -43,6 +56,15 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   let loading = nextWebviewStartsLoading;
   const webview = element as MockWebviewElement;
 
+  const record: GuestRecord = { srcWrites: [], loadURLs: [] };
+  guestLog.push(record);
+  let inLoadURL = false;
+  const setAttributeDirect = element.setAttribute.bind(element);
+  element.setAttribute = (name: string, value: string) => {
+    if (name === "src" && !inLoadURL) record.srcWrites.push(value);
+    setAttributeDirect(name, value);
+  };
+
   const syncUrlFromAttribute = () => {
     const src = element.getAttribute("src");
     if (typeof src === "string" && src.length > 0) {
@@ -53,8 +75,14 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   webview.reload = vi.fn();
   webview.stop = vi.fn();
   webview.loadURL = vi.fn((url: string) => {
+    record.loadURLs.push(url);
     currentUrl = url;
-    element.setAttribute("src", url);
+    inLoadURL = true;
+    try {
+      element.setAttribute("src", url);
+    } finally {
+      inLoadURL = false;
+    }
   });
   webview.setZoomFactor = vi.fn();
   webview.getURL = vi.fn(() => {
@@ -379,6 +407,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       dispatchEvent: vi.fn(),
     }));
     scrollPositionRef.current = undefined;
+    guestLog.length = 0;
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
       const element = originalCreateElement(tagName, options);
@@ -3402,6 +3431,214 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5174/");
+    });
+  });
+
+  // #12297 — crossing onto the stable proxy origin used to lose the route. `showEmptyState`
+  // unmounts the `<webview>` while `isProxyUrlPending` is true, and the replacement guest was
+  // seeded from `webviewSeedUrl`, which is captured once per session. These tests run the
+  // *configured proxy* path the existing coverage never reached, and assert call counts so a
+  // fix that re-requests a consumed callback would fail here.
+  describe("proxy-origin route preservation (#12297)", () => {
+    const PROXY_PORT = 43000;
+    const PROXY = buildDevPreviewProxyOrigin(PROXY_PORT, "project-1", "dev-preview-panel-1");
+
+    function enableProxyMode() {
+      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+      electron.devPreview = {
+        getProxyPort: vi.fn().mockResolvedValue({ port: PROXY_PORT }),
+        mintBrowserToken: vi
+          .fn()
+          .mockResolvedValue({ bootstrapUrl: `${PROXY}/_daintree/bootstrap` }),
+      };
+    }
+
+    function setSavedHistory(history: { past: string[]; present: string; future: string[] }) {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: history,
+        browserZoom: 1.4,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+    }
+
+    // Let the proxy-port promise resolve and every dependent effect flush.
+    async function settle() {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    function seedsAcrossGuests(): string[] {
+      return guestLog.flatMap((g) => g.srcWrites);
+    }
+
+    function loadsAcrossGuests(): string[] {
+      return guestLog.flatMap((g) => g.loadURLs);
+    }
+
+    beforeEach(() => {
+      enableProxyMode();
+    });
+
+    it("seeds a replacement guest from the migrated route, not the session's first URL", async () => {
+      // A session that persisted a raw upstream URL: the pane gates the webview out while it
+      // migrates onto the proxy origin, then mounts a fresh guest. Before the fix that guest
+      // was seeded with the stale `webviewSeedUrl` and landed on "/".
+      setSavedHistory({
+        past: [],
+        present: "http://localhost:5173/consume?token=audit-single-use#done",
+        future: [],
+      });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      const expected = `${PROXY}/consume?token=audit-single-use#done`;
+
+      expect(webview.getAttribute("src")).toBe(expected);
+      // Path, query and fragment all survive the origin change.
+      expect(seedsAcrossGuests()).not.toContain(`${PROXY}/`);
+      expect(seedsAcrossGuests().at(-1)).toBe(expected);
+    });
+
+    it("does not re-request the destination after seeding a replacement guest", async () => {
+      // The seed navigates the guest by itself, so a corrective loadURL on top of it would be
+      // a second request — exactly the callback replay the issue rules out.
+      setSavedHistory({ past: [], present: "http://localhost:5173/once", future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+
+      expect(webview.getAttribute("src")).toBe(`${PROXY}/once`);
+      expect(loadsAcrossGuests()).toEqual([]);
+    });
+
+    it("mounts exactly one guest per destination while migrating", async () => {
+      setSavedHistory({ past: [], present: "http://localhost:5173/deep/route?a=1", future: [] });
+      render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      // One gated mount is expected; what must not happen is a guest per intermediate state.
+      expect(guestLog.length).toBeLessThanOrEqual(2);
+      expect(seedsAcrossGuests().at(-1)).toBe(`${PROXY}/deep/route?a=1`);
+    });
+
+    it("hands the toolbar a validator that accepts the panel's own origin", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
+        validateUrl?: (url: string) => { url?: string; error?: string };
+      };
+      expect(props.validateUrl).toBeTypeOf("function");
+      // The reported failure: this returned "Only localhost URLs are allowed".
+      expect(props.validateUrl!(`${PROXY}/typed-route`)).toEqual({ url: `${PROXY}/typed-route` });
+      // A raw upstream address is retargeted rather than pushed off-origin.
+      expect(props.validateUrl!("http://localhost:5173/typed-route").url).toBe(
+        `${PROXY}/typed-route`
+      );
+      // Still no blanket acceptance of external hosts.
+      expect(props.validateUrl!("http://example.com/x").url).toBeUndefined();
+    });
+
+    it("navigates the live guest to a submitted route without remounting it", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+      const guestsBefore = guestLog.length;
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
+        onNavigate: (url: string) => void;
+      };
+
+      await act(async () => {
+        props.onNavigate(`${PROXY}/typed?x=1#s`);
+        await Promise.resolve();
+      });
+
+      // Same guest, one imperative load, and `src` was not re-bound (#9940).
+      expect(guestLog.length).toBe(guestsBefore);
+      expect(guestLog.at(-1)!.loadURLs).toEqual([`${PROXY}/typed?x=1#s`]);
+    });
+
+    it("retargets a raw upstream address onto the proxy origin, requesting it once", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
+        onNavigate: (url: string) => void;
+      };
+
+      await act(async () => {
+        props.onNavigate("http://localhost:5173/once");
+        await Promise.resolve();
+      });
+
+      // Never lands on the raw origin, so the pane never gates the guest out and never
+      // re-requests the route from a replacement guest.
+      expect(loadsAcrossGuests()).toEqual([`${PROXY}/once`]);
+      expect(loadsAcrossGuests()).not.toContain("http://localhost:5173/once");
+    });
+
+    it("ignores a rejected address entirely — no load, no mount, no history entry", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+      const guestsBefore = guestLog.length;
+      const loadsBefore = loadsAcrossGuests().length;
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
+        onNavigate: (url: string) => void;
+      };
+
+      await act(async () => {
+        props.onNavigate("http://evil.localhost:43000/x");
+        await Promise.resolve();
+      });
+
+      expect(guestLog.length).toBe(guestsBefore);
+      expect(loadsAcrossGuests()).toHaveLength(loadsBefore);
+    });
+
+    it("does not treat a prefix-matching port as the proxy origin", async () => {
+      // `startsWith` accepted `…localhost:43000` as sitting on `…localhost:4300`, which would
+      // leave the pane displaying an origin it never proxied.
+      setSavedHistory({
+        past: [],
+        present: buildDevPreviewProxyOrigin(4300, "project-1", "dev-preview-panel-1") + "/x",
+        future: [],
+      });
+      render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      expect(seedsAcrossGuests().at(-1)).toBe(`${PROXY}/x`);
     });
   });
 });
