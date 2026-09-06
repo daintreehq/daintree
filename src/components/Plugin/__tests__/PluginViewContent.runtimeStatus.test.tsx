@@ -81,7 +81,14 @@ function makeContentConfig(
 }
 
 function worker(overrides: Partial<PluginWorkerStatus> = {}): PluginWorkerStatus {
-  return { generation: 1, state: "ready", stateSince: Date.now(), reason: null, detail: null, ...overrides };
+  return {
+    generation: 1,
+    state: "ready",
+    stateSince: Date.now(),
+    reason: null,
+    detail: null,
+    ...overrides,
+  };
 }
 
 function runtimeStatus(w: PluginWorkerStatus | null): PluginRuntimeStatus {
@@ -119,7 +126,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  const { _resetPluginRuntimeStatusStoreForTest } = await import("@/store/pluginRuntimeStatusStore");
+  const { _resetPluginRuntimeStatusStoreForTest } =
+    await import("@/store/pluginRuntimeStatusStore");
   _resetPluginRuntimeStatusStoreForTest();
   vi.resetModules();
   Reflect.deleteProperty(window, "electron");

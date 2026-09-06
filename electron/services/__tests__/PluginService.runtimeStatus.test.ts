@@ -101,7 +101,6 @@ vi.mock("../plugin-capability/instances.js", () => ({
   getPluginCapabilityConsentService: () => capConsentMock,
 }));
 
-
 import { PluginService } from "../PluginService.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import type { PluginRuntimeStatus, PluginWorkerState } from "../../../shared/types/plugin.js";
@@ -347,7 +346,10 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
   async function writePlugin(id: string): Promise<void> {
     const dir = path.join(pluginsRoot, id);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify({ name: id, version: "1.0.0" }));
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: id, version: "1.0.0" })
+    );
   }
 
   /** A loaded plugin that actually has a utility-process backend to restart. */
@@ -399,9 +401,7 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
   it("coalesces concurrent restarts so sibling panels share one", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     internals(service).plugins.set("acme.prod", workerBackedPlugin("acme.prod"));
-    const activate = vi
-      .spyOn(service, "activatePlugin")
-      .mockImplementation(async () => undefined);
+    const activate = vi.spyOn(service, "activatePlugin").mockImplementation(async () => undefined);
 
     // Three panels of one instance, each clicking Restart plugin.
     await Promise.all([
