@@ -9,6 +9,7 @@ import {
   buildDevPreviewProxyOrigin,
   DEV_PREVIEW_PROXY_STATUS_TEXT,
 } from "@shared/utils/devPreviewProxy";
+import type { NormalizeResult } from "@shared/utils/urlUtils";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -288,15 +289,30 @@ vi.mock("@/hooks/useFindInPage", () => ({
   }),
 }));
 
+// The props the tests actually read, named so recording them needs no type assertion.
+// The index signature keeps every other prop flowing through untyped, as before.
+type MockToolbarProps = {
+  onNavigate: (url: string) => void;
+  validateUrl?: (url: string) => NormalizeResult;
+  onPromoteToPortal?: () => void;
+  onCaptureScreenshot: () => Promise<boolean>;
+} & Record<string, unknown>;
+
 const { browserToolbarPropsSpy } = vi.hoisted(() => ({
-  browserToolbarPropsSpy: vi.fn(),
+  browserToolbarPropsSpy: vi.fn<(props: MockToolbarProps) => void>(),
 }));
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
-  BrowserToolbar: (props: Record<string, unknown>) => {
+  BrowserToolbar: (props: MockToolbarProps) => {
     browserToolbarPropsSpy(props);
     return <div data-testid="browser-toolbar" />;
   },
 }));
+
+function latestToolbarProps(): MockToolbarProps {
+  const call = browserToolbarPropsSpy.mock.calls.at(-1);
+  if (!call) throw new Error("Expected BrowserToolbar to have rendered");
+  return call[0];
+}
 
 const headerContentPointerDownSpy = vi.hoisted(() => vi.fn());
 
@@ -1955,12 +1971,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       error: { code: "EXECUTION_ERROR", message },
     });
 
-    const getPromoteHandler = () => {
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
-        onPromoteToPortal?: () => void;
-      };
-      return props.onPromoteToPortal;
-    };
+    const getPromoteHandler = () => latestToolbarProps().onPromoteToPortal;
 
     it("renders the dispatch failure reason inline, without a global toast", async () => {
       const message = "Portal is already showing this URL";
@@ -2011,12 +2022,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   });
 
   describe("screenshot capture", () => {
-    const getToolbarCapture = () => {
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
-        onCaptureScreenshot: () => Promise<boolean>;
-      };
-      return props.onCaptureScreenshot;
-    };
+    const getToolbarCapture = () => latestToolbarProps().onCaptureScreenshot;
 
     const getWriteImageMock = () => {
       const electron = (window as unknown as { electron: { clipboard: Record<string, unknown> } })
@@ -3443,14 +3449,15 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     const PROXY_PORT = 43000;
     const PROXY = buildDevPreviewProxyOrigin(PROXY_PORT, "project-1", "dev-preview-panel-1");
 
-    function enableProxyMode() {
-      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
-      electron.devPreview = {
-        getProxyPort: vi.fn().mockResolvedValue({ port: PROXY_PORT }),
-        mintBrowserToken: vi
-          .fn()
-          .mockResolvedValue({ bootstrapUrl: `${PROXY}/_daintree/bootstrap` }),
-      };
+    function enableProxyMode(port = PROXY_PORT) {
+      Object.assign(window.electron, {
+        devPreview: {
+          getProxyPort: vi.fn().mockResolvedValue({ port }),
+          mintBrowserToken: vi
+            .fn()
+            .mockResolvedValue({ bootstrapUrl: `${PROXY}/_daintree/bootstrap` }),
+        },
+      });
     }
 
     function setSavedHistory(history: { past: string[]; present: string; future: string[] }) {
@@ -3607,9 +3614,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       render(<DevPreviewPane {...baseProps} />);
       await settle();
 
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
-        validateUrl?: (url: string) => { url?: string; error?: string };
-      };
+      const props = latestToolbarProps();
       expect(props.validateUrl).toBeTypeOf("function");
       // The reported failure: this returned "Only localhost URLs are allowed".
       expect(props.validateUrl!(`${PROXY}/typed-route`)).toEqual({ url: `${PROXY}/typed-route` });
@@ -3632,9 +3637,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
       const guestsBefore = guestLog.length;
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
-        onNavigate: (url: string) => void;
-      };
+      const props = latestToolbarProps();
 
       await act(async () => {
         props.onNavigate(`${PROXY}/typed?x=1#s`);
@@ -3658,9 +3661,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "dom-ready");
         await Promise.resolve();
       });
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
-        onNavigate: (url: string) => void;
-      };
+      const props = latestToolbarProps();
 
       await act(async () => {
         props.onNavigate("http://localhost:5173/once");
@@ -3688,9 +3689,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
       const guestsBefore = guestLog.length;
       const loadsBefore = loadsAcrossGuests().length;
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as {
-        onNavigate: (url: string) => void;
-      };
+      const props = latestToolbarProps();
 
       await act(async () => {
         props.onNavigate("http://evil.localhost:43000/x");
@@ -3706,8 +3705,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       // old check called the pane settled and left the guest on an origin it never proxied.
       // (The reverse arrangement is rejected by `startsWith` too, and proves nothing.)
       const shortPortProxy = buildDevPreviewProxyOrigin(4300, "project-1", "dev-preview-panel-1");
-      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
-      electron.devPreview = { getProxyPort: vi.fn().mockResolvedValue({ port: 4300 }) };
+      enableProxyMode(4300);
       setSavedHistory({ past: [], present: `${PROXY}/x`, future: [] });
 
       render(<DevPreviewPane {...baseProps} />);
