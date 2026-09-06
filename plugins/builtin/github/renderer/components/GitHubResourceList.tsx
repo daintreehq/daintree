@@ -1531,6 +1531,7 @@ export function GitHubResourceList({
           <div key="github-skeleton" className="overflow-y-auto flex-1 min-h-0">
             <GitHubResourceRowsSkeleton
               count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
+              type={type}
             />
           </div>
         ) : data.length > 0 ? (

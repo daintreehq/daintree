@@ -14,7 +14,7 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
-import { GitHubResourceRowsSkeleton } from "./GitHubDropdownSkeletons";
+import { FORGE_OPTION_ROW, ForgeOptionRowsSkeleton } from "./GitHubDropdownSkeletons";
 import { logError } from "@/utils/logger";
 
 /** Conforms to the host's issue-selector slot contract (forge-normalized shapes). */
@@ -255,7 +255,7 @@ export function IssueSelector({
           aria-busy={loading || undefined}
         >
           {loading && issues.length === 0 ? (
-            <GitHubResourceRowsSkeleton count={3} immediate />
+            <ForgeOptionRowsSkeleton count={3} immediate />
           ) : issues.length === 0 ? (
             loadFailed ? null : trimmedQuery ? (
               <EmptyState
@@ -291,10 +291,7 @@ export function IssueSelector({
                 aria-current={selectedIssue?.number === issue.number ? "true" : undefined}
                 onPointerMove={() => setActiveIndex(index)}
                 onClick={() => handleSelect(issue)}
-                className={cn(
-                  PALETTE_ROW_CLASS,
-                  "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer"
-                )}
+                className={cn(PALETTE_ROW_CLASS, FORGE_OPTION_ROW, "cursor-pointer")}
               >
                 <CircleDot className="w-3 h-3 text-pr-open shrink-0" aria-hidden="true" />
                 <span className="truncate flex-1 min-w-0">

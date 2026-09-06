@@ -6,7 +6,12 @@ import { render, act } from "@testing-library/react";
 import {
   GitHubResourceListSkeleton,
   CommitListSkeleton,
+  ForgeOptionRowsSkeleton,
+  FORGE_OPTION_LINE,
+  FORGE_OPTION_ROW,
   RESOURCE_ITEM_HEIGHT_PX,
+  RESOURCE_RAIL_ORDER,
+  RESOURCE_RAIL_SLOT,
   COMMIT_ITEM_HEIGHT_PX,
   MAX_SKELETON_ITEMS,
 } from "../components/GitHubDropdownSkeletons";
@@ -84,6 +89,19 @@ describe("GitHubResourceListSkeleton", () => {
     expect(status?.getAttribute("aria-label")).toBe("Loading GitHub results");
   });
 
+  it("hands the rows the type it was given, which they need to pick a rail", () => {
+    // The panel skeleton took `type` for its tabs and search copy and then
+    // dropped it, so a PR panel drew an issue's rail under a PR's header.
+    for (const type of ["issue", "pr"] as const) {
+      const { container, unmount } = render(<GitHubResourceListSkeleton count={1} type={type} />);
+      const ids = Array.from(container.querySelectorAll("[data-rail-slot]")).map((slot) =>
+        slot.getAttribute("data-rail-slot")
+      );
+      expect(ids).toEqual(RESOURCE_RAIL_ORDER[type].filter((id) => RESOURCE_RAIL_SLOT[id].bone));
+      unmount();
+    }
+  });
+
   it("reserves every header icon slot the loaded list renders", () => {
     // Refresh, sort and bulk-select. One slot short and the search field
     // jumps narrower the moment real content replaces this.
@@ -139,3 +157,44 @@ describe("CommitListSkeleton", () => {
     expect(status?.getAttribute("aria-label")).toBe("Loading commits");
   });
 });
+
+describe("ForgeOptionRowsSkeleton", () => {
+  it("draws the option row's own geometry, not the 64px resource row", () => {
+    // `IssueSelector` borrowed the resource skeleton for a single-line popover
+    // option, so its list collapsed to a third the height when issues landed.
+    const { container } = render(<ForgeOptionRowsSkeleton count={3} />);
+    const rows = container.querySelectorAll('[aria-hidden="true"] > div');
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expectTokens(row, FORGE_OPTION_ROW);
+      // No inline height: the option sizes to its own content, unlike the
+      // 64px resource row this used to borrow.
+      expect(row.getAttribute("style")).toBeNull();
+      // The line box the loaded option gets from `text-sm` and a bone has
+      // none of. Without it every row comes up 4px short.
+      expectTokens(row.querySelector("[data-option-line]")!, FORGE_OPTION_LINE);
+    }
+  });
+
+  it("clamps its count the way every other skeleton here does", () => {
+    const { container } = render(<ForgeOptionRowsSkeleton count={99} />);
+    expect(container.querySelectorAll('[aria-hidden="true"] > div')).toHaveLength(
+      MAX_SKELETON_ITEMS
+    );
+  });
+
+  it("pulses immediately when the caller already knows the wait is long", () => {
+    const { container } = render(<ForgeOptionRowsSkeleton count={1} immediate />);
+    const row = container.querySelector('[aria-hidden="true"] > div');
+    expect(row?.className).toContain("animate-pulse-immediate");
+    expect(row?.className).not.toContain("animate-pulse-delayed");
+  });
+});
+
+/** Whole tokens only — a substring check would accept `w-40` for `w-4`. */
+function expectTokens(el: Element, classes: string) {
+  const present = Array.from(el.classList);
+  for (const token of classes.split(" ").filter(Boolean)) {
+    expect(present).toContain(token);
+  }
+}

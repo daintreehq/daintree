@@ -186,11 +186,22 @@ vi.mock("framer-motion", () => {
   };
 });
 
-vi.mock("../components/GitHubDropdownSkeletons", () => ({
-  GitHubResourceRowsSkeleton: () => <div data-testid="skeleton">Loading...</div>,
-  MAX_SKELETON_ITEMS: 6,
-  RESOURCE_ITEM_HEIGHT_PX: 68,
-}));
+vi.mock("../components/GitHubDropdownSkeletons", async () => {
+  const actual = await vi.importActual<typeof import("../components/GitHubDropdownSkeletons")>(
+    "../components/GitHubDropdownSkeletons"
+  );
+  return {
+    ...actual,
+    // Flattened to a marker: these tests are about when the list loads, not
+    // what a row looks like. The real constants stay — a mocked copy of the
+    // row height is one more thing to drift, and this one already had.
+    GitHubResourceRowsSkeleton: ({ type }: { type: "issue" | "pr" }) => (
+      <div data-testid="skeleton" data-type={type}>
+        Loading...
+      </div>
+    ),
+  };
+});
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
@@ -521,6 +532,33 @@ describe("GitHubResourceList SWR behavior", () => {
 
     expect(screen.getByTestId("skeleton")).toBeTruthy();
   });
+
+  it.each(["issue", "pr"] as const)(
+    "tells the skeleton it is loading %s (#12294)",
+    async (type) => {
+      // The rail an issue reserves is not the one a PR reserves, so a skeleton
+      // that is not told the type cannot reserve either of them correctly.
+      // Both types run: hardcoding one at the call site would pass a test that
+      // only ever asked for the other.
+      const fetcher = type === "issue" ? mockListIssues : mockListPRs;
+      let release!: (page: Page<Issue>) => void;
+      fetcher.mockImplementation(
+        () =>
+          new Promise<Page<Issue>>((resolve) => {
+            release = resolve;
+          })
+      );
+
+      render(<GitHubResourceList type={type} projectPath="/test/proj" />);
+
+      await waitFor(() => expect(fetcher).toHaveBeenCalled());
+      expect(screen.getByTestId("skeleton").getAttribute("data-type")).toBe(type);
+
+      // Settle it: a request left pending outlives the test and surfaces as an
+      // unhandled rejection in whichever file happens to run next.
+      await act(async () => release(makeResponse([makeIssue(1)])));
+    }
+  );
 
   it("shows cached data immediately on warm remount (no skeleton)", async () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");

@@ -14,6 +14,86 @@ export const RESOURCE_ITEM_HEIGHT_PX = 64;
 export const COMMIT_ITEM_HEIGHT_PX = 64;
 export const MAX_SKELETON_ITEMS = 6;
 
+/**
+ * The state mark's placement in a forge row. Height was not the only thing the
+ * two files each held their own copy of: the mark's offset and the trailing
+ * rail drifted apart across three unrelated PRs to `GitHubListItem`, because
+ * nothing linked them. Anything the loading row has to mirror lives here now.
+ */
+export const RESOURCE_ROW_STATE_MARK = "shrink-0 mt-1";
+
+/** The trailing rail itself, so neither side can respace it on its own. */
+export const RESOURCE_RAIL = "flex items-center gap-1.5 shrink-0";
+
+/** The trailing rail's shared slot frame, so rows share a right edge. */
+export const RAIL_SLOT = "shrink-0 flex items-center justify-center";
+
+/**
+ * Every slot the trailing rail can hold, and the only definition of each.
+ *
+ * `box` is the width the slot holds open; `bone` is what the loading row draws
+ * inside it. A slot whose width is whatever it happens to contain carries an
+ * empty `box` and no `bone` — there is no fixed width there to reserve.
+ */
+export const RESOURCE_RAIL_SLOT = {
+  count: { box: "", bone: null },
+  assignee: { box: "w-4", bone: "w-4 h-4 rounded-full" },
+  ci: { box: "w-4 h-3.5", bone: "w-3.5 h-3.5 rounded-full" },
+  // `rounded-lg` is what a bare `rounded` already renders here — the design
+  // contract overrides `--radius` — named so the step is legible, and so the
+  // class stays visible to `component-contract/no-raw-radius`, which does not
+  // resolve identifiers and so cannot see into this table.
+  menu: { box: "w-6 h-6 -me-1", bone: "w-6 h-6 rounded-lg" },
+} as const satisfies Record<string, { box: string; bone: string | null }>;
+
+export type ResourceRailSlotId = keyof typeof RESOURCE_RAIL_SLOT;
+
+/**
+ * The rail in render order, per resource type — every slot the row can draw,
+ * whether or not the loading row reserves it.
+ *
+ * The rail is strictly type-partitioned: `GitHubListItem` empties `assignees`
+ * for a PR and gates the check glyph on the item being one, so neither type
+ * ever draws the other's slots.
+ *
+ * `count` is listed but never reserved. It has no fixed width and needs a
+ * second assignee to appear at all, so holding a box open for it would cost
+ * every title the space of a count most rows never show. It stays in the order
+ * because its position is the invariant that keeps avatars in one column —
+ * variable width to the LEFT of the fixed identity slot, which is itself
+ * immediately before the always-present menu — and because a rail child
+ * registered nowhere is exactly how this drifted in the first place.
+ */
+export const RESOURCE_RAIL_ORDER = {
+  issue: ["count", "assignee", "menu"],
+  pr: ["ci", "menu"],
+} as const satisfies Record<"issue" | "pr", readonly ResourceRailSlotId[]>;
+
+/**
+ * An issue's state mark is a circle (`CircleDot`/`CheckCircle2`); a PR's never
+ * is (`getPrStateGlyph` returns four non-round glyphs). Loading cannot know
+ * which state, but it can stop claiming the wrong shape.
+ */
+export const RESOURCE_STATE_BONE = {
+  issue: "rounded-full",
+  pr: "rounded-sm",
+} as const;
+
+/**
+ * The geometry of `IssueSelector`'s option row, shared with its skeleton. The
+ * transparent border comes from `PALETTE_ROW_CLASS` on the loaded row; the
+ * skeleton takes it from here rather than the whole interactive class.
+ */
+export const FORGE_OPTION_ROW =
+  "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] border border-transparent";
+
+/**
+ * The 20px line box `text-sm` gives the loaded option's text. A bone has no
+ * line box of its own, so the loading row has to stand one up or every row
+ * comes up 4px short of the option it stands in for.
+ */
+export const FORGE_OPTION_LINE = "h-5 flex items-center flex-1 min-w-0";
+
 function normalizeCount(count?: number | null): number {
   if (count == null || !Number.isFinite(count)) return MAX_SKELETON_ITEMS;
   return Math.min(Math.max(1, Math.floor(count)), MAX_SKELETON_ITEMS);
@@ -26,6 +106,11 @@ interface SkeletonProps {
 
 interface ResourceListSkeletonProps extends SkeletonProps {
   type?: "issue" | "pr";
+}
+
+/** Required, not defaulted: the rows cannot pick a rail without knowing. */
+interface ResourceRowsSkeletonProps extends SkeletonProps {
+  type: "issue" | "pr";
 }
 
 export function GitHubResourceListSkeleton({
@@ -108,7 +193,7 @@ export function GitHubResourceListSkeleton({
 
       {/* List skeleton rows */}
       <div className="relative overflow-hidden flex-1 min-h-0">
-        <GitHubResourceRowsSkeleton count={renderCount} immediate={showImmediate} />
+        <GitHubResourceRowsSkeleton count={renderCount} immediate={showImmediate} type={type} />
         {/* Same fade the loaded list uses, so a skeleton row cut by the panel
             edge dissolves instead of being guillotined. */}
         <div
@@ -132,7 +217,7 @@ export function GitHubResourceListSkeleton({
   );
 }
 
-export function GitHubResourceRowsSkeleton({ count, immediate }: SkeletonProps) {
+export function GitHubResourceRowsSkeleton({ count, immediate, type }: ResourceRowsSkeletonProps) {
   const renderCount = normalizeCount(count);
   const pulseClass = immediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
@@ -144,19 +229,65 @@ export function GitHubResourceRowsSkeleton({ count, immediate }: SkeletonProps) 
           className={`${pulseClass} box-border px-3 py-2.5 flex items-start gap-2.5`}
           style={{ height: `${RESOURCE_ITEM_HEIGHT_PX}px` }}
         >
-          <div className="w-4 h-4 rounded-full bg-muted shrink-0 mt-px" />
+          <div
+            data-state-mark
+            className={cn("w-4 h-4 bg-muted", RESOURCE_ROW_STATE_MARK, RESOURCE_STATE_BONE[type])}
+          />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 h-6">
               <div className="h-4 bg-muted rounded flex-1" />
-              {/* The loaded row's persistent 24×24 actions slot — reserve the
-                  same box or the title bar shrinks the moment data lands. */}
-              <div className="h-6 w-6 -me-1 bg-muted rounded shrink-0" />
+              {/* Every rail slot the loaded row reserves, from the one order
+                  that names them. One short and the title bar jumps the
+                  moment data lands — which is the bug this row shipped for
+                  three releases. */}
+              <div data-rail className={RESOURCE_RAIL}>
+                {RESOURCE_RAIL_ORDER[type].map((id) => {
+                  const slot = RESOURCE_RAIL_SLOT[id];
+                  if (!slot.bone) return null;
+                  return (
+                    <span key={id} data-rail-slot={id} className={cn(RAIL_SLOT, slot.box)}>
+                      <span className={cn("bg-muted", slot.bone)} />
+                    </span>
+                  );
+                })}
+              </div>
             </div>
             <div className="flex items-center gap-1.5 mt-1 h-4">
               <div className="h-3 bg-muted rounded w-12" />
               <div className="h-3 bg-muted rounded w-16" />
               <div className="h-3 bg-muted rounded w-10" />
             </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Three widths, so a short stack of bars reads as titles and not as a grid. */
+const OPTION_BONE_WIDTHS = ["w-3/5", "w-4/5", "w-2/3"];
+
+/**
+ * `IssueSelector`'s loading state. It used to borrow the resource skeleton
+ * above — a 64px two-line row for a single-line option a third that height, so
+ * the popover collapsed as the issues arrived.
+ */
+export function ForgeOptionRowsSkeleton({ count, immediate }: SkeletonProps) {
+  const renderCount = normalizeCount(count);
+  const pulseClass = immediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
+
+  return (
+    <div aria-hidden="true">
+      {Array.from({ length: renderCount }).map((_, i) => (
+        <div key={i} className={cn(FORGE_OPTION_ROW, pulseClass)}>
+          <div className="w-3 h-3 rounded-full bg-muted shrink-0" />
+          <div data-option-line className={FORGE_OPTION_LINE}>
+            <div
+              className={cn(
+                "h-4 bg-muted rounded-lg",
+                OPTION_BONE_WIDTHS[i % OPTION_BONE_WIDTHS.length]
+              )}
+            />
           </div>
         </div>
       ))}
