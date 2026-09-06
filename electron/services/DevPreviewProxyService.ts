@@ -6,6 +6,7 @@ import { createProxyServer, type ProxyServer } from "httpxy";
 import {
   DEV_PREVIEW_BOOTSTRAP_PATH,
   DEV_PREVIEW_PROXY_PORT,
+  DEV_PREVIEW_PROXY_STATUS_TEXT,
   buildBootstrapUrl,
   buildDevPreviewProxyOrigin,
   buildDevPreviewSubdomain,
@@ -348,7 +349,12 @@ export class DevPreviewProxyService {
       res.end();
       return;
     }
-    res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
+    // The custom reason phrase is the renderer's only provenance signal for a
+    // self-generated 502 — a 502 forwarded from the developer's own app keeps its
+    // own status text and must render normally (#12296).
+    res.writeHead(502, DEV_PREVIEW_PROXY_STATUS_TEXT, {
+      "Content-Type": "text/plain; charset=utf-8",
+    });
     res.end(message);
   }
 

@@ -36,6 +36,7 @@ interface UseDevPreviewNavigationParams {
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setWebviewLoadError: React.Dispatch<React.SetStateAction<WebviewLoadError | null>>;
   clearLoadTimers: () => void;
+  clearRetryState: () => void;
   isConsoleOpen: boolean;
   setDevPreviewConsoleOpen: (id: string, open: boolean) => void;
   onHardReload: () => void;
@@ -72,6 +73,7 @@ export function useDevPreviewNavigation({
   setIsLoading,
   setWebviewLoadError,
   clearLoadTimers,
+  clearRetryState,
   isConsoleOpen,
   setDevPreviewConsoleOpen,
   onHardReload,
@@ -109,9 +111,15 @@ export function useDevPreviewNavigation({
       ? computeDevServerUrl(devServerUrl, currentUrl, proxyOrigin)
       : false;
     if (nextUrl !== false) {
+      // Adopting a different dev-server target (legacy mode follows the upstream
+      // port in place). The budget belongs to the target that exhausted it, so
+      // hand it back before the imperative effect loads the new one (#12296).
+      if (nextUrl !== currentUrl) {
+        clearRetryState();
+      }
       setHistory((prev) => pushBrowserHistory(prev, nextUrl));
     }
-  }, [devServerUrl, currentUrl, isUnconfigured, proxyOrigin, setHistory]);
+  }, [devServerUrl, currentUrl, isUnconfigured, proxyOrigin, clearRetryState, setHistory]);
 
   useEffect(() => {
     if (isUnconfigured) return;
@@ -128,34 +136,53 @@ export function useDevPreviewNavigation({
     setBrowserZoom(id, zoomFactor);
   }, [id, zoomFactor, setBrowserZoom]);
 
+  // Every explicit navigation action hands the retry budget back. A load start no
+  // longer refills it (#12296), and the budget belongs to the target that
+  // exhausted it — carrying it into a URL the user just asked for would make that
+  // navigation's first transient failure terminal. Deliberately done in the
+  // action handlers rather than an effect on `currentUrl`: the error document's
+  // own history update must not replenish anything.
   const handleNavigate = useCallback(
     (rawUrl: string) => {
       const normalized = normalizeBrowserUrl(rawUrl);
       if (normalized.url) {
+        // Only when the target actually changes. Re-submitting the URL already
+        // showing pushes no history and starts no load, so resetting here would
+        // drop the in-flight document's latches with nothing to re-establish
+        // them — silently cancelling a 502's overlay and its auto-recovery.
+        if (normalized.url !== currentUrl) {
+          clearRetryState();
+        }
         // Push history only; the imperative navigation effect drives loadURL now
         // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
         setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
       }
     },
-    [setHistory]
+    [currentUrl, clearRetryState, setHistory]
   );
 
   const handleBack = useCallback(() => {
     if (canGoBack) {
+      clearRetryState();
       setHistory((prev) => goBackBrowserHistory(prev));
     }
-  }, [canGoBack, setHistory]);
+  }, [canGoBack, clearRetryState, setHistory]);
 
   const handleForward = useCallback(() => {
     if (canGoForward) {
+      clearRetryState();
       setHistory((prev) => goForwardBrowserHistory(prev));
     }
-  }, [canGoForward, setHistory]);
+  }, [canGoForward, clearRetryState, setHistory]);
 
+  // A user-initiated reload is a fresh attempt: hand back the retry budget. Load
+  // start no longer refills it on its own, so without this an exhausted panel would
+  // stay exhausted for the rest of its life (#12296).
   const handleReload = useCallback(() => {
     setWebviewLoadError(null);
+    clearRetryState();
     webviewRef.current?.reload();
-  }, [setWebviewLoadError, webviewRef]);
+  }, [clearRetryState, setWebviewLoadError, webviewRef]);
 
   const handleCancelLoad = useCallback(() => {
     clearLoadTimers();
@@ -170,6 +197,7 @@ export function useDevPreviewNavigation({
 
   const handleRetryWebviewLoad = useCallback(() => {
     setWebviewLoadError(null);
+    clearRetryState();
     setIsLoading(true);
     if (currentUrl) {
       // Swallow ERR_ABORTED-class rejections — did-fail-load is the source
@@ -181,7 +209,7 @@ export function useDevPreviewNavigation({
     } else {
       webviewRef.current?.reload();
     }
-  }, [currentUrl, setWebviewLoadError, setIsLoading, webviewRef]);
+  }, [currentUrl, clearRetryState, setWebviewLoadError, setIsLoading, webviewRef]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;

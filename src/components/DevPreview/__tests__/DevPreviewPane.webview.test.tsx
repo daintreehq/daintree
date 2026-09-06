@@ -5,6 +5,7 @@ import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { DEV_PREVIEW_PROXY_STATUS_TEXT } from "@shared/utils/devPreviewProxy";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -33,9 +34,13 @@ type MockWebviewElement = HTMLElement & {
   setMockLoading: (value: boolean) => void;
 };
 
+// Opt-in for the next guest to report a load already in flight, so the pane's
+// mount-time readiness probe leaves it unready (#12296).
+let nextWebviewStartsLoading = false;
+
 function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   let currentUrl = element.getAttribute("src") ?? "http://localhost:5173/";
-  let loading = false;
+  let loading = nextWebviewStartsLoading;
   const webview = element as MockWebviewElement;
 
   const syncUrlFromAttribute = () => {
@@ -334,6 +339,12 @@ function emitWebviewEvent(
   webview.dispatchEvent(event);
 }
 
+// The mocked `window.electron` needs a cast to be reachable at all; doing it once
+// here keeps it out of every individual test.
+function getElectronMock(): { webview: Record<string, unknown> } {
+  return (window as unknown as { electron: { webview: Record<string, unknown> } }).electron;
+}
+
 function getWebviewElement(container: HTMLElement): MockWebviewElement {
   const webview = container.querySelector("webview");
   if (!webview) {
@@ -457,8 +468,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("hard-reloads the focused webview guest when onReloadShortcut fires for this panel (#9497)", async () => {
     let reloadCb: ((payload: { panelId: string }) => void) | undefined;
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
       reloadCb = cb;
       return vi.fn();
@@ -488,8 +498,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("unsubscribes from onReloadShortcut on unmount (#9497)", () => {
     const unsubscribe = vi.fn();
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onReloadShortcut = vi.fn(() => unsubscribe);
 
     const { unmount } = render(<DevPreviewPane {...baseProps} />);
@@ -500,8 +509,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("closes this panel when onCloseShortcut fires for it, and ignores other panels (#10859)", async () => {
     let closeCb: ((payload: { panelId: string }) => void) | undefined;
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onCloseShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
       closeCb = cb;
       return vi.fn();
@@ -536,8 +544,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("unsubscribes from onCloseShortcut on unmount (#10859)", () => {
     const unsubscribe = vi.fn();
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onCloseShortcut = vi.fn(() => unsubscribe);
 
     const { unmount } = render(<DevPreviewPane {...baseProps} />);
@@ -786,8 +793,12 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     const callsAfterFirstRetry = webview.loadURL.mock.calls.length;
 
-    // Successful load resets retry counter
+    // The retry issues its own load, so the real sequence carries a load start
+    // before the successful finish. Without it the failure latch from the first
+    // did-fail-load would still be up and did-finish-load would (correctly) refuse
+    // to treat this as a successful load.
     act(() => {
+      emitWebviewEvent(webview, "did-start-loading");
       emitWebviewEvent(webview, "did-finish-load");
     });
 
@@ -2236,8 +2247,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("keeps the unresponsive banner visible while the URL is unchanged", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2258,8 +2268,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     it("clears the unresponsive banner when the guest becomes responsive again", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
       let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2285,8 +2294,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("does not clear a crashed banner when a stale responsive event arrives", () => {
       let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         responsiveCb = cb;
         return vi.fn();
@@ -2309,8 +2317,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("ignores unresponsive events targeting a different panel", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2690,6 +2697,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
         emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
@@ -2707,6 +2715,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2764,6 +2773,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           emitWebviewEvent(webview, "did-frame-navigate", {
             isMainFrame: true,
             httpResponseCode: 502,
+            httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
             url: "http://localhost:5173/",
           });
         });
@@ -2787,6 +2797,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2807,6 +2818,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: false,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/iframe",
         });
         emitWebviewEvent(webview, "did-finish-load");
@@ -2823,6 +2835,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2848,6 +2861,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           emitWebviewEvent(webview, "did-frame-navigate", {
             isMainFrame: true,
             httpResponseCode: 502,
+            httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
             url: "http://localhost:5173/",
           });
         });
@@ -2871,6 +2885,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2889,6 +2904,413 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+  });
+
+  describe("failed-load and early-crash recovery (#12296)", () => {
+    const REFUSED = {
+      errorCode: -102,
+      errorDescription: "ERR_CONNECTION_REFUSED",
+      isMainFrame: true,
+      validatedURL: "http://localhost:5173/",
+    };
+
+    // Render a pane whose guest reports isLoading() true from creation, so the
+    // mount-time readiness probe leaves isWebviewReady false — the state of a
+    // renderer that dies during its first load, before dom-ready ever fires.
+    const renderNeverReadyPane = () => {
+      nextWebviewStartsLoading = true;
+      try {
+        return render(<DevPreviewPane {...baseProps} />);
+      } finally {
+        nextWebviewStartsLoading = false;
+      }
+    };
+
+    // Chromium commits its own error document when a main-frame load fails and
+    // replays the whole lifecycle for it. This is the sequence captured from the
+    // real guest against a closed port.
+    const emitErrorDocumentTail = (webview: MockWebviewElement, url = "http://localhost:5173/") => {
+      emitWebviewEvent(webview, "dom-ready");
+      emitWebviewEvent(webview, "did-navigate", { url });
+      emitWebviewEvent(webview, "did-finish-load");
+      emitWebviewEvent(webview, "did-stop-loading");
+    };
+
+    it("keeps a terminal load error across the error document's own lifecycle", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -105,
+          errorDescription: "ERR_NAME_NOT_RESOLVED",
+          isMainFrame: true,
+          validatedURL: "http://missing.test/",
+        });
+        emitErrorDocumentTail(webview, "http://missing.test/");
+      });
+
+      expect(container.textContent).toContain("Couldn't resolve address");
+      expect(container.textContent).toContain("Couldn't resolve missing.test");
+    });
+
+    it("survives the exact captured sequence, with no did-navigate at all", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Verbatim from the issue's real-Electron capture against a closed port:
+      // did-start-loading → did-fail-load(-102) → dom-ready → did-finish-load →
+      // did-stop-loading. Nothing in that tail may read as a successful load.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitWebviewEvent(webview, "dom-ready");
+        emitWebviewEvent(webview, "did-finish-load");
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+
+      // The failure survived: the scheduled retry is still pending and fires with
+      // the URL that failed, rather than having been cancelled by the tail.
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore + 1);
+      expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/");
+    });
+
+    it("exhausts the connection-refused budget when each retry starts its own load", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      const loadsBefore = webview.loadURL.mock.calls.length;
+
+      // MAX_RETRIES = 5, so the 6th failure is the one that gives up. Every cycle
+      // carries the load start the scheduled retry actually issues — the event that
+      // used to refill the budget and make the cap unreachable.
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-fail-load", REFUSED);
+          emitErrorDocumentTail(webview);
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+          });
+        }
+      }
+
+      expect(webview.loadURL.mock.calls.length - loadsBefore).toBe(5);
+      expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/");
+      expect(container.textContent).toContain("Dev server unreachable");
+      expect(container.textContent).toContain("Unable to connect to dev server");
+
+      // Past every remaining backoff window, nothing more is scheduled: the cap
+      // stops the loop rather than merely relabelling the overlay.
+      act(() => {
+        vi.advanceTimersByTime(30000);
+      });
+      expect(webview.loadURL.mock.calls.length - loadsBefore).toBe(5);
+    });
+
+    it("recovers when the dev server comes up mid retry loop", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      for (let i = 0; i < 2; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-fail-load", REFUSED);
+          emitErrorDocumentTail(webview);
+        });
+        act(() => {
+          vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+        });
+      }
+
+      // The third attempt finds the server up.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 200,
+          httpStatusText: "OK",
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+      expect(container.textContent).not.toContain("Dev server unreachable");
+
+      // A confirmed success returns the full budget: the next failure retries at
+      // the first backoff step rather than partway up the ladder.
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore + 1);
+    });
+
+    it("cancels a pending retry when a fresh navigation starts", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore);
+    });
+
+    it("cancels a pending retry when the panel closes", () => {
+      const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      unmount();
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore);
+    });
+
+    it("hands the retry budget back when the user reloads after exhaustion", () => {
+      let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+      const electron = getElectronMock();
+      electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+        reloadCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-fail-load", REFUSED);
+          emitErrorDocumentTail(webview);
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+          });
+        }
+      }
+      expect(container.textContent).toContain("Unable to connect to dev server");
+
+      // Manual recovery must not inherit the exhausted budget now that a load
+      // start no longer refills it.
+      act(() => {
+        reloadCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.loadURL.mock.calls.length).toBeGreaterThan(loadsBefore);
+    });
+
+    it("lifts the blocking overlay at dom-ready while a subresource is still pending", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(container.textContent).toContain("Loading preview");
+
+      // The document is committed and usable; a hanging image means
+      // did-stop-loading never arrives. dom-ready is the shared finish boundary,
+      // so the overlay lifts and the watchdog it used to silently outlive is gone.
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+      expect(container.textContent).not.toContain("Loading preview");
+
+      act(() => {
+        vi.advanceTimersByTime(60000);
+      });
+      expect(webview.stop).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Page load timed out");
+    });
+
+    it("still times out when the main document never reaches dom-ready", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(30000);
+      });
+
+      expect(webview.stop).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Page load timed out");
+    });
+
+    it("renders an application 502 instead of the proxy outage overlay", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Same status code, different provenance: the proxy forwarded this one from
+      // the developer's app, so its error page has to stay inspectable.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          httpStatusText: "Bad Gateway",
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+      act(() => {
+        vi.advanceTimersByTime(16000);
+      });
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
+    it("reloads a guest that crashed before its first dom-ready", () => {
+      const electron = getElectronMock();
+      const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
+
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      // Auto-recovery on the first crash routes through the same reload the manual
+      // action uses; both used to return early while isWebviewReady was false.
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      // It has to reach the guest directly: the cache-ignoring IPC only acts on a
+      // panel registered at dom-ready, so for this guest it would resolve having
+      // done nothing at all.
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(reloadIgnoringCache).not.toHaveBeenCalled();
+    });
+
+    it("uses the cache-ignoring reload once the guest has reached dom-ready", () => {
+      const electron = getElectronMock();
+      const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
+
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(reloadIgnoringCache).toHaveBeenCalledWith(42, "dev-preview-panel-1");
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
+    it("clears the crash banner only once the reload is actually issued", () => {
+      let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+      const electron = getElectronMock();
+      electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+        reloadCb = cb;
+        return vi.fn();
+      });
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      // Two crashes inside the 60s window: auto-recovery stops, so the banner and
+      // its manual actions are the only way out.
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+
+      webview.reload.mockClear();
+      act(() => {
+        reloadCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(container.textContent).not.toContain("Preview process crashed");
+    });
+
+    it("recreates the guest when it can no longer be reloaded in place", () => {
+      let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+      const electron = getElectronMock();
+      electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+        reloadCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      // A renderer that died before it was ever attached has no WebContents to
+      // reach, so recovery falls through to a fresh guest rather than doing
+      // nothing.
+      webview.getWebContentsId.mockImplementation(() => {
+        throw new Error("The WebView must be attached to the DOM");
+      });
+      webview.reload.mockImplementation(() => {
+        throw new Error("The WebView must be attached to the DOM");
+      });
+
+      act(() => {
+        reloadCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      expect(getWebviewElement(container)).not.toBe(webview);
     });
   });
 
