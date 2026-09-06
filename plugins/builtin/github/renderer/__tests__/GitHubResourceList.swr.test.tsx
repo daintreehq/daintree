@@ -186,11 +186,22 @@ vi.mock("framer-motion", () => {
   };
 });
 
-vi.mock("../components/GitHubDropdownSkeletons", () => ({
-  GitHubResourceRowsSkeleton: () => <div data-testid="skeleton">Loading...</div>,
-  MAX_SKELETON_ITEMS: 6,
-  RESOURCE_ITEM_HEIGHT_PX: 68,
-}));
+vi.mock("../components/GitHubDropdownSkeletons", async () => {
+  const actual = await vi.importActual<typeof import("../components/GitHubDropdownSkeletons")>(
+    "../components/GitHubDropdownSkeletons"
+  );
+  return {
+    ...actual,
+    // Flattened to a marker: these tests are about when the list loads, not
+    // what a row looks like. The real constants stay — a mocked copy of the
+    // row height is one more thing to drift, and this one already had.
+    GitHubResourceRowsSkeleton: ({ type }: { type: "issue" | "pr" }) => (
+      <div data-testid="skeleton" data-type={type}>
+        Loading...
+      </div>
+    ),
+  };
+});
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
@@ -520,6 +531,18 @@ describe("GitHubResourceList SWR behavior", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     expect(screen.getByTestId("skeleton")).toBeTruthy();
+  });
+
+  it("tells the skeleton which resource it is loading (#12294)", async () => {
+    // The rail an issue reserves is not the one a PR reserves, so a skeleton
+    // that is not told the type cannot reserve either of them correctly.
+    mockListIssues.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve(makeResponse([makeIssue(1)])), 100))
+    );
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    expect(screen.getByTestId("skeleton").getAttribute("data-type")).toBe("pr");
   });
 
   it("shows cached data immediately on warm remount (no skeleton)", async () => {

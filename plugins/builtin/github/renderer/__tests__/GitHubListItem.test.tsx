@@ -5,6 +5,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { Activity, type ReactNode } from "react";
 import { GitHubListItem } from "../components/GitHubListItem";
+import {
+  GitHubResourceRowsSkeleton,
+  RESOURCE_RAIL_SLOTS,
+  RESOURCE_ROW_STATE_MARK,
+  RESOURCE_STATE_BONE,
+} from "../components/GitHubDropdownSkeletons";
 import type { Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 import { actionService } from "@/services/ActionService";
@@ -887,5 +893,94 @@ describe("GitHubListItem", () => {
   it("names a draft pull request's state, which only its glyph carried", () => {
     render(<GitHubListItem item={{ ...basePR, isDraft: true }} type="pr" />);
     expect(screen.getAllByLabelText("Draft pull request").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The skeleton and the row are two drawings of one layout, and for three
+ * releases only one of them was maintained: #12294. `RESOURCE_RAIL_SLOTS` is
+ * now the single list of what the rail holds, so these read it rather than
+ * restating it — a test that pastes its own copy of the answer is just a third
+ * copy that drifts.
+ */
+describe("skeleton/row parity (#12294)", () => {
+  const railSlotIds = (root: HTMLElement): (string | null)[] =>
+    Array.from(root.querySelector("[data-rail]")?.children ?? []).map((child) =>
+      child.getAttribute("data-rail-slot")
+    );
+
+  const railSlotClasses = (root: HTMLElement): Record<string, string> =>
+    Object.fromEntries(
+      Array.from(root.querySelectorAll("[data-rail-slot]")).map((slot) => [
+        slot.getAttribute("data-rail-slot"),
+        slot.className,
+      ])
+    );
+
+  /** A row of each type carrying every slot its rail can draw. */
+  const maximal = {
+    issue: (
+      <GitHubListItem
+        item={{
+          ...baseIssue,
+          assignees: [
+            { login: "alice", avatarUrl: "a.png", rawData: null },
+            { login: "bob", avatarUrl: "b.png", rawData: null },
+          ],
+        }}
+        type="issue"
+      />
+    ),
+    pr: <GitHubListItem item={{ ...basePR, ciStatus: "success" }} type="pr" />,
+  } as const;
+
+  for (const type of ["issue", "pr"] as const) {
+    it(`renders every ${type} rail slot the shared list names, in that order`, () => {
+      const { container } = render(maximal[type]);
+      expect(railSlotIds(container)).toEqual(RESOURCE_RAIL_SLOTS[type].map((slot) => slot.id));
+    });
+
+    it(`reserves the ${type} slots the loading row can reserve, at the row's own widths`, () => {
+      const row = render(maximal[type]);
+      const rowClasses = railSlotClasses(row.container);
+      row.unmount();
+
+      const { container } = render(<GitHubResourceRowsSkeleton count={1} type={type} />);
+      const reserved = RESOURCE_RAIL_SLOTS[type].filter((slot) => slot.bone);
+
+      expect(railSlotIds(container)).toEqual(reserved.map((slot) => slot.id));
+      for (const slot of reserved) {
+        // The box the row holds open, drawn by the loading row too — not a
+        // literal either file gets to change on its own.
+        for (const token of slot.box.split(" ")) {
+          expect(rowClasses[slot.id]).toContain(token);
+          expect(railSlotClasses(container)[slot.id]).toContain(token);
+        }
+      }
+    });
+
+    it(`places the ${type} state mark where the loaded row places it`, () => {
+      const row = render(maximal[type]);
+      const mark =
+        row.container.querySelector('[role="img"][aria-label$="request"]') ??
+        row.container.querySelector('[role="img"][aria-label$="issue"]');
+      for (const token of RESOURCE_ROW_STATE_MARK.split(" ")) {
+        expect(mark?.className).toContain(token);
+      }
+      row.unmount();
+
+      const { container } = render(<GitHubResourceRowsSkeleton count={1} type={type} />);
+      const bone = container.querySelector(".bg-muted")!;
+      for (const token of RESOURCE_ROW_STATE_MARK.split(" ")) {
+        expect(bone.className).toContain(token);
+      }
+      // An issue's mark is a circle and a PR's never is, so the loading mark
+      // must not draw the other one's shape.
+      expect(bone.className).toContain(RESOURCE_STATE_BONE[type]);
+    });
+  }
+
+  it("draws a different state-mark shape for each type", () => {
+    expect(RESOURCE_STATE_BONE.issue).not.toBe(RESOURCE_STATE_BONE.pr);
   });
 });

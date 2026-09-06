@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { IssueSelector } from "../components/IssueSelector";
+import { FORGE_OPTION_ROW } from "../components/GitHubDropdownSkeletons";
 import type { Issue } from "@shared/types/forge";
 
 const mockListIssues = vi.fn();
@@ -86,7 +87,16 @@ describe("IssueSelector", () => {
     });
     // Skeleton rows are aria-hidden, should be present
     const listbox = screen.getByRole("listbox");
-    expect(listbox.querySelectorAll('[aria-hidden="true"] > div').length).toBeGreaterThan(0);
+    const skeletonRows = listbox.querySelectorAll('[aria-hidden="true"] > div');
+    expect(skeletonRows.length).toBeGreaterThan(0);
+    // And they are this popover's single-line option, not the dropdown's 64px
+    // two-line resource row this used to borrow (#12294).
+    for (const row of skeletonRows) {
+      for (const token of FORGE_OPTION_ROW.split(" ")) {
+        expect(row.className).toContain(token);
+      }
+      expect(row.getAttribute("style")).toBeNull();
+    }
 
     // Resolve the promise
     await act(async () => resolvePromise({ items: [mockIssue()] }));
