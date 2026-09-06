@@ -70,6 +70,23 @@ function mockHttpOk() {
   vi.mocked(https.request).mockImplementation(impl);
 }
 
+/**
+ * A server that accepts the connection and never answers, so the readiness poll
+ * stays in flight for the whole test. dispose() aborts it in afterEach.
+ */
+function mockHttpNeverResponds() {
+  const impl = ((_: unknown, __: unknown, _cb: (res: MockIncomingMessage) => void) => {
+    const req: MockRequest = {
+      on: () => req,
+      end: () => {},
+      destroy: () => {},
+    };
+    return req;
+  }) as unknown as typeof http.request;
+  vi.mocked(http.request).mockImplementation(impl);
+  vi.mocked(https.request).mockImplementation(impl);
+}
+
 function createPtyClientMock() {
   const dataListeners = new Set<DataListener>();
   const exitListeners = new Set<ExitListener>();
@@ -172,6 +189,12 @@ describe("DevPreviewSessionService — worktreeToSession map invariants (adversa
   });
 
   it("BUG-V3: after panel-2 steals wt-1 then stops, panel-1 getState still works normally", async () => {
+    // This case asserts a transient status, so the readiness probe must not be
+    // able to resolve underneath it. `mockHttpOk` would flip panel-1 to
+    // "running" on the predicted-port poll, and only the latency of the old HMR
+    // handshake was keeping that from happening inside the test's window.
+    mockHttpNeverResponds();
+
     const s1 = await service.ensure({ ...project, panelId: "panel-1", worktreeId: "wt-1" });
     expect(s1.predictedUrl).toBeTruthy();
 
