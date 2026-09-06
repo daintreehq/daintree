@@ -30,23 +30,32 @@ let mockActiveDockTerminalId: string | null = null;
 let mockTabGroups = new Map<string, TabGroup>();
 let mockHiddenTabIds = new Set<string>();
 
+function panelStoreState(): Record<string, unknown> {
+  return {
+    activeDockTerminalId: mockActiveDockTerminalId,
+    openDockTerminal: openDockTerminalMock,
+    closeDockTerminal: closeDockTerminalMock,
+    moveTerminalToGrid: moveTerminalToGridMock,
+    backendStatus: "connected",
+    setActiveTab: setActiveTabMock,
+    setFocused: setFocusedMock,
+    trashPanel: trashPanelMock,
+    updateTitle: updateTitleMock,
+    reorderPanelsInGroup: reorderPanelsInGroupMock,
+    addPanel: addPanelMock,
+    addPanelToGroup: addPanelToGroupMock,
+    tabGroups: mockTabGroups,
+  };
+}
+
 vi.mock("@/store", () => ({
-  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      activeDockTerminalId: mockActiveDockTerminalId,
-      openDockTerminal: openDockTerminalMock,
-      closeDockTerminal: closeDockTerminalMock,
-      moveTerminalToGrid: moveTerminalToGridMock,
-      backendStatus: "connected",
-      setActiveTab: setActiveTabMock,
-      setFocused: setFocusedMock,
-      trashPanel: trashPanelMock,
-      updateTitle: updateTitleMock,
-      reorderPanelsInGroup: reorderPanelsInGroupMock,
-      addPanel: addPanelMock,
-      addPanelToGroup: addPanelToGroupMock,
-      tabGroups: mockTabGroups,
-    }),
+  // A shared factory: the dock's focus effect READS the session-wide
+  // `preferredTerminalFocusTarget` rather than subscribing to it, so the mock needs a
+  // non-reactive accessor alongside the hook.
+  usePanelStore: Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) => selector(panelStoreState()),
+    { getState: panelStoreState }
+  ),
   useTerminalInputStore: (
     selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown
   ) => selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),

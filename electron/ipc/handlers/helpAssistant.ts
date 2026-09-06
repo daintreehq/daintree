@@ -39,7 +39,6 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   modelId: "",
   customArgs: "",
   idleHibernateMinutes: 5,
-  debugLogging: false,
 };
 
 const HELP_ASSISTANT_KEYS = [
@@ -51,7 +50,6 @@ const HELP_ASSISTANT_KEYS = [
   "modelId",
   "customArgs",
   "idleHibernateMinutes",
-  "debugLogging",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(HELP_ASSISTANT_KEYS);
@@ -102,7 +100,6 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   const record = stored as Record<string, unknown>;
   if (typeof record.docSearch === "boolean") out.docSearch = record.docSearch;
   if (typeof record.daintreeControl === "boolean") out.daintreeControl = record.daintreeControl;
-  if (typeof record.debugLogging === "boolean") out.debugLogging = record.debugLogging;
   // Read-time migration from the legacy `skipPermissions` boolean: if the
   // new fields aren't stored, derive them from the old boolean. New writes
   // never touch `skipPermissions`, so once a user has saved the new fields
@@ -130,7 +127,10 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
 
 export function getHelpAssistantSettings(): HelpAssistantSettings {
   const stored = store.get("helpAssistant");
-  return { ...HELP_ASSISTANT_DEFAULTS, ...sanitizeStored(stored) };
+  return {
+    ...HELP_ASSISTANT_DEFAULTS,
+    ...sanitizeStored(stored),
+  };
 }
 
 // Safe "no live session" snapshot returned when the caller has no pinned help
@@ -157,10 +157,20 @@ export const helpAssistantNamespace = defineIpcNamespace({
         return getHelpAssistantSettings();
       }
     ),
+    /**
+     * Applies a patch and answers with the settings as they now ACTUALLY stand.
+     *
+     * Returning the post-write state rather than `void` is what makes this surface
+     * honest. Fields are validated individually and an invalid one is skipped, so a
+     * `void` reply reported success for a write that did not happen — and the renderer,
+     * which updates optimistically, would go on displaying the value it failed to save
+     * with nothing anywhere disagreeing. The caller can now reconcile against the
+     * answer instead of assuming its own request was the outcome.
+     */
     setSettings: op(
       HELP_ASSISTANT_METHOD_CHANNELS.setSettings,
-      async (patch: Partial<HelpAssistantSettings>): Promise<void> => {
-        if (!patch || typeof patch !== "object") return;
+      async (patch: Partial<HelpAssistantSettings>): Promise<HelpAssistantSettings> => {
+        if (!patch || typeof patch !== "object") return getHelpAssistantSettings();
         let daintreeControlTurnedOn = false;
         let auditRetentionWritten: HelpAssistantAuditRetention | null = null;
         for (const [field, value] of Object.entries(patch)) {
@@ -172,8 +182,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
-              field === "bypassPermissions" ||
-              field === "debugLogging") &&
+              field === "bypassPermissions") &&
             typeof value !== "boolean"
           ) {
             continue;
@@ -236,6 +245,12 @@ export const helpAssistantNamespace = defineIpcNamespace({
             );
           }
         }
+
+        // Read back rather than echoing the patch. The two differ exactly when it
+        // matters: a rejected field, a sanitised value, or a stored id this build
+        // canonicalises are all cases where what the caller asked for is not what is
+        // now true, and echoing would hide every one of them.
+        return getHelpAssistantSettings();
       }
     ),
     getLiveSessionStatus: opValidated(

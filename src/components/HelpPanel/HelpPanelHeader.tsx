@@ -1,4 +1,11 @@
-import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCcw } from "lucide-react";
+import {
+  ChevronRight,
+  CircleHelp,
+  CircleStop,
+  Ellipsis,
+  ListChecks,
+  RotateCcw,
+} from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
@@ -51,6 +58,8 @@ interface HelpPanelHeaderProps {
   agentState: AgentState | null | undefined;
   canRestartConversation: boolean;
   canEndSession: boolean;
+  canViewOperations?: boolean;
+  onViewOperations?: () => void;
   onRestartConversation: () => void;
   onEndSession: () => void;
   onOpenDocs: () => void;
@@ -62,6 +71,8 @@ export function HelpPanelHeader({
   agentState,
   canRestartConversation,
   canEndSession,
+  canViewOperations = false,
+  onViewOperations,
   onRestartConversation,
   onEndSession,
   onOpenDocs,
@@ -125,6 +136,12 @@ export function HelpPanelHeader({
               </DropdownMenuItem>
               <DropdownMenuSeparator />
             </>
+          )}
+          {canViewOperations && onViewOperations && (
+            <DropdownMenuItem onSelect={onViewOperations}>
+              <ListChecks className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+              View operations
+            </DropdownMenuItem>
           )}
           <DropdownMenuItem onSelect={onOpenDocs}>
             <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />

@@ -490,6 +490,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         import("../services/HelpSessionService.js")
           .then(({ helpSessionService }) => helpSessionService.revokeAll())
           .catch(() => {}),
+        // Stop every native assistant engine and WAIT for it to go.
+        //
+        // Awaited rather than fire-and-forget, and that is the whole point. Stopping an
+        // engine writes a shutdown frame and arms an UNREF'D kill backstop — right while
+        // the app is running, so a displaced engine cannot hold the process open, and
+        // worthless here, because `app.exit()` takes that timer with it. A spawned child
+        // is not reaped with its parent, so an engine that did not manage a clean exit
+        // would outlive Daintree holding its project's state lease, and the next launch
+        // would wait on a lease held by nothing anyone can see. The wait is bounded well
+        // inside the main-process cleanup budget; whatever is left is signalled.
+        import("../services/assistant-host/AssistantHostService.js")
+          .then(({ assistantHostService }) => assistantHostService.shutdown())
+          .catch((err) => {
+            console.warn("[MAIN] assistant host shutdown failed:", err);
+          }),
         // Tear down every supervised plugin MCP subprocess (#9233). Same
         // lazy-import guard — if no plugin ever activated an MCP server, the
         // supervisor module never loaded and there is nothing to stop.

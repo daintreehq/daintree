@@ -488,10 +488,20 @@ async function run() {
   validateCommandHandlerExtensions();
   runPluginTypecheck();
 
-  if (isProd && !isWatch) {
+  {
     // Clean both the electron host bundles and the built-in plugin outputs
     // so a renamed source file or removed contribution does not survive
-    // between production builds and ship inside `dist-electron/**/*`.
+    // between builds and ship inside `dist-electron/**/*`.
+    //
+    // Runs for EVERY build, not just production. Output chunks are content-hashed,
+    // and a chunk whose own content did not change keeps its name across rebuilds —
+    // so an unchanged importer can survive while the chunk it imports is re-emitted
+    // under a new hash and the old one is orphaned. Skipping the clean in dev left
+    // exactly that: a live chunk importing a hash no longer on disk, which fails at
+    // require time with "Cannot find module …/chunks/X-HASH.js imported from …".
+    //
+    // Safe in watch mode too: this whole function runs once per invocation, before
+    // esbuild's context starts watching, so it never wipes output mid-session.
     for (const dir of ["dist-electron/electron", "dist-electron/plugins"]) {
       const abs = path.join(root, dir);
       if (fs.existsSync(abs)) {

@@ -164,6 +164,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          # `npm run build` builds the vendored Go engine too; without the submodule
+          # there is nothing to build it from.
+          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -215,6 +219,12 @@ jobs:
       - name: Install dependencies
         if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Set up Go (assistant engine)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: vendor/daintree-assistant/go.mod
+          cache-dependency-path: vendor/daintree-assistant/go.sum
 
       - name: Build
         run: npm run build

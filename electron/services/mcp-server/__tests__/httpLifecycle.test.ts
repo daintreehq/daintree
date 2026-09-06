@@ -1915,7 +1915,7 @@ describe("HttpLifecycle", () => {
         const { code } = parseRejection(res).error;
         expect(code).toBeLessThanOrEqual(-32000);
         expect(code).toBeGreaterThanOrEqual(-32099);
-        expect(code).not.toBe(-32001);
+        expect(code).not.toBe(-32000);
       });
 
       it("refuses a selector from a bearer that already routes through its own renderer", async () => {

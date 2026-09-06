@@ -8,9 +8,18 @@ import type { BuiltInAgentId } from "@shared/config/agentIds";
 export interface UseSlashCommandListArgs {
   agentId?: BuiltInAgentId;
   projectPath?: string;
+  /**
+   * A caller-supplied command set that REPLACES discovery entirely.
+   *
+   * For a surface whose commands come from somewhere other than the filesystem — the
+   * native assistant's are advertised by its engine over the host protocol — there is
+   * nothing on disk to find, and letting discovery run would populate the menu with a
+   * different agent's commands.
+   */
+  commands?: SlashCommand[];
 }
 
-export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandListArgs): {
+export function useSlashCommandList({ agentId, projectPath, commands }: UseSlashCommandListArgs): {
   commands: SlashCommand[];
   commandMap: Map<string, SlashCommand>;
   isLoading: boolean;
@@ -19,8 +28,8 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
   const [isLoading, setIsLoading] = useState(false);
 
   const initial = useMemo(
-    (): SlashCommand[] => (agentId ? getBuiltinSlashCommands(agentId) : []),
-    [agentId]
+    (): SlashCommand[] => commands ?? (agentId ? getBuiltinSlashCommands(agentId) : []),
+    [agentId, commands]
   );
 
   const [agentCommands, setAgentCommands] = useState<SlashCommand[]>(initial);
@@ -30,6 +39,19 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
   }, [initial]);
 
   useEffect(() => {
+    // A supplied set is the whole set: nothing to discover, and discovery would
+    // overwrite it with whatever the agent has on disk.
+    //
+    // Bumping the request id on the way out is what makes that true. Returning early
+    // without it leaves an already-in-flight `list()` still matching, so its result
+    // lands AFTER the override and replaces it — and `isLoading` never clears, because
+    // the same guard gates the `finally`. Both effects below and in
+    // useSlashCommandAutocomplete are written this way for that reason.
+    if (commands) {
+      requestIdRef.current++;
+      setIsLoading(false);
+      return;
+    }
     // Data-driven: fetch for any agent that declares completion sources.
     if (!agentId || !getAgentConfig(agentId)?.completionSources?.length) return;
     if (!window.electron?.slashCommands?.list) return;
@@ -51,7 +73,7 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
         if (requestIdRef.current !== requestId) return;
         setIsLoading(false);
       });
-  }, [agentId, projectPath]);
+  }, [agentId, projectPath, commands]);
 
   const commandMap = useMemo(() => {
     const map = new Map<string, SlashCommand>();

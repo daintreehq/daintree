@@ -50,6 +50,14 @@ const cliAvailabilityStoreMock = vi.hoisted(() => ({
   useCliAvailabilityStore: { getState: vi.fn() },
 }));
 
+const agentPreferencesStoreMock = vi.hoisted(() => ({
+  useAgentPreferencesStore: {
+    getState: vi.fn<() => { defaultAgent: string | undefined }>(() => ({
+      defaultAgent: undefined,
+    })),
+  },
+}));
+
 // Return types are spelled out because `vi.fn` otherwise infers them from the
 // default implementation, which narrows `hydratedProjectId` to `null` and makes
 // every ownership case below a type error rather than a test.
@@ -74,6 +82,7 @@ vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/store/agentSettingsStore", () => agentSettingsStoreMock);
 vi.mock("@/store/cliAvailabilityStore", () => cliAvailabilityStoreMock);
+vi.mock("@/store/agentPreferencesStore", () => agentPreferencesStoreMock);
 vi.mock("@/store/ccrPresetsStore", () => ccrPresetsStoreMock);
 vi.mock("@/store/projectPresetsStore", () => projectPresetsStoreMock);
 // Partial rather than whole-module: a factory-built namespace throws on any
@@ -448,7 +457,9 @@ describe("agentActions adversarial", () => {
 
     const result = await service.dispatch(
       "agent.launch",
-      { agentId: "claude", name: "Claude: auth refactor" },
+      // worktreeId is required of an agent dispatch (#11722); this test is about
+      // `name`, so name the worktree and keep the subject unchanged.
+      { agentId: "claude", worktreeId: "wt-1", name: "Claude: auth refactor" },
       { source: "agent" }
     );
 
@@ -470,7 +481,9 @@ describe("agentActions adversarial", () => {
 
     const result = await service.dispatch(
       "agent.launch",
-      { agentId: "claude", name: "x".repeat(201) },
+      // Named worktree so the rejection is provably the 200-char cap and not the
+      // agent-dispatch worktree guard.
+      { agentId: "claude", worktreeId: "wt-1", name: "x".repeat(201) },
       { source: "agent" }
     );
 
@@ -832,6 +845,84 @@ describe("agent.launch dispatch integration", () => {
     });
   });
 
+  // An omitted worktreeId is resolved against the LIVE active-worktree selection at
+  // the instant the call lands. A person picking from the palette can see which row is
+  // highlighted; an agent cannot, and launches fan out — so a batch dispatched while
+  // the user switches worktrees lands split across two of them, with real terminals in
+  // the wrong place by the time anyone could re-read (#11722).
+  it("refuses an agent-dispatched launch that names no worktree, and launches nothing", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("worktreeId");
+    }
+    // The point of failing closed: nothing may reach the launcher, or a terminal
+    // exists in a worktree nobody chose.
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("lets an agent launch once it names the worktree", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", worktreeId: "wt-1" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ worktreeId: "wt-1" })
+    );
+  });
+
+  // The guard must not reach the surfaces it was already safe for: a person launching
+  // from the palette or a keybinding still gets the active worktree.
+  it("still lets a user-dispatched launch inherit the active worktree", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalled();
+  });
+
   it("rejects an empty agentId with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
@@ -981,6 +1072,24 @@ describe("agent.listToolbar (#10838)", () => {
     if (!row) throw new Error(`no row for ${id}`);
     return row;
   }
+
+  it("reports the default agent even when it is not on the toolbar", async () => {
+    agentPreferencesStoreMock.useAgentPreferencesStore.getState.mockReturnValue({
+      defaultAgent: "codex",
+    });
+    setStores({ agents: { codex: { pinned: false } } }, { codex: "ready" });
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agent.listToolbar")) as {
+      agents: ToolbarRow[];
+      defaultAgentId?: string;
+      resolvedDefaultAgentId?: string;
+    };
+    // Pinning is a display preference and the default is a launch preference; an
+    // explicitly hidden agent is still the agent a launch would pick.
+    expect(rowFor(result.agents, "codex").visible).toBe(false);
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBe("codex");
+  });
 
   it("returns one row per launchable agent, in registry order", async () => {
     const rows = await listToolbar({ agents: {} }, {});
@@ -1147,6 +1256,68 @@ describe("agent.listAvailable", () => {
       isInitialized,
     });
   }
+
+  async function listAvailable(
+    defaultAgent: string | undefined,
+    availability: Record<string, string>,
+    isInitialized = true
+  ) {
+    agentPreferencesStoreMock.useAgentPreferencesStore.getState.mockReturnValue({ defaultAgent });
+    setStores({ agents: {} }, availability, true, isInitialized);
+    clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+      claude: { name: "Claude" },
+      codex: { name: "Codex" },
+    });
+    clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
+    const actions = setupActions(makeCallbacks());
+    return (await callAction(actions, "agent.listAvailable")) as {
+      agents: AvailableRow[];
+      defaultAgentId?: string;
+      resolvedDefaultAgentId?: string;
+    };
+  }
+
+  it("reports the explicit default and the id a launch would actually resolve to", async () => {
+    const result = await listAvailable("codex", { claude: "ready", codex: "ready" });
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBe("codex");
+  });
+
+  it("keeps the pick but resolves past it when its CLI is not launchable", async () => {
+    // The pick is what the user chose and the resolution is what they would get; a
+    // caller needs both to say it substituted an agent rather than silently doing it.
+    const result = await listAvailable("codex", { claude: "ready", codex: "missing" });
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBe("claude");
+  });
+
+  it("omits the explicit default when the user picked None (first available)", async () => {
+    const result = await listAvailable(undefined, { claude: "ready" });
+    expect(result.defaultAgentId).toBeUndefined();
+    expect(result.resolvedDefaultAgentId).toBe("claude");
+  });
+
+  it("never names an assistant-only agent as the default", async () => {
+    // `daintree-assistant` is absent from this listing's rows, and naming it would mean
+    // "open the assistant", not "delegate work to it" — so a caller asking which agent
+    // to spawn has no pick to honour. A stale persisted value can still arrive here:
+    // the settings dropdown no longer offers it, but rehydration is what drops it.
+    const result = await listAvailable("daintree-assistant", {
+      claude: "ready",
+      "daintree-assistant": "ready",
+    });
+    expect(result.defaultAgentId).toBeUndefined();
+    expect(result.resolvedDefaultAgentId).toBe("claude");
+    expect(result.agents.some((row) => row.id === "daintree-assistant")).toBe(false);
+  });
+
+  it("withholds the resolution until a live probe has run, but keeps the pick", async () => {
+    // A hydrating cache synthesizes "missing", which would resolve straight past a
+    // default whose CLI is in fact installed.
+    const result = await listAvailable("codex", { claude: "ready", codex: "missing" }, false);
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBeUndefined();
+  });
 
   it("returns the complete effective registry with toolbar fields only for built-ins", async () => {
     setStores(

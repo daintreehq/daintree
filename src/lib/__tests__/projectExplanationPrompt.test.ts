@@ -133,31 +133,48 @@ describe("getDefaultAgentId", () => {
     expect(getDefaultAgentId(undefined, "browser", availability)).toBe("gemini");
   });
 
-  it("favours daintree-assistant over registry order when installed and no defaults", () => {
+  it("never resolves to daintree-assistant, however available it reads", () => {
     const availability: CliAvailability = {
       claude: "ready",
       gemini: "ready",
       codex: "ready",
       "daintree-assistant": "ready",
     };
-    // Even though claude/gemini/codex precede daintree-assistant in registry
-    // order, the soft-default guard wins when no explicit preference is set.
-    expect(getDefaultAgentId(undefined, undefined, availability)).toBe("daintree-assistant");
-  });
-
-  it("does not favour daintree-assistant when it is not installed", () => {
-    const availability: CliAvailability = {
-      claude: "ready",
-      "daintree-assistant": "missing",
-    };
+    // The engine ships with the app, so its availability reads "ready" on every
+    // working install. It still has no PTY form, so a launch resolver must never
+    // name it — the assistant's own agent setting is what picks the assistant.
     expect(getDefaultAgentId(undefined, undefined, availability)).toBe("claude");
   });
 
-  it("an explicit default agent still wins over daintree-assistant", () => {
+  it("never resolves to daintree-assistant even as the only available agent", () => {
+    const availability: CliAvailability = {
+      claude: "missing",
+      "daintree-assistant": "ready",
+    };
+    expect(getDefaultAgentId(undefined, undefined, availability)).toBeNull();
+  });
+
+  it("ignores daintree-assistant picked as the explicit default agent", () => {
     const availability: CliAvailability = {
       claude: "ready",
       "daintree-assistant": "ready",
     };
-    expect(getDefaultAgentId("claude", undefined, availability)).toBe("claude");
+    expect(getDefaultAgentId("daintree-assistant", undefined, availability)).toBe("claude");
+  });
+
+  it("ignores daintree-assistant passed as the secondary default selection", () => {
+    const availability: CliAvailability = {
+      claude: "ready",
+      "daintree-assistant": "ready",
+    };
+    expect(getDefaultAgentId(undefined, "daintree-assistant", availability)).toBe("claude");
+  });
+
+  it("an explicit default agent still wins over registry order", () => {
+    const availability: CliAvailability = {
+      claude: "ready",
+      gemini: "ready",
+    };
+    expect(getDefaultAgentId("gemini", undefined, availability)).toBe("gemini");
   });
 });

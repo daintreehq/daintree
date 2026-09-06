@@ -1,4 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
+import { isDarkGround, parse } from "@/utils/colorContrast";
 import {
   BUILT_IN_APP_SCHEMES,
   DEFAULT_APP_SCHEME_ID,
@@ -44,7 +45,13 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   const accent = theme.cursor ?? theme.blue ?? "#58a6ff";
   const foreground = theme.foreground ?? "#cccccc";
   const background = theme.background ?? "#1e1e1e";
-  const isDark = (document?.documentElement?.dataset?.colorMode ?? "dark") === "dark";
+  // Polarity from the TERMINAL's own background, not the app's colour mode.
+  //
+  // The bar sits ON this ground, so the ground is what decides whether its shell should
+  // darken or lighten. Reading `data-color-mode` asked the wrong surface: a light app
+  // theme with a dark terminal took the light branch and mixed the bar's focus border
+  // with black, against a background it should have been lightening away from.
+  const isDark = isDarkGround(parse(background) ?? [30, 30, 30]);
 
   return {
     accent,

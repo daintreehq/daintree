@@ -12,6 +12,7 @@ const {
   mockGetScratchState,
   mockLogError,
   mockRemovePanel,
+  mockPlatformSupport,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
   mockGetContext: vi.fn(() => ({})),
@@ -23,6 +24,7 @@ const {
   mockGetScratchState: vi.fn(),
   mockLogError: vi.fn(),
   mockRemovePanel: vi.fn(),
+  mockPlatformSupport: vi.fn(() => ({ supported: true })),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -70,6 +72,13 @@ vi.mock("@/lib/sidebarToggle", () => ({
   suppressSidebarResizes: vi.fn(),
 }));
 
+// Where the built-in engine can run decides the LAST-RESORT branch, and the real
+// answer is the machine the suite happens to run on. Mocked so both sides of it are
+// exercised the same way on every platform.
+vi.mock("@shared/config/assistantPlatform", () => ({
+  assistantPlatformSupport: () => mockPlatformSupport(),
+}));
+
 import { registerHelpActions } from "../helpActions";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
@@ -102,6 +111,16 @@ describe("help.launchAgent", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears CALLS, not implementations, and several tests below
+    // install their own (a drifted context, a resolved terminal id, a bare reset). Put
+    // the defaults back so this file does not depend on its own declaration order.
+    mockDispatch.mockResolvedValue({ ok: true });
+    mockGetContext.mockReturnValue({});
+    mockPlatformSupport.mockReturnValue({ supported: true });
+    // The assistant's own agent setting is what this action launches, so the PTY-path
+    // tests below need one set — a user with Claude picked in assistant settings.
+    // Tests about the resolution itself override it.
+    useHelpPanelStore.setState({ preferredAgentId: "claude", isOpen: false });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability(),
@@ -139,15 +158,41 @@ describe("help.launchAgent", () => {
     action = extractHelpLaunchAgent();
   });
 
-  it("dispatches agent.launch with first available agent when no default set", async () => {
+  it("opens the native assistant when no assistant agent has been chosen", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
+    useHelpPanelStore.setState({ preferredAgentId: null, isOpen: false });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
-    mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability(),
-      isInitialized: true,
-    });
+
+    await action.run(undefined, stubCtx);
+
+    // The same default the panel itself applies to an unset preference. Both surfaces
+    // open the same panel, so they must not disagree about what is in it. Asserted as
+    // "dispatched nothing at all" rather than "not agent.launch with these args": this
+    // action has no other legitimate dispatch, and the narrower form would pass if a
+    // launch went out under a changed argument shape.
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+  });
+
+  it("leaves the preference unset when it only DEFAULTED to the native assistant", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    useHelpPanelStore.setState({ preferredAgentId: null, isOpen: false });
+
+    await action.run(undefined, stubCtx);
+
+    // Unset already MEANS the native assistant. Stamping it in would freeze today's
+    // default into the user's settings behind their back.
+    expect(useHelpPanelStore.getState().preferredAgentId).toBeNull();
+  });
+
+  it("dispatches agent.launch for the chosen assistant agent", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
 
     await action.run(undefined, stubCtx);
 
@@ -160,21 +205,24 @@ describe("help.launchAgent", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("runs the Daintree Assistant in the project root, not the provisioned session dir", async () => {
-    // The assistant is env-only and ships its own skills, so it reads nothing
-    // from cwd — it should operate on the actual project files. Same mock setup
-    // as the non-assistant case below; only the cwd differs.
+  // Replaces "runs the Daintree Assistant in the project root, not the provisioned
+  // session dir". That test described the assistant when it WAS a CLI in a terminal.
+  // It is now a headless engine behind a React panel with no PTY form at all, so the
+  // question is no longer where its terminal runs but that it never gets one: this
+  // action sits on a shipped keyboard shortcut and in the Help menu, and a terminal
+  // spawned from here would race the panel's own engine for the project lease.
+  it("opens the panel and launches NO terminal for the native assistant", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
+    useHelpPanelStore.getState().setOpen(false);
 
     await action.run({ agentId: "daintree-assistant" }, stubCtx);
 
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
-      { source: "user" }
-    );
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("daintree-assistant");
   });
 
   it("keeps a non-assistant help agent in the provisioned session dir", async () => {
@@ -191,21 +239,21 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("uses the user's preferred default agent when available", async () => {
+  it("honours the assistant agent over the global default agent", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
+    // Two different settings answering two different questions. The global default
+    // names what a DIRECT launch spawns; the assistant setting names what the
+    // assistant runs, and this action opens the assistant.
+    useHelpPanelStore.setState({ preferredAgentId: "claude" });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
-    mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability(),
-      isInitialized: true,
-    });
 
     await action.run(undefined, stubCtx);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -218,6 +266,8 @@ describe("help.launchAgent", () => {
     // block sits at `tier: "deprecated"`, so `provisionSession` refuses it.
     // The implicit default has to skip it rather than resolve into that
     // refusal — this suite mocks provisioning, so nothing else would notice.
+    mockPlatformSupport.mockReturnValue({ supported: false });
+    useHelpPanelStore.setState({ preferredAgentId: null });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability(),
@@ -238,10 +288,87 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("falls back to first available agent when default is unavailable", async () => {
+  it("never overwrites a chosen assistant agent with the native one", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
+    useHelpPanelStore.setState({ preferredAgentId: "claude" });
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
+    // The native id must be IN the fixture, and ready. That is what it reads as on
+    // every working install — `CliAvailabilityService` short-circuits its PATH probe
+    // and answers from the bundled engine — and it is the whole mechanism of the bug:
+    // omit it here and the old code resolves Claude, so this test would pass against
+    // the very defect it exists to pin.
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability({ "daintree-assistant": "ready" }),
+      isInitialized: true,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    // The regression: this used to resolve the global default agent, land on the
+    // native assistant and write it back — so the setting lost the launch AND lost
+    // itself. Both halves are asserted: Claude runs, and Claude is still the setting.
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude" }),
+      { source: "user" }
+    );
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("claude");
+  });
+
+  it("falls back to the global default agent where the engine cannot run", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockPlatformSupport.mockReturnValue({ supported: false });
+    useHelpPanelStore.setState({ preferredAgentId: null });
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
+      { source: "user" }
+    );
+  });
+
+  it("skips a global default that no help session can be provisioned for", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockPlatformSupport.mockReturnValue({ supported: false });
+    useHelpPanelStore.setState({ preferredAgentId: null });
+    // Gemini is `supports.tier: "deprecated"` and OpenCode has no assistant wiring at
+    // all, so `HelpSessionService.provisionSession` rejects both outright. Resolving
+    // one here would pick a launch main then refuses — the fallback is held to the
+    // wired set, so it skips past both and lands on Claude.
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
+      { source: "user" }
+    );
+  });
+
+  it("falls back to first available agent when that default is unavailable", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockPlatformSupport.mockReturnValue({ supported: false });
+    useHelpPanelStore.setState({ preferredAgentId: null });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability({ codex: "missing" }),
@@ -257,10 +384,12 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("resolves to codex when claude, opencode, and gemini are unavailable", async () => {
+  it("resolves to codex when claude is unavailable", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
+    mockPlatformSupport.mockReturnValue({ supported: false });
+    useHelpPanelStore.setState({ preferredAgentId: null });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability({
@@ -284,6 +413,8 @@ describe("help.launchAgent", () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
+    mockPlatformSupport.mockReturnValue({ supported: false });
+    useHelpPanelStore.setState({ preferredAgentId: null });
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability({
@@ -309,6 +440,7 @@ describe("help.launchAgent", () => {
       "/mock/help"
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "claude" });
+    useHelpPanelStore.setState({ preferredAgentId: "gemini" });
 
     await action.run({ agentId: "codex" }, stubCtx);
 
@@ -317,6 +449,19 @@ describe("help.launchAgent", () => {
       expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
+  });
+
+  it("opens the native assistant even when the help folder is unavailable", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    useHelpPanelStore.setState({ preferredAgentId: null, isOpen: false });
+
+    await action.run(undefined, stubCtx);
+
+    // The native engine runs in the project root and reads its skills from the app
+    // bundle — the help folder is a PTY-path asset. Refusing to open over an asset
+    // this branch never touches blocked the DEFAULT surface on an unrelated failure.
+    expect(mockNotify).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
   });
 
   it("shows notification and does not dispatch when help folder is null", async () => {
@@ -471,7 +616,10 @@ describe("help.launchAgent", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("runs the assistant in the scratch root when a scratch is the active workspace", async () => {
+  it("runs a terminal help agent in the scratch root when a scratch is the active workspace", async () => {
+    // Was asserted with the Daintree Assistant, which no longer takes a terminal at
+    // all. The scratch-root rule it was really testing belongs to the PTY help agents,
+    // so it is asserted with one.
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
@@ -480,14 +628,11 @@ describe("help.launchAgent", () => {
       currentScratch: { id: "scratch-1", path: "/scratches/scratch-1" },
     });
 
-    await action.run({ agentId: "daintree-assistant" }, stubCtx);
+    await action.run({ agentId: "codex" }, stubCtx);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({
-        agentId: "daintree-assistant",
-        cwd: "/scratches/scratch-1",
-      }),
+      expect.objectContaining({ agentId: "codex" }),
       { source: "user" }
     );
   });

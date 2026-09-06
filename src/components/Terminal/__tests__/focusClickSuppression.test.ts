@@ -39,6 +39,22 @@ describe("shouldSuppressUnfocusedClick", () => {
     ).toBe(false);
   });
 
+  it("passes through for an alt press, which is a gesture only xterm can honour", () => {
+    // Under `mouseEventsRequireAlt`, alt is what hands a press to the application. It is
+    // the only route to a TUI's own click targets, and swallowing it to activate the
+    // pane made that unreachable on any pane not already clicked once — the pane someone
+    // is most likely to be reaching into.
+    expect(
+      shouldSuppressUnfocusedClick({
+        location: "grid",
+        isFocused: false,
+        isCursorPointer: false,
+        isShiftKey: false,
+        isAltKey: true,
+      })
+    ).toBe(false);
+  });
+
   it("passes through when xterm-cursor-pointer is active (URL link click)", () => {
     expect(
       shouldSuppressUnfocusedClick({

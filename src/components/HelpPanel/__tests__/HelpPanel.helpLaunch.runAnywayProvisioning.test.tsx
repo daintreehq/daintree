@@ -81,7 +81,11 @@ const {
     width: 380,
     terminalId: null as string | null,
     agentId: null as string | null,
-    preferredAgentId: null as string | null,
+    // "claude" rather than null: these suites exercise the PTY LAUNCH path, and the
+    // Daintree Assistant is now the default surface when no agent is chosen — a null
+    // preference renders the native panel and never launches a terminal at all. Naming
+    // a terminal-backed agent keeps each test about the thing it is testing.
+    preferredAgentId: "claude" as string | null,
     // Consent granted by default (#10699) so the existing auto-launch coverage
     // exercises the downstream launch wiring; the consent gate itself is
     // unit-tested in HelpSessionController.test.ts.
@@ -437,7 +441,9 @@ function resetState() {
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
-  helpPanelState.preferredAgentId = null;
+  // See the note on the initial state: null now means the NATIVE panel, so the
+  // PTY-launch suites reset to a terminal-backed agent.
+  helpPanelState.preferredAgentId = "claude";
   helpPanelState.autoLaunchEnabled = true;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
@@ -562,6 +568,19 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
+        // The native assistant panel mounts whenever no terminal-backed agent is
+        // chosen, so the HelpPanel harness has to model its IPC namespace. Without
+        // it the panel throws on subscribe and every test in the file fails for a
+        // reason that has nothing to do with what it asserts.
+        assistantHost: {
+          start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
+          send: vi.fn().mockResolvedValue({ delivered: true }),
+          stop: vi.fn().mockResolvedValue({ stopped: true }),
+          onEvent: vi.fn(() => () => {}),
+          onPeerPrompt: () => () => {},
+          onSequenceGap: vi.fn(() => () => {}),
+          onExit: vi.fn(() => () => {}),
+        },
         help: {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
@@ -1016,13 +1035,82 @@ describe("HelpPanel — hasAutoLaunched stale reset (regression)", () => {
   });
 });
 
-describe("HelpPanel — single-supported-agent auto-skip (issue #6612)", () => {
-  it("auto-launches the only supported agent without requiring user selection", async () => {
-    helpPanelState.preferredAgentId = null;
+describe("HelpPanel — no stored preference resolves to the native assistant (was #6612)", () => {
+  // #6612 auto-launched the sole installed agent when nothing was stored, on the
+  // reasoning that one candidate is not a choice worth asking about. The native
+  // Daintree Assistant is now what an unconfigured panel resolves to, so that
+  // inference is gone from this surface: silently starting someone's Claude because
+  // it happened to be the only CLI on the box is a billed action they never asked for.
+  //
+  // The three installed-agent shapes below used to be the whole point of the rule —
+  // one candidate launches, several or none do not. They are kept as a parameterized
+  // sweep because the guarantee now has to hold REGARDLESS of them: if the native gate
+  // ever regressed, the one-installed-agent case is precisely the one that would start
+  // dispatching again, and it would do so silently.
+  const INSTALLED_SHAPES = [
+    {
+      name: "exactly one supported agent installed",
+      availability: { claude: "ready" },
+      supported: ["claude"],
+      hasRealData: true,
+    },
+    {
+      name: "several supported agents installed",
+      availability: { claude: "ready", codex: "ready" },
+      supported: ["claude", "codex"],
+      hasRealData: true,
+    },
+    {
+      name: "no supported agent installed",
+      availability: { claude: "missing", gemini: "ready" },
+      supported: ["claude"],
+      hasRealData: true,
+    },
+    {
+      name: "availability still loading",
+      availability: { claude: "ready" },
+      supported: ["claude"],
+      hasRealData: false,
+    },
+  ] as const;
+
+  for (const shape of INSTALLED_SHAPES) {
+    it(`launches no terminal and starts the native engine with ${shape.name}`, async () => {
+      helpPanelState.preferredAgentId = null;
+      cliAvailabilityState.availability = { ...shape.availability };
+      cliAvailabilityState.hasRealData = shape.hasRealData;
+      mockGetAssistantSupportedAgentIds.mockReturnValue([...shape.supported]);
+      mockGetFolderPath.mockResolvedValue("/help");
+      mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
+
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+
+      expect(mockDispatch).not.toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(mockProvisionSession).not.toHaveBeenCalled();
+      expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+      // The positive half. Without it every assertion above is satisfied by a panel
+      // that renders nothing at all, which is not the behaviour being promised.
+      expect(window.electron.assistantHost.start).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: "proj-default" })
+      );
+    });
+  }
+
+  it("launches a terminal once that agent IS the stored preference", async () => {
+    // The other side of the boundary: an explicit choice still reaches the PTY path,
+    // and the native engine stays out of it. Asserted together so a regression that
+    // collapsed the two surfaces into one — either direction — fails here.
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
     mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-skip-term" } });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "preferred-term" } });
 
     await act(async () => {
       render(<HelpPanel width={380} />);
@@ -1033,60 +1121,11 @@ describe("HelpPanel — single-supported-agent auto-skip (issue #6612)", () => {
       expect.objectContaining({ agentId: "claude" }),
       { source: "user" }
     );
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
-      0,
-      "auto-skip-term",
-      "claude",
-      "sess-default"
-    );
+    expect(window.electron.assistantHost.start).not.toHaveBeenCalled();
   });
+});
 
-  it("does not auto-skip when more than one supported agent is installed", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(mockDispatch).not.toHaveBeenCalled();
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
-  it("does not auto-skip when no supported agent is installed", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "missing", gemini: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(mockDispatch).not.toHaveBeenCalled();
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
-  it("does not auto-skip while CLI availability data is still loading", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.hasRealData = false;
-    cliAvailabilityState.availability = { claude: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(mockDispatch).not.toHaveBeenCalled();
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
+describe("HelpPanel — the agent picker is gone", () => {
   it("never renders a Back button (picker removed)", () => {
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";

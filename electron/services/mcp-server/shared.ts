@@ -324,10 +324,10 @@ export interface McpWorkspaceBinding {
 }
 
 /**
- * JSON-RPC error code for a refused handshake (#11789). In the `-32000..-32099`
- * range the spec reserves for implementation-defined server errors, and distinct
- * from the `-32001` this server already returns for "Session not found" so a
- * client can tell "your selector is wrong" from "your session expired".
+ * JSON-RPC error code for a refused handshake (#11789). Distinct from the SDK's
+ * own `-32000` (`ErrorCode.ConnectionClosed`) that "Session not found" now
+ * returns, so a client can tell "your selector is wrong" (retry pointless, fix
+ * the request) from "your session expired" (re-handshake and retry).
  */
 export const MCP_HANDSHAKE_REJECTED_CODE = -32002;
 

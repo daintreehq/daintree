@@ -769,6 +769,49 @@ export const CHANNELS = {
    * figure inline. Targeted at the pinned WebContents — never broadcast.
    */
   MCP_HELP_DISPLAY_IMAGE: "mcp-server:help-display-image",
+
+  /**
+   * Native assistant engine (protocol v3). Commands go renderer → main; the event
+   * stream comes back on the push channels below.
+   *
+   * Every push here is a TARGETED send to the WebContents that started the session,
+   * never a broadcast: Daintree is multi-window and each project has its own
+   * renderer, so a broadcast would put one project's conversation — and its approval
+   * prompts — on another project's screen (#7003).
+   */
+  /**
+   * A project's durable timers when NO engine is running — read and retired over the
+   * supervisor daemon's control socket rather than the host protocol.
+   *
+   * A separate namespace from ASSISTANT_HOST_* because it is a different transport
+   * answering the same question, and it is reachable exactly when the host channels
+   * are not: after the panel, the view, or the whole app has been restarted, while
+   * the timer the user scheduled is still counting down.
+   */
+  ASSISTANT_TIMERS_LIST: "assistant-timers:list",
+  ASSISTANT_TIMERS_CANCEL: "assistant-timers:cancel",
+  ASSISTANT_HOST_START: "assistant-host:start",
+  ASSISTANT_HOST_SEND: "assistant-host:send",
+  ASSISTANT_HOST_STOP: "assistant-host:stop",
+  /** One validated protocol event from the engine. */
+  ASSISTANT_HOST_EVENT: "assistant-host:event",
+  /**
+   * A gap in the engine's monotonic sequence: frames were lost in transit, so the
+   * transcript from this point is incomplete. Surfaced rather than absorbed —
+   * rendering a partial answer as though it were whole is the worse failure.
+   */
+  ASSISTANT_HOST_GAP: "assistant-host:gap",
+  /** The engine process exited, cooperatively or otherwise. */
+  ASSISTANT_HOST_EXIT: "assistant-host:exit",
+  /**
+   * A prompt another surface sent to the engine this view is also watching.
+   *
+   * The engine never echoes prompts — a user turn exists only in the store of the
+   * renderer that submitted it — so without this a second window on the same project
+   * would render answers with no questions attached, and the two transcripts would
+   * diverge on the first message either of them sent.
+   */
+  ASSISTANT_HOST_PEER_PROMPT: "assistant-host:peer-prompt",
   /**
    * Push channel: a turn for the help-session pinned to this renderer
    * classified as `agent-stuck` or `reasoning-loop` (#10018). Drives the

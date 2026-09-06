@@ -233,6 +233,13 @@ export function createRendererBridge(
   // never double-register one across repeated fetches or a server restart.
   const perWebContentsEvictionWired = new Set<number>();
 
+  // One shared `destroyed` listener per WebContents, fanned out to every
+  // in-flight request bound to it. See `watchDestroyed`.
+  const destroyedWatches = new Map<
+    number,
+    { listener: () => void; subscribers: Set<() => void> }
+  >();
+
   // One-shot latch so a persistently broken workspace lookup can't flood the
   // log on every dispatch (#11536).
   let warnedWorkspaceResolveFailure = false;
@@ -352,6 +359,52 @@ export function createRendererBridge(
     }
   }
 
+  /**
+   * Subscribe to a WebContents' teardown, sharing ONE emitter listener across
+   * every in-flight request bound to that view. Returns an unsubscribe.
+   *
+   * Each request used to wire its own `webContents.once("destroyed", …)`. That
+   * is correct but does not scale: Node warns at the 11th listener on one
+   * emitter, and a single assistant turn fans out well past ten concurrent
+   * dispatches — five agent launches plus their follow-ups is enough — so the
+   * console filled with a `MaxListenersExceededWarning` naming a leak that was
+   * not there. Raising `setMaxListeners` would have silenced the message and
+   * kept the O(in-flight) registration churn; refcounting keeps the emitter at
+   * exactly one listener no matter how wide the fan-out gets, which is also
+   * what makes the warning a real signal again if something ever does leak.
+   *
+   * Subscribers are copied before the fan-out: a subscriber settles itself
+   * during its own callback (and, on a shared teardown, its siblings), and
+   * mutating the set mid-iteration would skip whoever came next.
+   */
+  function watchDestroyed(webContents: Electron.WebContents, onDestroyed: () => void): () => void {
+    const id = webContents.id;
+    let watch = destroyedWatches.get(id);
+    if (!watch) {
+      const subscribers = new Set<() => void>();
+      const listener = () => {
+        destroyedWatches.delete(id);
+        for (const subscriber of [...subscribers]) subscriber();
+      };
+      watch = { listener, subscribers };
+      destroyedWatches.set(id, watch);
+      webContents.once("destroyed", listener);
+    }
+    watch.subscribers.add(onDestroyed);
+    return () => {
+      const current = destroyedWatches.get(id);
+      if (!current) return;
+      current.subscribers.delete(onDestroyed);
+      if (current.subscribers.size > 0) return;
+      destroyedWatches.delete(id);
+      try {
+        webContents.removeListener("destroyed", current.listener);
+      } catch {
+        // best-effort cleanup; webContents may already be gone
+      }
+    };
+  }
+
   function sendManifestRequest(
     resolveWebContents: () => Electron.WebContents,
     onResolved: (manifest: ActionManifestEntry[]) => void,
@@ -387,7 +440,7 @@ export function createRendererBridge(
         settle();
         pending.reject(route ? routeLostError(route) : new Error("MCP renderer bridge destroyed"));
       };
-      webContents.once("destroyed", onDestroyed);
+      const unwatchDestroyed = watchDestroyed(webContents, onDestroyed);
       // Idempotent: a request can settle through the response, the deadline,
       // WebContents destruction, or a synchronous `send()` throw, and more than
       // one of those can run for the same request. A double release would
@@ -398,11 +451,7 @@ export function createRendererBridge(
       const settle = () => {
         if (settled) return;
         settled = true;
-        try {
-          webContents.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort cleanup; webContents may already be gone
-        }
+        unwatchDestroyed();
         releaseLease?.();
       };
 
@@ -486,16 +535,12 @@ export function createRendererBridge(
         settle();
         pending.reject(route ? routeLostError(route) : new Error("MCP renderer bridge destroyed"));
       };
-      webContents.once("destroyed", onDestroyed);
+      const unwatchDestroyed = watchDestroyed(webContents, onDestroyed);
       let settled = false;
       const settle = () => {
         if (settled) return;
         settled = true;
-        try {
-          webContents.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort cleanup; webContents may already be gone
-        }
+        unwatchDestroyed();
         releaseLease?.();
       };
 

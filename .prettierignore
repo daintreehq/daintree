@@ -10,6 +10,11 @@ node_modules/
 # Local tooling / session artifacts (not project source)
 .claude/
 
+# Vendored submodule: the daintree-assistant engine is a separate repo with its own
+# formatting and CI. Reformatting its files here would create a diff it can never
+# accept back.
+vendor/
+
 # Package manager
 package-lock.json
 pnpm-lock.yaml

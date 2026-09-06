@@ -854,6 +854,15 @@ export const PROVIDER_TO_AGENT_ID: Record<string, BuiltInAgentId> = {
   mistral: "mistral",
 };
 
+/**
+ * The native Daintree Assistant.
+ *
+ * Named because it is not an ordinary roster entry: it is the panel's DEFAULT surface
+ * and the one agent that never runs as a PTY, so code branching on "is this the native
+ * assistant" is asking a structural question rather than naming a preference.
+ */
+export const DAINTREE_ASSISTANT_AGENT_ID = "daintree-assistant";
+
 export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   claude: claudeConfig,
   opencode: opencodeConfig,

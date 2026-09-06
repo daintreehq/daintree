@@ -5,6 +5,7 @@ import path from "node:path";
 import { app } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { store } from "../store.js";
+import { defaultDebugLogging } from "./helpAssistantDefaults.js";
 import { getHelpFolderPath } from "./HelpService.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -76,7 +77,6 @@ const DEFAULT_TIER: HelpAssistantTier = "action";
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
-const DEFAULT_DEBUG_LOGGING = false;
 
 // Belt-and-suspenders bound for orphaned provisional bearers (#10698). A
 // session record is minted at provision time, then bound to a PTY terminal once
@@ -341,6 +341,16 @@ export class HelpSessionService {
   // not an orphan.
   private readonly activeHelpTerminalBySlotKey = new Map<string, string>();
   private readonly terminalBySessionId = new Map<string, string>();
+  /**
+   * Sessions held by the NATIVE assistant engine, which has no PTY to bind.
+   *
+   * The orphan sweeper's whole signal is "provisioned but never bound to a terminal",
+   * which for a native session is not a symptom of anything — it is the normal shape.
+   * Without this set every native conversation would have its bearer revoked at the
+   * 30-minute mark, mid-conversation, and present as the assistant abruptly losing
+   * the ability to spawn agents for no reason the user could see.
+   */
+  private readonly engineSessionIds = new Set<string>();
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
@@ -481,6 +491,20 @@ export class HelpSessionService {
     if (!record) return false;
     if (record.revoked) return false;
     return record.tier;
+  }
+
+  /**
+   * Binds a provisioned session to the native engine that owns it.
+   *
+   * The counterpart to `markTerminalForToken` for a surface with no terminal: it
+   * exempts the record from the orphan sweep and nothing else. Returns false for an
+   * unknown or revoked token, so a caller cannot keep a dead session alive.
+   */
+  markEngineSession(sessionId: string): boolean {
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return false;
+    this.engineSessionIds.add(sessionId);
+    return true;
   }
 
   /**
@@ -1276,6 +1300,11 @@ export class HelpSessionService {
     // active-terminal slot before this revoke ran. Skip the hard kill if
     // we already gracefulKilled — same lifecycle endpoint, just avoids the
     // duplicate "kill an unknown terminal" warning in the PTY host log.
+    // Outside the `terminalId` branch on purpose: a native-engine session has no
+    // terminal, so leaving this inside would mean its id is never removed on revoke,
+    // displacement or revokeAll — the set would grow for the life of the process and
+    // keep exempting ids whose sessions are long gone.
+    this.engineSessionIds.delete(sessionId);
     if (terminalId) {
       this.terminalBySessionId.delete(sessionId);
       // If displaced, the new provision already cleared the active slot (and
@@ -1608,7 +1637,14 @@ export class HelpSessionService {
 
   async revokeByWebContentsId(webContentsId: number): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
-      (record) => record.projectViewWebContentsId === webContentsId
+      (record) =>
+        record.projectViewWebContentsId === webContentsId &&
+        // Engine sessions are exempt: their bearer belongs to an engine that several
+        // views can be watching, and `AssistantHostService` owns that lifecycle — it
+        // re-pins the session to a surviving surface, or revokes when the last one
+        // leaves. Revoking here on the strength of one view going away would cut the
+        // control plane out from under the windows still using it.
+        !this.engineSessionIds.has(record.sessionId)
     );
     // LRU eviction destroys the renderer for a project the user almost
     // certainly intends to return to — capture the agent's resume ID
@@ -1620,7 +1656,14 @@ export class HelpSessionService {
 
   async revokeByWindowId(windowId: number): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
-      (record) => record.windowId === windowId
+      (record) =>
+        record.windowId === windowId &&
+        // Engine sessions are exempt, as in `revokeByWebContentsId`: one engine can be
+        // shared by surfaces in several windows, and `AssistantHostService` owns that
+        // lifecycle. Window unregister fires revocation and host teardown
+        // independently, so without this the revoke can win the race and cut the
+        // control plane out from under the windows still using it.
+        !this.engineSessionIds.has(record.sessionId)
     );
     // Window close = user is done with this window but the project lives on
     // in other windows / future launches. Capture the resume ID so the next
@@ -1744,6 +1787,9 @@ export class HelpSessionService {
       (record) =>
         !record.revoked &&
         !this.terminalBySessionId.has(record.sessionId) &&
+        // A native-engine session has no terminal by design; its liveness is the
+        // engine process, and `AssistantHostService` revokes it on exit.
+        !this.engineSessionIds.has(record.sessionId) &&
         record.createdAt <= cutoff
     );
     await Promise.all(orphans.map((record) => this.revokeSession(record.sessionId)));
@@ -1897,8 +1943,11 @@ export class HelpSessionService {
       docSearch: typeof stored.docSearch === "boolean" ? stored.docSearch : DEFAULT_DOC_SEARCH,
       tier,
       bypassPermissions,
-      debugLogging:
-        typeof stored.debugLogging === "boolean" ? stored.debugLogging : DEFAULT_DEBUG_LOGGING,
+      // Build-driven, with no stored preference behind it any more: the engine's own
+      // settings left Daintree with the account and the endpoint, and a trace switch
+      // that only one of three assistant backends reads went with them. Developers
+      // still get the trace automatically — see `defaultDebugLogging`.
+      debugLogging: defaultDebugLogging(),
     };
   }
 
@@ -1942,6 +1991,23 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
     return record.debugLogging;
+  }
+
+  /**
+   * The debug-logging preference read LIVE, with no session behind it.
+   *
+   * For the launch that could not provision one. `getDebugLogging` answers from a
+   * snapshot taken at provision time, which is the right shape for a running session and
+   * the wrong shape for a failed start: an engine launched degraded — MCP unreachable,
+   * the help folder unavailable — got no trace at all, because the only thing that could
+   * turn logging on had already thrown. That is precisely the launch worth having a
+   * trace of, and precisely the one that never had one.
+   *
+   * Not a replacement for the snapshot. A live read mid-session would let a settings
+   * change reach an engine that was started under the old value.
+   */
+  getDebugLoggingPreference(): boolean {
+    return this.readSettings().debugLogging;
   }
 
   private getSessionsRoot(): string {

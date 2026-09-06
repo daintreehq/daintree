@@ -15,6 +15,8 @@ export interface UseSlashCommandAutocompleteArgs {
   trigger: CompletionTrigger;
   agentId?: BuiltInAgentId;
   projectPath?: string;
+  /** A caller-supplied command set that REPLACES discovery — see useSlashCommandList. */
+  commands?: SlashCommand[];
 }
 
 export function useSlashCommandAutocomplete({
@@ -23,6 +25,7 @@ export function useSlashCommandAutocomplete({
   trigger,
   agentId,
   projectPath,
+  commands: commandsOverride,
 }: UseSlashCommandAutocompleteArgs): {
   items: AutocompleteItem[];
   isLoading: boolean;
@@ -31,8 +34,8 @@ export function useSlashCommandAutocomplete({
   const [isLoading, setIsLoading] = useState(false);
 
   const initial = useMemo(
-    (): SlashCommand[] => (agentId ? getBuiltinSlashCommands(agentId) : []),
-    [agentId]
+    (): SlashCommand[] => commandsOverride ?? (agentId ? getBuiltinSlashCommands(agentId) : []),
+    [agentId, commandsOverride]
   );
 
   const [commands, setCommands] = useState<SlashCommand[]>(initial);
@@ -44,6 +47,14 @@ export function useSlashCommandAutocomplete({
   useEffect(() => {
     // Data-driven: fetch for any agent that declares completion sources, rather
     // than a hard-coded agent-id allowlist.
+    //
+    // The id bump is load-bearing — see useSlashCommandList for why a bare `return`
+    // lets an in-flight result overwrite the supplied set and strands `isLoading`.
+    if (commandsOverride) {
+      requestIdRef.current++;
+      setIsLoading(false);
+      return;
+    }
     if (!agentId || !getAgentConfig(agentId)?.completionSources?.length) return;
     if (!window.electron?.slashCommands?.list) return;
 
@@ -63,7 +74,7 @@ export function useSlashCommandAutocomplete({
         if (requestIdRef.current !== requestId) return;
         setIsLoading(false);
       });
-  }, [agentId, projectPath]);
+  }, [agentId, projectPath, commandsOverride]);
 
   const items = useMemo(
     (): AutocompleteItem[] => (enabled ? toSlashAutocompleteItems(commands, query, trigger) : []),

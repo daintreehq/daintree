@@ -114,6 +114,26 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "assistant-host:send": {
+    args: [raw: unknown];
+    result: { delivered: boolean };
+  };
+  "assistant-host:start": {
+    args: [payload: import("./assistantHostIpc.js").AssistantHostStartPayload];
+    result: import("./assistantHostIpc.js").AssistantHostStartResult;
+  };
+  "assistant-host:stop": {
+    args: [sessionId: string, attachmentId: string];
+    result: { stopped: boolean };
+  };
+  "assistant-timers:cancel": {
+    args: [projectId: string, timerId: string, slot?: number | undefined];
+    result: import("./assistantTimers.js").DaemonTimerCancelResult;
+  };
+  "assistant-timers:list": {
+    args: [projectId: string, slot?: number | undefined];
+    result: import("./assistantTimers.js").ProjectTimersResult;
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
@@ -747,7 +767,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "help-assistant:set-settings": {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
-    result: void;
+    result: import("./api.js").HelpAssistantSettings;
   };
   "help:get-folder-path": {
     args: [];

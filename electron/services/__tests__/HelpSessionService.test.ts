@@ -113,6 +113,7 @@ vi.mock("../AssistantContentMirror.js", () => ({
 }));
 
 import { HelpSessionService } from "../HelpSessionService.js";
+import { defaultDebugLogging } from "../helpAssistantDefaults.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -570,17 +571,14 @@ describe("HelpSessionService", () => {
     expect(service.getBypassPermissions(result.token)).toBe(false);
   });
 
-  it("getDebugLogging returns the snapshot taken at provision time", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: true });
-
+  it("getDebugLogging is bound to the token, and released when the session is revoked", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    // Mutate the store after provisioning: the accessor must return the
-    // value captured at provision time, not re-read the live store.
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: false });
-
-    expect(service.getDebugLogging(result.token)).toBe(true);
+    // Not asserted against a literal: the value is deliberately build-dependent (on in
+    // development, off when packaged), so a literal here would just restate
+    // `helpAssistantDefaults.ts` and would have to be edited in lockstep with it.
+    expect(service.getDebugLogging(result.token)).toBe(defaultDebugLogging());
     expect(service.getDebugLogging("not-a-token")).toBe(false);
     expect(service.getDebugLogging("")).toBe(false);
 
@@ -588,10 +586,19 @@ describe("HelpSessionService", () => {
     expect(service.getDebugLogging(result.token)).toBe(false);
   });
 
-  it("getDebugLogging defaults to false when settings have not been touched", async () => {
-    const result = await service.provisionSession(provisionInput());
-    if (!result) throw new Error("expected result");
-    expect(service.getDebugLogging(result.token)).toBe(false);
+  it("ignores a stored debugLogging preference, in both directions", async () => {
+    // There is no such setting any more. The engine's own settings left Daintree with
+    // the account and the endpoint, and a trace switch only one of three assistant
+    // backends ever read went with them — so a value left behind in an older install's
+    // settings file must not quietly go on steering what the engine is told. Asserted in
+    // BOTH directions because only one of them can agree with the build default, and a
+    // test that checked the agreeing one would pass whether the value was read or not.
+    for (const stale of [true, false]) {
+      mockStoreGet.mockReturnValue({ tier: "action", debugLogging: stale });
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.getDebugLogging(result.token)).toBe(defaultDebugLogging());
+    }
   });
 
   it("omits the daintree MCP server when daintreeControl is false", async () => {

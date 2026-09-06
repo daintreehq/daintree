@@ -416,6 +416,23 @@ describe("AgentAvailabilityStore", () => {
       expect(agents.find((a) => a.agentId === "agent-1")).toBeDefined();
     });
 
+    it("isTrashed and getTrashedAt track a closed terminal until it is restored", () => {
+      expect(store.isTrashed("term-1")).toBe(false);
+      expect(store.getTrashedAt("term-1")).toBeUndefined();
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+      expect(store.isTrashed("term-1")).toBe(true);
+      const trashedAt = store.getTrashedAt("term-1");
+      expect(trashedAt).toBeDefined();
+      // A second read must return the SAME stamp, not a fresh timestamp — a
+      // waiter checking in more than once during one trash TTL relies on this.
+      expect(store.getTrashedAt("term-1")).toBe(trashedAt);
+
+      events.emit("terminal:restored", { id: "term-1" });
+      expect(store.isTrashed("term-1")).toBe(false);
+      expect(store.getTrashedAt("term-1")).toBeUndefined();
+    });
+
     it("returns 0 active agents when all working agents are trashed", () => {
       store.registerAgent("agent-1", "working");
       store.registerAgent("agent-2", "working");

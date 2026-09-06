@@ -442,6 +442,25 @@ export class CliAvailabilityService {
    * them would only mask the real problem.
    */
   private async probeCommand(config: AgentConfig): Promise<ProbeResult> {
+    // The Daintree Assistant engine SHIPS WITH THE APP — it is a Go binary vendored as
+    // a submodule and packaged as an extraResource, not something the user installs.
+    // Probing PATH for it is a leftover from when it was an npm package, and it fails
+    // on exactly the machines where the bundled copy is present and working: the
+    // assistant then reads as "not installed", drops out of the supported-agent list,
+    // and a persisted preference for it is discarded at rehydration.
+    //
+    // Resolution (env override → packaged → repo build) belongs to
+    // `resolveAssistantBinary`; this only answers "is it available", and the answer is
+    // yes wherever Daintree itself is running.
+    if (config.id === "daintree-assistant") {
+      // Returned WHATEVER it says, including "missing". There is deliberately no PATH
+      // fallthrough: `resolveAssistantBinary` refuses PATH outright, so a PATH copy
+      // that made this probe report "ready" would describe an engine the runtime will
+      // never start — availability promising a session that every launch then fails to
+      // open. This probe answers for the same resolver the engine actually uses.
+      return this.probeBundledAssistant();
+    }
+
     const command = config.command;
     if (typeof command !== "string" || !command.trim()) {
       return { status: "missing" };
@@ -507,6 +526,22 @@ export class CliAvailabilityService {
     }
 
     return { status: "missing" };
+  }
+
+  /**
+   * Probes the bundled assistant engine through the SAME resolver the runtime uses,
+   * so "is it available" and "what will actually be spawned" cannot disagree. A
+   * missing engine (fresh clone, submodule not checked out) reports missing rather
+   * than throwing, and the caller falls back to the PATH probe.
+   */
+  private async probeBundledAssistant(): Promise<ProbeResult> {
+    try {
+      const { resolveAssistantBinary } = await import("./assistant-host/resolveAssistantBinary.js");
+      const { path: binaryPath } = await resolveAssistantBinary();
+      return this.probeNativePaths([binaryPath]);
+    } catch {
+      return { status: "missing" };
+    }
   }
 
   private async probePrependedCliPath(command: string): Promise<ProbeResult> {

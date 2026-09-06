@@ -21,7 +21,7 @@ export type WaitUntilIdleResult = {
   terminalId: string;
   agentId?: string;
   busyState: "working" | "idle";
-  idleReason?: "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+  idleReason?: "idle" | "waiting_for_user" | "completed" | "exited" | "closed" | "unknown";
   /**
    * Only present when `idleReason === "waiting_for_user"`. Distinguishes a safe
    * auto-drive moment (`"prompt"` — empty input prompt) from an agent actively
@@ -72,9 +72,9 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     busyState: { type: "string", enum: ["working", "idle"] },
     idleReason: {
       type: "string",
-      enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+      enum: ["idle", "waiting_for_user", "completed", "exited", "closed", "unknown"],
       description:
-        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'closed' when the user closed the terminal itself (the process is still tearing down, so no exit code yet — treat the terminal as gone), 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
     },
     waitingReason: {
       type: "string",
@@ -124,7 +124,7 @@ export type WaitUntilIdleBatchEntry = {
   terminalId: string;
   agentId?: string;
   busyState: "working" | "idle";
-  idleReason?: "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+  idleReason?: "idle" | "waiting_for_user" | "completed" | "exited" | "closed" | "unknown";
   waitingReason?: WaitingReason;
   previousBusyState?: "working" | "idle";
   lastTransitionAt?: number;
@@ -158,7 +158,7 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
           busyState: { type: "string", enum: ["working", "idle"] },
           idleReason: {
             type: "string",
-            enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+            enum: ["idle", "waiting_for_user", "completed", "exited", "closed", "unknown"],
           },
           waitingReason: { type: "string", enum: ["prompt", "question", "approval", "error"] },
           previousBusyState: { type: "string", enum: ["working", "idle"] },
@@ -177,4 +177,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
-  "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold the call open for a minute interactively, far longer headless. Timing out means not met yet; untracked terminals count as finished.";
+  "Block until the first of several agents stops working, or until all do; the fan-out primitive when agents stop at different times. Prefer it to waiting on each terminal in turn; to poll without blocking, use a status snapshot. Timing out means the predicate is unmet, not failed; untracked terminals count as settled, as does one closed mid-wait (idleReason 'closed').";

@@ -450,6 +450,17 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn("[main] revokeByWebContentsId failed during eviction:", err);
           });
+        // And stop the native assistant engine the view owned. Same reasoning as the
+        // bearer revoke above, but a heavier consequence: the engine is a real child
+        // process holding its project's state lease, and the renderer that would have
+        // stopped it no longer exists to be asked. It was reaped only lazily, on the
+        // next event it tried to deliver into the dead view — so a quiet engine was
+        // never reaped at all.
+        import("./services/assistant-host/AssistantHostService.js")
+          .then(({ assistantHostService }) => assistantHostService.stopByWebContents(wcId))
+          .catch((err) => {
+            console.warn("[main] assistant host stop failed during eviction:", err);
+          });
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view becomes
@@ -472,6 +483,17 @@ if (!gotTheLock) {
         }
       },
       onViewCrashed: (wc) => {
+        // The engine goes FIRST, before the window guard below. Everything after that
+        // guard is about restoring a live window, and correctly gives up when there is
+        // no window left to restore — but a crashed renderer's engine is a child process
+        // that must die either way, and a crash taking its window with it is exactly the
+        // case where nothing else is coming to reap it.
+        const crashedWcId = wc.id;
+        import("./services/assistant-host/AssistantHostService.js")
+          .then(({ assistantHostService }) => assistantHostService.stopByWebContents(crashedWcId))
+          .catch((err) => {
+            console.warn("[main] assistant host stop failed during crash:", err);
+          });
         // Tear down the per-window PTY MessagePort on renderer crash so the
         // pty-host's PortQueueManager can drop stale queue accounting before
         // reload re-issues a fresh port. Without this, a stale port keeps the
@@ -485,7 +507,6 @@ if (!gotTheLock) {
         // would silently no-op against the dead id. Mirrors the synchronous
         // eviction-hook revoke (lesson #5009); `wc.id` is the dead id the
         // session pinned at provision time.
-        const crashedWcId = wc.id;
         import("./services/HelpSessionService.js")
           .then(({ helpSessionService }) => helpSessionService.revokeByWebContentsId(crashedWcId))
           .catch((err) => {

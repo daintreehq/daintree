@@ -3,8 +3,15 @@ import { WindowRegistry } from "../WindowRegistry.js";
 import { toDisposable } from "../../utils/lifecycle.js";
 import type { BrowserWindow } from "electron";
 
-const { mockRevokeByWindowId } = vi.hoisted(() => ({
+const { mockRevokeByWindowId, mockStopByWindow } = vi.hoisted(() => ({
   mockRevokeByWindowId: vi.fn<(windowId: number) => Promise<void>>(),
+  mockStopByWindow: vi.fn<(windowId: number) => void>(),
+}));
+
+vi.mock("../../services/assistant-host/AssistantHostService.js", () => ({
+  assistantHostService: {
+    stopByWindow: mockStopByWindow,
+  },
 }));
 
 vi.mock("../../services/HelpSessionService.js", () => ({
@@ -596,6 +603,51 @@ describe("WindowRegistry", () => {
       await Promise.resolve();
 
       expect(mockRevokeByWindowId).toHaveBeenCalledWith(7);
+    });
+
+    /**
+     * The native assistant engine is a real child process, and this is where a closing
+     * window's copy of it gets stopped.
+     *
+     * Asserted at the registry rather than only on the service because THAT was the bug:
+     * `stopByWindow` and its siblings all existed and none of them had a caller. The
+     * only path that reached any of them was lazy — an event happening to be delivered
+     * into a view that had already gone — so an engine that was simply quiet kept
+     * running, holding its project's state lease, after every window that could have
+     * stopped it had closed.
+     */
+    it("unregister stops the assistant engines the closing window owned", async () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(42, 100);
+      registry.register(win);
+
+      mockStopByWindow.mockClear();
+      registry.unregister(42);
+
+      // Fire-and-forget through a dynamic import, like the revoke above: one macrotask
+      // for the import, one microtask for the `.then`.
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+
+      expect(mockStopByWindow).toHaveBeenCalledWith(42);
+    });
+
+    it("stops the assistant engines once when both closed and destroyed fire", async () => {
+      // Window ids are reused, so a second stop against the same id would eventually
+      // name a different window's engine.
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(21, 100);
+      registry.register(win);
+
+      mockStopByWindow.mockClear();
+      win._fireClosed();
+      win._fireDestroyed();
+
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+
+      expect(mockStopByWindow).toHaveBeenCalledTimes(1);
+      expect(mockStopByWindow).toHaveBeenCalledWith(21);
     });
 
     it("unregister fires revokeByWindowId only once when both closed and destroyed fire (idempotent)", async () => {

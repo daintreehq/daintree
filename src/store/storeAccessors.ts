@@ -33,6 +33,7 @@ let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
 let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
+let _getWorktreeBranchById: ((worktreeId: string) => string | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
@@ -84,6 +85,21 @@ export function setWorktreeGitDirAccessor(
  */
 export function getWorktreeGitDirById(worktreeId: string): string | undefined {
   return _getWorktreeGitDirById?.(worktreeId);
+}
+
+export function setWorktreeBranchAccessor(
+  getter: (worktreeId: string) => string | undefined
+): void {
+  _getWorktreeBranchById = getter;
+}
+
+/**
+ * The branch checked out in a worktree of the current view, `""` on a detached
+ * HEAD, or `undefined` when no view store is mounted. Travels with each native
+ * assistant message so a result can name where a spawn landed.
+ */
+export function getWorktreeBranchById(worktreeId: string): string | undefined {
+  return _getWorktreeBranchById?.(worktreeId);
 }
 
 export function setWorktreePathIndexAccessor(
@@ -183,6 +199,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeSelectionState = null;
   _getWorktreeIdSet = null;
   _getWorktreeGitDirById = null;
+  _getWorktreeBranchById = null;
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
   _setPanelExtensionState = null;
