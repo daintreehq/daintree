@@ -1,3 +1,82 @@
+import { normalizeBrowserUrl, isLocalhostUrl, type NormalizeResult } from "../Browser/browserUtils";
+
+/**
+ * Copy the route (path + query + fragment) of `from` onto `origin`, returning the
+ * absolute URL. Field assignment rather than string concatenation so an encoded
+ * path or a `//`-prefixed pathname can never be reparsed as a new authority.
+ */
+function graftRouteOntoOrigin(origin: URL, from: URL): string {
+  const target = new URL(origin.toString());
+  target.pathname = from.pathname;
+  target.search = from.search;
+  target.hash = from.hash;
+  return target.toString();
+}
+
+function parseOrNull(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+/** True when `url` sits on exactly `origin`. Parsed comparison, not `startsWith`: a
+ * prefix test would accept `…localhost:43000` as a match for `…localhost:4300`. */
+export function isOnOrigin(url: string, origin: string): boolean {
+  const parsed = parseOrNull(url);
+  const parsedOrigin = parseOrNull(origin);
+  return !!parsed && !!parsedOrigin && parsed.origin === parsedOrigin.origin;
+}
+
+/**
+ * Address-bar/navigation policy for a dev-preview panel (#12297).
+ *
+ * Dev Preview used to normalize with no options, which takes `normalizeBrowserUrl`'s
+ * strict branch and accepts only the bare loopback hosts — so the panel rejected the
+ * very `dp-*.localhost` origin it was itself displaying. The fix is a policy that
+ * accepts exactly two things and nothing else:
+ *
+ *  - a bare loopback URL (what already worked), and
+ *  - **this panel's own** proxy origin. `isDevPreviewProxyUrl` is deliberately not
+ *    used here: it is a shape check that passes any `*.localhost` subdomain, which
+ *    would let one panel drive another panel's origin.
+ *
+ * Everything else — LAN/private hosts, arbitrary `.localhost`/`.test` names, public
+ * hosts, non-HTTP protocols — is rejected outright rather than returned with
+ * `requiresConfirmation`, since a dev preview has no host-approval flow to fall into.
+ *
+ * In configured proxy mode a loopback URL is retargeted onto the proxy origin,
+ * preserving path, query and fragment, so a typed raw-upstream address never lands
+ * the pane off-origin and back through the migration/remount dance.
+ */
+export function normalizeDevPreviewUrl(
+  rawUrl: string,
+  proxyOrigin: string | null | undefined
+): NormalizeResult {
+  // Extended mode (empty allow-list) parses `*.localhost` instead of erroring on it;
+  // the allow-list below, not this call, is what authorizes the result.
+  const normalized = normalizeBrowserUrl(rawUrl, { allowedHosts: [] });
+  if (normalized.error || !normalized.url) {
+    return { error: normalized.error ?? "Invalid URL format" };
+  }
+
+  const parsed = parseOrNull(normalized.url);
+  if (!parsed) return { error: "Invalid URL format" };
+
+  const proxy = typeof proxyOrigin === "string" ? parseOrNull(proxyOrigin) : null;
+
+  if (isLocalhostUrl(normalized.url)) {
+    return proxy ? { url: graftRouteOntoOrigin(proxy, parsed) } : { url: normalized.url };
+  }
+
+  if (proxy && parsed.origin === proxy.origin) {
+    return { url: normalized.url };
+  }
+
+  return { error: `Only localhost URLs are allowed (got "${parsed.hostname}")` };
+}
+
 /**
  * Decides whether a freshly detected dev-server URL should replace the URL the
  * pane is currently showing, and if so, what URL to navigate to.
@@ -10,8 +89,12 @@
  * restart only shifts the upstream port — which the proxy resolves live — so once
  * the pane is on the proxy origin there is nothing to navigate (returns `false`).
  * The only navigation is the first one onto the proxy origin (and any migration
- * off a stale direct-localhost URL), where the route is taken from the detected
- * URL's non-root path, else the pane's current route, else `/`.
+ * off a stale direct-localhost URL), where the route is taken from the pane's own
+ * current route, else the detected URL's non-root path, else `/`. A route the pane
+ * already holds outranks an advertised base: on a *migration* that route is where
+ * the user or the app asked to be, and overwriting it with the dev server's base
+ * is how the destination got lost (#12297). The base still wins on first adoption,
+ * when there is no current route to defend.
  *
  * **Legacy mode (no proxy):** when the dev server restarts on a different origin
  * (typically a port shift, e.g. 3000 → 3001), the detected URL is the bare server
@@ -46,25 +129,14 @@ export function computeDevServerUrl(
     if (current && current.origin === proxy.origin) return false;
 
     // First navigation onto the proxy origin (or migrating off a stale localhost
-    // URL). Choose the route: honor a non-root path the dev server advertises
-    // (Vite `base`), else preserve the pane's current route, else land on root.
-    let detected: URL | null;
-    try {
-      detected = new URL(detectedUrl);
-    } catch {
-      detected = null;
+    // URL). Choose the route: preserve the pane's current route, else honor a
+    // non-root path the dev server advertises (Vite `base`), else land on root.
+    if (current && (current.pathname !== "/" || !!current.search || !!current.hash)) {
+      return graftRouteOntoOrigin(proxy, current);
     }
-    const target = new URL(proxy.toString());
-    if (detected && detected.pathname !== "/") {
-      target.pathname = detected.pathname;
-      target.search = detected.search;
-      target.hash = detected.hash;
-    } else if (current) {
-      target.pathname = current.pathname;
-      target.search = current.search;
-      target.hash = current.hash;
-    }
-    return target.toString();
+    const detected = parseOrNull(detectedUrl);
+    if (detected && detected.pathname !== "/") return graftRouteOntoOrigin(proxy, detected);
+    return proxy.toString();
   }
 
   if (!currentUrl) return detectedUrl;

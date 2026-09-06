@@ -684,6 +684,347 @@ describe("DevPreviewProxyService", () => {
     });
   });
 
+  // The dev preview sits on a stable `dp-*.localhost` proxy origin. An upstream that answers
+  // with an absolute `Location` on its own `localhost:<port>` origin would carry the guest off
+  // that origin, forcing the pane to migrate back — which is how the route was lost, and how a
+  // single-use callback ended up at risk of being requested twice (#12297).
+  describe("same-upstream redirect rewriting (#12297)", () => {
+    // A fixture that logs every path it serves, so each test can assert *counts* and prove no
+    // replay was introduced — the issue's first (disproved) hypothesis was a double redemption.
+    function redirectFixture(locationFor: (upstreamPort: number) => string) {
+      const seen: string[] = [];
+      let port = 0;
+      const server = http.createServer((req, res) => {
+        seen.push(req.url ?? "");
+        if (req.url?.startsWith("/once")) {
+          res.writeHead(302, { Location: locationFor(port) });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end(`served ${req.url}`);
+      });
+      return {
+        server,
+        seen,
+        async listen() {
+          port = await listen(server);
+          return port;
+        },
+      };
+    }
+
+    function countOf(seen: string[], prefix: string): number {
+      return seen.filter((p) => p === prefix || p.startsWith(`${prefix}?`)).length;
+    }
+
+    it("rewrites an absolute same-upstream redirect onto the panel's origin and never replays the callback", async () => {
+      const fixture = redirectFixture(
+        (port) => `http://localhost:${port}/consume?token=audit-single-use`
+      );
+      upstream = fixture.server;
+      const upstreamPort = await fixture.listen();
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+      const host = `dp-test.localhost:${proxyPort}`;
+
+      const redirect = await request(proxyPort, host, "/once");
+
+      expect(redirect.status).toBe(302);
+      // The guest stays on its own origin instead of being sent to the raw upstream.
+      expect(redirect.headers.location).toBe(`http://${host}/consume?token=audit-single-use`);
+      expect(countOf(fixture.seen, "/once")).toBe(1);
+      expect(countOf(fixture.seen, "/consume")).toBe(0);
+
+      // Follow it exactly once, the way the guest would.
+      const followed = await request(proxyPort, host, "/consume?token=audit-single-use");
+
+      expect(followed.status).toBe(200);
+      expect(followed.body).toBe("served /consume?token=audit-single-use");
+      expect(countOf(fixture.seen, "/once")).toBe(1);
+      expect(countOf(fixture.seen, "/consume")).toBe(1);
+      expect(countOf(fixture.seen, "/")).toBe(0);
+    });
+
+    it("preserves the fragment on a rewritten redirect", async () => {
+      const fixture = redirectFixture((port) => `http://localhost:${port}/deep/route?a=1#frag`);
+      upstream = fixture.server;
+      const upstreamPort = await fixture.listen();
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+      const host = `dp-test.localhost:${proxyPort}`;
+
+      const res = await request(proxyPort, host, "/once");
+
+      expect(res.headers.location).toBe(`http://${host}/deep/route?a=1#frag`);
+    });
+
+    it("rewrites a protocol-relative same-upstream redirect", async () => {
+      const fixture = redirectFixture((port) => `//localhost:${port}/consume`);
+      upstream = fixture.server;
+      const upstreamPort = await fixture.listen();
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+      const host = `dp-test.localhost:${proxyPort}`;
+
+      const res = await request(proxyPort, host, "/once");
+
+      expect(res.headers.location).toBe(`http://${host}/consume`);
+    });
+
+    it("downgrades a TLS upstream's absolute redirect to the plain-HTTP proxy origin", async () => {
+      // The proxy is an http.Server; leaving `https:` on the rewritten Location would send the
+      // guest to a scheme this proxy never serves.
+      const seen: string[] = [];
+      let upstreamPort = 0;
+      tlsUpstream = https.createServer({ cert: TLS_CERT, key: TLS_KEY }, (req, res) => {
+        seen.push(req.url ?? "");
+        if (req.url === "/once") {
+          res.writeHead(302, { Location: `https://localhost:${upstreamPort}/consume` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end(`served ${req.url}`);
+      });
+      upstreamPort = await listenTls(tlsUpstream);
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: true } : null
+      );
+      const proxyPort = await proxy.start();
+      const host = `dp-test.localhost:${proxyPort}`;
+
+      const res = await request(proxyPort, host, "/once");
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe(`http://${host}/consume`);
+      expect(seen.filter((p) => p === "/consume")).toHaveLength(0);
+    });
+
+    it.each([301, 302, 303, 307, 308])("rewrites a %i redirect", async (status) => {
+      let upstreamPort = 0;
+      upstream = http.createServer((_req, res) => {
+        res.writeHead(status, { Location: `http://localhost:${upstreamPort}/moved` });
+        res.end();
+      });
+      upstreamPort = await listen(upstream);
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+      const host = `dp-test.localhost:${proxyPort}`;
+
+      const res = await request(proxyPort, host, "/once");
+
+      // The status must survive the rewrite: collapsing 307/308 to 302 would silently drop
+      // their method-preserving semantics.
+      expect(res.status).toBe(status);
+      expect(res.headers.location).toBe(`http://${host}/moved`);
+    });
+
+    it.each([
+      ["a path-relative Location", "consume"],
+      ["a root-relative Location", "/consume"],
+      ["a query-only Location", "?token=x"],
+    ])(
+      "leaves %s untouched — the guest resolves it against the proxy URL",
+      async (_l, location) => {
+        upstream = http.createServer((_req, res) => {
+          res.writeHead(302, { Location: location });
+          res.end();
+        });
+        const upstreamPort = await listen(upstream);
+
+        proxy = new DevPreviewProxyService((sub) =>
+          sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+        );
+        const proxyPort = await proxy.start();
+
+        const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`, "/nested/once");
+
+        // Rewriting these would resolve them against the upstream *root*, turning
+        // `/nested/consume` into `/consume` — the reason httpxy's autoRewrite is not used.
+        expect(res.headers.location).toBe(location);
+      }
+    );
+
+    it.each(["127.0.0.1", "[::1]"])(
+      "rewrites a redirect naming the upstream by its %s loopback address",
+      async (hostname) => {
+        // The proxy dials `localhost` and lets Node pick the address family (#9747), so an
+        // upstream that answers with its own IP is still naming the server we just called.
+        // A literal origin comparison would let this through, the guest would cross off the
+        // proxy origin, and the remount would request the callback a second time.
+        const fixture = redirectFixture((port) => `http://${hostname}:${port}/consume`);
+        upstream = fixture.server;
+        const upstreamPort = await fixture.listen();
+
+        proxy = new DevPreviewProxyService((sub) =>
+          sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+        );
+        const proxyPort = await proxy.start();
+        const host = `dp-test.localhost:${proxyPort}`;
+
+        const res = await request(proxyPort, host, "/once");
+
+        expect(res.headers.location).toBe(`http://${host}/consume`);
+        expect(countOf(fixture.seen, "/consume")).toBe(0);
+      }
+    );
+
+    it("preserves an explicitly emptied fragment", async () => {
+      // `Location: …/consume#` means "clear the fragment". Rebuilding the URL from
+      // pathname+search+hash drops the `#`, and the guest then inherits the fragment of the
+      // page it is leaving — a hash router would land on the wrong route.
+      const fixture = redirectFixture((port) => `http://localhost:${port}/consume#`);
+      upstream = fixture.server;
+      const upstreamPort = await fixture.listen();
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+      const host = `dp-test.localhost:${proxyPort}`;
+
+      const res = await request(proxyPort, host, "/once");
+
+      expect(res.headers.location).toBe(`http://${host}/consume#`);
+    });
+
+    it("refuses to rewrite onto a host smuggled through the Host header as userinfo", async () => {
+      // `parseDevPreviewProxyHost` splits at the first colon, so this Host routes as `dp-test`
+      // while the URL parser reads `evil.example` as the authority. The rewrite must fail
+      // closed rather than hand the client a redirect to an external origin.
+      let upstreamPort = 0;
+      upstream = http.createServer((_req, res) => {
+        res.writeHead(302, { Location: `http://localhost:${upstreamPort}/consume` });
+        res.end();
+      });
+      upstreamPort = await listen(upstream);
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}@evil.example`, "/once");
+
+      expect(res.headers.location).not.toContain("evil.example");
+      expect(res.headers.location).toBe(`http://localhost:${upstreamPort}/consume`);
+    });
+
+    it("rewrites against the upstream the request was dialled with, not the current one", async () => {
+      // The origins are snapshotted per request. If the response hook re-resolved the
+      // upstream instead, a dev-server restart landing mid-flight would move the port out
+      // from under an in-flight redirect and the rewrite would silently stop matching.
+      let releaseRedirect: (() => void) | undefined;
+      const held = new Promise<void>((resolve) => {
+        releaseRedirect = resolve;
+      });
+      let markDialled: (() => void) | undefined;
+      const dialled = new Promise<void>((resolve) => {
+        markDialled = resolve;
+      });
+      let upstreamPort = 0;
+      upstream = http.createServer((req, res) => {
+        void (async () => {
+          if (req.url === "/once") {
+            markDialled!();
+            await held;
+          }
+          res.writeHead(302, { Location: `http://localhost:${upstreamPort}/consume` });
+          res.end();
+        })();
+      });
+      upstreamPort = await listen(upstream);
+
+      let currentPort = upstreamPort;
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: currentPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+      const host = `dp-test.localhost:${proxyPort}`;
+
+      const inFlight = request(proxyPort, host, "/once");
+      // Wait until the upstream has the request, so the origins are already snapshotted;
+      // moving the port before that would just make the dial itself fail.
+      await dialled;
+      // The dev server "restarts" onto a different port while the response is outstanding.
+      currentPort = upstreamPort + 1;
+      releaseRedirect!();
+      const res = await inFlight;
+
+      // Re-resolving on the response would compare against the NEW port, the Location would
+      // no longer match, and the redirect would escape the rewrite entirely.
+      expect(res.headers.location).toBe(`http://${host}/consume`);
+    });
+
+    it("leaves an external redirect untouched", async () => {
+      upstream = http.createServer((_req, res) => {
+        res.writeHead(302, { Location: "https://accounts.example.com/oauth?client_id=abc" });
+        res.end();
+      });
+      const upstreamPort = await listen(upstream);
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`, "/once");
+
+      expect(res.headers.location).toBe("https://accounts.example.com/oauth?client_id=abc");
+    });
+
+    it("leaves a redirect to a different loopback port untouched", async () => {
+      // Only the upstream this request was actually dialled with may be rewritten; another
+      // port is a different server, not this panel's dev server.
+      upstream = http.createServer((_req, res) => {
+        res.writeHead(302, { Location: "http://localhost:1/elsewhere" });
+        res.end();
+      });
+      const upstreamPort = await listen(upstream);
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`, "/once");
+
+      expect(res.headers.location).toBe("http://localhost:1/elsewhere");
+    });
+
+    it("leaves a non-redirect response's Location header untouched", async () => {
+      let upstreamPort = 0;
+      upstream = http.createServer((_req, res) => {
+        res.writeHead(200, { Location: `http://localhost:${upstreamPort}/not-a-redirect` });
+        res.end("ok");
+      });
+      upstreamPort = await listen(upstream);
+
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`, "/x");
+
+      expect(res.headers.location).toBe(`http://localhost:${upstreamPort}/not-a-redirect`);
+    });
+  });
+
   describe("failure classification and diagnostics", () => {
     it("502s a not-running session with distinct copy and reports the cause", async () => {
       const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();

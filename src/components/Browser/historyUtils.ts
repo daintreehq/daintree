@@ -62,6 +62,25 @@ export function pushBrowserHistory(history: BrowserHistory, nextUrl: string): Br
   };
 }
 
+/**
+ * Retarget the current entry in place, keeping `past` and `future` intact.
+ *
+ * Distinct from `pushBrowserHistory`: an origin migration is a correction of *where
+ * we already are* (the dev-preview pane moving a route onto its stable proxy origin),
+ * not a new stop. Pushing one would strand the pre-migration URL in the back stack
+ * and drop every forward entry (#12297).
+ */
+export function replaceBrowserHistoryPresent(
+  history: BrowserHistory,
+  nextUrl: string
+): BrowserHistory {
+  const normalizedUrl = nextUrl.trim();
+  if (!normalizedUrl || normalizedUrl === history.present) {
+    return history;
+  }
+  return { ...history, present: normalizedUrl };
+}
+
 export function goBackBrowserHistory(history: BrowserHistory): BrowserHistory {
   const past = normalizeEntryList(history.past);
   if (past.length === 0) {
