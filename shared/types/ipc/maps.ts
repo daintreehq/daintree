@@ -1206,7 +1206,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "webview:get-console-properties": {
-    args: [webContentsId: number, objectId: string];
+    args: [webContentsId: number, paneId: string, rowId: number, objectId: string];
     result: import("./webviewConsole.js").CdpGetPropertiesResult;
   };
   "webview:reload-ignoring-cache": {
@@ -1214,8 +1214,9 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "webview:get-scroll-position": {
+    // `null` means the read failed; `0` means the page is genuinely at the top.
     args: [webContentsId: number];
-    result: number;
+    result: number | null;
   };
 
   // Demo mode channels (dev-only, gated by --demo-mode flag)

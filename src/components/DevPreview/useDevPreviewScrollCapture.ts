@@ -72,14 +72,38 @@ export function useDevPreviewScrollCapture({
       const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
       window.electron.webview
         .getScrollPosition(wcId)
-        .then((scrollY: number) => {
+        .then((scrollY: number | null) => {
           if (scrollCaptureGenerationRef.current !== captureGeneration) return;
-          // Guard `> 0`: a CDP error returns 0, and the user being at top of
-          // page has nothing worth restoring — both cases should leave any
-          // prior stored position untouched rather than clobber it.
-          if (typeof scrollY === "number" && Number.isFinite(scrollY) && scrollY > 0) {
-            setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
+          // `null` is the read-failed sentinel — leave any prior stored
+          // position alone. A successful `0` is a real position and must
+          // overwrite, or scrolling back to the top before eviction leaves a
+          // stale offset that a remount restores (#12298).
+          if (scrollY === null || !Number.isFinite(scrollY)) return;
+          // Now that a zero is persisted, the document it was measured on
+          // matters: the eviction path blanks the guest immediately after
+          // asking, and a reading landing after that would file the blank
+          // page's 0 against the previous URL. Only a URL we can still read
+          // *and* that differs is evidence of that — a detached tag can no
+          // longer tell us, and the read was taken before teardown began, so
+          // discarding it there would lose the eviction capture this path
+          // exists for.
+          let settledUrl: string | null;
+          try {
+            settledUrl = webview.getURL();
+          } catch {
+            settledUrl = null;
           }
+          if (settledUrl === null) {
+            // The tag is gone, so the document cannot be confirmed. A non-zero
+            // offset could not have come from a freshly blanked page, so it is
+            // safe to keep — this is the eviction capture doing its job. An
+            // unconfirmable zero is exactly the blank-page reading that must
+            // not be filed against the previous URL.
+            if (scrollY === 0) return;
+          } else if (settledUrl !== currentWebviewUrl) {
+            return;
+          }
+          setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
         })
         .catch(() => {});
     },

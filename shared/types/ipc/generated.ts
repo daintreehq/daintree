@@ -1888,6 +1888,10 @@ export interface GeneratedIpcInvokeMap {
     args: [webContentsId: number, index: number];
     result: void;
   };
+  "webview:set-device-emulation": {
+    args: [payload: import("./webviewEmulation.js").DeviceEmulationRequest];
+    result: { applied: boolean };
+  };
   "window-chrome:set-banner-severity": {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;

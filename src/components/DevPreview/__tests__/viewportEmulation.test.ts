@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { buildEmulationParams } from "../viewportEmulation";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { applyDevPreviewEmulation, buildEmulationParams } from "../viewportEmulation";
 
 describe("buildEmulationParams", () => {
   it("returns null when no preset is active", () => {
@@ -33,5 +33,90 @@ describe("buildEmulationParams", () => {
   it('builds iPad Air 11" params', () => {
     const params = buildEmulationParams("ipad", false, 1);
     expect(params!.screenSize).toEqual({ width: 820, height: 1180 });
+  });
+});
+
+describe("applyDevPreviewEmulation", () => {
+  const setDeviceEmulation = vi.fn<(payload: unknown) => Promise<{ applied: boolean }>>(() =>
+    Promise.resolve({ applied: true })
+  );
+  const registerPanel = vi.fn<() => Promise<void>>(() => Promise.resolve());
+
+  function makeWebview(webContentsId = 42): Electron.WebviewTag {
+    return {
+      getWebContentsId: vi.fn(() => webContentsId),
+    } as unknown as Electron.WebviewTag;
+  }
+
+  beforeEach(() => {
+    setDeviceEmulation.mockClear();
+    setDeviceEmulation.mockResolvedValue({ applied: true });
+    registerPanel.mockClear();
+    registerPanel.mockResolvedValue(undefined);
+    (globalThis as unknown as { window: { electron: unknown } }).window = {
+      electron: { webview: { setDeviceEmulation, registerPanel } },
+    } as never;
+  });
+
+  it("sends the preset metrics, spoofed UA and touch flag keyed by guest id", async () => {
+    await applyDevPreviewEmulation(makeWebview(7), "panel-1", "pixel", false, 2);
+
+    expect(setDeviceEmulation).toHaveBeenCalledWith({
+      webContentsId: 7,
+      panelId: "panel-1",
+      emulation: {
+        params: {
+          screenPosition: "mobile",
+          screenSize: { width: 412, height: 923 },
+          viewPosition: { x: 0, y: 0 },
+          deviceScaleFactor: 2,
+          viewSize: { width: 412, height: 923 },
+          scale: 1,
+        },
+        userAgent: expect.stringContaining("Pixel 10"),
+        touch: true,
+      },
+    });
+  });
+
+  it("sends a null payload to restore desktop", async () => {
+    await applyDevPreviewEmulation(makeWebview(7), "panel-1", undefined, false, 1);
+
+    expect(setDeviceEmulation).toHaveBeenCalledWith({
+      webContentsId: 7,
+      panelId: "panel-1",
+      emulation: null,
+    });
+  });
+
+  it("propagates a detached webview synchronously instead of invoking IPC", () => {
+    const detached = {
+      getWebContentsId: vi.fn(() => {
+        throw new Error("The WebView must be attached to the DOM");
+      }),
+    } as unknown as Electron.WebviewTag;
+
+    expect(() => applyDevPreviewEmulation(detached, "panel-1", "iphone", false, 1)).toThrow();
+    expect(setDeviceEmulation).not.toHaveBeenCalled();
+  });
+
+  it("registers the guest before applying, so main can resolve ownership", async () => {
+    await applyDevPreviewEmulation(makeWebview(7), "panel-1", "iphone", false, 1);
+
+    expect(registerPanel).toHaveBeenCalledWith(7, "panel-1");
+    expect(registerPanel.mock.invocationCallOrder[0]!).toBeLessThan(
+      setDeviceEmulation.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("passes main's applied verdict back to the caller", async () => {
+    setDeviceEmulation.mockResolvedValueOnce({ applied: false });
+    await expect(
+      applyDevPreviewEmulation(makeWebview(), "panel-1", "iphone", false, 1)
+    ).resolves.toBe(false);
+
+    await expect(
+      applyDevPreviewEmulation(makeWebview(), "panel-1", "iphone", false, 1)
+    ).resolves.toBe(true);
   });
 });

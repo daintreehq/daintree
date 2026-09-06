@@ -17,13 +17,6 @@ vi.mock("@/lib/notify", () => ({
   notify: (args: unknown) => notifyMock(args),
 }));
 
-type MockWebContents = {
-  setUserAgent: ReturnType<typeof vi.fn>;
-  getUserAgent: ReturnType<typeof vi.fn>;
-  enableDeviceEmulation: ReturnType<typeof vi.fn>;
-  disableDeviceEmulation: ReturnType<typeof vi.fn>;
-};
-
 /**
  * One entry per `<webview>` element React actually created. `srcWrites` are seed writes
  * (React setting the attribute); `loadURLs` are imperative navigations. The mock's
@@ -43,7 +36,6 @@ type MockWebviewElement = HTMLElement & {
   isLoading: ReturnType<typeof vi.fn>;
   executeJavaScript: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
-  getWebContents: () => MockWebContents;
   capturePage: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
@@ -93,13 +85,6 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   webview.isLoading = vi.fn(() => loading);
   webview.executeJavaScript = vi.fn().mockResolvedValue(0);
   webview.getWebContentsId = vi.fn(() => 42);
-  const mockWc = {
-    setUserAgent: vi.fn(),
-    getUserAgent: vi.fn(() => "original-ua"),
-    enableDeviceEmulation: vi.fn(),
-    disableDeviceEmulation: vi.fn(),
-  };
-  webview.getWebContents = vi.fn(() => mockWc);
   webview.capturePage = vi.fn(() =>
     Promise.resolve({ toPNG: () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })
   );
@@ -482,6 +467,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         onConsoleMessage: vi.fn(() => vi.fn()),
         onConsoleContextCleared: vi.fn(() => vi.fn()),
         reloadIgnoringCache: vi.fn(() => Promise.resolve()),
+        setDeviceEmulation: vi.fn(() => Promise.resolve({ applied: true })),
         onUnresponsive: vi.fn(() => vi.fn()),
         onResponsive: vi.fn(() => vi.fn()),
       },
@@ -726,10 +712,18 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       }));
     };
 
-    const getEmulationMock = (container: HTMLElement) =>
-      getWebviewElement(container).getWebContents().enableDeviceEmulation;
-    const getDisableEmulationMock = (container: HTMLElement) =>
-      getWebviewElement(container).getWebContents().disableDeviceEmulation;
+    // Emulation is a main-process IPC call keyed by the guest's webContents id.
+    // The webview tag has no getWebContents(); mocking one is what made the
+    // broken renderer-side path look tested (#12298).
+    type EmulationPayload = { webContentsId: number; panelId: string; emulation: unknown };
+    const setDeviceEmulationMock = () =>
+      (window as unknown as { electron: { webview: { setDeviceEmulation: unknown } } }).electron
+        .webview.setDeviceEmulation as unknown as {
+        mock: { calls: Array<[EmulationPayload]> };
+        mockClear: () => void;
+      };
+    const emulationCalls = (): EmulationPayload[] =>
+      setDeviceEmulationMock().mock.calls.map(([payload]) => payload);
 
     it("applies device emulation for the active preset without reloading the page", async () => {
       withPreset("iphone");
@@ -740,13 +734,21 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      expect(getEmulationMock(container)).toHaveBeenCalledWith({
-        screenPosition: "mobile",
-        screenSize: { width: 393, height: 852 },
-        viewPosition: { x: 0, y: 0 },
-        deviceScaleFactor: 1,
-        viewSize: { width: 393, height: 852 },
-        scale: 1,
+      expect(emulationCalls()).toContainEqual({
+        webContentsId: 42,
+        panelId: "dev-preview-panel-1",
+        emulation: {
+          params: {
+            screenPosition: "mobile",
+            screenSize: { width: 393, height: 852 },
+            viewPosition: { x: 0, y: 0 },
+            deviceScaleFactor: 1,
+            viewSize: { width: 393, height: 852 },
+            scale: 1,
+          },
+          userAgent: expect.stringContaining("iPhone"),
+          touch: true,
+        },
       });
       expect(webview.reload).not.toHaveBeenCalled();
     });
@@ -760,13 +762,18 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      getEmulationMock(container).mockClear();
+      setDeviceEmulationMock().mockClear();
 
       act(() => {
         emitWebviewEvent(webview, "did-finish-load");
       });
+      await act(async () => {
+        await Promise.resolve();
+      });
 
-      expect(getEmulationMock(container)).toHaveBeenCalledWith({
+      const firstCall = emulationCalls()[0];
+      if (!firstCall) throw new Error("expected a device-emulation call");
+      expect((firstCall.emulation as { params: unknown }).params).toEqual({
         screenPosition: "mobile",
         screenSize: { width: 360, height: 780 },
         viewPosition: { x: 0, y: 0 },
@@ -785,7 +792,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      getEmulationMock(container).mockClear();
+      setDeviceEmulationMock().mockClear();
       withPreset(undefined);
       rerender(<DevPreviewPane {...baseProps} />);
 
@@ -793,7 +800,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      expect(getDisableEmulationMock(container)).toHaveBeenCalled();
+      expect(emulationCalls()).toContainEqual({
+        webContentsId: 42,
+        panelId: "dev-preview-panel-1",
+        emulation: null,
+      });
       expect(webview.reload).not.toHaveBeenCalled();
     });
   });
@@ -1089,11 +1100,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.executeJavaScript).not.toHaveBeenCalledWith("window.scrollY");
   });
 
-  it("does not persist scrollY=0 from CDP (avoids clobbering prior position)", async () => {
-    // Defense: handleGetScrollPosition returns 0 on CDP error. If we persisted
-    // {scrollY: 0}, an earlier captured position could be silently overwritten.
-    // The renderer guard `> 0` keeps the prior value intact.
-    const getScrollPosition = vi.fn().mockResolvedValue(0);
+  it("does not persist a failed CDP scroll read (null sentinel)", async () => {
+    // handleGetScrollPosition answers `null` when it could not read at all, and
+    // only then must the prior stored position survive. A genuine 0 is a real
+    // position and is covered by the sibling test below (#12298).
+    const getScrollPosition = vi.fn().mockResolvedValue(null);
     (window as unknown as { electron: Record<string, unknown> }).electron = {
       system: { openExternal: vi.fn() },
       window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
@@ -1130,6 +1141,48 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     expect(getScrollPosition).toHaveBeenCalled();
     expect(terminalStoreState.setDevPreviewScrollPosition).not.toHaveBeenCalled();
+  });
+
+  it("persists a successful scrollY=0 so a return to the top overwrites a stale offset", async () => {
+    const getScrollPosition = vi.fn().mockResolvedValue(0);
+    (window as unknown as { electron: Record<string, unknown> }).electron = {
+      system: { openExternal: vi.fn() },
+      window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
+      webview: {
+        registerPanel: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+        onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
+        onCloseShortcut: vi.fn(() => vi.fn()),
+        onNavigationBlocked: vi.fn(() => vi.fn()),
+        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
+        onUnresponsive: vi.fn(() => vi.fn()),
+        onResponsive: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn().mockResolvedValue(undefined),
+        getScrollPosition,
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+      },
+    };
+
+    const { unmount } = render(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
+      "dev-preview-panel-1",
+      { url: "http://localhost:5173/", scrollY: 0 }
+    );
   });
 
   it("captures scroll position when status transitions from running", async () => {

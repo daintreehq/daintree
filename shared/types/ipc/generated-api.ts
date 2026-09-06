@@ -827,6 +827,9 @@ export interface GeneratedElectronAPI {
     goToHistoryIndex(
       ...args: IpcInvokeMap["webview:go-to-history-index"]["args"]
     ): Promise<IpcInvokeMap["webview:go-to-history-index"]["result"]>;
+    setDeviceEmulation(
+      ...args: IpcInvokeMap["webview:set-device-emulation"]["args"]
+    ): Promise<IpcInvokeMap["webview:set-device-emulation"]["result"]>;
   };
   windowChrome: {
     setBannerSeverity(

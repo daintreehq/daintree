@@ -139,7 +139,13 @@ const ConsoleRow = memo(function ConsoleRow({
             msg.args.map((arg, i) => (
               <span key={i}>
                 {i > 0 && <span className="mx-1" />}
-                <ObjectInspector arg={arg} webContentsId={webContentsId} isStale={msg.isStale} />
+                <ObjectInspector
+                  arg={arg}
+                  webContentsId={webContentsId}
+                  paneId={msg.paneId}
+                  rowId={msg.id}
+                  isStale={msg.isStale}
+                />
               </span>
             ))
           ) : (

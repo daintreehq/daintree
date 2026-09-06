@@ -89,6 +89,7 @@ import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRel
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
+import { buildWebviewEmulationPreloadBindings } from "./ipc/handlers/webviewEmulation.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
@@ -2348,8 +2349,19 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
       clearConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
-      getConsoleProperties: (webContentsId: number, objectId: string) =>
-        _unwrappingInvoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
+      getConsoleProperties: (
+        webContentsId: number,
+        paneId: string,
+        rowId: number,
+        objectId: string
+      ) =>
+        _unwrappingInvoke(
+          CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES,
+          webContentsId,
+          paneId,
+          rowId,
+          objectId
+        ),
       onConsoleMessage: (
         callback: (
           row: import("../shared/types/ipc/webviewConsole.js").SerializedConsoleRow
@@ -2360,10 +2372,11 @@ function buildElectronApi(): ElectronAPI {
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, callback),
       reloadIgnoringCache: (webContentsId: number, panelId: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, webContentsId, panelId),
-      getScrollPosition: (webContentsId: number): Promise<number> =>
+      getScrollPosition: (webContentsId: number): Promise<number | null> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
       ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
       ...buildWebviewCapturePreloadBindings(_unwrappingInvoke),
+      ...buildWebviewEmulationPreloadBindings(_unwrappingInvoke),
     },
 
     // Hibernation API

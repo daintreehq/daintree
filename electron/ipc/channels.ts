@@ -418,6 +418,7 @@ export const CHANNELS = {
   WEBVIEW_RELOAD_IGNORING_CACHE: "webview:reload-ignoring-cache",
   WEBVIEW_GET_SCROLL_POSITION: "webview:get-scroll-position",
   WEBVIEW_CAPTURE_SCREENSHOT: "webview:capture-screenshot",
+  WEBVIEW_SET_DEVICE_EMULATION: "webview:set-device-emulation",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
   WEBVIEW_GET_NAVIGATION_HISTORY: "webview:get-navigation-history",
