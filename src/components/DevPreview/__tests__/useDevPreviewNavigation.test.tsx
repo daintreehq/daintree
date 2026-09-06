@@ -585,10 +585,14 @@ describe("useDevPreviewNavigation — proxy-origin routing (#12297)", () => {
       present: init.present,
       future: init.future ?? [],
     };
-    const seen = { history: initial };
+    // Every rendered history, not just the converged one: asserting on final state alone
+    // cannot tell "never committed the raw upstream URL" from "committed it, then the
+    // migration effect quietly replaced it".
+    const seen = { history: initial, commits: [] as string[] };
     const rendered = renderHook(() => {
       const [history, setHistory] = useState<BrowserHistory>(initial);
       seen.history = history;
+      if (seen.commits.at(-1) !== history.present) seen.commits.push(history.present);
       return useDevPreviewNavigation(
         baseParams({
           history,
@@ -624,7 +628,9 @@ describe("useDevPreviewNavigation — proxy-origin routing (#12297)", () => {
     // never gates the webview out and never remounts it against a stale seed.
     expect(seen.history.present).toBe(`${PROXY}/once?a=1#b`);
     expect(seen.history.past).toEqual([`${PROXY}/`]);
-    expect(seen.history.past).not.toContain(`${UPSTREAM}/once?a=1#b`);
+    // The raw URL was never committed even transiently. Without this, a strict-normalizing
+    // handleNavigate followed by a repairing migration would satisfy the assertions above.
+    expect(seen.commits).toEqual([`${PROXY}/`, `${PROXY}/once?a=1#b`]);
   });
 
   it("refuses a foreign host without touching history", () => {
@@ -670,6 +676,8 @@ describe("useDevPreviewNavigation — proxy-origin routing (#12297)", () => {
     rerender();
     expect(seen.history.present).toBe(`${PROXY}/settings`);
     expect(seen.history).toBe(settled);
+    // Exactly one migration commit: the stale entry, then the migrated one, and no loop.
+    expect(seen.commits).toEqual([`${UPSTREAM}/settings`, `${PROXY}/settings`]);
   });
 
   it("still pushes in legacy mode, where a port shift is a genuine new origin", () => {

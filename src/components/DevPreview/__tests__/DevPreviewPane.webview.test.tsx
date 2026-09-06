@@ -3520,17 +3520,86 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(webview.getAttribute("src")).toBe(`${PROXY}/once`);
+      // Both halves matter: no corrective load, and no second guest seeded with the same
+      // route — either one would be a second request for the destination.
       expect(loadsAcrossGuests()).toEqual([]);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/once`]);
+      expect(webview.reload).not.toHaveBeenCalled();
     });
 
-    it("mounts exactly one guest per destination while migrating", async () => {
+    it("creates exactly one guest, seeded once, while migrating", async () => {
       setSavedHistory({ past: [], present: "http://localhost:5173/deep/route?a=1", future: [] });
       render(<DevPreviewPane {...baseProps} />);
       await settle();
 
-      // One gated mount is expected; what must not happen is a guest per intermediate state.
-      expect(guestLog.length).toBeLessThanOrEqual(2);
-      expect(seedsAcrossGuests().at(-1)).toBe(`${PROXY}/deep/route?a=1`);
+      // Exact, not "at most": two guests each seeded with the destination would request it
+      // twice while still satisfying a loadURL-only assertion.
+      expect(guestLog).toHaveLength(1);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/deep/route?a=1`]);
+      expect(loadsAcrossGuests()).toEqual([]);
+    });
+
+    it("re-seeds a genuine replacement guest when a redirect crosses off the proxy origin", async () => {
+      // The reported sequence, end to end, against an ALREADY-MOUNTED guest — the case the
+      // gated-first-mount tests above cannot reach. The guest is on the proxy origin, follows
+      // an absolute upstream redirect off it, which gates the webview out; the pane migrates
+      // the route back onto the proxy origin and mounts a REPLACEMENT guest. That guest must
+      // start from the callback route, not from the origin's root.
+      setSavedHistory({ past: [], present: `${PROXY}/once`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const firstGuest = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "dom-ready");
+        await Promise.resolve();
+      });
+      expect(guestLog).toHaveLength(1);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/once`]);
+
+      // The guest followed the upstream's absolute redirect and committed off-origin.
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "did-navigate", {
+          url: "http://localhost:5173/consume?token=audit-single-use#done",
+        });
+        await Promise.resolve();
+      });
+      await settle();
+
+      const expected = `${PROXY}/consume?token=audit-single-use#done`;
+      // A replacement guest was created, and it starts from the callback route with its
+      // query and fragment intact — before the fix it started from the frozen session seed.
+      expect(guestLog.length).toBeGreaterThan(1);
+      expect(seedsAcrossGuests().at(-1)).toBe(expected);
+      expect(seedsAcrossGuests()).not.toContain(`${PROXY}/`);
+      // The seed navigates the replacement guest by itself; a corrective load on top would
+      // be a second request for a single-use callback.
+      expect(loadsAcrossGuests()).toEqual([]);
+      expect(getWebviewElement(container).getAttribute("src")).toBe(expected);
+    });
+
+    it("keeps a replacement guest's seed current across repeated origin crossings", async () => {
+      // Guards specifically against a fix that refreshes the seed once and then re-freezes:
+      // the second crossing must be seeded from the second destination, not the first.
+      setSavedHistory({ past: [], present: `${PROXY}/start`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      for (const route of ["/first?n=1", "/second?n=2"]) {
+        const guest = getWebviewElement(container);
+        await act(async () => {
+          emitWebviewEvent(guest, "dom-ready");
+          await Promise.resolve();
+        });
+        await act(async () => {
+          emitWebviewEvent(guest, "did-navigate", { url: `http://localhost:5173${route}` });
+          await Promise.resolve();
+        });
+        await settle();
+        expect(seedsAcrossGuests().at(-1)).toBe(`${PROXY}${route}`);
+      }
+
+      expect(loadsAcrossGuests()).toEqual([]);
     });
 
     it("hands the toolbar a validator that accepts the panel's own origin", async () => {
@@ -3572,9 +3641,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      // Same guest, one imperative load, and `src` was not re-bound (#9940).
+      // Same guest, one imperative load, and `src` genuinely was not re-bound (#9940) —
+      // the seed write count must not have grown.
       expect(guestLog.length).toBe(guestsBefore);
       expect(guestLog.at(-1)!.loadURLs).toEqual([`${PROXY}/typed?x=1#s`]);
+      expect(guestLog.at(-1)!.srcWrites).toEqual([`${PROXY}/`]);
     });
 
     it("retargets a raw upstream address onto the proxy origin, requesting it once", async () => {
@@ -3600,6 +3671,9 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       // re-requests the route from a replacement guest.
       expect(loadsAcrossGuests()).toEqual([`${PROXY}/once`]);
       expect(loadsAcrossGuests()).not.toContain("http://localhost:5173/once");
+      // One guest throughout, seeded once — the destination is requested exactly once.
+      expect(guestLog).toHaveLength(1);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/`]);
     });
 
     it("ignores a rejected address entirely — no load, no mount, no history entry", async () => {
@@ -3628,17 +3702,20 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
 
     it("does not treat a prefix-matching port as the proxy origin", async () => {
-      // `startsWith` accepted `…localhost:43000` as sitting on `…localhost:4300`, which would
-      // leave the pane displaying an origin it never proxied.
-      setSavedHistory({
-        past: [],
-        present: buildDevPreviewProxyOrigin(4300, "project-1", "dev-preview-panel-1") + "/x",
-        future: [],
-      });
+      // The ports must be this way round: `"…:43000/x".startsWith("…:4300")` is TRUE, so the
+      // old check called the pane settled and left the guest on an origin it never proxied.
+      // (The reverse arrangement is rejected by `startsWith` too, and proves nothing.)
+      const shortPortProxy = buildDevPreviewProxyOrigin(4300, "project-1", "dev-preview-panel-1");
+      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+      electron.devPreview = { getProxyPort: vi.fn().mockResolvedValue({ port: 4300 }) };
+      setSavedHistory({ past: [], present: `${PROXY}/x`, future: [] });
+
       render(<DevPreviewPane {...baseProps} />);
       await settle();
 
-      expect(seedsAcrossGuests().at(-1)).toBe(`${PROXY}/x`);
+      expect(seedsAcrossGuests().at(-1)).toBe(`${shortPortProxy}/x`);
+      // Never seeded on the longer-port origin that merely has the real one as a prefix.
+      expect(seedsAcrossGuests()).not.toContain(`${PROXY}/x`);
     });
   });
 });

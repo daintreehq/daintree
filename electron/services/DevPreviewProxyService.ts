@@ -35,6 +35,13 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 // guest off the proxy origin; a path-relative `Location` is resolved by the guest against
 // the proxy URL it asked for and is already correct.
 const ABSOLUTE_LOCATION_REGEX = /^(?:https?:)?\/\//i;
+// Hostnames that name this machine. The proxy dials `localhost` and lets Node's Happy
+// Eyeballs pick the family (#9747), so we cannot know whether we reached IPv4 or IPv6 —
+// which means an upstream that answers `Location: http://127.0.0.1:<port>/…` is naming
+// the very server we just called. Matching on scheme + port + any loopback alias keeps
+// those redirects on the proxy origin; a literal origin comparison would let them
+// through and re-run the callback on the remount (#12297).
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
 // "Open in real browser" handoff token (#9101). The token is HMAC-signed,
 // single-use, bound to its issuing panel, and expires fast — it only has to
@@ -108,7 +115,7 @@ export class DevPreviewProxyService {
   // Weak keys: an aborted request is collected without an explicit delete.
   private readonly inFlightOrigins = new WeakMap<
     http.IncomingMessage,
-    { upstreamOrigin: string; proxyOrigin: string }
+    { upstreamOrigin: string; upstreamProtocol: string; upstreamPort: string; proxyOrigin: URL }
   >();
   private actualPort = 0;
   private portFallback = false;
@@ -292,20 +299,32 @@ export class DevPreviewProxyService {
     }
   }
 
-  /** Snapshot the origins this request is being proxied between, for the response hook. */
+  /** Snapshot the endpoints this request is being proxied between, for the response hook. */
   private rememberRequestOrigins(req: http.IncomingMessage, target: string): void {
     const host = req.headers.host;
     if (!host) return;
-    let proxyOrigin: string;
-    let upstreamOrigin: string;
+    let proxyOrigin: URL;
+    let upstream: URL;
     try {
       // The proxy serves plain HTTP only, so the guest-facing origin is always http:.
-      proxyOrigin = new URL(`http://${host}`).origin;
-      upstreamOrigin = new URL(target).origin;
+      proxyOrigin = new URL(`http://${host}`);
+      upstream = new URL(target);
     } catch {
       return;
     }
-    this.inFlightOrigins.set(req, { upstreamOrigin, proxyOrigin });
+    // `parseDevPreviewProxyHost` splits the Host at its first colon, so a crafted
+    // `dp-x.localhost:1@evil.example` satisfies routing while the URL parser reads
+    // `evil.example` as the authority and the rest as userinfo. Re-validate the parsed
+    // authority, and fail closed — a redirect must never be rewritten onto a host the
+    // proxy does not itself serve.
+    if (proxyOrigin.username || proxyOrigin.password) return;
+    if (!parseDevPreviewProxyHost(proxyOrigin.host)) return;
+    this.inFlightOrigins.set(req, {
+      upstreamOrigin: upstream.origin,
+      upstreamProtocol: upstream.protocol,
+      upstreamPort: upstream.port,
+      proxyOrigin,
+    });
   }
 
   /**
@@ -335,9 +354,17 @@ export class DevPreviewProxyService {
     } catch {
       return;
     }
-    if (destination.origin !== origins.upstreamOrigin) return;
+    if (destination.protocol !== origins.upstreamProtocol) return;
+    if (destination.port !== origins.upstreamPort) return;
+    if (!LOOPBACK_HOSTNAMES.has(destination.hostname.toLowerCase())) return;
 
-    proxyRes.headers.location = `${origins.proxyOrigin}${destination.pathname}${destination.search}${destination.hash}`;
+    // Retarget the parsed URL rather than rebuilding the string: `${pathname}${search}${hash}`
+    // silently drops an explicitly empty fragment, and a `Location` ending in a bare `#`
+    // means "clear the fragment", not "inherit the current one".
+    const rewritten = new URL(destination.toString());
+    rewritten.protocol = origins.proxyOrigin.protocol;
+    rewritten.host = origins.proxyOrigin.host;
+    proxyRes.headers.location = rewritten.toString();
   }
 
   private async handleUpgrade(

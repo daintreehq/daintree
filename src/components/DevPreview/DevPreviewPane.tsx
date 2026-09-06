@@ -862,20 +862,19 @@ export function DevPreviewPane({
     !hasBeenVisible ||
     isEvicted;
 
-  // Re-seed the `src` for a *replacement* guest, at render time, before the JSX below
-  // reads it. Every branch of `showEmptyState` unmounts the webview, so flipping back
-  // to false mounts a brand-new guest; without this it would start from the URL
-  // captured when the panel first mounted — typically the proxy root — and its
-  // did-navigate would then overwrite the route we actually intended (#12297).
-  // Only ever written on the unmounted→mounted edge, so a mounted guest's `src`
-  // still never changes underneath it (#9940).
-  const isWebviewMounted = !showEmptyState;
-  const wasWebviewMountedRef = useRef(isWebviewMounted);
-  if (wasWebviewMountedRef.current !== isWebviewMounted) {
-    wasWebviewMountedRef.current = isWebviewMounted;
-    if (isWebviewMounted && currentUrl) {
-      webviewSeedUrlRef.current = currentUrl;
-    }
+  // Track the destination a *replacement* guest should start from, at render time so the
+  // JSX below reads it in the same pass that mounts the guest. Every branch of
+  // `showEmptyState` unmounts the webview, so a fresh guest would otherwise start from the
+  // URL captured when the panel first mounted — typically the proxy root — and its
+  // did-navigate would overwrite the route we actually intended (#12297).
+  //
+  // Gated on `webviewElement` rather than on `showEmptyState`: the ref callback only runs
+  // on commit, so this reflects whether a guest is *actually* live. That keeps the write
+  // impossible while one is mounted (re-binding `src` would trigger Electron's
+  // SrcAttribute observer into a redundant reload, #9940) and immune to a render that
+  // React starts and throws away, which a previous/next flag comparison is not.
+  if (!webviewElement && currentUrl) {
+    webviewSeedUrlRef.current = currentUrl;
   }
 
   return (
