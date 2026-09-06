@@ -86,8 +86,9 @@ export function stripTurbopackFlag(command: string): string {
   return (
     command
       // `\b` also matched a longer flag that merely starts with the same
-      // letters — stripping it turned `--turbopack-root` into `-root`.
-      .replace(/\s+--turbo(?:pack)?(?![\w-])/g, "")
+      // letters — stripping it turned `--turbopack-root` into `-root`. Not
+      // global: a second pass reaches inside quoted argument values.
+      .replace(/\s+--turbo(?:pack)?(?![\w-])/, "")
       // Drop npm's forwarding separator only when nothing is left to forward.
       .replace(/\s+--\s*$/, "")
       .trim()
@@ -139,9 +140,13 @@ export async function normalizeNextjsDevCommand(
 
   // PKG_SCRIPT_RE is anchored, so `npm run dev -- --turbopack` — what the
   // renderer produces — matches no script. Retry without the turbo flag so the
-  // script body can still be inspected for a conflicting `--webpack`.
-  const scriptMatch =
-    PKG_SCRIPT_RE.exec(command) ?? PKG_SCRIPT_RE.exec(stripTurbopackFlag(command));
+  // script body can still be inspected for a conflicting `--webpack`. Anything
+  // appended goes onto the stripped form, or `npm run dev --` would grow a
+  // second forwarding separator.
+  const directMatch = PKG_SCRIPT_RE.exec(command);
+  const strippedCommand = stripTurbopackFlag(command);
+  const scriptMatch = directMatch ?? PKG_SCRIPT_RE.exec(strippedCommand);
+  const appendBase = directMatch !== null ? command : strippedCommand;
   let resolved = command;
   if (scriptMatch) {
     const scriptBody = await readPackageScript(cwd, scriptMatch[1]);
@@ -171,7 +176,7 @@ export async function normalizeNextjsDevCommand(
   }
 
   if (!turbopackEnabled) {
-    const stripped = stripTurbopackFlag(command);
+    const stripped = strippedCommand;
     // Stripping alone stopped opting out in Next 16: Turbopack runs by default
     // there, so honouring the preference means naming the other bundler.
     if (!turbopackIsDefault) return stripped;
@@ -192,7 +197,7 @@ export async function normalizeNextjsDevCommand(
   }
 
   if (hasTurbopack || turbopackIsDefault) return command;
-  return `${command}${separator}--turbopack`;
+  return `${appendBase}${separator}--turbopack`;
 }
 
 // Vite, SvelteKit, Astro, and Nuxt all ignore process.env.PORT — the only

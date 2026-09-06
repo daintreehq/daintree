@@ -367,6 +367,24 @@ describe("normalizeNextjsDevCommand", () => {
       );
     });
 
+    it("does not add a second forwarding separator to a bare 'npm run dev --'", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(15);
+      mockPkg({ dev: "next dev" });
+      expect(await normalizeNextjsDevCommand("npm run dev --", CWD)).toBe(
+        "npm run dev -- --turbopack"
+      );
+    });
+
+    it("does not reach inside a quoted argument value", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(14);
+      expect(
+        await normalizeNextjsDevCommand(
+          'next dev --turbo --experimental-https-key "certs/dev --turbopack.pem"',
+          CWD
+        )
+      ).toBe('next dev --experimental-https-key "certs/dev --turbopack.pem"');
+    });
+
     it("drops the separator when the turbo flag was all it forwarded", async () => {
       mockResolveNextMajorVersion.mockResolvedValue(14);
       expect(await normalizeNextjsDevCommand("npm run dev -- --turbopack", CWD)).toBe(

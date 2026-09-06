@@ -119,8 +119,10 @@ async function flushAsyncWork(): Promise<void> {
  * pending" as "the guard stopped the respawn".
  */
 async function waitForReal(predicate: () => boolean, timeoutMs = 5000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  // vi.setSystemTime freezes Date.now, so the deadline has to come from the
+  // real clock or it would never expire.
+  const deadline = vi.getRealSystemTime() + timeoutMs;
+  while (vi.getRealSystemTime() < deadline) {
     if (predicate()) return true;
     await new Promise((resolve) => realSetTimeout(resolve, 10));
   }

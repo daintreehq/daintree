@@ -138,6 +138,15 @@ export function detachTerminal<TSession extends TerminalControllerSession>(
   session.terminalId = null;
 }
 
+/**
+ * Cancel any launch still resolving its port or command. Every path that stops,
+ * replaces, or removes a session must call this — a launch with no terminal yet
+ * is invisible to the `terminalId` checks those paths otherwise rely on.
+ */
+export function invalidatePendingLaunch(session: TerminalControllerSession): void {
+  session.launchEpoch += 1;
+}
+
 export function clearStartupReplay(session: TerminalControllerSession): void {
   if (session.startupReplayTimer !== null) {
     clearTimeout(session.startupReplayTimer);
@@ -245,7 +254,7 @@ export async function stopSessionTerminal<TSession extends TerminalControllerSes
   // Before the no-terminal early return: a post-install respawn that is still
   // resolving its command has no terminal yet, and is exactly what must not
   // survive this stop.
-  session.launchEpoch += 1;
+  invalidatePendingLaunch(session);
 
   const terminalId = session.terminalId;
   if (!terminalId) return;
@@ -377,10 +386,15 @@ export async function spawnSessionTerminal<TSession extends TerminalControllerSe
   session: TSession,
   deps: TerminalControllerDeps<TSession>
 ): Promise<void> {
+  const startEpoch = session.launchEpoch;
+  const startGeneration = session.generation;
   try {
     await prepareAndSpawnSessionTerminal(session, deps);
   } catch (error) {
     if (deps.isDisposed()) return;
+    // Stopped or superseded while preparing — the owner of that transition has
+    // already published the state it wants.
+    if (session.launchEpoch !== startEpoch || session.generation !== startGeneration) return;
     const message = formatErrorMessage(error, "Failed to start dev server");
     deps.recordSessionDiagnostic(session, {
       type: "spawn-failed",
@@ -413,7 +427,7 @@ async function prepareAndSpawnSessionTerminal<TSession extends TerminalControlle
   // dispose() can fire while allocatePort awaits its net probe. Guard here
   // so we don't spawn a terminal on a disposed service; roll back the
   // reservation to avoid a stale portRegistry entry after disposal cleared it.
-  if (deps.isDisposed()) {
+  if (deps.isDisposed() || session.launchEpoch !== startEpoch) {
     releasePort(deps.portRegistry, sessionKey);
     return;
   }

@@ -14,6 +14,7 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 import {
+  invalidatePendingLaunch,
   spawnSessionTerminal,
   stopSessionTerminal,
   type TerminalControllerDeps,
@@ -135,6 +136,24 @@ describe("dev preview launch cancellation", () => {
 
     expect(spawn).not.toHaveBeenCalled();
     expect(session.terminalId).toBeNull();
+  });
+
+  // stop() and the config-change path cancel this way: they never reach
+  // stopSessionTerminal when the session has no terminal yet.
+  it("abandons a launch invalidated without going through stopSessionTerminal", async () => {
+    const releaseNormalization = gateReadFile();
+
+    const session = makeSession();
+    const { deps, spawn } = makeDeps();
+
+    const launch = spawnSessionTerminal(session, deps);
+    await vi.waitFor(() => expect(mockReadFile).toHaveBeenCalled());
+
+    invalidatePendingLaunch(session);
+    releaseNormalization();
+    await launch;
+
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("still spawns when nothing cancelled the launch", async () => {
