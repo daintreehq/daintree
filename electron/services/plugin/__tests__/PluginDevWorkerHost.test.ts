@@ -258,6 +258,26 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  it("sends `start` with no bundle URL for a commands-only plugin (#12274)", async () => {
+    // A plugin whose only executable code is its manifest command handlers has
+    // no `main` to import. The worker still forks and boots; the harness reports
+    // activated without importing anything, and each handler module is imported
+    // on its first dispatch instead.
+    const { PluginDevWorkerHost } = await loadModule();
+    const { bundlePath: _omitted, ...commandsOnly } = OPTS;
+    const host = new PluginDevWorkerHost(commandsOnly);
+    const ready = host.start();
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+    await ready;
+
+    const startMsg = child.postMessage.mock.calls.find((c) => c[0]?.type === "start")?.[0];
+    expect(startMsg).toBeTruthy();
+    expect(startMsg.pluginId).toBe("acme.demo");
+    expect(startMsg.bundleUrl).toBeUndefined();
+    host.dispose();
+  });
+
   it("gives up after the crash threshold of unexpected exits", async () => {
     const { PluginDevWorkerHost, CRASH_WINDOW_MS } = await loadModule();
     expect(CRASH_WINDOW_MS).toBeGreaterThan(0);

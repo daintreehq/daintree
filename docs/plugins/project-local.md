@@ -53,7 +53,7 @@ Run `npx daintree-plugin validate` in the plugin directory to check the manifest
 
 ## The committed `dist/` contract
 
-**Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json`.** That holds for command handlers too: an installed plugin may put one at `src/<commandId>.js` for the host to import, but a project plugin's commands are registered from its worker entry point with `host.registerAction`. Running a repository's uncompiled source in the main process would sit outside the worker every other plugin gets its crash isolation from.
+**Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json`.** That holds for command handlers too: an installed plugin may put one at `src/<commandId>.js` for the host to find, but a project plugin's commands are registered from its entry point with `host.registerAction`. The reason is the committed-`dist/` contract itself — `src/` is authoring source the host has no business reading here, so there is nothing for it to look for — not where the handler ends up running. Both kinds run in the plugin's own worker.
 
 Opening a project must not run a build — that would be an execution channel with no gate in front of it — so the build output is part of the repository. The payoff is that a checkout is complete: the plugin activates on any machine, on any branch, with no `npm install` and no build step. That is what makes it work for an agent that just created a worktree.
 

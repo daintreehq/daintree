@@ -1207,9 +1207,23 @@ export class PluginDevWorkerMainBridge {
     }
   }
 
+  /**
+   * Run a manifest-declared command's handler inside this plugin's worker
+   * (#12274). The only invoke kind main initiates on its own rather than
+   * against something the worker registered: the handler module is imported
+   * lazily, worker-side, from `resolvedPath` — the absolute path
+   * `PluginService.resolveCommandHandlerPath` already probed and containment-
+   * checked. Public because `PluginService` is the caller; every other kind is
+   * driven from `dispatchHostNotify` inside this class.
+   */
+  invokeCommand(namespacedId: string, resolvedPath: string, args: unknown): Promise<unknown> {
+    return this.invoke({ kind: "command", namespacedId, resolvedPath, args });
+  }
+
   private invoke(
     target:
       | { kind: "action"; namespacedId: string; args: unknown }
+      | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
       | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
       | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
   ): Promise<unknown> {
@@ -1226,6 +1240,15 @@ export class PluginDevWorkerMainBridge {
           requestId,
           kind: "action",
           namespacedId: target.namespacedId,
+          args: target.args,
+        });
+      } else if (target.kind === "command") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "command",
+          namespacedId: target.namespacedId,
+          resolvedPath: target.resolvedPath,
           args: target.args,
         });
       } else if (target.kind === "handler") {

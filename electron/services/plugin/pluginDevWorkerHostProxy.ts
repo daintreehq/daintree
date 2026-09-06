@@ -44,6 +44,7 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
 } from "../../../shared/types/plugin.js";
+import { pathToFileURL } from "node:url";
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type {
   FileDecorationProviderDescriptor,
@@ -56,6 +57,8 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { withTimeout } from "../../utils/withTimeout.js";
+import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import type {
   PluginHostCallMethod,
   PluginHostNotifyMethod,
@@ -85,6 +88,15 @@ interface RegisteredHandler {
   schema?: PluginChannelSchema<unknown, unknown>;
 }
 
+/**
+ * Budget for importing one manifest command's handler module (#12274). Matches
+ * the `IMPORT_TIMEOUT_MS` that bounded this import back when it ran in main, so
+ * moving the import out of the main process doesn't silently drop the bound: a
+ * handler module with a hanging top-level await must fail its dispatch rather
+ * than pin a pending invoke forever.
+ */
+const COMMAND_IMPORT_TIMEOUT_MS = 5000;
+
 export class PluginDevWorkerHostProxy {
   readonly host: PluginHostApi;
   private readonly post: Post;
@@ -100,6 +112,16 @@ export class PluginDevWorkerHostProxy {
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
+  /**
+   * Manifest command handlers (#12274), keyed by the file URL of the module
+   * main resolved. Holds the in-flight IMPORT promise, not the settled handler,
+   * so concurrent first dispatches of the same command share one import instead
+   * of racing two. A rejection is evicted rather than cached: a timeout is
+   * transient, and the main-process loader this replaces never cached failures
+   * either. Cleared on dispose — though the real reclamation of the imported
+   * module's state is the worker exiting, not this map.
+   */
+  private readonly commandModules = new Map<string, Promise<ActionHandler>>();
 
   constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
@@ -129,6 +151,7 @@ export class PluginDevWorkerHostProxy {
     this.ipcHandlers.clear();
     this.subscriptions.clear();
     this.fileDecorationProviders.clear();
+    this.commandModules.clear();
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -180,6 +203,30 @@ export class PluginDevWorkerHostProxy {
         this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
         return;
       }
+      if (msg.kind === "command") {
+        const handler = await this.loadCommandHandler(msg.namespacedId, msg.resolvedPath);
+        // A dispose that landed while the module was importing means the plugin
+        // is gone; running its handler now would let a torn-down generation take
+        // effect. `dispose()` has already rejected every pending host call, so
+        // the handler would fail on its first host API use anyway — fail here,
+        // before any side effect.
+        if (this.disposed) {
+          throw new Error(`Plugin dev worker disposed before command "${msg.namespacedId}" ran`);
+        }
+        let result: unknown;
+        try {
+          result = await handler(msg.args);
+        } catch (err) {
+          // Arity hint (#12214) applied HERE, against the plugin's real closure.
+          // Main only ever sees the synthetic RPC thunk, whose arity says nothing
+          // about how the author wrote their handler, so appending the hint
+          // main-side stopped working the moment this import moved off it.
+          appendHandlerHint(err, actionHandlerArityHint(handler, err));
+          throw err;
+        }
+        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        return;
+      }
       if (msg.kind === "file-decoration-method") {
         const impl = this.fileDecorationProviders.get(msg.providerId);
         if (!impl) {
@@ -208,6 +255,42 @@ export class PluginDevWorkerHostProxy {
         error: formatErrorMessage(err, "invocation failed"),
       });
     }
+  }
+
+  /**
+   * Import a manifest-declared command's handler module and return its default
+   * export (#12274). `resolvedPath` is the absolute path main already probed
+   * and containment-checked in `resolveCommandHandlerPath` — the worker takes
+   * it as given rather than re-deriving it, so the two sides can never disagree
+   * about which file a command maps to and the worker holds no second copy of
+   * the command registry.
+   */
+  private loadCommandHandler(namespacedId: string, resolvedPath: string): Promise<ActionHandler> {
+    const url = pathToFileURL(resolvedPath).href;
+    const cached = this.commandModules.get(url);
+    if (cached) return cached;
+    const pending = withTimeout(
+      import(url) as Promise<{ default?: unknown }>,
+      COMMAND_IMPORT_TIMEOUT_MS,
+      `Command "${namespacedId}" handler module "${resolvedPath}" did not import within ${COMMAND_IMPORT_TIMEOUT_MS}ms`
+    ).then((mod) => {
+      if (typeof mod.default !== "function") {
+        throw new Error(
+          `Command "${namespacedId}" handler module "${resolvedPath}" has no callable default export`
+        );
+      }
+      return mod.default as ActionHandler;
+    });
+    // Evict a failed import so the next dispatch retries. Only a timeout is
+    // genuinely transient — ESM's URL-keyed cache will hand a broken module the
+    // same failure again — but caching the rejection would turn a slow first
+    // import into a permanently dead command, and the main-process loader this
+    // replaces never cached failures either.
+    pending.catch(() => {
+      if (this.commandModules.get(url) === pending) this.commandModules.delete(url);
+    });
+    this.commandModules.set(url, pending);
+    return pending;
   }
 
   private async invokeIpcHandler(

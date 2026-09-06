@@ -1861,3 +1861,64 @@ describe("PluginDevWorkerMainBridge", () => {
     });
   });
 });
+
+describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("sends the command id, the path main resolved, and the args", async () => {
+    const { workerHost, bridge } = makeBridge();
+
+    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/plugins/acme.demo/src/plan.js", {
+      issue: 42,
+    });
+
+    const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "command");
+    expect(invoke).toMatchObject({
+      namespacedId: "acme.demo.plan",
+      resolvedPath: "/plugins/acme.demo/src/plan.js",
+      args: { issue: 42 },
+    });
+
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invoke.requestId,
+      ok: true,
+      result: "planned",
+    });
+    await expect(resultPromise).resolves.toBe("planned");
+  });
+
+  it("rejects with the worker's own error when the handler fails", async () => {
+    const { workerHost, bridge } = makeBridge();
+
+    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {});
+    const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "command");
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invoke.requestId,
+      ok: false,
+      error: "handler blew up",
+    });
+
+    await expect(resultPromise).rejects.toThrow("handler blew up");
+  });
+
+  it("rejects a command sent to a worker that is not running", async () => {
+    const { workerHost, bridge } = makeBridge();
+    workerHost.ready = false;
+
+    await expect(bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {})).rejects.toThrow(
+      /not running/
+    );
+  });
+
+  it("rejects an in-flight command when the bridge is disposed", async () => {
+    const { bridge } = makeBridge();
+
+    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {});
+    const assertion = expect(resultPromise).rejects.toThrow();
+    bridge.dispose();
+    await assertion;
+  });
+});

@@ -117,18 +117,28 @@ export type PluginWorkerSubscriptionKind =
  * Callback kinds main invokes back in the worker. `file-decoration-method`
  * round-trips a registered `FileDecorationProviderImpl` method (just
  * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
+ * `command` is the odd one out: nothing is registered ahead of it. The handler
+ * module for a manifest-declared command is imported by the worker on first
+ * dispatch, from the absolute path main resolved (#12274), so there is no
+ * worker-side registry to look the target up in.
  * Forge providers are deliberately absent: `ForgeProviderImpl` has required
  * SYNCHRONOUS methods (`parseRemote`, the URL builders, `classifyPushError`)
  * the host calls and consumes synchronously, which can't cross this async port.
  */
-export type PluginWorkerInvokeKind = "action" | "handler" | "file-decoration-method";
+export type PluginWorkerInvokeKind = "action" | "command" | "handler" | "file-decoration-method";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
-  /** Kick off: import the plugin bundle at `bundleUrl` and call `activate(proxy)`. */
+  /**
+   * Kick off: import the plugin bundle at `bundleUrl` and call `activate(proxy)`.
+   * `bundleUrl` is absent for a commands-only plugin — one with no `main`, whose
+   * only executable code is its manifest commands' handler modules (#12274).
+   * That worker boots the harness and reports `activated` without importing
+   * anything; the handler modules are imported on first dispatch instead.
+   */
   | {
       type: "start";
-      bundleUrl: string;
+      bundleUrl?: string;
       pluginId: string;
       /**
        * The plugin's identity as the main-process host knows it. Sent rather
@@ -151,6 +161,21 @@ export type PluginHostToWorkerMessage =
       requestId: string;
       kind: "action";
       namespacedId: string;
+      args: unknown;
+    }
+  /**
+   * Import (once, lazily) a manifest-declared command's handler module and call
+   * its default export (#12274). `resolvedPath` is the absolute path main
+   * already probed and containment-checked in `resolveCommandHandlerPath` — the
+   * worker never derives it, so the two sides can't disagree about which file a
+   * command maps to.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "command";
+      namespacedId: string;
+      resolvedPath: string;
       args: unknown;
     }
   | {

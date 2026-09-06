@@ -817,3 +817,149 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     expect(notify.params.descriptor.requires).toBeUndefined();
   });
 });
+
+describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {
+  let cmdDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    cmdDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-cmd-proxy-"));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    const fs = await import("node:fs/promises");
+    await fs.rm(cmdDir, { recursive: true, force: true });
+  });
+
+  /** Write a handler module and return its absolute path. */
+  async function writeHandler(name: string, source: string): Promise<string> {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    await fs.writeFile(path.join(cmdDir, `${name}.mjs`), source);
+    return path.join(cmdDir, `${name}.mjs`);
+  }
+
+  function dispatch(
+    proxy: PluginDevWorkerHostProxy,
+    requestId: string,
+    resolvedPath: string,
+    args: unknown
+  ): void {
+    proxy.handleMessage({
+      type: "invoke",
+      requestId,
+      kind: "command",
+      namespacedId: "acme.demo.run",
+      resolvedPath,
+      args,
+    } as any);
+  }
+
+  /**
+   * `handleInvoke` is fired-and-forgotten, and this path awaits a REAL
+   * filesystem ESM import — orders of magnitude more turns than the microtask
+   * flush the in-memory tests use. Poll for the reply instead of guessing a
+   * flush count.
+   */
+  async function awaitResult(sent: any[], requestId: string): Promise<any> {
+    for (let i = 0; i < 400; i++) {
+      const found = sent.find((m) => m.type === "invoke-result" && m.requestId === requestId);
+      if (found) return found;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error(`no invoke-result for ${requestId}; sent: ${JSON.stringify(sent)}`);
+  }
+
+  it("imports the module main resolved and calls its default export", async () => {
+    const { proxy, sent } = makeProxy();
+    const file = await writeHandler("ok", `export default async (args) => ({ echoed: args })`);
+
+    dispatch(proxy, "c1", file, { n: 1 });
+
+    expect(await awaitResult(sent, "c1")).toMatchObject({
+      type: "invoke-result",
+      ok: true,
+      result: { echoed: { n: 1 } },
+    });
+  });
+
+  it("replies with an error when the module has no callable default export", async () => {
+    const { proxy, sent } = makeProxy();
+    const file = await writeHandler("nodef", `export const named = 1`);
+
+    dispatch(proxy, "c1", file, {});
+
+    const result = await awaitResult(sent, "c1");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no callable default export/);
+  });
+
+  it("replies with an error when the module cannot be imported", async () => {
+    const { proxy, sent } = makeProxy();
+    const path = await import("node:path");
+
+    dispatch(proxy, "c1", path.join(cmdDir, "does-not-exist.mjs"), {});
+
+    expect(await awaitResult(sent, "c1")).toMatchObject({ ok: false });
+  });
+
+  it("does not cache a failed import, so a later dispatch can succeed", async () => {
+    // Only a timeout is genuinely transient, but caching the rejection would
+    // turn one slow first import into a permanently dead command.
+    const { proxy, sent } = makeProxy();
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const file = path.join(cmdDir, "late.mjs");
+
+    dispatch(proxy, "c1", file, {});
+    expect(await awaitResult(sent, "c1")).toMatchObject({ ok: false });
+
+    await fs.writeFile(file, `export default () => "arrived"`);
+    dispatch(proxy, "c2", file, {});
+    expect(await awaitResult(sent, "c2")).toMatchObject({ ok: true, result: "arrived" });
+  });
+
+  it("keeps concurrent dispatches of one command independent", async () => {
+    // Both share a single import; each still gets its own call and its own
+    // result, correlated by requestId.
+    const { proxy, sent } = makeProxy();
+    const file = await writeHandler("concurrent", `export default async (args) => args.id`);
+
+    dispatch(proxy, "c1", file, { id: "first" });
+    dispatch(proxy, "c2", file, { id: "second" });
+
+    expect(await awaitResult(sent, "c1")).toMatchObject({ ok: true, result: "first" });
+    expect(await awaitResult(sent, "c2")).toMatchObject({ ok: true, result: "second" });
+  });
+
+  it("does not run the handler when the plugin was disposed mid-import", async () => {
+    const { proxy, sent } = makeProxy();
+    const file = await writeHandler("disposed", `export default () => "should not run"`);
+
+    dispatch(proxy, "c1", file, {});
+    // The import is awaited, so this lands before the handler would be called.
+    proxy.dispose();
+
+    const result = await awaitResult(sent, "c1");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/disposed before command/);
+  });
+
+  it("appends the arity hint against the plugin's own handler (#12214)", async () => {
+    // Main only ever sees the synthetic RPC thunk, so the hint has to be
+    // applied here, where the author's real closure is.
+    const { proxy, sent } = makeProxy();
+    const file = await writeHandler("arity", `export default (ctx, args) => args.value`);
+
+    dispatch(proxy, "c1", file, { value: 1 });
+
+    const result = await awaitResult(sent, "c1");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/Daintree hint:/);
+    expect(result.error).toMatch(/only parameter/);
+  });
+});

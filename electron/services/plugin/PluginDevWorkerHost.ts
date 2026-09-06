@@ -56,8 +56,14 @@ export interface PluginDevWorkerHostOptions {
   identity: PluginIdentity;
   /** Plugin directory root (the symlink target). Used as the worker `cwd`. */
   pluginDir: string;
-  /** Absolute path to the built bundle (`dist/index.js`) the worker imports. */
-  bundlePath: string;
+  /**
+   * Absolute path to the built bundle (`dist/index.js`) the worker imports.
+   * Absent for a commands-only plugin — one with no `main`, whose only
+   * executable code is its manifest commands' handler modules (#12274). The
+   * worker still forks and boots the harness; it just has nothing to import
+   * until a command is dispatched.
+   */
+  bundlePath?: string;
   /**
    * Distinguishes the two worker kinds for the service name and the
    * utility-process kind label only. Crash supervision, fork lifecycle, and
@@ -76,7 +82,8 @@ export interface PluginDevWorkerHostOptions {
 
 /**
  * Owns the `utilityProcess.fork` lifecycle for one plugin: fork the worker and
- * hand it the bundle to import. Rebuild detection is deliberately NOT here —
+ * hand it the bundle to import — or nothing to import, for a commands-only
+ * plugin whose handler modules are loaded on dispatch instead (#12274). Rebuild detection is deliberately NOT here —
  * a rebuild changes the manifest and the views as well as the backend, so it is
  * reconciled one layer up by {@link PluginDevArtifactWatcher} driving the
  * ordinary dev-load path, which replaces this host along with everything else
@@ -98,7 +105,7 @@ export class PluginDevWorkerHost extends EventEmitter {
   readonly pluginId: string;
   private readonly identity: PluginIdentity;
   private readonly pluginDir: string;
-  private readonly bundlePath: string;
+  private readonly bundlePath: string | undefined;
   private readonly serviceName: string;
   private readonly mode: "dev" | "prod";
   private readonly workerKind: string;
@@ -474,7 +481,7 @@ export class PluginDevWorkerHost extends EventEmitter {
       // Re-import the bundle and re-run activate on every (re)start.
       this.send({
         type: "start",
-        bundleUrl: pathToBundleUrl(this.bundlePath),
+        bundleUrl: this.bundlePath ? pathToBundleUrl(this.bundlePath) : undefined,
         pluginId: this.pluginId,
         identity: this.identity,
       });
