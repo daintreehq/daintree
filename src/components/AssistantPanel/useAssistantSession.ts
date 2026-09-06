@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
-import { getWorktreeSelectionSnapshot, getWorktreePathIndex } from "@/store/storeAccessors";
+import {
+  getWorktreeSelectionSnapshot,
+  getWorktreePathIndex,
+  getWorktreeBranchById,
+} from "@/store/storeAccessors";
 import { assistantStoreForSlot, type AssistantStoreApi } from "@/store/assistantStore";
 import { DEFAULT_ASSISTANT_SLOT } from "@shared/config/assistantSlots";
 import type { AssistantHostEvent } from "@shared/types/ipc/assistantHost";
@@ -538,7 +542,10 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       // Capture before IPC or any await: a later focus change must not retarget this message.
       const worktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId;
       const path = worktreeId ? getWorktreePathIndex()?.get(worktreeId) : undefined;
-      const worktree = worktreeId && path ? { id: worktreeId, path, branch: "" } : null;
+      const worktree =
+        worktreeId && path
+          ? { id: worktreeId, path, branch: getWorktreeBranchById(worktreeId) ?? "" }
+          : null;
       const localTurnId = store.getState().appendUserTurn(text);
       // The local checks above can only see what the renderer knows. The engine can
       // exit between them and main receiving this command, in which case main answers
