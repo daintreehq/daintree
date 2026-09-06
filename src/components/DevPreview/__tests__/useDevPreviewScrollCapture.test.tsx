@@ -182,6 +182,35 @@ describe("useDevPreviewScrollCapture — captureScrollViaCdp (frozen-safe) path"
     expect(setDevPreviewScrollPosition).not.toHaveBeenCalled();
   });
 
+  it("discards a reading whose document changed while the request was in flight", async () => {
+    // The eviction path blanks the guest right after asking for the offset.
+    // Now that a zero is persisted, an answer arriving after that would file
+    // the blank page's 0 against the previous URL.
+    let urlNow = "http://localhost:3000/page";
+    const webview = makeWebview({ getURL: vi.fn(() => urlNow) });
+    getScrollPositionMock.mockImplementation(() => {
+      urlNow = "about:blank";
+      return Promise.resolve(0);
+    });
+    const setDevPreviewScrollPosition = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewScrollCapture({
+        id: PANE_ID,
+        status: "running",
+        webviewElement: null,
+        setDevPreviewScrollPosition,
+      })
+    );
+
+    await act(async () => {
+      result.current.captureScrollViaCdp(webview);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setDevPreviewScrollPosition).not.toHaveBeenCalled();
+  });
+
   it("skips capture entirely when the webview URL is about:blank", async () => {
     const webview = makeWebview({ getURL: vi.fn(() => "about:blank") });
     const setDevPreviewScrollPosition = vi.fn();

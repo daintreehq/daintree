@@ -1174,7 +1174,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     setDeviceEmulation(
       payload: import("./webviewEmulation.js").DeviceEmulationRequest
-    ): Promise<void>;
+    ): Promise<{ applied: boolean }>;
     /** Capture the panel's webview viewport as a PNG, returned base64-encoded */
     captureScreenshot(
       panelId: string

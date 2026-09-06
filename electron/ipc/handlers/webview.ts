@@ -32,16 +32,17 @@ interface CdpSession {
    */
   rowObjectIdsByPane: Map<string, Map<number, Set<string>>>;
   /**
-   * Newest `Runtime.consoleAPICalled` timestamp already delivered to the
-   * renderer. `Runtime.enable` replays the guest's buffered console messages,
-   * so a stop/start cycle would re-deliver everything the renderer still has on
-   * screen; replayed events at or below this watermark are dropped.
+   * Replay reconciliation, one watermark per event stream. `Runtime.enable` and
+   * `Log.enable` both re-deliver their guest-side buffer, so a stop/start cycle
+   * would duplicate everything the renderer still has on screen. Each stream
+   * gets its own watermark because one stream's progress says nothing about
+   * what another has delivered.
    */
-  lastConsoleTimestamp: number;
-  /** True only while a `Runtime.enable` command is in flight (its replay window). */
-  replayingRuntimeEnable: boolean;
-  /** Whether a `destroyed` cleanup hook has been installed on the guest. */
-  destroyHookInstalled: boolean;
+  consoleWatermark: ReplayWatermark;
+  exceptionWatermark: ReplayWatermark;
+  logEntryWatermark: ReplayWatermark;
+  /** `destroyed` cleanup hook, held so teardown can detach it with the rest. */
+  destroyListener: (() => void) | null;
   // Per-session throttle for `Log.entryAdded` — browser-emitted entries
   // (CSP, network, deprecation) can flood. Keyed by source:level:url:line.
   logRateLimit: Map<string, { count: number; resetAt: number }>;
@@ -125,9 +126,10 @@ function getOrCreateSession(wcId: number): CdpSession {
       navigationGeneration: 0,
       groupDepthByPane: new Map(),
       rowObjectIdsByPane: new Map(),
-      lastConsoleTimestamp: 0,
-      replayingRuntimeEnable: false,
-      destroyHookInstalled: false,
+      consoleWatermark: createReplayWatermark(),
+      exceptionWatermark: createReplayWatermark(),
+      logEntryWatermark: createReplayWatermark(),
+      destroyListener: null,
       logRateLimit: new Map(),
       ownerWindow: null,
       messageListener: null,
@@ -279,6 +281,89 @@ function releaseObjectIds(wcId: number, objectIds: Iterable<string>): void {
   }
 }
 
+/**
+ * How much of one CDP event stream the renderer has already been given.
+ *
+ * CDP timestamps are epoch milliseconds and are neither unique nor guaranteed
+ * to increase, so a timestamp alone cannot identify an event. Pairing the
+ * newest timestamp with how many events carried it lets a replay skip exactly
+ * the events already delivered and admit distinct ones that merely landed in
+ * the same millisecond.
+ */
+interface ReplayWatermark {
+  timestamp: number;
+  count: number;
+  /** Set while the stream's enable command is in flight — its replay window. */
+  replaying: boolean;
+  /** Watermark as of the moment the window opened; the live one keeps moving. */
+  replayFromTimestamp: number;
+  replayFromCount: number;
+  /** Events seen at `replayFromTimestamp` since the window opened. */
+  replaySeenAtTimestamp: number;
+}
+
+function createReplayWatermark(): ReplayWatermark {
+  return {
+    timestamp: 0,
+    count: 0,
+    replaying: false,
+    replayFromTimestamp: 0,
+    replayFromCount: 0,
+    replaySeenAtTimestamp: 0,
+  };
+}
+
+function openReplayWindow(...watermarks: ReplayWatermark[]): void {
+  for (const w of watermarks) {
+    w.replaying = true;
+    w.replayFromTimestamp = w.timestamp;
+    w.replayFromCount = w.count;
+    w.replaySeenAtTimestamp = 0;
+  }
+}
+
+function closeReplayWindow(...watermarks: ReplayWatermark[]): void {
+  for (const w of watermarks) w.replaying = false;
+}
+
+function resetReplayWatermark(w: ReplayWatermark): void {
+  w.timestamp = 0;
+  w.count = 0;
+  w.replayFromTimestamp = 0;
+  w.replayFromCount = 0;
+  w.replaySeenAtTimestamp = 0;
+}
+
+/**
+ * Whether to deliver this event, advancing the watermark when we do.
+ *
+ * Inside a replay window everything up to the pre-enable watermark has already
+ * reached the renderer and is dropped; everything past it is new. An event with
+ * no usable timestamp can't be matched at all, so it is delivered rather than
+ * risk losing something the renderer never saw.
+ */
+function admitEvent(w: ReplayWatermark, timestamp: number | null): boolean {
+  if (timestamp === null) return true;
+
+  if (w.replaying && timestamp <= w.replayFromTimestamp) {
+    if (timestamp < w.replayFromTimestamp) return false;
+    w.replaySeenAtTimestamp += 1;
+    if (w.replaySeenAtTimestamp <= w.replayFromCount) return false;
+  }
+
+  if (timestamp > w.timestamp) {
+    w.timestamp = timestamp;
+    w.count = 1;
+  } else if (timestamp === w.timestamp) {
+    w.count += 1;
+  }
+  return true;
+}
+
+function eventTimestampOf(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function objectIdsFromArgs(args: CdpRemoteArg[]): string[] {
   const ids: string[] = [];
   for (const arg of args) {
@@ -359,6 +444,11 @@ function cleanupSession(wcId: number): void {
     if (session.detachListener) {
       wc.debugger.off("detach", session.detachListener);
     }
+    // Without this, a guest that survives repeated failed starts accumulates
+    // one dead `destroyed` callback per attempt.
+    if (session.destroyListener && typeof wc.off === "function") {
+      wc.off("destroyed", session.destroyListener);
+    }
   }
 
   sessions.delete(wcId);
@@ -380,6 +470,47 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
     await (frozen ? freezeWebContents(wc) : unfreezeWebContents(wc));
   };
+
+  /**
+   * Enable the console domains for a session whose listeners are already bound.
+   * Ordering matters: both enables replay their guest-side buffer, so the
+   * listener has to be live first, and each enable opens its stream's replay
+   * window so already-delivered events are reconciled away.
+   */
+  async function enableConsoleDomains(
+    webContentsId: number,
+    wc: Electron.WebContents,
+    session: CdpSession
+  ): Promise<void> {
+    if (!session.runtimeEnabled) {
+      openReplayWindow(session.consoleWatermark, session.exceptionWatermark);
+      try {
+        await wc.debugger.sendCommand("Runtime.enable");
+        session.runtimeEnabled = true;
+      } finally {
+        closeReplayWindow(session.consoleWatermark, session.exceptionWatermark);
+      }
+    }
+
+    // Log surfaces browser-emitted entries (CSP violations, network failures,
+    // deprecations) that never reach Runtime.consoleAPICalled. Its own
+    // try/catch so a Log.enable failure degrades to "no log-entry rows" rather
+    // than silently breaking the already-working consoleAPICalled capture.
+    if (!session.logEnabled) {
+      try {
+        openReplayWindow(session.logEntryWatermark);
+        await wc.debugger.sendCommand("Log.enable");
+        session.logEnabled = true;
+      } catch (logErr) {
+        console.warn(
+          `[webview] CDP Log.enable failed for id=${webContentsId}:`,
+          formatErrorMessage(logErr, "Log.enable failed")
+        );
+      } finally {
+        closeReplayWindow(session.logEntryWatermark);
+      }
+    }
+  }
 
   const handleStartConsoleCapture = async (
     webContentsId: unknown,
@@ -409,9 +540,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
     // Sessions outlive capture (see handleStopConsoleCapture), so tie their
     // lifetime to the guest rather than to the last pane that stopped.
-    if (!session.destroyHookInstalled && typeof wc.once === "function") {
-      session.destroyHookInstalled = true;
-      wc.once("destroyed", () => cleanupSession(webContentsId));
+    if (!session.destroyListener && typeof wc.once === "function") {
+      const destroyListener = () => cleanupSession(webContentsId);
+      session.destroyListener = destroyListener;
+      wc.once("destroyed", destroyListener);
     }
 
     let boundListenersHere = false;
@@ -439,7 +571,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
               session.logRateLimit.clear();
               // The new document has not delivered anything yet, so nothing is
               // a duplicate of what the renderer already holds.
-              session.lastConsoleTimestamp = 0;
+              resetReplayWatermark(session.consoleWatermark);
+              resetReplayWatermark(session.exceptionWatermark);
+              resetReplayWatermark(session.logEntryWatermark);
               // Reset group depth and drop stale handle ownership for all
               // panes. No release call: the guest already invalidated every
               // handle when the execution context went away.
@@ -482,7 +616,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             session.messageListener = null;
             session.detachListener = null;
             session.navigationGeneration++;
-            session.lastConsoleTimestamp = 0;
+            resetReplayWatermark(session.consoleWatermark);
+            resetReplayWatermark(session.exceptionWatermark);
+            resetReplayWatermark(session.logEntryWatermark);
             for (const pid of session.paneIds) {
               session.groupDepthByPane.set(pid, 0);
               session.rowObjectIdsByPane.get(pid)?.clear();
@@ -516,33 +652,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       // lands before this await resolves. Enabling first — as this handler used
       // to — dropped everything the page logged before capture attached, which
       // is every startup log for a page that had already booted (#12298).
-      if (!session.runtimeEnabled) {
-        session.replayingRuntimeEnable = true;
-        try {
-          await wc.debugger.sendCommand("Runtime.enable");
-          session.runtimeEnabled = true;
-        } finally {
-          session.replayingRuntimeEnable = false;
-        }
-      }
-
-      // Log domain surfaces browser-emitted entries (CSP violations, network
-      // failures, deprecations) that never reach Runtime.consoleAPICalled.
-      // Enabled AFTER the message listener is wired so any entries CDP replays
-      // on enable are captured, and in its own try/catch so a Log.enable
-      // failure degrades to "no log-entry rows" rather than silently breaking
-      // the already-registered Runtime.consoleAPICalled capture.
-      if (!session.logEnabled) {
-        try {
-          await wc.debugger.sendCommand("Log.enable");
-          session.logEnabled = true;
-        } catch (logErr) {
-          console.warn(
-            `[webview] CDP Log.enable failed for id=${webContentsId}:`,
-            formatErrorMessage(logErr, "Log.enable failed")
-          );
-        }
-      }
+      await enableConsoleDomains(webContentsId, wc, session);
     } catch (err) {
       // Setup failed after the listeners were bound. Unwind them when this call
       // is the only thing holding the session, so a guest that can never be
@@ -569,24 +679,12 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     const p = params as any;
     if (!p) return;
 
-    // Replay suppression. Runtime.enable re-delivers the guest's whole console
-    // buffer, so a stop/start cycle (a dev-preview tab switch, which unmounts
-    // the pane while the store keeps its rows) would duplicate everything still
-    // on screen. Only the enable window is filtered, and only up to the newest
-    // timestamp already delivered, so messages logged while capture was
-    // stopped still arrive. Ties within the same millisecond are dropped in
-    // favour of not duplicating.
-    const eventTimestamp = typeof p.timestamp === "number" ? p.timestamp : null;
-    if (
-      session.replayingRuntimeEnable &&
-      eventTimestamp !== null &&
-      eventTimestamp <= session.lastConsoleTimestamp
-    ) {
-      return;
-    }
-    if (eventTimestamp !== null && eventTimestamp > session.lastConsoleTimestamp) {
-      session.lastConsoleTimestamp = eventTimestamp;
-    }
+    // Runtime.enable re-delivers the guest's whole console buffer, so a
+    // stop/start cycle (a dev-preview tab switch unmounts the pane while the
+    // store keeps its rows) would duplicate everything still on screen. Only
+    // the enable window is reconciled, so messages logged while capture was
+    // stopped still arrive.
+    if (!admitEvent(session.consoleWatermark, eventTimestampOf(p.timestamp))) return;
 
     const cdpType = (p.type ?? "log") as CdpConsoleType;
 
@@ -658,6 +756,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     const details = p?.exceptionDetails;
     if (!details) return;
 
+    // Runtime.enable replays buffered exceptions alongside console calls, so
+    // these need their own reconciliation — the console watermark's progress
+    // says nothing about which exceptions the renderer already has.
+    if (!admitEvent(session.exceptionWatermark, eventTimestampOf(p.timestamp))) return;
+
     const summaryText: string =
       details.exception?.description ?? details.text ?? "Uncaught (unknown exception)";
     const stackTrace = normalizeStackTrace(details.stackTrace);
@@ -686,6 +789,12 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const entry = (params as any)?.entry;
     if (!entry) return;
+
+    // `Log.enable` replays the guest's stored entries just like Runtime does,
+    // so a stop/start cycle would duplicate CSP, network and deprecation rows
+    // the renderer still displays. Reconciled before the rate limiter, so a
+    // replay can't consume the allowance a live failure needs.
+    if (!admitEvent(session.logEntryWatermark, eventTimestampOf(entry.timestamp))) return;
 
     const source = normalizeLogEntrySource(entry.source);
     const level = logEntryLevelToLevel(entry.level);
@@ -739,11 +848,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
     // If no more panes are capturing, disable the domains but keep the session.
     // Its listeners are inert while the domains are off, and holding it keeps
-    // `lastConsoleTimestamp` so the replay that a later Runtime.enable triggers
-    // can be filtered against what the renderer already displays. The session
-    // is disposed by the guest's `destroyed` hook or by handler teardown.
-    if (session.paneIds.size === 0) {
-      if (wc && !wc.isDestroyed() && session.runtimeEnabled) {
+    // the replay watermarks so the replay a later Runtime.enable triggers can
+    // be reconciled against what the renderer already displays. The session is
+    // disposed by the guest's `destroyed` hook or by handler teardown.
+    if (session.paneIds.size === 0 && wc && !wc.isDestroyed()) {
+      if (session.runtimeEnabled) {
         try {
           await wc.debugger.sendCommand("Runtime.disable");
         } catch {
@@ -751,13 +860,27 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         }
         session.runtimeEnabled = false;
       }
-      if (wc && !wc.isDestroyed() && session.logEnabled) {
+      if (session.logEnabled) {
         try {
           await wc.debugger.sendCommand("Log.disable");
         } catch {
           // Ignore
         }
         session.logEnabled = false;
+      }
+
+      // A start that raced this teardown saw the domains still enabled and
+      // skipped enabling them, so it would come back to a pane that never
+      // receives another message. Re-enable for whoever arrived.
+      if (session.paneIds.size > 0) {
+        try {
+          await enableConsoleDomains(webContentsId, wc, session);
+        } catch (err) {
+          console.warn(
+            `[webview] CDP re-enable after a raced stop failed for id=${webContentsId}:`,
+            formatErrorMessage(err, "console domain re-enable failed")
+          );
+        }
       }
     }
   };
@@ -805,11 +928,13 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       return { properties: [] };
     }
 
-    // Expansion is only meaningful for a row that still owns its handles. A row
+    // Expansion is only meaningful for a handle the named row still owns. A row
     // that was evicted, cleared or invalidated by navigation is gone from the
     // renderer too, and inspecting it would mint descendants nothing can own.
+    // Checking the handle itself — not just that the row exists — keeps a
+    // caller from inspecting an arbitrary objectId through a live row.
     const session = sessions.get(webContentsId);
-    if (!session?.rowObjectIdsByPane.get(paneId)?.has(rowId)) {
+    if (!session?.rowObjectIdsByPane.get(paneId)?.get(rowId)?.has(objectId)) {
       return { properties: [] };
     }
 
@@ -825,14 +950,22 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       const properties: CdpPropertyDescriptor[] = [];
       const descendantIds: string[] = [];
 
+      // Handles come off the raw descriptors, not the normalized ones:
+      // normalizeRemoteObject drops accessors and symbols, and CDP hands back
+      // mirrors in three sibling arrays. A Map, a Promise or an object with
+      // private fields allocates handles in the latter two, and anything not
+      // collected here can never be released.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const collectHandles = (prop: any): void => {
+        for (const mirror of [prop?.value, prop?.get, prop?.set, prop?.symbol]) {
+          if (mirror && typeof mirror.objectId === "string") descendantIds.push(mirror.objectId);
+        }
+      };
+
       if (Array.isArray(raw.result)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const prop of raw.result as any[]) {
-          // Read handles off the raw descriptor: normalizeRemoteObject drops
-          // accessors and symbols, whose mirrors are retained just the same.
-          for (const mirror of [prop.value, prop.get, prop.set, prop.symbol]) {
-            if (mirror && typeof mirror.objectId === "string") descendantIds.push(mirror.objectId);
-          }
+          collectHandles(prop);
           properties.push({
             name: prop.name ?? "",
             value: prop.value ? normalizeRemoteObject(prop.value) : undefined,
@@ -842,6 +975,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             isOwn: prop.isOwn,
           });
         }
+      }
+      // Not surfaced in the UI, but CDP retains their mirrors all the same.
+      for (const list of [raw.internalProperties, raw.privateProperties]) {
+        if (!Array.isArray(list)) continue;
+        for (const prop of list) collectHandles(prop);
       }
 
       // Re-check ownership after the await. If the row lost it while the

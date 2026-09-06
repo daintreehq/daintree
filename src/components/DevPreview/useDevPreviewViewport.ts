@@ -108,23 +108,26 @@ export function useDevPreviewViewport({
   // Applying is an async IPC round trip now, so two fast preset switches can
   // resolve out of order. Only the newest request may record what is applied.
   const emulationSeqRef = useRef(0);
+  const inFlightEmulationRef = useRef(0);
   useEffect(() => {
     if (!isWebviewReady || !webviewElement) return;
     const emulationKey = `${viewportPreset ?? "none"}-${viewportRotated}-${viewportDpr}`;
     if (prevEmulationKeyRef.current === emulationKey) return;
     // Clearing emulation that was never applied is a no-op, but the key still
     // has to advance so a later switch back to the same desktop state is not
-    // mistaken for a repeat.
-    if (!viewportPreset && !hasAppliedEmulationRef.current) {
+    // mistaken for a repeat. An in-flight request counts as applied for this
+    // purpose: skipping the clear while a preset apply is still on the wire
+    // would leave the guest emulated with the toolbar showing desktop.
+    if (!viewportPreset && !hasAppliedEmulationRef.current && inFlightEmulationRef.current === 0) {
       prevEmulationKeyRef.current = emulationKey;
       return;
     }
 
     // eslint-disable-next-line react-compiler/react-compiler -- refs mutated inside an effect the compiler cannot prove is not render-phase
     const seq = ++emulationSeqRef.current;
-    let applied: Promise<void>;
+    let request: Promise<boolean>;
     try {
-      applied = applyDevPreviewEmulation(
+      request = applyDevPreviewEmulation(
         webviewElement,
         id,
         viewportPreset,
@@ -137,12 +140,21 @@ export function useDevPreviewViewport({
       return;
     }
 
+    inFlightEmulationRef.current += 1;
     safeFireAndForget(
-      applied.then(() => {
-        if (emulationSeqRef.current !== seq) return;
-        prevEmulationKeyRef.current = emulationKey;
-        hasAppliedEmulationRef.current = viewportPreset !== undefined;
-      }),
+      request
+        .then((applied) => {
+          // A superseded request must not record what it asked for, and main
+          // reporting `applied: false` (guest gone, or not registered to this
+          // panel) must not be cached as success — either way the next
+          // preset/ready transition re-issues.
+          if (!applied || emulationSeqRef.current !== seq) return;
+          prevEmulationKeyRef.current = emulationKey;
+          hasAppliedEmulationRef.current = viewportPreset !== undefined;
+        })
+        .finally(() => {
+          inFlightEmulationRef.current -= 1;
+        }),
       { context: "Applying dev-preview device emulation" }
     );
   }, [id, viewportPreset, viewportRotated, viewportDpr, isWebviewReady, webviewElement]);

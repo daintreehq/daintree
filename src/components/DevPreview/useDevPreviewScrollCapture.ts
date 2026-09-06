@@ -79,6 +79,17 @@ export function useDevPreviewScrollCapture({
           // overwrite, or scrolling back to the top before eviction leaves a
           // stale offset that a remount restores (#12298).
           if (scrollY === null || !Number.isFinite(scrollY)) return;
+          // Now that a zero is persisted, the document it was measured on
+          // matters: the eviction path blanks the guest immediately after
+          // asking, and a reading that lands after that would file the blank
+          // page's 0 against the previous URL.
+          let settledUrl: string;
+          try {
+            settledUrl = webview.getURL();
+          } catch {
+            return;
+          }
+          if (settledUrl !== currentWebviewUrl) return;
           setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
         })
         .catch(() => {});

@@ -10,7 +10,10 @@ const PANE_ID = "pane-1";
 // Emulation runs in the main process now: the renderer only hands over the
 // guest id. A webview tag never had `getWebContents()` — mocking it is what let
 // the broken code path pass its tests (#12298).
-const setDeviceEmulation = vi.fn<(payload: unknown) => Promise<void>>(() => Promise.resolve());
+const setDeviceEmulation = vi.fn<(payload: unknown) => Promise<{ applied: boolean }>>(() =>
+  Promise.resolve({ applied: true })
+);
+const registerPanel = vi.fn<() => Promise<void>>(() => Promise.resolve());
 
 function makeWebview(webContentsId = 42): Electron.WebviewTag {
   return {
@@ -24,6 +27,17 @@ function makeDetachedWebview(): Electron.WebviewTag {
       throw new Error("The WebView must be attached to the DOM");
     }),
   } as unknown as Electron.WebviewTag;
+}
+
+/**
+ * Drain the register→apply→record promise chain. Each apply crosses several
+ * microtask boundaries now that registration is chained ahead of it, so a
+ * fixed couple of `Promise.resolve()` turns would be passing by luck.
+ */
+async function settleEmulation() {
+  await act(async () => {
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+  });
 }
 
 function emulationCalls() {
@@ -52,9 +66,11 @@ function baseParams(overrides: Partial<Parameters<typeof useDevPreviewViewport>[
 beforeEach(() => {
   vi.restoreAllMocks();
   setDeviceEmulation.mockClear();
-  setDeviceEmulation.mockResolvedValue(undefined);
+  setDeviceEmulation.mockResolvedValue({ applied: true });
+  registerPanel.mockClear();
+  registerPanel.mockResolvedValue(undefined);
   (globalThis as unknown as { window: { electron: unknown } }).window.electron = {
-    webview: { setDeviceEmulation },
+    webview: { setDeviceEmulation, registerPanel },
   };
   class ResizeObserverStub {
     observe = vi.fn();
@@ -195,9 +211,7 @@ describe("useDevPreviewViewport — device emulation effect", () => {
       )
     );
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settleEmulation();
 
     expect(emulationCalls()).toEqual([
       {
@@ -231,9 +245,7 @@ describe("useDevPreviewViewport — device emulation effect", () => {
       )
     );
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settleEmulation();
 
     const firstCall = emulationCalls()[0];
     if (!firstCall) throw new Error("expected a device-emulation call");
@@ -252,16 +264,12 @@ describe("useDevPreviewViewport — device emulation effect", () => {
         webviewElement: webview,
       }),
     });
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settleEmulation();
 
     rerender(
       baseParams({ viewportPreset: undefined, isWebviewReady: true, webviewElement: webview })
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settleEmulation();
 
     const calls = emulationCalls();
     expect(calls).toHaveLength(2);
@@ -279,9 +287,7 @@ describe("useDevPreviewViewport — device emulation effect", () => {
       )
     );
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settleEmulation();
 
     expect(setDeviceEmulation).not.toHaveBeenCalled();
   });
@@ -295,27 +301,23 @@ describe("useDevPreviewViewport — device emulation effect", () => {
         webviewElement: webview,
       }),
     });
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settleEmulation();
     expect(setDeviceEmulation).toHaveBeenCalledTimes(1);
 
     rerender(
       baseParams({ viewportPreset: "iphone", isWebviewReady: true, webviewElement: webview })
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settleEmulation();
     expect(setDeviceEmulation).toHaveBeenCalledTimes(1);
   });
 
   it("records the newest request when two applies resolve out of order", async () => {
     // Applying is an IPC round trip now, so a slow first apply can land after a
     // fast second one. The stale reply must not overwrite what is applied.
-    let resolveFirst: () => void = () => {};
+    let resolveFirst: (value: { applied: boolean }) => void = () => {};
     setDeviceEmulation.mockImplementationOnce(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<{ applied: boolean }>((resolve) => {
           resolveFirst = resolve;
         })
     );
@@ -332,21 +334,100 @@ describe("useDevPreviewViewport — device emulation effect", () => {
     rerender(
       baseParams({ viewportPreset: "galaxy", isWebviewReady: true, webviewElement: webview })
     );
-    await act(async () => {
-      resolveFirst();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await settleEmulation();
+    // Now the superseded iPhone request finally answers.
+    resolveFirst({ applied: true });
+    await settleEmulation();
     expect(setDeviceEmulation).toHaveBeenCalledTimes(2);
 
-    // Galaxy is what actually landed, so re-rendering with it must not re-apply.
+    // Galaxy is what actually landed. Switching back to iPhone must re-apply —
+    // if the stale reply had been allowed to record iPhone, this would dedupe
+    // and never reach main.
+    rerender(
+      baseParams({ viewportPreset: "iphone", isWebviewReady: true, webviewElement: webview })
+    );
+    await settleEmulation();
+    expect(setDeviceEmulation).toHaveBeenCalledTimes(3);
+  });
+
+  it("clears emulation requested while the first apply is still in flight", async () => {
+    // Selecting a preset and going straight back to desktop must still reach
+    // main: skipping the clear because nothing had been *confirmed* applied
+    // would leave the guest emulated while the toolbar reads desktop.
+    let resolveFirst: (value: { applied: boolean }) => void = () => {};
+    setDeviceEmulation.mockImplementationOnce(
+      () =>
+        new Promise<{ applied: boolean }>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+
+    const webview = makeWebview();
+    const { rerender } = renderHook((props) => useDevPreviewViewport(props), {
+      initialProps: baseParams({
+        viewportPreset: "iphone",
+        isWebviewReady: true,
+        webviewElement: webview,
+      }),
+    });
+    await settleEmulation();
+
+    rerender(
+      baseParams({ viewportPreset: undefined, isWebviewReady: true, webviewElement: webview })
+    );
+    resolveFirst({ applied: true });
+    await settleEmulation();
+
+    const calls = emulationCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.emulation).toBeNull();
+  });
+
+  it("does not record a preset main reported it did not apply", async () => {
+    setDeviceEmulation.mockResolvedValueOnce({ applied: false });
+    const webview = makeWebview();
+    const { rerender } = renderHook((props) => useDevPreviewViewport(props), {
+      initialProps: baseParams({
+        viewportPreset: "iphone",
+        isWebviewReady: false,
+        webviewElement: webview,
+      }),
+    });
+    rerender(
+      baseParams({ viewportPreset: "iphone", isWebviewReady: true, webviewElement: webview })
+    );
+    await settleEmulation();
+    expect(setDeviceEmulation).toHaveBeenCalledTimes(1);
+
+    // A guest that was not yet registered gets another go on the next
+    // transition rather than being cached as emulated.
     rerender(
       baseParams({ viewportPreset: "galaxy", isWebviewReady: true, webviewElement: webview })
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(setDeviceEmulation).toHaveBeenCalledTimes(2);
+    await settleEmulation();
+    rerender(
+      baseParams({ viewportPreset: "iphone", isWebviewReady: true, webviewElement: webview })
+    );
+    await settleEmulation();
+    expect(setDeviceEmulation).toHaveBeenCalledTimes(3);
+  });
+
+  it("registers the panel before applying so main can resolve ownership", async () => {
+    renderHook(() =>
+      useDevPreviewViewport(
+        baseParams({
+          viewportPreset: "iphone",
+          isWebviewReady: true,
+          webviewElement: makeWebview(7),
+        })
+      )
+    );
+    await settleEmulation();
+
+    expect(registerPanel).toHaveBeenCalledWith(7, PANE_ID);
+    expect(registerPanel.mock.invocationCallOrder[0]!).toBeLessThan(
+      setDeviceEmulation.mock.invocationCallOrder[0]!
+    );
   });
 
   it("reports a rejected apply instead of throwing", async () => {
@@ -364,10 +445,7 @@ describe("useDevPreviewViewport — device emulation effect", () => {
       )
     ).not.toThrow();
 
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await settleEmulation();
     expect(setDeviceEmulation).toHaveBeenCalledTimes(1);
   });
 

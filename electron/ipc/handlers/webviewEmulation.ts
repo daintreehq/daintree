@@ -31,7 +31,18 @@ import type { DeviceEmulationRequest } from "../../../shared/types/ipc/webviewEm
  */
 interface GuestEmulationState {
   originalUserAgent: string;
-  touchEmulated: boolean;
+  /**
+   * Whether touch is currently emulated, or `null` when we no longer know —
+   * a partially-applied CDP sequence leaves the guest in a state this cache
+   * cannot describe, and the next request must re-issue rather than skip.
+   */
+  touchEmulated: boolean | null;
+  /**
+   * Requests for one guest run one at a time. Without this, a desktop clear
+   * still awaiting its CDP commands can finish after a newly-selected phone
+   * preset and turn that preset's touch emulation back off.
+   */
+  queue: Promise<void>;
 }
 
 const guestEmulation = new Map<number, GuestEmulationState>();
@@ -91,31 +102,22 @@ async function setTouchEmulation(wc: Electron.WebContents, enabled: boolean): Pr
   }
 }
 
-async function handleSetDeviceEmulation(payload: DeviceEmulationRequest): Promise<void> {
-  const { webContentsId, panelId, emulation } = payload;
-
-  // Ownership gate: only the panel that registered this guest may drive it.
-  if (getWebviewDialogService().getPanelId(webContentsId) !== panelId) return;
-
-  const wc = webContents.fromId(webContentsId);
-  if (!wc || wc.isDestroyed()) {
-    guestEmulation.delete(webContentsId);
-    return;
-  }
-
-  let state = guestEmulation.get(webContentsId);
-  if (!state) {
-    state = { originalUserAgent: wc.getUserAgent(), touchEmulated: false };
-    guestEmulation.set(webContentsId, state);
-    wc.once("destroyed", () => guestEmulation.delete(webContentsId));
-  }
+async function applyEmulation(
+  wc: Electron.WebContents,
+  state: GuestEmulationState,
+  emulation: DeviceEmulationRequest["emulation"]
+): Promise<void> {
+  if (wc.isDestroyed()) return;
 
   if (emulation) {
     wc.setUserAgent(emulation.userAgent);
     wc.enableDeviceEmulation(emulation.params as Electron.Parameters);
     if (emulation.touch !== state.touchEmulated) {
-      const applied = await setTouchEmulation(wc, emulation.touch);
-      if (applied) state.touchEmulated = emulation.touch;
+      // Mark unknown across the await: a failure part-way through leaves some
+      // overrides set and others not, and claiming either value would let a
+      // later request skip the cleanup the guest actually needs.
+      state.touchEmulated = null;
+      if (await setTouchEmulation(wc, emulation.touch)) state.touchEmulated = emulation.touch;
     }
     return;
   }
@@ -128,10 +130,54 @@ async function handleSetDeviceEmulation(payload: DeviceEmulationRequest): Promis
   if (state.originalUserAgent) {
     wc.setUserAgent(state.originalUserAgent);
   }
-  if (state.touchEmulated) {
-    const applied = await setTouchEmulation(wc, false);
-    if (applied) state.touchEmulated = false;
+  if (state.touchEmulated !== false) {
+    state.touchEmulated = null;
+    if (await setTouchEmulation(wc, false)) state.touchEmulated = false;
   }
+}
+
+/**
+ * Apply or clear device emulation for one guest.
+ *
+ * Resolves `{ applied: false }` when nothing was done — an unregistered or
+ * destroyed guest — so the renderer never caches a preset as active on a guest
+ * that never received it.
+ */
+async function handleSetDeviceEmulation(
+  payload: DeviceEmulationRequest
+): Promise<{ applied: boolean }> {
+  const { webContentsId, panelId, emulation } = payload;
+
+  // Ownership gate: only the panel that registered this guest may drive it.
+  if (getWebviewDialogService().getPanelId(webContentsId) !== panelId) {
+    return { applied: false };
+  }
+
+  const wc = webContents.fromId(webContentsId);
+  if (!wc || wc.isDestroyed()) {
+    guestEmulation.delete(webContentsId);
+    return { applied: false };
+  }
+
+  let state = guestEmulation.get(webContentsId);
+  if (!state) {
+    state = {
+      originalUserAgent: wc.getUserAgent(),
+      touchEmulated: false,
+      queue: Promise.resolve(),
+    };
+    guestEmulation.set(webContentsId, state);
+    if (typeof wc.once === "function") {
+      wc.once("destroyed", () => guestEmulation.delete(webContentsId));
+    }
+  }
+
+  const settled = state.queue.then(() => applyEmulation(wc, state, emulation));
+  // Keep the chain alive after a rejection so one failed request cannot wedge
+  // every later one for this guest.
+  state.queue = settled.catch(() => {});
+  await settled;
+  return { applied: true };
 }
 
 export const webviewEmulationNamespace = defineIpcNamespace({

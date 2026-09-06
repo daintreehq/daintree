@@ -147,6 +147,7 @@ describe("registerWebviewHandlers", () => {
     // stubs an unregistered guest would otherwise leak that into every test
     // declared after it.
     mockDialogService.getPanelId.mockReturnValue("test-panel");
+    mockWebContents.once.mockImplementation(() => {});
     debuggerMock.isAttached.mockReturnValue(false);
     debuggerMock.sendCommand.mockResolvedValue(undefined);
     webContentsMock.fromId.mockReturnValue(mockWebContents);
@@ -356,6 +357,12 @@ describe("registerWebviewHandlers", () => {
       const result = await handler(null, 42, "pane-1", rowId, "stale-obj");
 
       expect(result.properties).toEqual([]);
+      // The CDP call must have been reached — otherwise an ownership rejection
+      // would be indistinguishable from the "Could not find object" path.
+      expect(debuggerMock.sendCommand).toHaveBeenCalledWith(
+        "Runtime.getProperties",
+        expect.objectContaining({ objectId: "stale-obj" })
+      );
     });
 
     it("tracks group depth correctly", async () => {
@@ -848,6 +855,8 @@ describe("registerWebviewHandlers", () => {
       cleanup = registerWebviewHandlers(deps);
       await getHandler("webview:start-console-capture")(null, 42, "pane-1");
 
+      expect(order).toContain("on:message");
+      expect(order).toContain("send:Runtime.enable");
       expect(order.indexOf("on:message")).toBeLessThan(order.indexOf("send:Runtime.enable"));
       debuggerMock.on.mockReset();
     });
@@ -873,6 +882,10 @@ describe("registerWebviewHandlers", () => {
 
       cleanup = registerWebviewHandlers(deps);
       await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      // Pin the first delivery: without it, an ordering-only regression that
+      // lost the startup row here and re-delivered it on the second start
+      // would still satisfy the combined assertion below.
+      expect(consoleRows().map((row) => row.summaryText)).toEqual(["STARTUP"]);
       await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
 
       // The guest logged again while capture was off; the next enable replays
@@ -884,6 +897,153 @@ describe("registerWebviewHandlers", () => {
       await getHandler("webview:start-console-capture")(null, 42, "pane-1");
 
       expect(consoleRows().map((row) => row.summaryText)).toEqual(["STARTUP", "WHILE_STOPPED"]);
+    });
+
+    it("keeps distinct messages that share a millisecond in the first replay", async () => {
+      // CDP timestamps are epoch milliseconds and are neither unique nor
+      // strictly increasing. A watermark that only compared timestamps would
+      // keep the first of these and silently drop the rest — rows the renderer
+      // has never seen.
+      replayOnRuntimeEnable([
+        { type: "log", args: [{ type: "string", value: "first" }], timestamp: 1000 },
+        { type: "log", args: [{ type: "string", value: "second" }], timestamp: 1000 },
+        { type: "log", args: [{ type: "string", value: "third" }], timestamp: 1000 },
+      ]);
+
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+
+      expect(consoleRows().map((row) => row.summaryText)).toEqual(["first", "second", "third"]);
+    });
+
+    it("reconciles a same-millisecond replay against how many were delivered", async () => {
+      const tied = (value: string) => ({
+        type: "log",
+        args: [{ type: "string", value }],
+        timestamp: 1000,
+      });
+      replayOnRuntimeEnable([tied("first"), tied("second")]);
+
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+
+      // The guest logged a third message in that same millisecond while
+      // capture was off. Two were already delivered, so exactly two are
+      // skipped and the third comes through.
+      replayOnRuntimeEnable([tied("first"), tied("second"), tied("third")]);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+
+      expect(consoleRows().map((row) => row.summaryText)).toEqual(["first", "second", "third"]);
+    });
+
+    it("does not re-deliver replayed exceptions after a stop/start cycle", async () => {
+      const thrown = {
+        timestamp: 1000,
+        exceptionDetails: { exception: { description: "TypeError: boom" } },
+      };
+      const replayExceptions = (events: Array<Record<string, unknown>>) => {
+        debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+          if (cmd === "Runtime.enable") {
+            const call = debuggerMock.on.mock.calls.find(
+              ([event]: string[]) => event === "message"
+            );
+            const listener = call?.[1] as
+              ((event: unknown, method: string, params: unknown) => void) | undefined;
+            for (const event of events) listener?.({}, "Runtime.exceptionThrown", event);
+          }
+          return Promise.resolve();
+        });
+      };
+
+      replayExceptions([thrown]);
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+
+      replayExceptions([
+        thrown,
+        {
+          timestamp: 2000,
+          exceptionDetails: { exception: { description: "ReferenceError: later" } },
+        },
+      ]);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+
+      expect(consoleRows().map((row) => row.summaryText)).toEqual([
+        "TypeError: boom",
+        "ReferenceError: later",
+      ]);
+    });
+
+    it("re-enables the domains for a start that raced the last stop", async () => {
+      let resolveDisable: () => void = () => {};
+      debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+        if (cmd === "Runtime.disable") {
+          return new Promise<void>((resolve) => {
+            resolveDisable = resolve;
+          });
+        }
+        return Promise.resolve();
+      });
+
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+
+      const stopping = getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+      // Let the stop drop its pane and reach the pending Runtime.disable, so
+      // the new pane genuinely arrives mid-teardown rather than before it.
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // The new pane sees the domain still enabled and skips enabling; without
+      // the re-enable, the stop then turns it off and this pane never receives
+      // another message.
+      await getHandler("webview:start-console-capture")(null, 42, "pane-2");
+      resolveDisable();
+      await stopping;
+
+      const enableCalls = debuggerMock.sendCommand.mock.calls.filter(
+        ([cmd]: string[]) => cmd === "Runtime.enable"
+      );
+      expect(enableCalls).toHaveLength(2);
+    });
+
+    it("does not re-deliver replayed Log entries after a stop/start cycle", async () => {
+      // Log.enable replays the guest's stored entries the same way Runtime does.
+      const buffered = {
+        entry: { source: "network", level: "error", text: "CSP violation", timestamp: 1000 },
+      };
+      const replayLogOnEnable = (entries: Array<Record<string, unknown>>) => {
+        debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+          if (cmd === "Log.enable") {
+            const call = debuggerMock.on.mock.calls.find(
+              ([event]: string[]) => event === "message"
+            );
+            const listener = call?.[1] as
+              ((event: unknown, method: string, params: unknown) => void) | undefined;
+            for (const entry of entries) listener?.({}, "Log.entryAdded", entry);
+          }
+          return Promise.resolve();
+        });
+      };
+
+      replayLogOnEnable([buffered]);
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+
+      replayLogOnEnable([
+        buffered,
+        {
+          entry: { source: "network", level: "error", text: "later failure", timestamp: 2000 },
+        },
+      ]);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+
+      expect(consoleRows().map((row) => row.summaryText)).toEqual([
+        "CSP violation",
+        "later failure",
+      ]);
     });
 
     it("does not rebind listeners across a stop/start cycle", async () => {
@@ -1000,6 +1160,89 @@ describe("registerWebviewHandlers", () => {
       expect(releasedIds()).toContain("late-nested");
     });
 
+    it("evicts one row's handles without touching a row still on screen", async () => {
+      // The claim is per-row ownership, not per-pane: pane-wide tracking would
+      // satisfy the eviction test above just as well.
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      const listener = getMessageListener();
+
+      const emit = (objectId: string, timestamp: number) => {
+        listener({}, "Runtime.consoleAPICalled", {
+          type: "log",
+          args: [{ type: "object", objectId, className: "Object" }],
+          timestamp,
+        });
+      };
+
+      emit("old-obj", 1000);
+      // Rows carrying no handles still occupy renderer rows, so they have to
+      // count toward the cap or eviction drifts out of step with the store.
+      for (let i = 0; i < MAX_CONSOLE_ROWS - 1; i++) {
+        listener({}, "Runtime.consoleAPICalled", {
+          type: "log",
+          args: [{ type: "string", value: `filler-${i}` }],
+          timestamp: 1001 + i,
+        });
+      }
+      emit("kept-obj", 9000);
+
+      // Exactly one row past the cap, so only the oldest is released.
+      expect(releasedIds()).toEqual(["old-obj"]);
+    });
+
+    it("releases internal and private property handles the UI never renders", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      const rowId = await emitObjectRow("pane-1", "root-obj");
+
+      debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+        if (cmd === "Runtime.getProperties") {
+          return Promise.resolve({
+            result: [
+              {
+                name: "visible",
+                get: { type: "function", objectId: "getter-obj" },
+                enumerable: true,
+              },
+            ],
+            internalProperties: [
+              { name: "[[Prototype]]", value: { type: "object", objectId: "proto-obj" } },
+            ],
+            privateProperties: [
+              { name: "#secret", value: { type: "object", objectId: "private-obj" } },
+            ],
+          });
+        }
+        return Promise.resolve();
+      });
+      await getHandler("webview:get-console-properties")(null, 42, "pane-1", rowId, "root-obj");
+      await getHandler("webview:clear-console-capture")(null, 42, "pane-1");
+
+      for (const id of ["getter-obj", "proto-obj", "private-obj"]) {
+        expect(releasedIds()).toContain(id);
+      }
+    });
+
+    it("refuses an objectId the named row does not own", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      const rowId = await emitObjectRow("pane-1", "root-obj");
+
+      debuggerMock.sendCommand.mockClear();
+      const result = await getHandler("webview:get-console-properties")(
+        null,
+        42,
+        "pane-1",
+        rowId,
+        "some-other-objects-handle"
+      );
+
+      expect(result).toEqual({ properties: [] });
+      expect(debuggerMock.sendCommand).not.toHaveBeenCalledWith(
+        "Runtime.getProperties",
+        expect.anything()
+      );
+    });
+
     it("refuses to expand a row that no longer owns its handles", async () => {
       cleanup = registerWebviewHandlers(deps);
       const rowId = await emitObjectRow("pane-1", "root-obj");
@@ -1019,6 +1262,28 @@ describe("registerWebviewHandlers", () => {
         "Runtime.getProperties",
         expect.anything()
       );
+    });
+  });
+
+  describe("session disposal (#12298)", () => {
+    it("disposes the session when the guest is destroyed", async () => {
+      const destroyCallbacks: Array<() => void> = [];
+      mockWebContents.once.mockImplementation((event: string, cb: () => void) => {
+        if (event === "destroyed") destroyCallbacks.push(cb);
+      });
+
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      expect(destroyCallbacks).toHaveLength(1);
+
+      destroyCallbacks[0]!();
+
+      // Disposal detached the listeners, so the next start has to bind fresh
+      // ones rather than reuse a session for a guest that is gone.
+      expect(debuggerMock.off).toHaveBeenCalledWith("message", expect.any(Function));
+      debuggerMock.on.mockClear();
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      expect(debuggerMock.on).toHaveBeenCalledWith("message", expect.any(Function));
     });
   });
 

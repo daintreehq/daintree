@@ -71,7 +71,7 @@ async function getHandler() {
   const { webviewEmulationNamespace } = await import("../webviewEmulation.js");
   return webviewEmulationNamespace.ops.setDeviceEmulation.handler as (
     payload: DeviceEmulationRequest
-  ) => Promise<void>;
+  ) => Promise<{ applied: boolean }>;
 }
 
 function cdpCalls(guest: MockGuest) {
@@ -160,7 +160,7 @@ describe("webviewEmulation handler", () => {
     expect(guest.setUserAgent).toHaveBeenLastCalledWith("Daintree/1.0 Electron desktop UA");
   });
 
-  it("does not re-issue touch commands when the touch state is unchanged", async () => {
+  it("does not re-issue touch commands when the state is known and unchanged", async () => {
     const guest = makeGuest();
     guestRegistry.set(7, guest);
     const handler = await getHandler();
@@ -194,7 +194,7 @@ describe("webviewEmulation handler", () => {
     guestRegistry.set(7, guest);
 
     const handler = await getHandler();
-    await expect(handler(applyRequest({ emulation: null }))).resolves.toBeUndefined();
+    await expect(handler(applyRequest({ emulation: null }))).resolves.toEqual({ applied: true });
   });
 
   it("ignores a guest registered to a different panel", async () => {
@@ -203,10 +203,77 @@ describe("webviewEmulation handler", () => {
     dialogService.getPanelId.mockReturnValue("panel-b");
 
     const handler = await getHandler();
-    await handler(applyRequest());
+    const result = await handler(applyRequest());
 
+    expect(result).toEqual({ applied: false });
     expect(guest.enableDeviceEmulation).not.toHaveBeenCalled();
     expect(guest.setUserAgent).not.toHaveBeenCalled();
+  });
+
+  it("reports applied:false rather than letting the caller cache a lie", async () => {
+    const handler = await getHandler();
+    await expect(handler(applyRequest())).resolves.toEqual({ applied: false });
+
+    guestRegistry.set(7, makeGuest());
+    await expect(handler(applyRequest())).resolves.toEqual({ applied: true });
+  });
+
+  it("does not let a clear finish underneath a newer preset", async () => {
+    const guest = makeGuest();
+    const pending: Array<() => void> = [];
+    guest.debugger.sendCommand.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+
+    // Apply a preset, then clear, then apply again — all while every CDP
+    // command is still outstanding.
+    const first = handler(applyRequest());
+    const cleared = handler(applyRequest({ emulation: null }));
+    const second = handler(applyRequest());
+
+    // Requests are serialized, so the next batch of CDP commands is only
+    // issued once the previous request finishes — keep draining past the
+    // moments when nothing is outstanding.
+    for (let i = 0; i < 200; i++) {
+      while (pending.length > 0) pending.shift()!();
+      await Promise.resolve();
+    }
+    await Promise.all([first, cleared, second]);
+
+    // Serialized, so the last request wins: the guest ends up emulated, not
+    // left with the clear's touch teardown applied on top of it.
+    const touchCalls = cdpCalls(guest)
+      .filter(([cmd]) => cmd === "Emulation.setTouchEmulationEnabled")
+      .map(([, params]) => (params as { enabled: boolean }).enabled);
+    expect(touchCalls[touchCalls.length - 1]).toBe(true);
+  });
+
+  it("re-issues touch commands after a partial failure instead of trusting the cache", async () => {
+    const guest = makeGuest();
+    // The first command lands, the second does not — the guest is now in a
+    // state the cache cannot describe.
+    let call = 0;
+    guest.debugger.sendCommand.mockImplementation(() => {
+      call += 1;
+      return call === 2 ? Promise.reject(new Error("boom")) : Promise.resolve();
+    });
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+
+    await handler(applyRequest());
+    guest.debugger.sendCommand.mockClear();
+    guest.debugger.sendCommand.mockImplementation(() => Promise.resolve());
+    await handler(applyRequest());
+
+    expect(cdpCalls(guest)).toContainEqual([
+      "Emulation.setTouchEmulationEnabled",
+      { enabled: true, maxTouchPoints: 5 },
+    ]);
   });
 
   it("ignores an unregistered guest", async () => {
@@ -222,6 +289,6 @@ describe("webviewEmulation handler", () => {
 
   it("does nothing when the guest is gone", async () => {
     const handler = await getHandler();
-    await expect(handler(applyRequest())).resolves.toBeUndefined();
+    await expect(handler(applyRequest())).resolves.toEqual({ applied: false });
   });
 });

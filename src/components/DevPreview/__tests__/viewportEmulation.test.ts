@@ -37,7 +37,10 @@ describe("buildEmulationParams", () => {
 });
 
 describe("applyDevPreviewEmulation", () => {
-  const setDeviceEmulation = vi.fn<(payload: unknown) => Promise<void>>(() => Promise.resolve());
+  const setDeviceEmulation = vi.fn<(payload: unknown) => Promise<{ applied: boolean }>>(() =>
+    Promise.resolve({ applied: true })
+  );
+  const registerPanel = vi.fn<() => Promise<void>>(() => Promise.resolve());
 
   function makeWebview(webContentsId = 42): Electron.WebviewTag {
     return {
@@ -47,8 +50,11 @@ describe("applyDevPreviewEmulation", () => {
 
   beforeEach(() => {
     setDeviceEmulation.mockClear();
+    setDeviceEmulation.mockResolvedValue({ applied: true });
+    registerPanel.mockClear();
+    registerPanel.mockResolvedValue(undefined);
     (globalThis as unknown as { window: { electron: unknown } }).window = {
-      electron: { webview: { setDeviceEmulation } },
+      electron: { webview: { setDeviceEmulation, registerPanel } },
     } as never;
   });
 
@@ -92,5 +98,25 @@ describe("applyDevPreviewEmulation", () => {
 
     expect(() => applyDevPreviewEmulation(detached, "panel-1", "iphone", false, 1)).toThrow();
     expect(setDeviceEmulation).not.toHaveBeenCalled();
+  });
+
+  it("registers the guest before applying, so main can resolve ownership", async () => {
+    await applyDevPreviewEmulation(makeWebview(7), "panel-1", "iphone", false, 1);
+
+    expect(registerPanel).toHaveBeenCalledWith(7, "panel-1");
+    expect(registerPanel.mock.invocationCallOrder[0]!).toBeLessThan(
+      setDeviceEmulation.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("passes main's applied verdict back to the caller", async () => {
+    setDeviceEmulation.mockResolvedValueOnce({ applied: false });
+    await expect(
+      applyDevPreviewEmulation(makeWebview(), "panel-1", "iphone", false, 1)
+    ).resolves.toBe(false);
+
+    await expect(
+      applyDevPreviewEmulation(makeWebview(), "panel-1", "iphone", false, 1)
+    ).resolves.toBe(true);
   });
 });

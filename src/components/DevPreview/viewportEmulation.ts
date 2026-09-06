@@ -28,8 +28,14 @@ export function buildEmulationParams(
  * resolves the guest from `getWebContentsId()` and owns the original-UA
  * bookkeeping needed to restore desktop.
  *
- * Throws if the webview is already detached (`getWebContentsId()` raises
- * synchronously); callers decide whether that is worth reporting.
+ * Registration is chained ahead of the apply because main gates every
+ * guest-keyed handler on the panel registry: emulation can otherwise reach main
+ * before the capture hook has registered the guest and be silently dropped.
+ * `registerPanel` is idempotent, so the duplicate call is free.
+ *
+ * Resolves `false` when main reports it did not apply, so callers do not cache
+ * a preset as active on a guest that never received it. Throws if the webview
+ * is already detached (`getWebContentsId()` raises synchronously).
  */
 export function applyDevPreviewEmulation(
   webviewElement: Electron.WebviewTag,
@@ -37,21 +43,26 @@ export function applyDevPreviewEmulation(
   presetId: ViewportPresetId | undefined,
   rotated: boolean,
   dpr: number
-): Promise<void> {
+): Promise<boolean> {
   const webContentsId = webviewElement.getWebContentsId();
   const params = buildEmulationParams(presetId, rotated, dpr);
-  return window.electron.webview.setDeviceEmulation({
-    webContentsId,
-    panelId,
-    emulation:
-      presetId && params
-        ? {
-            params,
-            userAgent: getViewportPreset(presetId).userAgent,
-            // Every preset in the table is a phone or tablet, so a preset being
-            // active is the same signal as "emulate a touch screen".
-            touch: true,
-          }
-        : null,
-  });
+  return window.electron.webview
+    .registerPanel(webContentsId, panelId)
+    .then(() =>
+      window.electron.webview.setDeviceEmulation({
+        webContentsId,
+        panelId,
+        emulation:
+          presetId && params
+            ? {
+                params,
+                userAgent: getViewportPreset(presetId).userAgent,
+                // Every preset in the table is a phone or tablet, so a preset
+                // being active is the same signal as "emulate a touch screen".
+                touch: true,
+              }
+            : null,
+      })
+    )
+    .then((result) => result.applied);
 }
