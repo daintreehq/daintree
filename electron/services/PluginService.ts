@@ -698,6 +698,19 @@ export class PluginService {
    */
   private commandModulePaths = new Map<string, string>();
   /**
+   * In-flight command-handler discovery, keyed by plugin id. Set synchronously
+   * on the same tick the plugin becomes addressable and cleared when probing
+   * settles, so activation can tell "this plugin has no command handlers" apart
+   * from "we have not looked yet" (#12274).
+   *
+   * Without it, an activation trigger that lands mid-probe reads an empty
+   * {@link commandModulePaths}, concludes the plugin needs no worker, and
+   * `activatePlugin` latches that verdict in `activatedPlugins` for the
+   * plugin's lifetime — leaving a commands-only plugin permanently unable to
+   * fork the worker its commands now need.
+   */
+  private commandDiscovery = new Map<string, Promise<void>>();
+  /**
    * Set of namespaced action ids whose descriptor was registered from
    * `manifest.contributes.commands`. Distinguishes a manifest-declared
    * command (whose handler is the lazy `src/{cmd.id}.{ext}` import) from
@@ -2059,7 +2072,21 @@ export class PluginService {
     // front). Probes happen after `plugins.set()` so
     // `validateAndBuildActionDescriptor` sees the plugin as loaded.
     if (manifest.contributes.commands.length > 0) {
-      await this.registerManifestCommands(pluginId, plugin);
+      // Published before this stack yields, so an activation trigger racing
+      // discovery waits for the answer instead of reading a half-filled map
+      // (#12274). Calling `registerManifestCommands` runs its body up to the
+      // first probe, but nothing else can interleave until this stack suspends —
+      // and nothing runs between `plugins.set()` above and here either, so
+      // there is no gap on either side to cover.
+      const discovery = this.registerManifestCommands(pluginId, plugin);
+      this.commandDiscovery.set(pluginId, discovery);
+      try {
+        await discovery;
+      } finally {
+        if (this.commandDiscovery.get(pluginId) === discovery) {
+          this.commandDiscovery.delete(pluginId);
+        }
+      }
     }
 
     return plugin;
@@ -2121,11 +2148,15 @@ export class PluginService {
       owners.add(descriptor.id);
       registered = true;
 
-      // A project plugin's `src/` is authoring source the host never reads: the
-      // load contract is the committed `dist/`, and importing `src/` here would
-      // run a project's uncompiled code in Electron main, outside the worker
-      // that gives every other plugin its crash isolation. Project plugins
-      // register command handlers from their worker entry point instead.
+      // A project plugin's `src/` is authoring source the host never reads —
+      // its load contract is the committed `dist/`, so there is nothing to
+      // probe for. That is a distribution rule, not a trust one: an installed
+      // or dev-linked plugin's handler module is imported and run inside that
+      // plugin's own worker like every other surface it contributes (#12274),
+      // so what this gate selects is which plugins use the filesystem
+      // convention at all, never which ones get to run code in Electron main.
+      // Project plugins register command handlers from their entry point with
+      // `host.registerAction` instead.
       const resolvedPath =
         plugin.origin === "project"
           ? null
@@ -2172,13 +2203,22 @@ export class PluginService {
   }
 
   /**
-   * Lazily resolve a manifest-declared command's handler module from
-   * {@link commandModulePaths}, import it via `runImport`, and cache the
-   * default export in {@link pluginActionHandlers}. Concurrent dispatches
-   * race on the cache: the first to set wins; subsequent setters drop the
-   * (identical) handler to avoid clobbering an in-flight set. ESM's
-   * URL-keyed module cache makes the duplicate import effectively free, so
-   * a full in-flight promise map adds no value here.
+   * Resolve the handler for a manifest-declared command, deferred to first
+   * dispatch so a plugin with twenty commands pays no import cost at load.
+   *
+   * Where that handler RUNS is the whole point of #12274. A non-builtin's
+   * module is imported and invoked inside that plugin's own worker; what comes
+   * back here is a synthetic stand-in that relays the call over the port, the
+   * same shape `host.registerAction` has produced for worker-registered actions
+   * since #5600. Only a built-in — app-bundled code, never uninstalled, never
+   * dev-symlinked — is imported into Electron main, and it says so by name
+   * rather than by being what's left over after the other branches.
+   *
+   * The synthetic is deliberately NOT cached in {@link pluginActionHandlers}:
+   * it would outlive the worker generation it was built against, and a stale
+   * bridge is exactly the binding a reload exists to discard. Rebuilding the
+   * closure per dispatch costs nothing and cannot go stale, so no invalidation
+   * hook is needed at any of the four teardown paths.
    */
   private async loadManifestCommandHandler(channel: string): Promise<ActionHandler> {
     const cached = this.pluginActionHandlers.get(channel);
@@ -2189,6 +2229,9 @@ export class PluginService {
     }
     const descriptor = this.pluginActions.get(channel);
     const pluginId = descriptor?.pluginId ?? channel;
+    if (this.plugins.get(pluginId)?.isBuiltin !== true) {
+      return this.buildWorkerCommandHandler(pluginId, channel, resolvedPath);
+    }
     const mod = (await this.runImport(pluginId, resolvedPath)) as { default?: unknown };
     if (typeof mod.default !== "function") {
       throw new Error(
@@ -2203,6 +2246,36 @@ export class PluginService {
     if (existing) return existing;
     this.pluginActionHandlers.set(channel, handler);
     return handler;
+  }
+
+  /**
+   * Build the stand-in that relays a manifest command into its plugin's worker
+   * (#12274). The worker entry is looked up when the command RUNS, not when
+   * this closure is built, so a reload that replaced the worker in between is
+   * routed to the live generation rather than a dead one.
+   *
+   * `dispatchHandler` has already awaited `activatePlugin`, but that promise
+   * never rejects (#9428) — a plugin whose activation failed still arrives
+   * here, just with no worker behind it. That reads as a missing entry and
+   * fails with a message naming activation, so the toast doesn't blame the
+   * handler file for a failure that happened before it.
+   */
+  private buildWorkerCommandHandler(
+    pluginId: string,
+    channel: string,
+    resolvedPath: string
+  ): ActionHandler {
+    return async (args: unknown) => {
+      const entry = this.pluginWorkers.get(pluginId);
+      if (!entry || entry.activation.ok === false) {
+        throw new Error(`Plugin "${pluginId}" is not activated; cannot run command "${channel}"`);
+      }
+      // `entry.activation.ok` describes the last outcome the bridge REPORTED,
+      // which survives the worker it described: after a crash the entry and its
+      // stale `ok: true` both persist while a replacement forks. The bridge's
+      // own generation state is the live fact, so it makes the final call.
+      return entry.bridge.invokeCommand(channel, resolvedPath, args);
+    };
   }
 
   /**
@@ -2224,6 +2297,30 @@ export class PluginService {
   }
 
   /**
+   * Whether a non-builtin plugin has code for a worker to run (#12274).
+   *
+   * `main` is the obvious case. The other is a plugin that declares commands
+   * and ships handler modules but no entry point: before this, its `src/` files
+   * were imported into Electron main precisely BECAUSE it had no worker, which
+   * is the asymmetry the issue closes. It needs one now.
+   *
+   * Reads {@link commandModulePaths}, so it is only meaningful after
+   * `registerManifestCommands` has probed — which is load time, well before any
+   * activation trigger. A command whose file is missing, whose only sibling is
+   * `.ts`, or whose registration was rejected leaves no entry, so a descriptor
+   * with nothing behind it still forks nothing.
+   */
+  private hasWorkerCode(pluginId: string, plugin: LoadedPlugin): boolean {
+    if (plugin.isBuiltin) return false;
+    if (plugin.resolvedMain) return true;
+    return (
+      plugin.manifest.contributes?.commands?.some((cmd) =>
+        this.commandModulePaths.has(`${pluginId}.${cmd.id}`)
+      ) ?? false
+    );
+  }
+
+  /**
    * Actually import the plugin's `main` module, create its host, and run
    * `activate()`. Wrapped by {@link activatePlugin} for idempotency &
    * concurrent-caller dedup — direct callers will re-import on every call.
@@ -2232,7 +2329,7 @@ export class PluginService {
    */
   private async _doActivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
-    if (!plugin || !plugin.resolvedMain) return;
+    if (!plugin) return;
     // User-installed plugins activate inside a `utilityProcess.fork` worker
     // (#10526). Dev plugins hot-reload on each `dist/index.js` rebuild; packaged
     // prod plugins run the same worker without the file watcher. Out-of-process
@@ -2247,8 +2344,15 @@ export class PluginService {
     // builders are SYNCHRONOUS — they can't cross the worker's async MessagePort
     // (#8879), so routing built-ins through the worker would silently break forge.
     if (!plugin.isBuiltin) {
+      // Eligibility (`main`, or a manifest command with a resolved handler) is
+      // decided by `activateViaWorker` itself — it is the same predicate its
+      // reuse guard needs, so it lives in one place.
       return this.activateViaWorker(pluginId, plugin);
     }
+    // A built-in with no `main` has nothing to activate. Its manifest commands
+    // are still dispatchable: `loadManifestCommandHandler` imports them on
+    // demand, in-process, which for a built-in is the intended path (#12274).
+    if (!plugin.resolvedMain) return;
     try {
       // Bound the dynamic import — a built-in with a hanging top-level await
       // would otherwise pin this promise forever and stall `Promise.allSettled`
@@ -2335,7 +2439,30 @@ export class PluginService {
    * Only a fork failure (no worker at all) rejects.
    */
   private async activateViaWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
-    if (!plugin.resolvedMain) return;
+    // Worker eligibility reads the probed handler paths, so it cannot be decided
+    // while the probe is still running (#12274) — deciding early would latch
+    // "no worker needed" for the plugin's lifetime. Only a plugin with no `main`
+    // depends on the answer, though, and the wait is deliberately confined to
+    // it: `main` alone already makes a plugin eligible, so making every plugin
+    // queue behind a filesystem probe would let one unresponsive mount stall an
+    // activation that never needed the probe's result.
+    if (!plugin.resolvedMain) {
+      const discovery = this.commandDiscovery.get(pluginId);
+      if (discovery) {
+        await discovery.catch(() => undefined);
+        // Post-await liveness re-check (#9428). Throwing rather than returning:
+        // a return reads as a successful activation, and `activatePlugin` would
+        // leave this fulfilled promise cached under an id whose CURRENT
+        // generation was never activated — every later trigger would then get
+        // the stale promise back and no worker would ever fork. The rejection
+        // path drops the in-flight entry instead, so the live generation can
+        // still activate (#10899); `activatePlugin` itself still never rejects.
+        if (this.plugins.get(pluginId) !== plugin) {
+          throw new Error(`Plugin "${pluginId}" was replaced during activation`);
+        }
+      }
+    }
+    if (!this.hasWorkerCode(pluginId, plugin)) return;
     // A re-activation while a worker is already live is a no-op — the worker
     // owns its own reload cycle; activatePlugin's idempotency normally prevents
     // this, but guard defensively against the unload-race re-entry path.
@@ -2378,7 +2505,10 @@ export class PluginService {
       // binding instead of reconstructing one from the instance key.
       identity: host.pluginInfo,
       pluginDir: plugin.dir,
-      bundlePath: plugin.resolvedMain,
+      // Absent for a commands-only plugin: the worker boots the harness and
+      // reports activated without importing anything, then imports each command
+      // handler on its first dispatch (#12274).
+      bundlePath: plugin.resolvedMain ?? undefined,
       mode: plugin.devMode ? "dev" : "prod",
       permissionExecArgv,
     });
@@ -2548,6 +2678,18 @@ export class PluginService {
    * retry; a hang only affects the first attempt.
    */
   private async runImport(pluginId: string, resolvedMain: string): Promise<unknown> {
+    // Built-in origin is a POSITIVE requirement to run plugin code in Electron
+    // main, not the default that other branches happen to route around
+    // (#12274). Both current callers already select for it — the built-in arm
+    // of `_doActivate`, and the built-in arm of `loadManifestCommandHandler` —
+    // so this changes nothing today and is here for the next caller, where
+    // reaching main by omission is exactly the mistake that would be easy to
+    // make and invisible once made.
+    if (this.plugins.get(pluginId)?.isBuiltin !== true) {
+      throw new Error(
+        `Plugin "${pluginId}" is not a built-in and must not be imported into Electron main`
+      );
+    }
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([

@@ -1207,9 +1207,39 @@ export class PluginDevWorkerMainBridge {
     }
   }
 
+  /**
+   * Run a manifest-declared command's handler inside this plugin's worker
+   * (#12274). The only invoke kind main initiates on its own rather than
+   * against something the worker registered: the handler module is imported
+   * lazily, worker-side, from `resolvedPath` — the absolute path
+   * `PluginService.resolveCommandHandlerPath` already probed and containment-
+   * checked. Public because `PluginService` is the caller; every other kind is
+   * driven from `dispatchHostNotify` inside this class.
+   */
+  invokeCommand(namespacedId: string, resolvedPath: string, args: unknown): Promise<unknown> {
+    // Only a generation that has COMMITTED activation can serve a command.
+    // `workerHost.isReady()` alone is not that test: it is true the instant a
+    // child exists, which after a crash means the replacement counts as ready
+    // while it is still booting — before it has been sent `start`, so its proxy
+    // does not exist yet and the worker drops the message on the floor. Nothing
+    // ever answers, and an invoke has no timeout, so the caller would hang and
+    // the phantom pending invoke would block idle disposal too. Every other
+    // invoke kind is implicitly protected by re-registration (a retired
+    // generation's handlers are unregistered, so main has nothing to call);
+    // manifest commands are resolved from the plugin's manifest and survive
+    // retirement, so they need the check made explicitly.
+    if (this.activationPhase !== "succeeded") {
+      return Promise.reject(
+        new Error(`Plugin "${this.pluginId}" worker is not ready to run command "${namespacedId}"`)
+      );
+    }
+    return this.invoke({ kind: "command", namespacedId, resolvedPath, args });
+  }
+
   private invoke(
     target:
       | { kind: "action"; namespacedId: string; args: unknown }
+      | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
       | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
       | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
   ): Promise<unknown> {
@@ -1226,6 +1256,15 @@ export class PluginDevWorkerMainBridge {
           requestId,
           kind: "action",
           namespacedId: target.namespacedId,
+          args: target.args,
+        });
+      } else if (target.kind === "command") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "command",
+          namespacedId: target.namespacedId,
+          resolvedPath: target.resolvedPath,
           args: target.args,
         });
       } else if (target.kind === "handler") {

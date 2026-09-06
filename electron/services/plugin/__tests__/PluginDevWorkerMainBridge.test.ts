@@ -1861,3 +1861,109 @@ describe("PluginDevWorkerMainBridge", () => {
     });
   });
 });
+
+describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Drive a bridge to a committed activation, the only state that serves commands. */
+  function makeActivatedBridge() {
+    const made = makeBridge();
+    made.workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+    return made;
+  }
+
+  it("sends the command id, the path main resolved, and the args", async () => {
+    const { workerHost, bridge } = makeActivatedBridge();
+
+    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/plugins/acme.demo/src/plan.js", {
+      issue: 42,
+    });
+
+    const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "command");
+    expect(invoke).toMatchObject({
+      namespacedId: "acme.demo.plan",
+      resolvedPath: "/plugins/acme.demo/src/plan.js",
+      args: { issue: 42 },
+    });
+
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invoke.requestId,
+      ok: true,
+      result: "planned",
+    });
+    await expect(resultPromise).resolves.toBe("planned");
+  });
+
+  it("rejects with the worker's own error when the handler fails", async () => {
+    const { workerHost, bridge } = makeActivatedBridge();
+
+    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {});
+    const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "command");
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invoke.requestId,
+      ok: false,
+      error: "handler blew up",
+    });
+
+    await expect(resultPromise).rejects.toThrow("handler blew up");
+  });
+
+  it("rejects a command sent to a worker that is not running", async () => {
+    const { workerHost, bridge } = makeActivatedBridge();
+    workerHost.ready = false;
+
+    await expect(bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {})).rejects.toThrow(
+      /not running/
+    );
+  });
+
+  it("rejects an in-flight command when the bridge is disposed", async () => {
+    const { bridge } = makeActivatedBridge();
+
+    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {});
+    const assertion = expect(resultPromise).rejects.toThrow();
+    bridge.dispose();
+    await assertion;
+  });
+
+  it("refuses a command before this generation has activated", async () => {
+    // A fresh bridge has a forked child but no completed handshake.
+    const { workerHost, bridge } = makeBridge();
+
+    await expect(bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {})).rejects.toThrow(
+      /not ready to run command/
+    );
+    expect(workerHost.sent.find((m: any) => m.type === "invoke")).toBeUndefined();
+  });
+
+  it("refuses a NEW command while a crashed worker's replacement is booting", async () => {
+    // Regression: `workerHost.isReady()` is true the instant a child exists, so
+    // a replacement counts as ready before it has been sent `start` — its proxy
+    // does not exist yet, so it drops the message and nothing ever answers.
+    // Invokes have no timeout, so the caller would hang forever and the phantom
+    // pending invoke would keep the worker off the idle-disposal path.
+    const { workerHost, bridge } = makeActivatedBridge();
+    // Sanity: it works before the crash.
+    void bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}).catch(() => undefined);
+    expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(1);
+
+    bridge.retire("worker crashed");
+
+    await expect(bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {})).rejects.toThrow(
+      /not ready to run command/
+    );
+    // Nothing new went to the booting replacement.
+    expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(1);
+
+    // Service returns exactly when the replacement finishes its own handshake:
+    // `ready` marks the new generation as the live one, and its `activated`
+    // commits it.
+    workerHost.emit("ready");
+    workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+    void bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}).catch(() => undefined);
+    expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(2);
+  });
+});
