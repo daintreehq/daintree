@@ -85,8 +85,14 @@ export interface DevPreviewFrame {
  * recorded the right number of the wrong events still scores.
  */
 export interface DevPreviewDiagnosticExpectation {
-  type: "url-detected" | "output-error";
-  detail: string;
+  type:
+    "first-output" | "url-detected" | "candidate-url-chosen" | "marker-recognized" | "output-error";
+  /**
+   * The field of the event that says WHICH plant it came from — the URL for a
+   * bind, the error type for a fault, the marker kind for a recognition. Absent
+   * for `first-output`, which carries no detail of its own.
+   */
+  detail?: string;
 }
 
 export interface DevPreviewStreamPlan {
@@ -111,11 +117,13 @@ export interface DevPreviewStreamPlan {
   /**
    * The diagnostics-ring writes the pass must leave behind, in order.
    *
-   * Only the two the per-chunk handler makes synchronously: `url-detected` on
-   * a new bind and `output-error` on a newly-classified fault. The compile
-   * events are written from `setTimeout` callbacks (COMPILE_ARM_MS /
-   * COMPILE_CLEAR_MS) that cannot fire inside a synchronous feed loop, so
-   * expecting them would grade a healthy pass as broken.
+   * Only what the per-chunk handler writes synchronously, in its own order:
+   * `first-output` once, then per frame `url-detected` + `candidate-url-chosen`
+   * on a new bind, `marker-recognized` on a ready/compile line, and
+   * `output-error` on a newly-classified fault. The compile events are written
+   * from `setTimeout` callbacks (COMPILE_ARM_MS / COMPILE_CLEAR_MS) that cannot
+   * fire inside a synchronous feed loop, so expecting them would grade a
+   * healthy pass as broken.
    */
   expectedDiagnostics: DevPreviewDiagnosticExpectation[];
   decoyFrames: number;
@@ -132,6 +140,7 @@ class PlanBuilder {
   private readonly expectedUrls: string[] = [];
   private readonly expectedPolls: string[] = [];
   private pendingUrl: string | null = null;
+  private sawOutput = false;
   private readonly expectedErrorTypes: DevServerErrorType[] = [];
   private readonly expectedDiagnostics: DevPreviewDiagnosticExpectation[] = [];
   private readyAccelerations = 0;
@@ -143,11 +152,19 @@ class PlanBuilder {
   push(frame: DevPreviewFrame): this {
     this.frames.push(frame);
     this.chars += frame.text.length;
+    // Mirrors the emission order inside processDevPreviewOutput: the
+    // first-output probe runs before the scan, the URL branch before the marker
+    // check, and the error branch last.
+    if (!this.sawOutput && frame.text.length > 0) {
+      this.sawOutput = true;
+      this.expectedDiagnostics.push({ type: "first-output" });
+    }
     if (frame.expectsUrl !== undefined) {
       this.expectedUrls.push(frame.expectsUrl);
       this.expectedPolls.push(frame.expectsUrl);
       this.pendingUrl = frame.expectsUrl;
       this.expectedDiagnostics.push({ type: "url-detected", detail: frame.expectsUrl });
+      this.expectedDiagnostics.push({ type: "candidate-url-chosen", detail: frame.expectsUrl });
     }
     if (frame.isDecoy) this.decoys += 1;
     if (frame.expectsReadyAcceleration) {
@@ -156,6 +173,16 @@ class PlanBuilder {
     }
     if (frame.expectsCompileArm) this.compileArms += 1;
     if (frame.expectsCompileClear) this.compileClears += 1;
+    // A ready line and a compile line both surface as one recognition; the
+    // product labels it "ready" whenever the ready marker matched.
+    const readyLine = frame.expectsReadyAcceleration === true || frame.expectsCompileClear === true;
+    const compileLine = frame.expectsCompileArm === true;
+    if (readyLine || compileLine) {
+      this.expectedDiagnostics.push({
+        type: "marker-recognized",
+        detail: readyLine ? "ready" : "compile",
+      });
+    }
     if (frame.expectsErrorType !== undefined) {
       this.expectedErrorTypes.push(frame.expectsErrorType);
       this.expectedDiagnostics.push({ type: "output-error", detail: frame.expectsErrorType });
@@ -812,6 +839,8 @@ function diagnosticRingMisses(
       continue;
     }
     if (event.type === "url-detected" && event.url !== expected.detail) misses += 1;
+    if (event.type === "candidate-url-chosen" && event.url !== expected.detail) misses += 1;
+    if (event.type === "marker-recognized" && event.marker !== expected.detail) misses += 1;
     if (event.type === "output-error" && event.errorType !== expected.detail) misses += 1;
   }
 
