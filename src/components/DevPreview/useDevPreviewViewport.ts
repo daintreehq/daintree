@@ -127,7 +127,6 @@ export function useDevPreviewViewport({
       return;
     }
 
-    // eslint-disable-next-line react-compiler/react-compiler -- refs mutated inside an effect the compiler cannot prove is not render-phase
     const seq = ++emulationSeqRef.current;
     let request: Promise<boolean>;
     try {
