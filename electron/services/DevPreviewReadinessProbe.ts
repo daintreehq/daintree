@@ -1,19 +1,32 @@
 import http from "node:http";
 import https from "node:https";
-import WebSocket from "ws";
+import type {
+  DevPreviewReadinessOutcome,
+  DevPreviewReadinessRetryCause,
+} from "../../shared/types/ipc/devPreview.js";
 
 export const READINESS_TIMEOUT_MS = 30000;
 export const READINESS_POLL_INTERVAL_MS = 500;
 export const READINESS_REQUEST_TIMEOUT_MS = 5000;
-export const READINESS_HMR_TIMEOUT_MS = 1500;
 
-type ProbeResult = "ready" | "5xx" | "fail";
+interface ProbeResult {
+  outcome: DevPreviewReadinessOutcome;
+  status?: number;
+  cause?: DevPreviewReadinessRetryCause;
+}
 
-const HMR_PROBE_CANDIDATES: ReadonlyArray<{ path: string; subprotocols?: string[] }> = [
-  { path: "/", subprotocols: ["vite-hmr"] },
-  { path: "/_next/webpack-hmr" },
-  { path: "/ws" },
-];
+/** One settled request, reported to the caller for the diagnostics timeline. */
+export interface ReadinessAttempt {
+  url: string;
+  outcome: DevPreviewReadinessOutcome;
+  status?: number;
+  cause?: DevPreviewReadinessRetryCause;
+  /** 1-based poll round this request belonged to. */
+  attempt: number;
+  elapsedMs: number;
+  /** Budget left when the request settled; 0 once the deadline has passed. */
+  remainingMs: number;
+}
 
 function buildReadinessUrls(url: string): string[] | null {
   let parsed: URL;
@@ -35,7 +48,24 @@ function buildReadinessUrls(url: string): string[] | null {
   return [...new Set(urls)];
 }
 
-async function probeUrl(url: string, useHttps: boolean, signal: AbortSignal): Promise<ProbeResult> {
+/**
+ * Issue one readiness GET and classify what came back.
+ *
+ * A final HTTP response proves the server is bound and serving, so 401/403/404
+ * resolve as `reachable` rather than looping until the deadline — an auth-gated
+ * dev server or one with no route at `/` is a working server, and interpreting
+ * its status is the webview's job, not the probe's. 5xx stays separate because
+ * frameworks answer 500 from a shell that is still compiling.
+ *
+ * `timeoutMs` is clamped by the caller to the budget left, so a single request
+ * can never outlive the overall deadline.
+ */
+async function probeUrl(
+  url: string,
+  useHttps: boolean,
+  signal: AbortSignal,
+  timeoutMs: number
+): Promise<ProbeResult> {
   const requestModule = useHttps ? https : http;
 
   return new Promise<ProbeResult>((resolve) => {
@@ -47,148 +77,70 @@ async function probeUrl(url: string, useHttps: boolean, signal: AbortSignal): Pr
       signal.removeEventListener("abort", onAbort);
       resolve(value);
     };
+    const retry = (cause: DevPreviewReadinessRetryCause) => settle({ outcome: "retry", cause });
 
     try {
       const req = requestModule.request(
         url,
         {
           method: "GET",
-          timeout: READINESS_REQUEST_TIMEOUT_MS,
+          timeout: timeoutMs,
           ...(useHttps ? { rejectUnauthorized: false } : {}),
         },
         (res) => {
           res.resume();
           const status = res.statusCode ?? 0;
-          if (status >= 200 && status < 400) {
-            settle("ready");
-          } else if (status >= 500 && status < 600) {
-            settle("5xx");
+          if (status >= 500 && status < 600) {
+            settle({ outcome: "server-error", status });
+          } else if (status >= 200 && status < 500) {
+            settle({ outcome: "reachable", status });
           } else {
-            settle("fail");
+            // 1xx and anything out of range is not a completed final response;
+            // never claim readiness from it.
+            settle({ outcome: "retry", status, cause: "bad-status" });
           }
         }
       );
       onAbort = () => {
         req.destroy();
-        settle("fail");
+        retry("connection-error");
       };
-      req.on("error", () => settle("fail"));
+      req.on("error", () => retry("connection-error"));
       req.on("timeout", () => {
         req.destroy();
-        settle("fail");
+        retry("request-timeout");
       });
       if (signal.aborted) {
         req.destroy();
-        settle("fail");
+        retry("connection-error");
       } else {
         signal.addEventListener("abort", onAbort, { once: true });
         req.end();
       }
     } catch {
-      settle("fail");
+      retry("connection-error");
     }
   });
 }
 
-export async function probeHmrWebSocket(
-  httpUrl: string,
-  signal: AbortSignal,
-  timeoutMs = READINESS_HMR_TIMEOUT_MS
-): Promise<boolean> {
-  let parsed: URL;
-  try {
-    parsed = new URL(httpUrl);
-  } catch {
-    return false;
-  }
-
-  const wsScheme = parsed.protocol === "https:" ? "wss:" : "ws:";
-  const origin = `${parsed.protocol}//${parsed.host}`;
-  const sockets: WebSocket[] = [];
-
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let onAbort: () => void = () => {};
-
-    const cleanup = () => {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-      signal.removeEventListener("abort", onAbort);
-      for (const socket of sockets) {
-        try {
-          socket.terminate();
-        } catch {
-          // best-effort cleanup
-        }
-      }
-    };
-
-    const settle = (value: boolean) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(value);
-    };
-
-    if (signal.aborted) {
-      settle(false);
-      return;
-    }
-
-    let pending = HMR_PROBE_CANDIDATES.length;
-
-    const isSecure = wsScheme === "wss:";
-    const baseOptions = {
-      headers: { Origin: origin },
-      ...(isSecure ? { rejectUnauthorized: false } : {}),
-    };
-
-    for (const candidate of HMR_PROBE_CANDIDATES) {
-      const wsUrl = `${wsScheme}//${parsed.host}${candidate.path}`;
-      let socket: WebSocket;
-      try {
-        socket = candidate.subprotocols
-          ? new WebSocket(wsUrl, candidate.subprotocols, baseOptions)
-          : new WebSocket(wsUrl, baseOptions);
-      } catch {
-        pending -= 1;
-        if (pending === 0) settle(false);
-        continue;
-      }
-      sockets.push(socket);
-
-      // ws emits both "error" and "close" on a failed connection. Guard so a single
-      // socket can only decrement `pending` once regardless of event ordering.
-      let counted = false;
-      const onFail = () => {
-        if (counted) return;
-        counted = true;
-        pending -= 1;
-        if (pending === 0 && !settled) settle(false);
-      };
-      socket.once("open", () => settle(true));
-      socket.once("error", onFail);
-      socket.once("close", onFail);
-    }
-
-    if (pending === 0) {
-      settle(false);
-      return;
-    }
-
-    onAbort = () => settle(false);
-    signal.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => settle(false), timeoutMs);
-  });
-}
-
+/**
+ * Poll a dev server until it answers, or until `timeoutMs` is genuinely spent.
+ *
+ * The budget is a real deadline, not a between-rounds check: it is composed
+ * once into an AbortSignal that every request shares, and each request's own
+ * timeout is clamped to the time left, so a round of slow candidates cannot
+ * overshoot the way a fixed 5s-per-candidate round could.
+ *
+ * A 5xx latches `hasSeen5xx` and requires a confirming success in a *later*
+ * round — a Next.js 500 served from a compiling shell must not flip the panel
+ * to "running" (#8294, #9317). The confirming round ends the candidate loop so
+ * two loopback aliases in one pass cannot satisfy both halves back to back.
+ */
 export async function waitForServerReady(
   url: string,
   signal: AbortSignal,
-  timeoutMs = READINESS_TIMEOUT_MS
+  timeoutMs = READINESS_TIMEOUT_MS,
+  onAttempt?: (attempt: ReadinessAttempt) => void
 ): Promise<boolean> {
   const deadline = performance.now() + timeoutMs;
   let useHttps: boolean;
@@ -201,25 +153,68 @@ export async function waitForServerReady(
     return false;
   }
 
+  if (signal.aborted) return false;
+
+  // Composed once, not per request: every candidate and every round shares this
+  // signal, so the deadline fires exactly once and cancellation from the caller
+  // (an output error aborting the in-flight poll) still propagates.
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const probeSignal = AbortSignal.any([signal, timeoutSignal]);
+
   let hasSeen5xx = false;
   let awaitingConfirmation = false;
+  let attempt = 0;
+  // Last reported outcome per candidate. A poll against a refused port settles
+  // identically every 500ms; reporting only changes keeps the timeline to one
+  // row per candidate instead of flooding a 100-event ring.
+  const lastReported = new Map<string, string>();
+
+  const report = (candidateUrl: string, result: ProbeResult, elapsedMs: number) => {
+    if (!onAttempt) return;
+    const key = `${result.outcome}:${result.status ?? ""}:${result.cause ?? ""}`;
+    if (lastReported.get(candidateUrl) === key) return;
+    lastReported.set(candidateUrl, key);
+    onAttempt({
+      url: candidateUrl,
+      outcome: result.outcome,
+      ...(result.status !== undefined ? { status: result.status } : {}),
+      ...(result.cause !== undefined ? { cause: result.cause } : {}),
+      attempt,
+      elapsedMs: Math.round(elapsedMs),
+      remainingMs: Math.max(0, Math.round(deadline - performance.now())),
+    });
+  };
 
   while (performance.now() < deadline) {
     if (signal.aborted) return false;
+    attempt += 1;
 
     for (const candidateUrl of urls) {
       if (signal.aborted) return false;
-      const result = await probeUrl(candidateUrl, useHttps, signal);
-      if (result === "5xx") {
+      // Clamp each request to what is actually left. Without this a round of
+      // three candidates could spend 15s against a 30s budget that had 2s left.
+      const budget = deadline - performance.now();
+      if (budget <= 0) break;
+      const requestTimeout = Math.min(READINESS_REQUEST_TIMEOUT_MS, Math.ceil(budget));
+
+      const startedAt = performance.now();
+      const result = await probeUrl(candidateUrl, useHttps, probeSignal, requestTimeout);
+      report(candidateUrl, result, performance.now() - startedAt);
+
+      if (result.outcome === "server-error") {
         hasSeen5xx = true;
         awaitingConfirmation = false;
-      } else if (result === "ready") {
+      } else if (result.outcome === "reachable") {
         if (!hasSeen5xx || awaitingConfirmation) {
-          await probeHmrWebSocket(candidateUrl, signal);
           if (signal.aborted) return false;
           return true;
         }
+        // First success after a 5xx only arms the confirmation. End the round
+        // here so the confirming observation lands after a poll interval —
+        // a sibling candidate answering in the same pass proves nothing about
+        // whether the compile finished.
         awaitingConfirmation = true;
+        break;
       }
     }
 

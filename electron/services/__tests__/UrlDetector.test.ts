@@ -419,5 +419,84 @@ describe("UrlDetector", () => {
         expect(result.compileMarker).toBe(false);
       });
     });
+
+    // #12299: PTY transport splits output at arbitrary offsets, so a marker
+    // line regularly arrives in two pieces. Matching only the current chunk
+    // dropped those markers permanently.
+    describe("markers split across chunk boundaries", () => {
+      const READY_LINE = "  VITE v8.0.1  ready in 87 ms";
+      const COMPILE_LINE = "[vite] hmr update /src/App.tsx";
+
+      function feed(chunks: string[]): Array<{ readyMarker: boolean; compileMarker: boolean }> {
+        let buffer = "";
+        return chunks.map((chunk) => {
+          const result = detector.scanOutput(chunk, buffer);
+          buffer = result.buffer;
+          return { readyMarker: result.readyMarker, compileMarker: result.compileMarker };
+        });
+      }
+
+      it("detects a ready marker at every split position", () => {
+        for (let split = 1; split < READY_LINE.length; split++) {
+          detector = new UrlDetector();
+          const results = feed([READY_LINE.slice(0, split), READY_LINE.slice(split)]);
+          expect(
+            results.some((r) => r.readyMarker),
+            `split at ${split}`
+          ).toBe(true);
+        }
+      });
+
+      it("detects a compile marker at every split position", () => {
+        for (let split = 1; split < COMPILE_LINE.length; split++) {
+          detector = new UrlDetector();
+          const results = feed([COMPILE_LINE.slice(0, split), COMPILE_LINE.slice(split)]);
+          expect(
+            results.some((r) => r.compileMarker),
+            `split at ${split}`
+          ).toBe(true);
+        }
+      });
+
+      it("detects a ready marker split across three chunks", () => {
+        const results = feed(["  VITE v8.0", ".1  ready", " in 87 ms"]);
+        expect(results.some((r) => r.readyMarker)).toBe(true);
+      });
+
+      it("reports a split marker exactly once", () => {
+        const results = feed(["  VITE v8.0.1  rea", "dy in 87 ms", "\nwatching for changes"]);
+        expect(results.filter((r) => r.readyMarker)).toHaveLength(1);
+      });
+
+      it("does not re-report a completed marker on later unrelated chunks", () => {
+        const results = feed([READY_LINE, "\n", "  ➜  press h + enter to show help", ""]);
+        expect(results.filter((r) => r.readyMarker)).toHaveLength(1);
+      });
+
+      it("reports a second genuine marker later in the stream", () => {
+        const results = feed([COMPILE_LINE, "\nsome unrelated output\n", COMPILE_LINE]);
+        expect(results.filter((r) => r.compileMarker)).toHaveLength(2);
+      });
+
+      it("detects a marker whose ANSI colour codes are split across chunks", () => {
+        const results = feed(["\x1b[36m  VITE v6.3.1\x1b[39m  \x1b[32mready", " in 456 ms\x1b[0m"]);
+        expect(results.some((r) => r.readyMarker)).toBe(true);
+      });
+
+      it("does not report a marker that lies wholly in the carried tail", () => {
+        const first = detector.scanOutput(READY_LINE, "");
+        expect(first.readyMarker).toBe(true);
+        const second = detector.scanOutput("still nothing to see", first.buffer);
+        expect(second.readyMarker).toBe(false);
+      });
+
+      it("keeps markers out of an unrelated session's buffer", () => {
+        // scanOutput is stateless — the caller's buffer is the only carry.
+        const other = detector.scanOutput("plain output", "");
+        expect(other.readyMarker).toBe(false);
+        const fresh = detector.scanOutput("dy in 87 ms", "");
+        expect(fresh.readyMarker).toBe(false);
+      });
+    });
   });
 });

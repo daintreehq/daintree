@@ -29,6 +29,27 @@ export function capDiagnosticText(text: string): string {
 }
 
 /**
+ * Strip credentials and query/fragment from a URL before it enters the
+ * timeline. A dev server's own URL is normally innocuous, but a configured one
+ * can carry a token in userinfo or a query parameter, and the timeline is
+ * user-visible and copyable. Origin plus path is all a reader needs to tell one
+ * candidate from another.
+ */
+export function sanitizeDiagnosticUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return capDiagnosticText(url);
+  }
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return capDiagnosticText(parsed.toString());
+}
+
+/**
  * Append a diagnostic event to a session key's bounded ring. Consecutive
  * identical proxy failures coalesce into one event with a count so a webview
  * retry storm can't evict the lifecycle history. Writing touches the key's

@@ -38,6 +38,57 @@ const COMPILE_MARKERS: RegExp[] = [
   /\bcompiling\s+\//i,
 ];
 
+// How much of the previous buffer is prepended before matching markers. PTY
+// transport splits output at arbitrary byte offsets, so a marker line can
+// straddle two chunks; every pattern above is far shorter than this window, so
+// prepending it is enough to reunite any split marker with its own tail.
+const MARKER_CARRY_MAX = 512;
+
+function toGlobal(pattern: RegExp): RegExp {
+  return pattern.flags.includes("g") ? pattern : new RegExp(pattern.source, `${pattern.flags}g`);
+}
+
+// Global clones so every occurrence in the window can be walked, not just the
+// first — see matchesAcrossBoundary.
+const READY_MARKERS_GLOBAL = READY_MARKERS.map(toGlobal);
+const COMPILE_MARKERS_GLOBAL = COMPILE_MARKERS.map(toGlobal);
+
+/**
+ * Match `patterns` against the boundary between the carried tail of previous
+ * output and the newly arrived chunk, accepting only matches that *end* inside
+ * the new text.
+ *
+ * That end-position rule is what makes this fire exactly once: a marker wholly
+ * contained in the carry has already been reported by the scan that received
+ * it, and a marker completed by this chunk necessarily ends past the boundary.
+ * Scanning the full 8192-char buffer instead would re-report every marker on
+ * every subsequent chunk, which for the ready marker means restarting the
+ * readiness poll on each keystroke of server output.
+ *
+ * Every occurrence has to be walked, not just the first: when the same marker
+ * appears twice — an HMR update already in the carry and a fresh one in the new
+ * chunk — the leading match ends inside the carry and would mask the one that
+ * actually just landed.
+ */
+function matchesAcrossBoundary(patterns: RegExp[], carry: string, chunk: string): boolean {
+  if (chunk.length === 0) return false;
+  const window = carry + chunk;
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(window)) !== null) {
+      if (match.index + match[0].length > carry.length) {
+        pattern.lastIndex = 0;
+        return true;
+      }
+      // These patterns cannot match empty, but a zero-width match would spin
+      // the loop forever on `lastIndex` — advance defensively.
+      if (match[0].length === 0) pattern.lastIndex += 1;
+    }
+  }
+  return false;
+}
+
 export class UrlDetector {
   scanOutput(data: string, buffer: string): ScanResult {
     const newBuffer =
@@ -56,9 +107,16 @@ export class UrlDetector {
     const preferredUrl = urls.length > 0 ? this.selectPreferredUrl(urls) : null;
     const error = detectDevServerError(newBuffer);
 
+    // Stripped separately so the boundary offset stays exact — stripping the
+    // concatenation would shift it by however many escape bytes the carry held.
+    const strippedCarry = stripAnsiAndOscCodes(buffer.slice(-MARKER_CARRY_MAX));
     const strippedChunk = stripAnsiAndOscCodes(data);
-    const readyMarker = READY_MARKERS.some((pattern) => pattern.test(strippedChunk));
-    const compileMarker = COMPILE_MARKERS.some((pattern) => pattern.test(strippedChunk));
+    const readyMarker = matchesAcrossBoundary(READY_MARKERS_GLOBAL, strippedCarry, strippedChunk);
+    const compileMarker = matchesAcrossBoundary(
+      COMPILE_MARKERS_GLOBAL,
+      strippedCarry,
+      strippedChunk
+    );
 
     return {
       url: preferredUrl,

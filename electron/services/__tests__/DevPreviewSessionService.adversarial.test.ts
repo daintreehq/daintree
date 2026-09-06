@@ -505,6 +505,61 @@ describe("DevPreviewSessionService adversarial", () => {
     expect(vi.mocked(http.request).mock.calls.length).toBeGreaterThan(callsBeforeSecondMarker);
   });
 
+  // #12299: the predicted-port path polls the allocator's URL but never sets
+  // pendingUrl (two recovery paths read that field as "a URL was seen in
+  // output"), so marker acceleration was gated off for the whole common case
+  // where the framework prints its ready line before its URL line.
+  it("lets a readiness marker accelerate a predicted-port poll with no URL in output", async () => {
+    const impl = ((_: unknown, __: unknown, _cb: (res: MockIncomingMessage) => void) => {
+      const req: MockRequest = {
+        on: (event, handler) => {
+          if (event === "error") setTimeout(() => handler(new Error("ECONNREFUSED")), 0);
+          return req;
+        },
+        end: () => {},
+        destroy: () => {},
+      };
+      return req;
+    }) as unknown as typeof http.request;
+    vi.mocked(http.request).mockImplementation(impl);
+
+    // No URL is ever detected — only the ready marker.
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("ready in")) return { buffer, readyMarker: true };
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    // Let the predicted-port poll start and settle into its poll interval.
+    await vi.advanceTimersByTimeAsync(50);
+    const callsBeforeMarker = vi.mocked(http.request).mock.calls.length;
+    expect(callsBeforeMarker).toBeGreaterThan(0);
+
+    ptyClient.emitData(started.terminalId!, "VITE v6.0.0  ready in 200 ms");
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(vi.mocked(http.request).mock.calls.length).toBeGreaterThan(callsBeforeMarker);
+  });
+
+  it("ignores a readiness marker when no readiness poll is in flight", async () => {
+    scanOutputMock.mockImplementation((data, buffer) => {
+      if (data.includes("ready in")) return { buffer, readyMarker: true };
+      return { buffer };
+    });
+
+    const started = await service.ensure(baseRequest);
+    await vi.advanceTimersByTimeAsync(50);
+    // Stop clears readinessAbort; predictedUrl survives on the session, so the
+    // liveness check is the only thing keeping a stray marker from re-probing.
+    await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+    const callsAfterStop = vi.mocked(http.request).mock.calls.length;
+
+    ptyClient.emitData(started.terminalId!, "VITE v6.0.0  ready in 200 ms");
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(vi.mocked(http.request).mock.calls.length).toBe(callsAfterStop);
+  });
+
   it("suppresses late state changes after dispose while stop is still waiting for the terminal to die", async () => {
     const started = await service.ensure(baseRequest);
     const terminalId = started.terminalId!;

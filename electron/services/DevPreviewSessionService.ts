@@ -13,6 +13,7 @@ import {
 } from "./DevPreviewDiskUsage.js";
 import {
   capDiagnosticText,
+  sanitizeDiagnosticUrl,
   recordDevPreviewDiagnostic,
   type DevPreviewDiagnosticInput,
   type DevPreviewDiagnosticsRingMap,
@@ -74,6 +75,14 @@ interface DevPreviewSession extends DevPreviewSessionState {
   pendingUrl: string | null;
   readinessAbort: AbortController | null;
   markerSeen: boolean;
+  sawOutput: boolean;
+  /**
+   * Monotonic deadline (performance.now basis) for this launch's readiness, set
+   * when the first poll starts and kept across marker- and URL-triggered
+   * re-polls. Without it each restart handed `waitForServerReady` a fresh 30s,
+   * so the 30s the UI promises could stretch to a multiple of itself.
+   */
+  readinessDeadline: number | null;
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
@@ -1107,6 +1116,8 @@ export class DevPreviewSessionService {
       pendingUrl: null,
       readinessAbort: null,
       markerSeen: false,
+      sawOutput: false,
+      readinessDeadline: null,
       needsInstall: false,
       isRunningInstall: false,
       installAttemptedGeneration: null,
@@ -1409,13 +1420,34 @@ export class DevPreviewSessionService {
     signal: AbortSignal,
     generation: number
   ): void {
-    void waitForServerReady(url, signal)
+    // One budget per launch. A ready marker or a newly detected URL restarts
+    // the probe, and each restart used to get a full READINESS_TIMEOUT_MS —
+    // so the deadline the error message quotes was not the one being enforced.
+    if (session.readinessDeadline === null) {
+      session.readinessDeadline = performance.now() + READINESS_TIMEOUT_MS;
+    }
+    const remainingMs = Math.max(1, Math.round(session.readinessDeadline - performance.now()));
+
+    void waitForServerReady(url, signal, remainingMs, (attempt) => {
+      if (signal.aborted || session.generation !== generation) return;
+      this.recordSessionDiagnostic(session, {
+        type: "readiness-http-attempt",
+        url: sanitizeDiagnosticUrl(attempt.url),
+        outcome: attempt.outcome,
+        ...(attempt.status !== undefined ? { status: attempt.status } : {}),
+        ...(attempt.cause !== undefined ? { cause: attempt.cause } : {}),
+        attempt: attempt.attempt,
+        elapsedMs: attempt.elapsedMs,
+        remainingMs: attempt.remainingMs,
+      });
+    })
       .then((ready) => {
         if (signal.aborted || session.generation !== generation) return;
         if (session.readinessAbort?.signal !== signal) return;
 
         session.pendingUrl = null;
         session.readinessAbort = null;
+        session.readinessDeadline = null;
 
         if (ready) {
           session.needsInstall = false;
@@ -1462,6 +1494,7 @@ export class DevPreviewSessionService {
 
         session.pendingUrl = null;
         session.readinessAbort = null;
+        session.readinessDeadline = null;
 
         const message = formatErrorMessage(err, "Dev server readiness check failed");
         console.warn("[DevPreviewSessionService] Readiness poll error:", {

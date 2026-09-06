@@ -29,6 +29,33 @@ function describeProxyCause(cause: string, code?: string): string {
   return code ? `${label} (${code})` : label;
 }
 
+const RETRY_CAUSE_LABELS: Record<string, string> = {
+  "connection-error": "no connection",
+  "request-timeout": "request timed out",
+  "bad-status": "unusable response",
+};
+
+type ReadinessAttemptEvent = Extract<DevPreviewDiagnosticEvent, { type: "readiness-http-attempt" }>;
+
+/**
+ * Attempt rows say what the response was, never what it implied. A 404 is
+ * reported as a server that answered, because it is one — the probe stops there
+ * and the webview decides what the page means.
+ */
+function describeAttemptLabel(event: ReadinessAttemptEvent): string {
+  if (event.outcome === "reachable") return "Server responded";
+  if (event.outcome === "server-error") return "Server error response";
+  return "No response";
+}
+
+function describeAttemptDetail(event: ReadinessAttemptEvent): string {
+  const what =
+    event.status !== undefined
+      ? `HTTP ${event.status}`
+      : (RETRY_CAUSE_LABELS[event.cause ?? ""] ?? "failed");
+  return `${event.url} — ${what}, attempt ${event.attempt}, ${event.elapsedMs}ms (${Math.round(event.remainingMs / 1000)}s budget left)`;
+}
+
 /**
  * Human-readable line for one timeline event. Exported for tests — the switch
  * is exhaustive over the event union, so a new event type fails typecheck here
@@ -64,8 +91,26 @@ export function describeDiagnosticEvent(event: DevPreviewDiagnosticEvent): {
       return { label: "Install completed" };
     case "install-failed":
       return { label: "Install failed", detail: event.message };
+    case "command-submitted":
+      return {
+        label: "Command submitted",
+        detail: event.via === "shell-args" ? "with the shell launch" : "typed into the terminal",
+      };
+    case "first-output":
+      return { label: "First output received" };
     case "url-detected":
       return { label: "URL detected", detail: event.url };
+    case "candidate-url-chosen":
+      return {
+        label: "Probing",
+        detail: `${event.url} (${event.source === "predicted" ? "allocated port" : "server output"})`,
+      };
+    case "marker-recognized":
+      return {
+        label: event.marker === "ready" ? "Ready line seen" : "Compile line seen",
+      };
+    case "readiness-http-attempt":
+      return { label: describeAttemptLabel(event), detail: describeAttemptDetail(event) };
     case "readiness-probe-succeeded":
       return { label: "Server ready", detail: event.url };
     case "readiness-probe-timed-out":
@@ -78,7 +123,11 @@ export function describeDiagnosticEvent(event: DevPreviewDiagnosticEvent): {
     case "compile-started":
       return { label: "Compile started" };
     case "compile-cleared":
-      return { label: "Compile finished" };
+      // "Compile finished" was a claim the timer path could not support: it
+      // only knew that compile lines had stopped arriving.
+      return event.reason === "ready-marker"
+        ? { label: "Compile finished", detail: "ready line observed" }
+        : { label: "Compile output quiet" };
     case "output-error":
       return { label: `Error (${event.errorType})`, detail: event.message };
     case "restart-requested":

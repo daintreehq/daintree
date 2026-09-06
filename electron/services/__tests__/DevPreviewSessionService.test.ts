@@ -672,9 +672,30 @@ describe("DevPreviewSessionService", () => {
     expect(after.status).toBe("error");
   });
 
-  it("does not treat HTTP 4xx as ready (waits for 2xx/3xx)", async () => {
+  // #12299: a 404 means the server answered. It has no route at `/`, which is
+  // the webview's problem to render, not grounds for "did not respond".
+  it("treats HTTP 4xx as a responding server", async () => {
     vi.useFakeTimers();
     mockHttpResponse(404);
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const after = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(after.status).toBe("running");
+    expect(after.url).toBe("http://localhost:4173/");
+  });
+
+  it("still rejects HTTP 5xx as a compiling shell", async () => {
+    vi.useFakeTimers();
+    mockHttpResponse(500);
 
     const started = await service.ensure(baseRequest);
     expect(started.terminalId).toBeTruthy();

@@ -16,9 +16,12 @@ export interface OutputProcessorSession {
   status: DevPreviewSessionStatus;
   url: string | null;
   pendingUrl: string | null;
+  predictedUrl: string | null;
   buffer: string;
   readinessAbort: AbortController | null;
   markerSeen: boolean;
+  /** False until this launch's terminal has produced any output. */
+  sawOutput: boolean;
   generation: number;
   isRunningInstall: boolean;
   needsInstall: boolean;
@@ -67,6 +70,12 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
   if (session.isRunningInstall) return;
 
   const dataString = typeof data === "string" ? data : deps.textDecoder.decode(data);
+
+  if (!session.sawOutput && dataString.length > 0) {
+    session.sawOutput = true;
+    deps.recordSessionDiagnostic(session, { type: "first-output" });
+  }
+
   const result: ScanResult = deps.detector.scanOutput(dataString, session.buffer);
   session.buffer = result.buffer;
 
@@ -82,6 +91,11 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
       type: "url-detected",
       url: capDiagnosticText(result.url),
     });
+    deps.recordSessionDiagnostic(session, {
+      type: "candidate-url-chosen",
+      url: capDiagnosticText(result.url),
+      source: "output",
+    });
 
     session.readinessAbort?.abort();
     const abort = new AbortController();
@@ -95,17 +109,37 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
     urlJustStarted = true;
   }
 
+  if (result.readyMarker || result.compileMarker) {
+    deps.recordSessionDiagnostic(session, {
+      type: "marker-recognized",
+      marker: result.readyMarker ? "ready" : "compile",
+    });
+  }
+
   // A framework readiness line ("ready in N ms", "✓ Ready in", "compiled
   // successfully") confirms the HTTP server is bound. When a poll is already
   // mid-cycle (sleeping between HEAD attempts), abort it and re-probe now to
   // skip the remaining poll interval. The poll itself stays the fallback for
   // unrecognized frameworks, so no marker means no behavior change.
-  if (result.readyMarker && !session.markerSeen && !urlJustStarted && session.pendingUrl) {
+  //
+  // The target falls back to predictedUrl because a predicted-port startup has
+  // no pendingUrl to accelerate — pendingUrl means "a URL was observed in the
+  // server's own output", and two recovery paths (startup replay, stale-start
+  // respawn) read it that way, so the allocator's guess must not be written
+  // there. `readinessAbort` is what actually proves a poll is in flight.
+  const acceleratableUrl = session.pendingUrl ?? session.predictedUrl;
+  if (
+    result.readyMarker &&
+    !session.markerSeen &&
+    !urlJustStarted &&
+    acceleratableUrl &&
+    session.readinessAbort
+  ) {
     session.markerSeen = true;
-    session.readinessAbort?.abort();
+    session.readinessAbort.abort();
     const abort = new AbortController();
     session.readinessAbort = abort;
-    deps.pollServerReadiness(session, session.pendingUrl, abort.signal, session.generation);
+    deps.pollServerReadiness(session, acceleratableUrl, abort.signal, session.generation);
   }
 
   // Compile marker detection fires whenever the framework emits a
@@ -125,7 +159,7 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
         clearTimeout(session.compilingClearTimer);
         session.compilingClearTimer = setTimeout(() => {
           session.compilingClearTimer = null;
-          deps.recordSessionDiagnostic(session, { type: "compile-cleared" });
+          deps.recordSessionDiagnostic(session, { type: "compile-cleared", reason: "silence" });
           deps.clearCompiling(session);
           deps.emitStateChanged(session);
         }, COMPILE_CLEAR_MS);
@@ -147,7 +181,7 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
         deps.updateSession(session, { phaseLabel: "Compiling" });
         session.compilingClearTimer = setTimeout(() => {
           session.compilingClearTimer = null;
-          deps.recordSessionDiagnostic(session, { type: "compile-cleared" });
+          deps.recordSessionDiagnostic(session, { type: "compile-cleared", reason: "silence" });
           deps.clearCompiling(session);
           deps.emitStateChanged(session);
         }, COMPILE_CLEAR_MS);
@@ -163,7 +197,7 @@ export function processDevPreviewOutput<TSession extends OutputProcessorSession>
       session.compilingTimer = null;
     }
     if (session.compiling) {
-      deps.recordSessionDiagnostic(session, { type: "compile-cleared" });
+      deps.recordSessionDiagnostic(session, { type: "compile-cleared", reason: "ready-marker" });
     }
     deps.clearCompiling(session);
     deps.emitStateChanged(session);

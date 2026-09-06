@@ -56,6 +56,8 @@ function makeSession(): TerminalControllerSession {
     pendingUrl: null,
     readinessAbort: null,
     markerSeen: false,
+    sawOutput: false,
+    readinessDeadline: null,
     needsInstall: false,
     isRunningInstall: false,
     installAttemptedGeneration: null,
