@@ -976,7 +976,7 @@ describe("registerWebviewHandlers", () => {
       ]);
     });
 
-    it("re-enables the domains for a start that raced the last stop", async () => {
+    it("serializes a start issued while the last stop is still tearing down", async () => {
       let resolveDisable: () => void = () => {};
       debuggerMock.sendCommand.mockImplementation((cmd: string) => {
         if (cmd === "Runtime.disable") {
@@ -991,17 +991,18 @@ describe("registerWebviewHandlers", () => {
       await getHandler("webview:start-console-capture")(null, 42, "pane-1");
 
       const stopping = getHandler("webview:stop-console-capture")(null, 42, "pane-1");
-      // Let the stop drop its pane and reach the pending Runtime.disable, so
-      // the new pane genuinely arrives mid-teardown rather than before it.
+      // Let the stop drop its pane and reach the pending Runtime.disable.
       for (let i = 0; i < 10; i++) await Promise.resolve();
 
-      // The new pane sees the domain still enabled and skips enabling; without
-      // the re-enable, the stop then turns it off and this pane never receives
-      // another message.
-      await getHandler("webview:start-console-capture")(null, 42, "pane-2");
+      // A new pane arrives mid-teardown. Interleaved, it would see the domain
+      // still enabled, skip enabling, and then be silently switched off by the
+      // stop finishing underneath it. Queued, it runs after the stop and
+      // enables the domain for itself.
+      const restarting = getHandler("webview:start-console-capture")(null, 42, "pane-2");
       resolveDisable();
-      await stopping;
+      await Promise.all([stopping, restarting]);
 
+      expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Runtime.disable");
       const enableCalls = debuggerMock.sendCommand.mock.calls.filter(
         ([cmd]: string[]) => cmd === "Runtime.enable"
       );

@@ -43,6 +43,13 @@ interface CdpSession {
   logEntryWatermark: ReplayWatermark;
   /** `destroyed` cleanup hook, held so teardown can detach it with the rest. */
   destroyListener: (() => void) | null;
+  /**
+   * Capture starts and stops for one guest run one at a time. Both mutate pane
+   * membership either side of an await and then decide the domain state from
+   * it, so interleaving them lets a stop disable domains a start just adopted,
+   * or delete a registration a restart just made.
+   */
+  transitionQueue: Promise<void>;
   // Per-session throttle for `Log.entryAdded` — browser-emitted entries
   // (CSP, network, deprecation) can flood. Keyed by source:level:url:line.
   logRateLimit: Map<string, { count: number; resetAt: number }>;
@@ -130,6 +137,7 @@ function getOrCreateSession(wcId: number): CdpSession {
       exceptionWatermark: createReplayWatermark(),
       logEntryWatermark: createReplayWatermark(),
       destroyListener: null,
+      transitionQueue: Promise.resolve(),
       logRateLimit: new Map(),
       ownerWindow: null,
       messageListener: null,
@@ -284,84 +292,57 @@ function releaseObjectIds(wcId: number, objectIds: Iterable<string>): void {
 /**
  * How much of one CDP event stream the renderer has already been given.
  *
- * CDP timestamps are epoch milliseconds and are neither unique nor guaranteed
- * to increase, so a timestamp alone cannot identify an event. Pairing the
- * newest timestamp with how many events carried it lets a replay skip exactly
- * the events already delivered and admit distinct ones that merely landed in
- * the same millisecond.
+ * Reconciliation is positional, not timestamp-based. The guest's console buffer
+ * is append-only and replays in emission order, so "how many we already took"
+ * identifies the already-delivered prefix exactly. Timestamps cannot: CDP
+ * timestamps are epoch milliseconds that are neither unique (a burst shares a
+ * millisecond) nor guaranteed to increase (a clock step can move them
+ * backwards), and either property alone loses real rows.
  */
 interface ReplayWatermark {
-  timestamp: number;
-  count: number;
-  /** Set while the stream's enable command is in flight — its replay window. */
+  /** Events admitted from this stream since the buffer was last cleared. */
+  delivered: number;
+  /** Events still to skip in the current replay window. */
+  skipRemaining: number;
   replaying: boolean;
-  /** Watermark as of the moment the window opened; the live one keeps moving. */
-  replayFromTimestamp: number;
-  replayFromCount: number;
-  /** Events seen at `replayFromTimestamp` since the window opened. */
-  replaySeenAtTimestamp: number;
 }
 
 function createReplayWatermark(): ReplayWatermark {
-  return {
-    timestamp: 0,
-    count: 0,
-    replaying: false,
-    replayFromTimestamp: 0,
-    replayFromCount: 0,
-    replaySeenAtTimestamp: 0,
-  };
+  return { delivered: 0, skipRemaining: 0, replaying: false };
 }
 
 function openReplayWindow(...watermarks: ReplayWatermark[]): void {
   for (const w of watermarks) {
     w.replaying = true;
-    w.replayFromTimestamp = w.timestamp;
-    w.replayFromCount = w.count;
-    w.replaySeenAtTimestamp = 0;
+    w.skipRemaining = w.delivered;
   }
 }
 
 function closeReplayWindow(...watermarks: ReplayWatermark[]): void {
-  for (const w of watermarks) w.replaying = false;
-}
-
-function resetReplayWatermark(w: ReplayWatermark): void {
-  w.timestamp = 0;
-  w.count = 0;
-  w.replayFromTimestamp = 0;
-  w.replayFromCount = 0;
-  w.replaySeenAtTimestamp = 0;
+  for (const w of watermarks) {
+    w.replaying = false;
+    w.skipRemaining = 0;
+  }
 }
 
 /**
- * Whether to deliver this event, advancing the watermark when we do.
- *
- * Inside a replay window everything up to the pre-enable watermark has already
- * reached the renderer and is dropped; everything past it is new. An event with
- * no usable timestamp can't be matched at all, so it is delivered rather than
- * risk losing something the renderer never saw.
+ * Reset after the guest's buffer is genuinely gone. Only an execution-context
+ * clear does that — a debugger detach leaves the buffer intact, so resetting
+ * there would re-admit everything on the next attach.
  */
-function admitEvent(w: ReplayWatermark, timestamp: number | null): boolean {
-  if (timestamp === null) return true;
-
-  if (w.replaying && timestamp <= w.replayFromTimestamp) {
-    if (timestamp < w.replayFromTimestamp) return false;
-    w.replaySeenAtTimestamp += 1;
-    if (w.replaySeenAtTimestamp <= w.replayFromCount) return false;
-  }
-
-  if (timestamp > w.timestamp) {
-    w.timestamp = timestamp;
-    w.count = 1;
-  } else if (timestamp === w.timestamp) {
-    w.count += 1;
-  }
-  return true;
+function resetReplayWatermark(w: ReplayWatermark): void {
+  w.delivered = 0;
+  w.skipRemaining = 0;
 }
 
-function eventTimestampOf(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+/** Whether to deliver this event, counting it against the stream when we do. */
+function admitEvent(w: ReplayWatermark): boolean {
+  if (w.replaying && w.skipRemaining > 0) {
+    w.skipRemaining -= 1;
+    return false;
+  }
+  w.delivered += 1;
+  return true;
 }
 
 function objectIdsFromArgs(args: CdpRemoteArg[]): string[] {
@@ -472,6 +453,16 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   /**
+   * Run a capture transition after every earlier one for the same guest.
+   * A rejection is contained so one failed transition cannot wedge the queue.
+   */
+  function enqueueTransition(session: CdpSession, work: () => Promise<void>): Promise<void> {
+    const running = session.transitionQueue.then(work);
+    session.transitionQueue = running.catch(() => {});
+    return running;
+  }
+
+  /**
    * Enable the console domains for a session whose listeners are already bound.
    * Ordering matters: both enables replay their guest-side buffer, so the
    * listener has to be live first, and each enable opens its stream's replay
@@ -526,6 +517,17 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     if (!wc || wc.isDestroyed()) return;
 
     const session = getOrCreateSession(webContentsId);
+    return enqueueTransition(session, () => startCapture(webContentsId, wc, session, paneId));
+  };
+
+  async function startCapture(
+    webContentsId: number,
+    wc: Electron.WebContents,
+    session: CdpSession,
+    paneId: string
+  ): Promise<void> {
+    if (wc.isDestroyed()) return;
+
     session.paneIds.add(paneId);
     session.groupDepthByPane.set(paneId, 0);
 
@@ -616,9 +618,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             session.messageListener = null;
             session.detachListener = null;
             session.navigationGeneration++;
-            resetReplayWatermark(session.consoleWatermark);
-            resetReplayWatermark(session.exceptionWatermark);
-            resetReplayWatermark(session.logEntryWatermark);
+            // Deliberately NOT resetting the replay watermarks: a debugger
+            // detach leaves the guest's console buffer intact, so the next
+            // attach replays it and everything already delivered would arrive
+            // a second time.
             for (const pid of session.paneIds) {
               session.groupDepthByPane.set(pid, 0);
               session.rowObjectIdsByPane.get(pid)?.clear();
@@ -672,7 +675,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         );
       }
     }
-  };
+  }
 
   function handleConsoleApiCalled(wcId: number, session: CdpSession, params: unknown): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -684,7 +687,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // store keeps its rows) would duplicate everything still on screen. Only
     // the enable window is reconciled, so messages logged while capture was
     // stopped still arrive.
-    if (!admitEvent(session.consoleWatermark, eventTimestampOf(p.timestamp))) return;
+    if (!admitEvent(session.consoleWatermark)) return;
 
     const cdpType = (p.type ?? "log") as CdpConsoleType;
 
@@ -759,7 +762,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // Runtime.enable replays buffered exceptions alongside console calls, so
     // these need their own reconciliation — the console watermark's progress
     // says nothing about which exceptions the renderer already has.
-    if (!admitEvent(session.exceptionWatermark, eventTimestampOf(p.timestamp))) return;
+    if (!admitEvent(session.exceptionWatermark)) return;
 
     const summaryText: string =
       details.exception?.description ?? details.text ?? "Uncaught (unknown exception)";
@@ -794,7 +797,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // so a stop/start cycle would duplicate CSP, network and deprecation rows
     // the renderer still displays. Reconciled before the rate limiter, so a
     // replay can't consume the allowance a live failure needs.
-    if (!admitEvent(session.logEntryWatermark, eventTimestampOf(entry.timestamp))) return;
+    if (!admitEvent(session.logEntryWatermark)) return;
 
     const source = normalizeLogEntrySource(entry.source);
     const level = logEntryLevelToLevel(entry.level);
@@ -837,6 +840,14 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     const session = sessions.get(webContentsId);
     if (!session) return;
 
+    return enqueueTransition(session, () => stopCapture(webContentsId, session, paneId));
+  };
+
+  async function stopCapture(
+    webContentsId: number,
+    session: CdpSession,
+    paneId: string
+  ): Promise<void> {
     const wc = webContents.fromId(webContentsId);
     if (wc && !wc.isDestroyed()) {
       await releaseObjectsForPane(wc, session, paneId);
@@ -848,9 +859,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
     // If no more panes are capturing, disable the domains but keep the session.
     // Its listeners are inert while the domains are off, and holding it keeps
-    // the replay watermarks so the replay a later Runtime.enable triggers can
+    // the replay bookkeeping so the replay a later Runtime.enable triggers can
     // be reconciled against what the renderer already displays. The session is
-    // disposed by the guest's `destroyed` hook or by handler teardown.
+    // disposed by the guest's `destroyed` hook or by handler teardown. No start
+    // can interleave here — transitions are serialized per guest.
     if (session.paneIds.size === 0 && wc && !wc.isDestroyed()) {
       if (session.runtimeEnabled) {
         try {
@@ -868,22 +880,8 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         }
         session.logEnabled = false;
       }
-
-      // A start that raced this teardown saw the domains still enabled and
-      // skipped enabling them, so it would come back to a pane that never
-      // receives another message. Re-enable for whoever arrived.
-      if (session.paneIds.size > 0) {
-        try {
-          await enableConsoleDomains(webContentsId, wc, session);
-        } catch (err) {
-          console.warn(
-            `[webview] CDP re-enable after a raced stop failed for id=${webContentsId}:`,
-            formatErrorMessage(err, "console domain re-enable failed")
-          );
-        }
-      }
     }
-  };
+  }
 
   const handleClearConsoleCapture = async (
     webContentsId: unknown,

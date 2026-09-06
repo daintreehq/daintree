@@ -383,6 +383,45 @@ describe("useDevPreviewViewport — device emulation effect", () => {
     expect(calls[1]!.emulation).toBeNull();
   });
 
+  it("re-issues the last confirmed state when a newer request is still pending", async () => {
+    // Desktop is confirmed, a preset is requested, then desktop again before
+    // that preset lands. Deduplicating against the confirmed desktop key would
+    // skip the clear and leave the guest emulated once the preset arrives.
+    let resolvePreset: (value: { applied: boolean }) => void = () => {};
+    const webview = makeWebview();
+    const { rerender } = renderHook((props) => useDevPreviewViewport(props), {
+      initialProps: baseParams({
+        viewportPreset: undefined,
+        isWebviewReady: true,
+        webviewElement: webview,
+      }),
+    });
+    await settleEmulation();
+    expect(setDeviceEmulation).not.toHaveBeenCalled();
+
+    setDeviceEmulation.mockImplementationOnce(
+      () =>
+        new Promise<{ applied: boolean }>((resolve) => {
+          resolvePreset = resolve;
+        })
+    );
+    rerender(
+      baseParams({ viewportPreset: "iphone", isWebviewReady: true, webviewElement: webview })
+    );
+    await settleEmulation();
+
+    rerender(
+      baseParams({ viewportPreset: undefined, isWebviewReady: true, webviewElement: webview })
+    );
+    await settleEmulation();
+    resolvePreset({ applied: true });
+    await settleEmulation();
+
+    const calls = emulationCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.emulation).toBeNull();
+  });
+
   it("does not record a preset main reported it did not apply", async () => {
     setDeviceEmulation.mockResolvedValueOnce({ applied: false });
     const webview = makeWebview();

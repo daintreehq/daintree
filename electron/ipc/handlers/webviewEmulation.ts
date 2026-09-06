@@ -102,12 +102,13 @@ async function setTouchEmulation(wc: Electron.WebContents, enabled: boolean): Pr
   }
 }
 
+/** Resolves false when the guest went away before this queued request ran. */
 async function applyEmulation(
   wc: Electron.WebContents,
   state: GuestEmulationState,
   emulation: DeviceEmulationRequest["emulation"]
-): Promise<void> {
-  if (wc.isDestroyed()) return;
+): Promise<boolean> {
+  if (wc.isDestroyed()) return false;
 
   if (emulation) {
     wc.setUserAgent(emulation.userAgent);
@@ -119,7 +120,7 @@ async function applyEmulation(
       state.touchEmulated = null;
       if (await setTouchEmulation(wc, emulation.touch)) state.touchEmulated = emulation.touch;
     }
-    return;
+    return true;
   }
 
   try {
@@ -134,6 +135,7 @@ async function applyEmulation(
     state.touchEmulated = null;
     if (await setTouchEmulation(wc, false)) state.touchEmulated = false;
   }
+  return true;
 }
 
 /**
@@ -175,9 +177,14 @@ async function handleSetDeviceEmulation(
   const settled = state.queue.then(() => applyEmulation(wc, state, emulation));
   // Keep the chain alive after a rejection so one failed request cannot wedge
   // every later one for this guest.
-  state.queue = settled.catch(() => {});
-  await settled;
-  return { applied: true };
+  state.queue = settled.then(
+    () => {},
+    () => {}
+  );
+  // A request that waited behind another can find the guest gone by the time it
+  // runs, and must say so rather than let the caller cache a preset that was
+  // never applied.
+  return { applied: await settled };
 }
 
 export const webviewEmulationNamespace = defineIpcNamespace({

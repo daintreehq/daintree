@@ -112,13 +112,17 @@ export function useDevPreviewViewport({
   useEffect(() => {
     if (!isWebviewReady || !webviewElement) return;
     const emulationKey = `${viewportPreset ?? "none"}-${viewportRotated}-${viewportDpr}`;
-    if (prevEmulationKeyRef.current === emulationKey) return;
+    // Both shortcuts below are only safe while nothing is on the wire. A
+    // request in flight is about to move the guest somewhere else, so
+    // returning to the last confirmed state — plain desktop included — has to
+    // re-issue rather than dedupe, or that pending request lands and leaves
+    // the guest somewhere the toolbar is not showing.
+    const isSettled = inFlightEmulationRef.current === 0;
+    if (isSettled && prevEmulationKeyRef.current === emulationKey) return;
     // Clearing emulation that was never applied is a no-op, but the key still
     // has to advance so a later switch back to the same desktop state is not
-    // mistaken for a repeat. An in-flight request counts as applied for this
-    // purpose: skipping the clear while a preset apply is still on the wire
-    // would leave the guest emulated with the toolbar showing desktop.
-    if (!viewportPreset && !hasAppliedEmulationRef.current && inFlightEmulationRef.current === 0) {
+    // mistaken for a repeat.
+    if (isSettled && !viewportPreset && !hasAppliedEmulationRef.current) {
       prevEmulationKeyRef.current = emulationKey;
       return;
     }

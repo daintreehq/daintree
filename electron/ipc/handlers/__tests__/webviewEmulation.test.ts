@@ -220,6 +220,116 @@ describe("webviewEmulation handler", () => {
 
   it("does not let a clear finish underneath a newer preset", async () => {
     const guest = makeGuest();
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+
+    // Settle the first preset, so touch is *known* to be on. Without that, a
+    // clear racing a still-unsettled apply would find the cache already false
+    // and skip its touch teardown, hiding the ordering problem.
+    await handler(applyRequest());
+    expect(
+      cdpCalls(guest).filter(([cmd]) => cmd === "Emulation.setTouchEmulationEnabled")
+    ).toHaveLength(1);
+
+    // Now hold the clear's CDP commands open and select another preset behind
+    // it. Serialized, the clear finishes first and the preset's touch setup
+    // lands last; interleaved, the clear's teardown lands on top of it.
+    const pending: Array<() => void> = [];
+    guest.debugger.sendCommand.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    const cleared = handler(applyRequest({ emulation: null }));
+    const reapplied = handler(applyRequest());
+
+    for (let i = 0; i < 200; i++) {
+      while (pending.length > 0) pending.shift()!();
+      await Promise.resolve();
+    }
+    await Promise.all([cleared, reapplied]);
+
+    const touchCalls = cdpCalls(guest)
+      .filter(([cmd]) => cmd === "Emulation.setTouchEmulationEnabled")
+      .map(([, params]) => (params as { enabled: boolean }).enabled);
+    expect(touchCalls).toEqual([true, false, true]);
+  });
+
+  it("cleans up touch after a partial failure instead of trusting the cache", async () => {
+    const guest = makeGuest();
+    // The first command lands, the second does not — the guest now has touch
+    // emulation partly on, in a state a boolean cache cannot describe.
+    let call = 0;
+    guest.debugger.sendCommand.mockImplementation(() => {
+      call += 1;
+      return call === 2 ? Promise.reject(new Error("boom")) : Promise.resolve();
+    });
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+    await handler(applyRequest());
+
+    guest.debugger.sendCommand.mockClear();
+    guest.debugger.sendCommand.mockImplementation(() => Promise.resolve());
+    await handler(applyRequest({ emulation: null }));
+
+    // A cache that recorded the failed apply as "touch off" would skip this
+    // teardown and leave the guest reporting a coarse pointer on desktop.
+    expect(cdpCalls(guest)).toContainEqual([
+      "Emulation.setTouchEmulationEnabled",
+      { enabled: false, maxTouchPoints: 1 },
+    ]);
+  });
+
+  it("reports applied:false for a queued request whose guest went away", async () => {
+    const guest = makeGuest();
+    const pending: Array<() => void> = [];
+    guest.debugger.sendCommand.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    guestRegistry.set(7, guest);
+    const handler = await getHandler();
+
+    const first = handler(applyRequest());
+    const queued = handler(applyRequest({ emulation: null }));
+
+    // The guest dies while the second request is still waiting its turn.
+    guest.isDestroyed = () => true;
+    for (let i = 0; i < 200; i++) {
+      while (pending.length > 0) pending.shift()!();
+      await Promise.resolve();
+    }
+
+    await first;
+    await expect(queued).resolves.toEqual({ applied: false });
+  });
+
+  it("ignores a guest registered to a different panel", async () => {
+    const guest = makeGuest();
+    guestRegistry.set(7, guest);
+    dialogService.getPanelId.mockReturnValue("panel-b");
+
+    const handler = await getHandler();
+    const result = await handler(applyRequest());
+
+    expect(result).toEqual({ applied: false });
+    expect(guest.enableDeviceEmulation).not.toHaveBeenCalled();
+    expect(guest.setUserAgent).not.toHaveBeenCalled();
+  });
+
+  it("reports applied:false rather than letting the caller cache a lie", async () => {
+    const handler = await getHandler();
+    await expect(handler(applyRequest())).resolves.toEqual({ applied: false });
+
+    guestRegistry.set(7, makeGuest());
+    await expect(handler(applyRequest())).resolves.toEqual({ applied: true });
+  });
+
+  it("does not let a clear finish underneath a newer preset", async () => {
+    const guest = makeGuest();
     const pending: Array<() => void> = [];
     guest.debugger.sendCommand.mockImplementation(
       () =>

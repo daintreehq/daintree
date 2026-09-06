@@ -81,15 +81,19 @@ export function useDevPreviewScrollCapture({
           if (scrollY === null || !Number.isFinite(scrollY)) return;
           // Now that a zero is persisted, the document it was measured on
           // matters: the eviction path blanks the guest immediately after
-          // asking, and a reading that lands after that would file the blank
-          // page's 0 against the previous URL.
-          let settledUrl: string;
+          // asking, and a reading landing after that would file the blank
+          // page's 0 against the previous URL. Only a URL we can still read
+          // *and* that differs is evidence of that — a detached tag can no
+          // longer tell us, and the read was taken before teardown began, so
+          // discarding it there would lose the eviction capture this path
+          // exists for.
+          let settledUrl: string | null;
           try {
             settledUrl = webview.getURL();
           } catch {
-            return;
+            settledUrl = null;
           }
-          if (settledUrl !== currentWebviewUrl) return;
+          if (settledUrl !== null && settledUrl !== currentWebviewUrl) return;
           setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
         })
         .catch(() => {});
