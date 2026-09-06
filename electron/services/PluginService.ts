@@ -226,6 +226,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import { withTimeout, TimeoutError } from "../utils/withTimeout.js";
 import type {
   PluginDiagnosticsAuditRecord,
   PluginDiagnosticsLogLine,
@@ -853,7 +854,20 @@ export class PluginService {
    */
   private pluginWorkers = new Map<
     string,
-    { workerHost: PluginDevWorkerHost; bridge: PluginDevWorkerMainBridge; revoke: () => void }
+    {
+      workerHost: PluginDevWorkerHost;
+      bridge: PluginDevWorkerMainBridge;
+      revoke: () => void;
+      /** Full teardown — the same disposer registered in {@link cleanupMap}. */
+      cleanup: () => void;
+      /**
+       * Verdict of this entry's last activation: `undefined` while one is in
+       * flight, `false` once it failed. Read by {@link activateViaWorker} so a
+       * retry against a live-but-failed worker forks a fresh one instead of
+       * short-circuiting on the entry's mere existence (#12275).
+       */
+      activation: { ok?: boolean };
+    }
   >();
   /**
    * Last time each plugin was needed (activation trigger, action dispatch,
@@ -2325,7 +2339,17 @@ export class PluginService {
     // A re-activation while a worker is already live is a no-op — the worker
     // owns its own reload cycle; activatePlugin's idempotency normally prevents
     // this, but guard defensively against the unload-race re-entry path.
-    if (this.pluginWorkers.has(pluginId)) return;
+    const existing = this.pluginWorkers.get(pluginId);
+    if (existing) {
+      // ...unless its last generation FAILED. A worker left alive after a failed
+      // activation is not an activated plugin, so returning here would let
+      // `activatePlugin` cache the id and turn every later retry into a no-op —
+      // the bug this method exists to fix, one level up. Drop it and fork fresh,
+      // which is what Settings → Retry means for a generation that is not coming
+      // back on its own.
+      if (existing.activation.ok !== false) return;
+      existing.cleanup();
+    }
 
     // Spike #10890 (opt-in): compute the permission-model execArgv flags BEFORE
     // creating the host, so the default (env-off) path never awaits and stays
@@ -2388,7 +2412,7 @@ export class PluginService {
       // and a freshly-introduced one is recorded — the first-activation promise
       // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
-        lastActivationOk = result.ok;
+        activation.ok = result.ok;
         if (result.ok) {
           if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
             this.recordPluginLoadError(pluginId, plugin, null);
@@ -2407,11 +2431,11 @@ export class PluginService {
     // first activation must not be cached as "activated" (#10523 retry-on-reopen):
     // for a prod worker — which has no file watcher to auto-recover — we tear the
     // worker down below so a re-open (Settings → Retry) re-forks and re-runs.
-    let lastActivationOk: boolean | undefined;
+    const activation: { ok?: boolean } = {};
     /** Set when the worker broke the protocol and was terminated (#12276). */
     let terminalFailure = false;
 
-    const entry = { workerHost, bridge, revoke };
+    const entry = { workerHost, bridge, revoke, cleanup: () => cleanup(), activation };
     this.pluginWorkers.set(pluginId, entry);
 
     // Register the teardown disposer up front so a concurrent unloadPlugin()
@@ -2452,66 +2476,69 @@ export class PluginService {
 
     // Bound the first activation so a plugin with a hanging `activate()` (or a
     // never-resolving top-level await in the worker) can't stall the
-    // `Promise.allSettled` startup gate forever. On timeout the worker stays
-    // alive — `onActivationResult` will clear/record the error if activation
-    // eventually settles (or, for a dev worker, a reload follows). The
-    // provenance `loadError` is owned by `onActivationResult`; this catch only
-    // logs and unblocks startup.
-    let timer: NodeJS.Timeout | undefined;
-    let timedOut = false;
+    // `Promise.allSettled` startup gate forever.
+    const gate = bridge.waitForActivation();
+    // The race abandons this promise on timeout; a late `activate-error` would
+    // otherwise settle it with nobody listening.
+    gate.catch(() => undefined);
     try {
-      await Promise.race([
-        bridge.waitForActivation(),
-        new Promise<void>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            timedOut = true;
-            reject(
-              new Error(
-                `Plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
-              )
-            );
-          }, ACTIVATE_TIMEOUT_MS);
-          timer.unref?.();
-        }),
-      ]);
+      await withTimeout(
+        gate,
+        ACTIVATE_TIMEOUT_MS,
+        `Plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
+      );
+      return;
     } catch (err) {
-      // Only a timeout is this catch's to record. The bridge settles a failed
-      // activation twice — `onActivationResult` first, with the WORKER's error
-      // and stack, then a rejection carrying a freshly-built main-process
-      // `Error` — so recording every rejection here would overwrite the real
-      // plugin stack with this process's own and push a second, worse snapshot.
-      // The remaining rejection is a bridge disposal, which is a teardown, not
-      // an activation failure.
-      //
-      // On timeout the worker stays alive — typically a hanging `activate()` or
-      // a never-resolving top-level await — so record why the plugin never came
-      // up. If activation eventually settles (or a dev reload follows),
-      // `onActivationResult` overwrites this.
-      if (timedOut) {
+      // Record only what the bridge did not. It settles a failed activation
+      // twice — `onActivationResult` first, with the WORKER's error and stack,
+      // then a rejection carrying a freshly-built main-process `Error` — so
+      // recording every rejection would overwrite the real plugin stack with
+      // this process's own. An outcome the bridge never reported at all, though,
+      // is ours to persist: neither a timeout nor a crash calls
+      // `onActivationResult`, and those are the two failures that would
+      // otherwise leave no evidence at all.
+      if (activation.ok === undefined) {
         this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       }
       console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
-    } finally {
-      if (timer) clearTimeout(timer);
+      if (err instanceof TimeoutError) {
+        // A hung `activate()` leaves a worker burning CPU behind a host that has
+        // already given up on it, and no message will ever arrive to retire it.
+        // Isolated: a throw out of teardown must not replace the activation
+        // failure it is cleaning up after, nor skip the bookkeeping below.
+        try {
+          bridge.retire(`Plugin "${pluginId}" activate() did not settle`);
+        } catch (retireErr) {
+          console.error(`[PluginService] Retiring "${pluginId}" threw:`, retireErr);
+        }
+      }
     }
 
-    // A failed first activation must not be cached as a successful one
-    // (#10523): `activatePlugin` adds the id to `activatedPlugins` when this
-    // method resolves, which would short-circuit every later re-open. A dev
-    // worker is left alive so the author can fix the error and save: its retry
-    // path is `PluginDevArtifactWatcher` reconciling the whole plugin (#12277),
-    // not a re-activation of this worker.
-    // A prod worker has no watcher, so the only recovery is a re-open / Settings
-    // → Retry that re-runs `activatePlugin`; tear the failed worker down and
-    // rethrow so the in-flight entry is dropped and the id is never cached,
-    // mirroring the in-process loader's rethrow-on-activate-failure semantics.
-    if (terminalFailure) {
-      throw new Error(`Plugin "${pluginId}" dev worker stopped: protocol violation`);
-    }
-    if (lastActivationOk === false && !plugin.devMode) {
-      cleanup();
+    // Every unsuccessful outcome marks the generation failed — not just the ones
+    // the bridge reported. A timeout never reports, and neither does a crash, so
+    // leaving this `undefined` would let the reuse guard read a dead entry as
+    // "still in flight" and cache the id as activated.
+    activation.ok = false;
+
+    // An unload raced the failure and already tore the entry down.
+    if (this.pluginWorkers.get(pluginId) !== entry) {
       throw new Error(`Plugin "${pluginId}" activate() failed`);
     }
+
+    // A failed first activation must not be cached as a successful one (#10523):
+    // `activatePlugin` adds the id to `activatedPlugins` when this method
+    // RESOLVES, which would short-circuit every later re-open and make the
+    // panel's retry control a no-op forever. Throwing instead routes through
+    // `activatePlugin`'s existing identity-guarded rejection handler, which drops
+    // the in-flight entry so a retry genuinely re-runs (#10899) — while
+    // `activatePlugin` itself still never rejects (#9428).
+    //
+    // A dev worker is left alive so the author can fix the error and save: its
+    // retry path is `PluginDevArtifactWatcher` reconciling the whole plugin
+    // (#12277). A prod worker has no watcher, so tear it down and let the next
+    // trigger fork a fresh one.
+    if (!plugin.devMode) cleanup();
+    throw new Error(`Plugin "${pluginId}" activate() failed`);
   }
 
   /**

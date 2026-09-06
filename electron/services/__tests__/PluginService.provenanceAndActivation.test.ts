@@ -207,6 +207,7 @@ const devWorkerMock = vi.hoisted(() => {
         throw new Error(error, { cause: err });
       }
     });
+    retire = vi.fn();
     dispose = vi.fn(() => {
       try {
         this.cleanup?.();
@@ -1147,10 +1148,67 @@ describe("Deferred activation — activatePlugin", () => {
       await service.activatePlugin("acme.hanging-import");
       const record = service.getPluginLoadError("acme.hanging-import");
       expect(record?.message).toContain("did not settle");
+
+      // A timeout is a FAILURE, not a slow success (#12275). Caching the id here
+      // made the panel's retry control a no-op forever, because every later
+      // `activatePlugin` short-circuited on the fast path.
+      const internals = service as unknown as {
+        activatedPlugins: Set<string>;
+        activationPromises: Map<string, Promise<void>>;
+      };
+      expect(internals.activatedPlugins.has("acme.hanging-import")).toBe(false);
+      expect(internals.activationPromises.has("acme.hanging-import")).toBe(false);
     } finally {
       errorSpy.mockRestore();
     }
   }, 10_000);
+
+  it("a timed-out activation can be retried and succeed (#12275)", async () => {
+    const pluginDir = path.join(tmpDir, "hanging-activate");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.hanging-activate", version: "1.0.0", main: "main.mjs" })
+    );
+    // Hangs the first time, succeeds the second — so the invocation count proves
+    // the retry genuinely re-ran activate() rather than returning a cached
+    // "activated" latch the timeout left behind.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      `export function activate() {
+         globalThis.__hangActivateCount = (globalThis.__hangActivateCount ?? 0) + 1;
+         if (globalThis.__hangActivateCount === 1) return new Promise(() => {});
+         return () => {};
+       }`
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      openedServices.push(service);
+      await service.initialize();
+
+      await service.activatePlugin("acme.hanging-activate");
+      expect((globalThis as Record<string, unknown>).__hangActivateCount).toBe(1);
+      expect(service.getPluginLoadError("acme.hanging-activate")?.message).toContain(
+        "did not settle"
+      );
+
+      await service.activatePlugin("acme.hanging-activate");
+
+      expect((globalThis as Record<string, unknown>).__hangActivateCount).toBe(2);
+      expect(
+        (service as unknown as { activatedPlugins: Set<string> }).activatedPlugins.has(
+          "acme.hanging-activate"
+        )
+      ).toBe(true);
+      // The timeout's record is cleared by the successful retry.
+      expect(service.getPluginLoadError("acme.hanging-activate")?.message).toBeUndefined();
+    } finally {
+      errorSpy.mockRestore();
+      delete (globalThis as Record<string, unknown>).__hangActivateCount;
+    }
+  }, 15_000);
 
   it("unloadPlugin during a racing activation does not leak activatedPlugins state", async () => {
     const pluginDir = path.join(tmpDir, "race-unload");

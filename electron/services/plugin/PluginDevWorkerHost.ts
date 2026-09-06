@@ -23,6 +23,13 @@ const __dirname = path.dirname(__filename);
 /** Graceful-dispose grace period before SIGKILL, matching WorkspaceHostProcess. */
 const DISPOSE_TIMEOUT_MS = 1000;
 
+/**
+ * Budget from a successful fork to the worker's `ready` handshake (#12275).
+ * Separate from the activation budget in `PluginService`: this one covers
+ * bootstrap, that one the plugin's own `activate()`.
+ */
+const READY_TIMEOUT_MS = 5000;
+
 // Time-windowed crash-loop guard. Mirrors the constants in PtyHostLifecycle,
 // WorkspaceHostProcess, and CrashLoopGuardService so all guards follow the same
 // policy: three crashes within the window trip the cap, and crashes spread
@@ -123,6 +130,8 @@ export class PluginDevWorkerHost extends EventEmitter {
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
+  /** Armed per fork; cleared by `ready`, by an exit, or by dispose. */
+  private readyTimer: NodeJS.Timeout | null = null;
 
   constructor(options: PluginDevWorkerHostOptions) {
     super();
@@ -161,7 +170,7 @@ export class PluginDevWorkerHost extends EventEmitter {
    * guard in effect; `startWorker` swallows its own errors and never throws
    * synchronously, so awaiting callers still observe rejections. */
   start(): Promise<void> {
-    this.startWorker();
+    this.startWorker(/* armDeadline */ true);
     return this.readyPromise;
   }
 
@@ -206,7 +215,7 @@ export class PluginDevWorkerHost extends EventEmitter {
       });
       this.readyPromise.catch(() => undefined);
     }
-    this.startWorker();
+    this.startWorker(/* armDeadline */ false);
   }
 
   /** Promise that resolves on the next `ready` after a crash respawn. */
@@ -218,6 +227,7 @@ export class PluginDevWorkerHost extends EventEmitter {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
+    this.clearReadyDeadline();
     if (this.childProcessGoneHandler) {
       app.off("child-process-gone", this.childProcessGoneHandler);
       this.childProcessGoneHandler = null;
@@ -259,7 +269,12 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.removeAllListeners();
   }
 
-  private startWorker(): void {
+  /**
+   * @param armDeadline Whether this fork gets a fork-to-ready deadline. True for
+   * the fork `start()` is awaiting; false for the supervisor's own crash
+   * respawn, which answers to the crash-loop cap instead.
+   */
+  private startWorker(armDeadline: boolean): void {
     if (this.isDisposed) return;
     this.pendingChildProcessGoneReason = null;
     this.expectingExit = false;
@@ -342,6 +357,58 @@ export class PluginDevWorkerHost extends EventEmitter {
       if (this.child !== child) return;
       this.handleExit(code);
     });
+
+    if (armDeadline) this.armReadyDeadline(child);
+  }
+
+  /**
+   * Bound the gap between a successful fork and this child's `ready`.
+   *
+   * `utilityProcess.fork()` only throws for an immediate spawn failure, and
+   * Electron merely WARNS a utility process on an unhandled rejection instead of
+   * killing it (#10340) — so a worker whose bootstrap throws, or whose import
+   * spins, stays alive-but-mute and emits no `exit` to react to. Nothing else
+   * bounds that gap: `start()` would stay pending forever, and the in-flight
+   * `activationPromises` entry it feeds hangs every later retry with it.
+   *
+   * Armed for the fork `start()` is AWAITING, because that is what the deadline
+   * is for: an awaited bootstrap that never completes hangs its caller, and
+   * through it the cached in-flight activation. Deliberately NOT armed for the
+   * supervisor's own crash respawn — nobody awaits that fork, so a wedged one
+   * hangs no one, and it already answers to the crash-loop cap; a second
+   * deadline there would be a competing restart policy layered over the ladder.
+   *
+   * On expiry the worker is wedged rather than crashing, so it is stopped
+   * WITHOUT crash accounting: a bootstrap that never completes must not burn the
+   * respawn budget, and the failure has to stay visible to its caller.
+   */
+  private armReadyDeadline(child: UtilityProcess): void {
+    this.clearReadyDeadline();
+    this.readyTimer = setTimeout(() => {
+      this.readyTimer = null;
+      if (this.isDisposed || this.child !== child) return;
+      const message = `Plugin worker "${this.pluginId}" did not become ready within ${READY_TIMEOUT_MS}ms`;
+      logger.error(`[${this.serviceName}] ${message}`);
+      if (this.readyReject) {
+        this.readyReject(new Error(message));
+        this.readyReject = null;
+        this.readyResolve = null;
+      }
+      this.expectingExit = true;
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+    }, READY_TIMEOUT_MS);
+    this.readyTimer.unref?.();
+  }
+
+  private clearReadyDeadline(): void {
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
   }
 
   /**
@@ -383,6 +450,7 @@ export class PluginDevWorkerHost extends EventEmitter {
     const msg = parsed.message;
 
     if (msg.type === "ready") {
+      this.clearReadyDeadline();
       // No `expectingExit` guard here, unlike #12282's in-host reload. A child
       // is only ever asked to die by `dispose()`, which sets `isDisposed`
       // first — so both this method and `hasAuthority` have already dropped the
@@ -470,6 +538,7 @@ export class PluginDevWorkerHost extends EventEmitter {
   }
 
   private handleExit(code: number | undefined): void {
+    this.clearReadyDeadline();
     const wasExpected = this.expectingExit;
     this.expectingExit = false;
     this.child = null;

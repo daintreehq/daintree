@@ -317,6 +317,84 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  describe("fork-to-ready deadline (#12275)", () => {
+    it("rejects start() and kills a worker that forks but never posts `ready`", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const started = host.start();
+      const rejection = started.catch((err: Error) => err.message);
+      // A worker whose bootstrap throws stays alive-but-mute — Electron only
+      // WARNS a utility process on an unhandled rejection (#10340) — so nothing
+      // but this deadline ever settles `start()`.
+      const child = mockChildren[0] as MockUtilityChild;
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(await rejection).toContain("did not become ready");
+      expect(child.kill).toHaveBeenCalled();
+      host.dispose();
+    });
+
+    it("does not fire once the worker posts `ready`", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const started = host.start();
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      await expect(started).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(child.kill).not.toHaveBeenCalled();
+      host.dispose();
+    });
+
+    it("does not charge a wedged bootstrap against the crash respawn budget", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.start().catch(() => undefined);
+      const child = mockChildren[0] as MockUtilityChild;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      // The stop is deliberate, so the exit must read as expected: a bootstrap
+      // that never completes is not a crash, and must not burn the budget that
+      // exists for workers that genuinely die.
+      const exits: Array<[number, boolean]> = [];
+      host.on("exit", (code: number, expected: boolean) => exits.push([code, expected]));
+      child.emit("exit", 0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(exits).toEqual([[0, true]]);
+      host.dispose();
+    });
+
+    it("does not arm a deadline for the supervisor's own crash respawn", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.start().catch(() => undefined);
+      const first = mockChildren[0] as MockUtilityChild;
+      first.emit("message", { type: "ready" });
+
+      first.emit("exit", 139);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(forkMock).toHaveBeenCalledTimes(2);
+      const second = mockChildren[1] as MockUtilityChild;
+      host.waitForReady().catch(() => undefined);
+
+      // Nobody awaits a respawn, so a wedged one hangs no one — and the crash
+      // ladder already owns the give-up policy. A deadline here would be a
+      // second, competing restart policy layered over it.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(second.kill).not.toHaveBeenCalled();
+      host.dispose();
+    });
+  });
+
   it("re-emits non-lifecycle worker messages as `worker-message`", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost(OPTS);
