@@ -30,11 +30,8 @@ import {
   usePluginRuntimeStatus,
   usePluginRuntimeStatusStore,
 } from "@/store/pluginRuntimeStatusStore";
-import {
-  PluginViewRuntimeStatus,
-  presentWorkerStatus,
-  useWorkerStall,
-} from "@/components/Plugin/PluginViewRuntimeStatus";
+import { PluginViewRuntimeStatus } from "@/components/Plugin/PluginViewRuntimeStatus";
+import { presentWorkerStatus, useWorkerStall } from "@/components/Plugin/pluginWorkerPresentation";
 import {
   PLUGIN_STYLE_ROOT_PROPS,
   preparePluginStyles,

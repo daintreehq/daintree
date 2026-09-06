@@ -186,9 +186,16 @@ describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
     // 52 → 53 for #12214's `plugin:validate-manifest`, the on-disk manifest
-    // check behind the `plugin.validate` action.
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(53);
+    // check behind the `plugin.validate` action. 53 → 55 for #12278's
+    // `plugin:runtime-statuses-get` and `plugin:restart-worker`, the health
+    // snapshot a panel hydrates from and the restart it recovers with.
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(55);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:runtime-statuses-get",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:restart-worker", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:validate-manifest",
       expect.any(Function)

@@ -62,6 +62,22 @@ vi.mock("@/components/ErrorBoundary", async () => {
   return { ErrorBoundary: FakeBoundary };
 });
 
+/**
+ * The status layer lazily loads its banner so the tooltip graph stays off the
+ * first-render path of every healthy panel. This suite stubs React's `lazy`
+ * wholesale to mount plugin views synchronously, which would swallow that inner
+ * lazy too — so mount the real banner directly. The lazy boundary is a loading
+ * optimisation; what these tests assert is what the banner says.
+ */
+vi.mock("@/components/Plugin/PluginViewRuntimeStatus", async () => {
+  const { PluginViewRuntimeBanner } = await import("../PluginViewRuntimeBanner");
+  type Props = Parameters<typeof PluginViewRuntimeBanner>[0];
+  return {
+    PluginViewRuntimeStatus: (props: Props) =>
+      props.presentation.kind === "content" ? null : <PluginViewRuntimeBanner {...props} />,
+  };
+});
+
 type Listener = (payload: { pluginId: string; status: PluginRuntimeStatus | null }) => void;
 
 let emit: Listener = () => {};
