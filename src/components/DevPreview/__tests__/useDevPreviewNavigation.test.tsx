@@ -276,6 +276,15 @@ describe("useDevPreviewNavigation — history handlers", () => {
     expect(clearRetryState).toHaveBeenCalledTimes(1);
   });
 
+  // Re-submitting the URL already showing starts no load, so clearing retry state
+  // there would drop an in-flight document's latches with nothing to restore them.
+  it("handleNavigate leaves the retry budget alone when re-submitting the current URL", () => {
+    const clearRetryState = vi.fn();
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams({ clearRetryState })));
+    act(() => result.current.handleNavigate("http://localhost:3000/"));
+    expect(clearRetryState).not.toHaveBeenCalled();
+  });
+
   it("handleNavigate leaves the retry budget alone when the URL is rejected", () => {
     const clearRetryState = vi.fn();
     const { result } = renderHook(() => useDevPreviewNavigation(baseParams({ clearRetryState })));

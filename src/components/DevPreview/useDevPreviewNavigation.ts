@@ -111,9 +111,15 @@ export function useDevPreviewNavigation({
       ? computeDevServerUrl(devServerUrl, currentUrl, proxyOrigin)
       : false;
     if (nextUrl !== false) {
+      // Adopting a different dev-server target (legacy mode follows the upstream
+      // port in place). The budget belongs to the target that exhausted it, so
+      // hand it back before the imperative effect loads the new one (#12296).
+      if (nextUrl !== currentUrl) {
+        clearRetryState();
+      }
       setHistory((prev) => pushBrowserHistory(prev, nextUrl));
     }
-  }, [devServerUrl, currentUrl, isUnconfigured, proxyOrigin, setHistory]);
+  }, [devServerUrl, currentUrl, isUnconfigured, proxyOrigin, clearRetryState, setHistory]);
 
   useEffect(() => {
     if (isUnconfigured) return;
@@ -140,13 +146,19 @@ export function useDevPreviewNavigation({
     (rawUrl: string) => {
       const normalized = normalizeBrowserUrl(rawUrl);
       if (normalized.url) {
-        clearRetryState();
+        // Only when the target actually changes. Re-submitting the URL already
+        // showing pushes no history and starts no load, so resetting here would
+        // drop the in-flight document's latches with nothing to re-establish
+        // them — silently cancelling a 502's overlay and its auto-recovery.
+        if (normalized.url !== currentUrl) {
+          clearRetryState();
+        }
         // Push history only; the imperative navigation effect drives loadURL now
         // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
         setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
       }
     },
-    [clearRetryState, setHistory]
+    [currentUrl, clearRetryState, setHistory]
   );
 
   const handleBack = useCallback(() => {
