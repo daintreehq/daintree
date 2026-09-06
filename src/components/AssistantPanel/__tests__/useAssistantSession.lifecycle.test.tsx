@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setWorktreeSelectionAccessor, setWorktreePathIndexAccessor } from "@/store/storeAccessors";
 import { useAssistantSession } from "../useAssistantSession";
 import { useAssistantStore } from "@/store/assistantStore";
 
@@ -74,6 +75,8 @@ beforeEach(() => {
     clearTimeout(id as unknown as NodeJS.Timeout)
   );
   useAssistantStore.getState().reset(null);
+  setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+  setWorktreePathIndexAccessor(() => new Map());
 });
 
 afterEach(() => {
@@ -144,6 +147,44 @@ describe("useAssistantSession — a dead session refuses work", () => {
       expect.objectContaining({ type: "prompt", sessionId: "ses_live" })
     );
     expect(useAssistantStore.getState().turns.some((t) => t.role === "user")).toBe(true);
+  });
+
+  it("captures each message's current worktree without restarting the assistant", async () => {
+    let selected = "wt-open";
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: selected,
+      restoreWorktreeId: selected,
+    }));
+    setWorktreePathIndexAccessor(
+      () =>
+        new Map([
+          ["wt-open", "/open"],
+          ["wt-send", "/send"],
+        ])
+    );
+    const { result } = await live();
+    selected = "wt-send";
+    act(() => {
+      result.current.submit("ask Claude and Codex for a fact");
+    });
+    const submitted = send.mock.calls.find(([command]) => command.type === "prompt")![0];
+    selected = "wt-open";
+    expect(submitted.worktree).toEqual({ id: "wt-send", path: "/send", branch: "" });
+    act(() => {
+      result.current.submit("ask those agents to vote");
+    });
+    expect(send).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: "ask those agents to vote",
+        worktree: { id: "wt-open", path: "/open", branch: "" },
+      })
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+    selected = "missing";
+    act(() => {
+      result.current.submit("new task");
+    });
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ worktree: null }));
   });
 
   it("refuses a prompt after the engine exits, and records no user turn", async () => {
