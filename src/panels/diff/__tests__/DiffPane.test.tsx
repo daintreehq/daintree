@@ -31,8 +31,14 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   // Surfaces `wrapLines` so the auto/override resolution is observable from the
   // prop the viewer actually receives, not just from the toolbar's pressed state.
-  DiffViewer: (props: { wrapLines?: boolean }) => (
-    <div data-testid="diff-viewer-mock" data-wrap-lines={String(props.wrapLines)} />
+  // `diff` rides along so a test can prove the viewer received the patch it
+  // names, not merely that something mounted.
+  DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => (
+    <div
+      data-testid="diff-viewer-mock"
+      data-wrap-lines={String(props.wrapLines)}
+      data-diff={props.diff}
+    />
   ),
   FULL_FILE_MAX_LINES: 5000,
 }));
@@ -210,6 +216,8 @@ beforeEach(() => {
   preferences.diffWrapLines = null;
   preferences.setDiffWrapLines.mockClear();
   preferences.diffMarkdownRendered = false;
+  preferences.diffFullFile = false;
+  (preferences.setDiffFullFile as ReturnType<typeof vi.fn>).mockReset();
   (preferences.setDiffMarkdownRendered as ReturnType<typeof vi.fn>).mockReset();
   (preferences.setDiffViewType as ReturnType<typeof vi.fn>).mockReset();
   worktrees.clear();
@@ -1250,5 +1258,145 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
 
     const second = await screen.findByTestId("rendered-markdown-mock");
     expect(second.getAttribute("data-attempt-key")).not.toBe(firstAttempt);
+  });
+});
+
+describe("DiffPane — submodule gitlinks (#12309)", () => {
+  // Real `git diff` output for a submodule whose recorded commit moved. The
+  // trailing 160000 on the index line is what marks the entry a gitlink.
+  const GITLINK_DIFF = `diff --git a/vendor/sub b/vendor/sub
+index ada605e..029ae62 160000
+--- a/vendor/sub
++++ b/vendor/sub
+@@ -1 +1 @@
+-Subproject commit ada605e3957df590939d8d977a26e1735b98390f
++Subproject commit 029ae62ae5f30fb47a84aa76407e4e42dd165e6d`;
+
+  function seedGitlink(overrides: Record<string, unknown> = {}): void {
+    useDiffContentMock.mockReturnValue({ content: GITLINK_DIFF, stale: false, retry: vi.fn() });
+    seedPanel({
+      filePath: "vendor/sub",
+      fileStatus: "modified",
+      changeSet: [entry("vendor/sub")],
+      ...overrides,
+    });
+  }
+
+  it("never asks to read a submodule path, even with Full file on", () => {
+    // The path is the submodule's checkout directory, so the read fails with a
+    // message no Retry can clear. It must never be requested.
+    preferences.diffFullFile = true;
+    seedGitlink();
+    renderPane();
+
+    expect(sourceEnabledCalls().some(Boolean)).toBe(false);
+  });
+
+  it("disables Full file with a reason instead of raising a failed-read banner", () => {
+    preferences.diffFullFile = true;
+    seedGitlink();
+    renderPane();
+
+    const group = screen.getByRole("group", { name: "Diff content" });
+    const describedBy = group.getAttribute("aria-describedby");
+    if (!describedBy) throw new Error("scope group carries no aria-describedby");
+    expect(document.getElementById(describedBy)?.textContent).toMatch(/submodule/i);
+
+    const fullFile = [...group.querySelectorAll("button")].find(
+      (button) => button.textContent === "Full file"
+    );
+    expect(fullFile?.hasAttribute("disabled")).toBe(true);
+    // The bug: a warning banner claiming the read failed, with a dead Retry.
+    expect(screen.queryByText("Showing changed lines only")).toBeNull();
+    expect(
+      [...document.querySelectorAll("button")].some((button) => button.textContent === "Retry")
+    ).toBe(false);
+  });
+
+  it("still hands the viewer the commit-pair patch", () => {
+    preferences.diffFullFile = true;
+    seedGitlink();
+    renderPane();
+
+    // Refusing the full-file scope must not cost the patch that IS renderable.
+    const viewer = screen.getByTestId("diff-viewer-mock");
+    expect(viewer.getAttribute("data-diff")).toContain("Subproject commit");
+  });
+
+  it("leaves an ordinary file's Full file scope alone", () => {
+    // The guard keys off the patch, so it must not leak onto everything else.
+    preferences.diffFullFile = true;
+    useDiffContentMock.mockReturnValue({
+      content: `diff --git a/a.ts b/a.ts\nindex 83db48f..bf269f4 100644`,
+      stale: false,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    renderPane();
+
+    const group = screen.getByRole("group", { name: "Diff content" });
+    const fullFile = [...group.querySelectorAll("button")].find(
+      (button) => button.textContent === "Full file"
+    );
+    expect(fullFile?.hasAttribute("disabled")).toBe(false);
+    expect(sourceEnabledCalls().some(Boolean)).toBe(true);
+  });
+
+  it("refuses the rendered layout for a .md-suffixed submodule rather than reading it", async () => {
+    // The rendered layout is a second, independent reason to read the new side.
+    preferences.diffMarkdownRendered = true;
+    seedGitlink({ filePath: "vendor/docs.md", changeSet: [entry("vendor/docs.md")] });
+    renderPane();
+
+    await act(async () => {});
+    expect(sourceEnabledCalls().some(Boolean)).toBe(false);
+    const layoutGroup = screen.getByRole("group", { name: "Diff layout" });
+    const describedBy = layoutGroup.getAttribute("aria-describedby");
+    if (!describedBy) throw new Error("layout group carries no aria-describedby");
+    expect(document.getElementById(describedBy)?.textContent).toMatch(/submodule/i);
+  });
+
+  it("shows a folder read failure without a Retry that cannot work", () => {
+    // Belt and braces: the guard above stops the read being issued, but any
+    // residual path that still reaches a directory must not offer a retry.
+    preferences.diffFullFile = true;
+    useDiffFileSourceMock.mockReturnValue({ source: undefined, errorCode: "NOT_A_FILE" });
+    useDiffContentMock.mockReturnValue({
+      content: `diff --git a/a.ts b/a.ts\nindex 83db48f..bf269f4 100644`,
+      stale: false,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    renderPane();
+
+    expect(screen.getByText("This is a folder, not a file")).toBeTruthy();
+    expect(
+      [...document.querySelectorAll("button")].some((button) => button.textContent === "Retry")
+    ).toBe(false);
+  });
+
+  it("keeps Retry for a read failure that a refresh could clear", () => {
+    preferences.diffFullFile = true;
+    useDiffFileSourceMock.mockReturnValue({ source: undefined, errorCode: "PERMISSION" });
+    useDiffContentMock.mockReturnValue({
+      content: `diff --git a/a.ts b/a.ts\nindex 83db48f..bf269f4 100644`,
+      stale: false,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    renderPane();
+
+    expect(
+      [...document.querySelectorAll("button")].some((button) => button.textContent === "Retry")
+    ).toBe(true);
+  });
+
+  it("does not treat an image-suffixed submodule as an image", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedGitlink({ filePath: "vendor/icons.png", changeSet: [entry("vendor/icons.png")] });
+    renderPane();
+
+    expect(screen.queryByTestId("image-diff-mock")).toBeNull();
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
   });
 });

@@ -4751,43 +4751,65 @@ export class WorkspaceService {
 
       if (status === "untracked" || status === "added") {
         const { readFile } = await import("fs/promises");
-        const buffer = await readFile(absolutePath);
+        // A newly added submodule is `added` with a path that is the
+        // submodule's own checkout, so there is no file to inline. Git already
+        // knows how to describe it (`new file mode 160000`), so fall through to
+        // the tracked path rather than failing the request (#12309).
+        //
+        // Only for `added`: an untracked directory has no index entry, so the
+        // tracked diff would come back empty and report NO_CHANGES — which
+        // claims something the request cannot know.
+        let buffer: Buffer | null = null;
+        try {
+          buffer = await readFile(absolutePath);
+        } catch (error) {
+          const isDirectory = (error as NodeJS.ErrnoException).code === "EISDIR";
+          if (!isDirectory || status !== "added") throw error;
+        }
 
-        let isBinary = false;
-        const checkLength = Math.min(buffer.length, 8192);
-        for (let i = 0; i < checkLength; i++) {
-          if (buffer[i] === 0) {
-            isBinary = true;
-            break;
+        if (buffer !== null) {
+          let isBinary = false;
+          const checkLength = Math.min(buffer.length, 8192);
+          for (let i = 0; i < checkLength; i++) {
+            if (buffer[i] === 0) {
+              isBinary = true;
+              break;
+            }
           }
-        }
 
-        if (isBinary) {
-          sendSentinel("BINARY_FILE");
-          return;
-        }
+          if (isBinary) {
+            sendSentinel("BINARY_FILE");
+            return;
+          }
 
-        const content = buffer.toString("utf-8");
-        const lines = content.split("\n");
+          const content = buffer.toString("utf-8");
+          const lines = content.split("\n");
 
-        const diff = `diff --git a/${gitPath} b/${gitPath}
+          const diff = `diff --git a/${gitPath} b/${gitPath}
 new file mode 100644
 --- /dev/null
 +++ b/${gitPath}
 @@ -0,0 +1,${lines.length} @@
 ${lines.map((l) => "+" + l).join("\n")}`;
 
-        sendWindow(diff);
-        return;
+          sendWindow(diff);
+          return;
+        }
       }
 
       // `--no-textconv` blocks user-defined diff drivers that would otherwise
       // execute arbitrary binaries via `.gitattributes` textconv mappings.
+      // `--submodule=short` pins the gitlink format: a user's `diff.submodule`
+      // of `log` emits a `Submodule <path> a..b:` summary that is not a unified
+      // diff at all, and `diff` emits patches for files INSIDE the submodule
+      // under their own paths — neither of which this pane can render or
+      // recognise as a gitlink (#12309).
       const diff = await git.diff([
         "HEAD",
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
+        "--submodule=short",
         ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
         "--",
         normalizedPath,

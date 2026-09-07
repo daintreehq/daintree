@@ -210,6 +210,74 @@ describe("WorkspaceService.getFileDiff", () => {
     expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--no-textconv"]));
   });
 
+  it("pins --submodule=short so a user's diff.submodule can't reshape the patch", async () => {
+    // `diff.submodule=log` emits a `Submodule <path> a..b:` summary that is not
+    // a unified diff at all, and `diff` emits patches for files INSIDE the
+    // submodule under their own paths (#12309).
+    mockSimpleGit.diff.mockResolvedValueOnce(
+      "diff --git a/vendor/sub b/vendor/sub\nindex ada605e..029ae62 160000"
+    );
+    await service.getFileDiff("req-sub-1", "/test/repo", "vendor/sub", "modified");
+
+    expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--submodule=short"]));
+  });
+
+  it("asks git for an added gitlink instead of reading its checkout directory", async () => {
+    // An added submodule's path is a directory, so the synthetic added-file
+    // branch cannot inline it — it used to fail the whole request (#12309).
+    const { readFile } = await import("fs/promises");
+    vi.mocked(readFile).mockRejectedValueOnce(
+      Object.assign(new Error("illegal operation on a directory"), { code: "EISDIR" })
+    );
+    const gitlinkPatch =
+      "diff --git a/vendor/sub b/vendor/sub\nnew file mode 160000\nindex 0000000..ada605e";
+    mockSimpleGit.diff.mockResolvedValueOnce(gitlinkPatch);
+
+    await service.getFileDiff("req-sub-2", "/test/repo", "vendor/sub", "added");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-sub-2", diff: gitlinkPatch })
+    );
+    // Not an error result, and not the synthetic `new file mode 100644` shape.
+    const event = mockSendEvent.mock.calls
+      .map((call) => call[0])
+      .find((e) => e.requestId === "req-sub-2");
+    expect(event.error).toBeUndefined();
+  });
+
+  it("refuses to call an untracked directory NO_CHANGES", async () => {
+    // An embedded repository shows as `?? vendor/sub/` and has no index entry,
+    // so the tracked diff would come back empty — reporting that as "no
+    // changes" would claim something this request cannot know (#12309).
+    const { readFile } = await import("fs/promises");
+    vi.mocked(readFile).mockRejectedValueOnce(
+      Object.assign(new Error("illegal operation on a directory"), { code: "EISDIR" })
+    );
+
+    await service.getFileDiff("req-sub-4", "/test/repo", "vendor/sub", "untracked");
+
+    const event = mockSendEvent.mock.calls
+      .map((call) => call[0])
+      .find((e) => e.requestId === "req-sub-4");
+    expect(event.error).toBeTruthy();
+    expect(event.diff).not.toBe("NO_CHANGES");
+    expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
+  it("still rethrows a non-directory read failure on an added file", async () => {
+    const { readFile } = await import("fs/promises");
+    vi.mocked(readFile).mockRejectedValueOnce(
+      Object.assign(new Error("permission denied"), { code: "EACCES" })
+    );
+
+    await service.getFileDiff("req-sub-3", "/test/repo", "secret.txt", "added");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-sub-3", error: "permission denied" })
+    );
+    expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
   it("refuses a file past the source ceiling without reading it or diffing", async () => {
     const { stat, readFile } = await import("fs/promises");
     vi.mocked(stat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);

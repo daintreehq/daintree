@@ -50,6 +50,30 @@ describe("getFullFileAvailability", () => {
     }
   });
 
+  it("refuses a submodule gitlink, whose path is a directory rather than a file", () => {
+    // The reported bug: status `modified` on a working-tree diff looked like an
+    // ordinary edit, so the scope was offered and the read failed (#12309).
+    const result = getFullFileAvailability("working-tree", "modified", true);
+    expect(result.available).toBe(false);
+    expect(result.available === false && result.reason).toMatch(/submodule/i);
+  });
+
+  it("outranks every other reason, so a submodule always says submodule", () => {
+    // An added gitlink would otherwise be told its diff already carries the
+    // whole file — true of a file, meaningless for a commit reference.
+    for (const status of ["added", "deleted", "renamed", "conflicted"] as GitStatus[]) {
+      const result = getFullFileAvailability("working-tree", status, true);
+      expect(result.available === false && result.reason).toMatch(/submodule/i);
+    }
+    const staged = getFullFileAvailability("staged", "modified", true);
+    expect(staged.available === false && staged.reason).toMatch(/submodule/i);
+  });
+
+  it("leaves ordinary files untouched when the flag is absent or false", () => {
+    expect(getFullFileAvailability("working-tree", "modified", false).available).toBe(true);
+    expect(getFullFileAvailability("working-tree", "modified").available).toBe(true);
+  });
+
   it("always explains itself when it says no", () => {
     const sources = ["working-tree", "unstaged", "staged", "base-branch", undefined] as const;
     const statuses: (GitStatus | undefined)[] = [
