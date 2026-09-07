@@ -85,6 +85,7 @@ import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.pr
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
+import { buildWorkspacePreloadBindings } from "./ipc/handlers/workspace.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
@@ -1522,6 +1523,7 @@ function buildElectronApi(): ElectronAPI {
 
     // Per-window back/forward over visited projects
     projectHistory: buildProjectHistoryPreloadBindings(_unwrappingInvoke),
+    workspace: buildWorkspacePreloadBindings(_unwrappingInvoke),
 
     // Move or rename project — preview + apply (#11282, phase 4)
     projectRelocation: buildProjectRelocationPreloadBindings(_unwrappingInvoke),

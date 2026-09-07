@@ -271,6 +271,9 @@ export const BUILT_IN_ACTION_IDS = [
   "project.detectRunners",
   "project.runCheck",
 
+  // -- workspaceActions --
+  "workspace.list",
+
   // -- pluginActions --
   "plugin.validate",
   "plugin.diagnostics",

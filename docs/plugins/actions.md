@@ -480,6 +480,12 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `window.zoomOut` | Zoom Out | safe | — |
 | `window.zoomReset` | Reset Zoom | safe | — |
 
+## workspace
+
+| Action | Title | Danger | Arguments |
+| --- | --- | --- | --- |
+| `workspace.list` | List Workspaces | safe | — |
+
 ## worktree
 
 | Action | Title | Danger | Arguments |

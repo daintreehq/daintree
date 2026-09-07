@@ -1142,6 +1142,11 @@ export const CHANNELS = {
   SCRATCH_UPDATED: "scratch:updated",
   SCRATCH_REMOVED: "scratch:removed",
   SCRATCH_ON_SWITCH: "scratch:on-switch",
+
+  // Workspace discovery — the catalog of every project and scratch, spanning
+  // both stores, so an MCP client can look a workspace id up instead of
+  // deriving one (#12307).
+  WORKSPACE_LIST: "workspace:list",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

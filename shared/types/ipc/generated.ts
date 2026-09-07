@@ -1896,6 +1896,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;
   };
+  "workspace:list": {
+    args: [];
+    result: import("./workspace.js").WorkspaceListEntry[];
+  };
   "worktree-config:dismiss-wsl-banner": {
     args: [payload: { worktreeId: string }];
     result: void;

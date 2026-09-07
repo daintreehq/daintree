@@ -66,6 +66,19 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // (#11859). Identity only: no env, args or flags at any redaction level.
   "agent.listPresets",
 
+  // The same argument as `agent.listPresets`, one surface out: workspace ids
+  // are minted by Daintree and cannot be reconstructed from outside it.
+  // `Daintree-Workspace-Id` has shipped since #11789 and routes a session to
+  // one workspace deterministically, but nothing on this surface said what the
+  // ids were, so external clients recovered them by hashing candidate paths —
+  // the one lookup `projectStorePaths.ts` says is invalid, since a relocated
+  // project keeps its original id and `mintProjectId`'s `randomBytes(32)`
+  // collision fallback is not derivable at all. Without this the binding
+  // mechanism is only usable by guessing its key (#12307). Identity only:
+  // id, path, name, kind and whether a view is open — nothing about what is
+  // running inside a workspace.
+  "workspace.list",
+
   // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
   // deliberately NOT exposed — external orchestrators fan out
   // `terminal.sendCommand` per terminal (see CLAUDE.tasks.md guidance).

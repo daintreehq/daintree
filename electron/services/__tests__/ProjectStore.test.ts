@@ -807,3 +807,156 @@ describe("ProjectStore.getAllProjects reconciliation", () => {
     updateSpy.mockRestore();
   });
 });
+
+/**
+ * The identity projection behind workspace discovery (#12307).
+ *
+ * Its whole reason to exist is what it does NOT do: `getAllProjects()` repairs
+ * row statuses inside a write-locking IMMEDIATE transaction, which is wrong for
+ * a read an external MCP client can call at will. Seeded with the same
+ * inconsistent statuses the reconciliation suite above uses, so an
+ * implementation that delegated to `getAllProjects()` and mapped its result
+ * would be caught here rather than in production.
+ */
+describe("ProjectStore.getAllProjectIdentities", () => {
+  let store: ProjectStore;
+  let dirs: string[];
+  let currentId: string;
+  let staleActiveId: string;
+  let relocatedId: string;
+
+  beforeEach(async () => {
+    const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), "daintree-ident-"));
+    const alphaDir = mk();
+    const betaDir = mk();
+    const gammaDir = mk();
+    dirs = [alphaDir, betaDir, gammaDir];
+
+    const { generateProjectId } = await import("../projectStorePaths.js");
+    const alpha = await fs.promises.realpath(alphaDir);
+    const beta = await fs.promises.realpath(betaDir);
+    const gamma = await fs.promises.realpath(gammaDir);
+
+    currentId = generateProjectId(alpha);
+    staleActiveId = generateProjectId(beta);
+    // A project that has MOVED: its id was minted from a path it no longer
+    // lives at, which is precisely the case hashing cannot recover (#11282).
+    relocatedId = generateProjectId("/somewhere/it/used/to/live");
+
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+
+    const now = Date.now();
+    db.insert(schema.projects)
+      .values({
+        id: currentId,
+        path: alpha,
+        name: "Alpha",
+        emoji: "🌲",
+        lastOpened: now,
+        status: "closed",
+        frecencyScore: 10,
+        lastAccessedAt: now,
+      })
+      .run();
+    db.insert(schema.projects)
+      .values({
+        id: staleActiveId,
+        path: beta,
+        name: "Beta",
+        emoji: "🌲",
+        lastOpened: now - 1000,
+        status: "active",
+        frecencyScore: 5,
+        lastAccessedAt: now - 1000,
+      })
+      .run();
+    db.insert(schema.projects)
+      .values({
+        id: relocatedId,
+        path: gamma,
+        name: "Gamma",
+        emoji: "🌲",
+        lastOpened: now - 2000,
+        status: null,
+        frecencyScore: 1,
+        lastAccessedAt: now - 2000,
+      })
+      .run();
+    db.insert(schema.appState).values({ key: "currentProjectId", value: currentId }).run();
+
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns id, path and name for every row and nothing else", () => {
+    const identities = store.getAllProjectIdentities();
+
+    expect(identities).toHaveLength(3);
+    for (const identity of identities) {
+      // Identity only — a widened projection would leak emoji, statuses,
+      // frecency and completion timestamps onto the external MCP surface.
+      expect(Object.keys(identity).sort()).toEqual(["id", "name", "path"]);
+    }
+    expect(identities.map((i) => i.name).sort()).toEqual(["Alpha", "Beta", "Gamma"]);
+  });
+
+  it("includes closed and legacy-null-status projects", () => {
+    const ids = store.getAllProjectIdentities().map((i) => i.id);
+
+    // `status` is lifecycle, not deletion: a closed workspace is still one a
+    // caller may want to bind to, and listing only open ones would put a client
+    // back where it started.
+    expect(ids).toContain(currentId);
+    expect(ids).toContain(relocatedId);
+  });
+
+  it("returns the stored id for a relocated project rather than a path hash", async () => {
+    const { generateProjectId } = await import("../projectStorePaths.js");
+    const relocated = store.getAllProjectIdentities().find((i) => i.id === relocatedId);
+
+    expect(relocated).toBeDefined();
+    // The whole point of the tool: hashing the CURRENT path gives a different
+    // id, so discovery has to report what is stored.
+    expect(generateProjectId(relocated!.path)).not.toBe(relocated!.id);
+  });
+
+  it("opens no write transaction and repairs no status", () => {
+    const txSpy = vi.spyOn(db, "transaction");
+    const updateSpy = vi.spyOn(db, "update");
+
+    store.getAllProjectIdentities();
+
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+
+    // And the rows the reconciliation pass would have rewritten are untouched:
+    // `currentId` is the current project still marked "closed", and
+    // `staleActiveId` is a non-current row still marked "active".
+    const currentRow = db
+      .select()
+      .from(schema.projects)
+      .where(eq(schema.projects.id, currentId))
+      .get();
+    const staleRow = db
+      .select()
+      .from(schema.projects)
+      .where(eq(schema.projects.id, staleActiveId))
+      .get();
+    expect(currentRow?.status).toBe("closed");
+    expect(staleRow?.status).toBe("active");
+
+    txSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("returns an empty list when no projects are registered", () => {
+    db.delete(schema.projects).run();
+    expect(store.getAllProjectIdentities()).toEqual([]);
+  });
+});

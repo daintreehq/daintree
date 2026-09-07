@@ -29,6 +29,7 @@ import { registerTerminalWorktreeActions } from "./definitions/terminalWorktreeA
 import { registerFleetActions } from "./definitions/fleetActions";
 import { registerVoiceActions } from "./definitions/voiceActions";
 import { registerWatchdogActions } from "./definitions/watchdogActions";
+import { registerWorkspaceActions } from "./definitions/workspaceActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
 import { registerWorktreeBulkActions } from "./definitions/worktreeBulkActions";
@@ -60,6 +61,7 @@ export function createActionDefinitions(
   registerWorktreeBulkActions(actions);
   registerRecipeActions(actions, callbacks);
   registerProjectActions(actions, callbacks);
+  registerWorkspaceActions(actions);
   registerEnvActions(actions, callbacks);
   registerForgeActions(actions, callbacks);
   registerGitActions(actions, callbacks);

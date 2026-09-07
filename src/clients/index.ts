@@ -24,6 +24,7 @@ export { scratchClient } from "./scratchClient";
 export { slashCommandsClient } from "./slashCommandsClient";
 export { systemClient } from "./systemClient";
 export { terminalClient } from "./terminalClient";
+export { workspaceClient } from "./workspaceClient";
 export { worktreeClient } from "./worktreeClient";
 export { worktreeConfigClient } from "./worktreeConfigClient";
 export { codexClient } from "./codexClient";

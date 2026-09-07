@@ -5856,6 +5856,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Start Work on Issue",
   },
   {
+    "category": "workspace",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "List every project and scratch Daintree knows about, open or not, so a client can look up a workspace id rather than derive one by hashing a path. workspaceId is what the Daintree-Workspace-Id header binds to; kind is project or scratch. hasLiveView says whether a view is open, not whether an id is valid — absence from this list is what makes an id wrong.",
+    "examples": undefined,
+    "id": "workspace.list",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": false,
+    "title": "List Workspaces",
+  },
+  {
     "category": "worktree",
     "danger": "confirm",
     "dangerRationale": "Permanently ends every session for each selected worktree. Scrollback is lost for each terminal.",
