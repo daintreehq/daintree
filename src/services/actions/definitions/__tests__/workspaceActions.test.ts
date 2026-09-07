@@ -42,6 +42,9 @@ function definition(): AnyActionDefinition {
   return factory() as AnyActionDefinition;
 }
 
+/** The five identity fields the external contract permits, in sorted order. */
+const FIELDS = ["hasLiveView", "kind", "name", "path", "workspaceId"];
+
 const ROW = {
   workspaceId: "a".repeat(64),
   path: "/repos/alpha",
@@ -74,25 +77,23 @@ describe("workspace.list", () => {
     const schema = service().get("workspace.list" as ActionId)?.outputSchema as
       Record<string, unknown> | undefined;
 
+    // Narrow rather than assert past each hop: under the repo's index-access
+    // strictness a bracket read is `T | undefined`, and a bare `!` would make
+    // the test throw a TypeError instead of reporting which hop was missing.
     expect(schema).toBeDefined();
-    expect(schema!["type"]).toBe("object");
+    expect(schema?.["type"]).toBe("object");
 
-    const properties = schema!["properties"] as Record<string, Record<string, unknown>>;
-    const row = properties["workspaces"]["items"] as Record<string, unknown>;
-    expect(Object.keys(row["properties"] as Record<string, unknown>).sort()).toEqual([
-      "hasLiveView",
-      "kind",
-      "name",
-      "path",
-      "workspaceId",
-    ]);
-    expect((row["required"] as string[]).sort()).toEqual([
-      "hasLiveView",
-      "kind",
-      "name",
-      "path",
-      "workspaceId",
-    ]);
+    const properties = schema?.["properties"] as
+      Record<string, Record<string, unknown> | undefined> | undefined;
+    const workspaces = properties?.["workspaces"];
+    expect(workspaces).toBeDefined();
+
+    const row = workspaces?.["items"] as Record<string, unknown> | undefined;
+    expect(row).toBeDefined();
+
+    const rowProperties = row?.["properties"] as Record<string, unknown> | undefined;
+    expect(Object.keys(rowProperties ?? {}).sort()).toEqual(FIELDS);
+    expect([...((row?.["required"] as string[] | undefined) ?? [])].sort()).toEqual(FIELDS);
   });
 
   it("describes what hasLiveView does and does not mean", () => {

@@ -203,15 +203,15 @@ describe("workspace:list", () => {
       project(PROJECT_OPEN, "Open", "/repos/open"),
     ]);
     const wc = openView(PROJECT_OPEN);
-    expect((await list())[0].hasLiveView).toBe(true);
+    expect((await list())[0]?.hasLiveView).toBe(true);
 
     // The real registry prunes the entry; membership is a catalog fact and must
     // survive — it is what separates a wrong id from a closed workspace.
     wc.isDestroyed = () => true;
 
     const [entry] = await list();
-    expect(entry.workspaceId).toBe(PROJECT_OPEN);
-    expect(entry.hasLiveView).toBe(false);
+    expect(entry?.workspaceId).toBe(PROJECT_OPEN);
+    expect(entry?.hasLiveView).toBe(false);
   });
 
   it("reports one row for a workspace holding two live views", async () => {
@@ -225,7 +225,7 @@ describe("workspace:list", () => {
 
     const entries = await list();
     expect(entries).toHaveLength(1);
-    expect(entries[0].hasLiveView).toBe(true);
+    expect(entries[0]?.hasLiveView).toBe(true);
   });
 
   it("invents no catalog entry for a registered view with no stored row", async () => {
@@ -269,7 +269,7 @@ describe("workspace:list", () => {
     // into a filesystem walk and would drop exactly the relocated projects the
     // tool exists to make addressable.
     const [entry] = await list();
-    expect(entry.path).toBe("/repos/moved-away");
+    expect(entry?.path).toBe("/repos/moved-away");
   });
 
   it("propagates a store failure instead of reporting an empty catalog", async () => {
