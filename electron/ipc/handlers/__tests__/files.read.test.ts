@@ -321,6 +321,26 @@ describe("files:read handler", () => {
     });
   });
 
+  it("throws AppError(NOT_A_FILE) when readFile raises EISDIR on a directory", async () => {
+    // A submodule gitlink's path is a directory, and the generic fallback
+    // reported that as "Invalid file path" with a Retry that could never
+    // succeed (#12309).
+    fsMock.stat.mockResolvedValue({ size: 128 });
+    const handle = {
+      readFile: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("illegal operation"), { code: "EISDIR" })),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    fsMock.open.mockResolvedValue(handle);
+    registerFilesHandlers();
+
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "NOT_A_FILE",
+    });
+  });
+
   it("throws AppError(PERMISSION) when readFile raises EACCES", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {

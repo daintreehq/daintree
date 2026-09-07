@@ -81,6 +81,19 @@ export function registerFilesHandlers(): () => void {
           cause: error instanceof Error ? error : undefined,
         });
       }
+      // A submodule gitlink's path is the submodule's own checkout, so the diff
+      // and file panels can arrive here aimed at a directory. `open` succeeds on
+      // one; `readFile` is what fails, with EISDIR on all three platforms. Left
+      // to the fallback it was reported as an invalid path (#12309).
+      if (errCode === "EISDIR") {
+        return new AppError({
+          code: "NOT_A_FILE",
+          message: "Path is a directory, not a file",
+          userMessage: "This is a folder, not a file.",
+          context: { filePath },
+          cause: error instanceof Error ? error : undefined,
+        });
+      }
       if (errCode === "EACCES" || errCode === "EPERM") {
         return new AppError({
           code: "PERMISSION",
