@@ -8,7 +8,7 @@ export function loadBudgetConfig(configPath = DEFAULT_BUDGETS_PATH): PerfBudgetC
   const raw = fs.readFileSync(configPath, "utf-8");
   const parsed = JSON.parse(raw) as PerfBudgetConfig;
 
-  if (!parsed.defaultBudget || !parsed.scenarios || !Array.isArray(parsed.criticalScenarios)) {
+  if (!parsed.defaultBudget || !parsed.scenarios) {
     throw new Error(`Invalid performance budget config: ${configPath}`);
   }
 

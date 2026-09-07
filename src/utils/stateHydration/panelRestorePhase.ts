@@ -10,6 +10,7 @@ import type {
 import type { AgentSettings } from "@shared/types/agentSettings";
 import type { WorktreeState } from "@shared/types";
 import type { AgentPreset } from "@/config/agents";
+import type { PanelKind } from "@shared/types/panel";
 import type { ResourceProfile } from "@shared/types/resourceProfile";
 import { type TerminalRestoreTask, getRestoreBatchParams, delay } from "./batchScheduler";
 import { reconnectWithTimeout } from "./reconnectManager";
@@ -38,6 +39,7 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { codexClient } from "@/clients/codexClient";
 import { isValidTerminalGeometry } from "@shared/types/terminal";
 import type { TerminalGeometry } from "@shared/types/terminal";
 
@@ -189,6 +191,7 @@ function electResumeSuppression(
   panels: readonly (TerminalState | undefined)[],
   context: {
     projectRoot: string;
+    projectId: string | null;
     backendTerminalMap: Map<string, BackendTerminalInfo>;
     prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
   }
@@ -245,9 +248,9 @@ function electResumeSuppression(
     // neither is something the fallback can collide with.
     const holdsLiveSession = reconnects && record.hasPty !== false;
 
-    const kind = record?.kind ?? inferKind(saved);
+    const kind = record?.kind ?? inferKind(saved, context.projectId);
     if (kind === "assistant" || !panelKindHasPty(kind)) continue;
-    const savedAgentId = resolveRespawnAgentId(saved, inferKind(saved));
+    const savedAgentId = resolveRespawnAgentId(saved, inferKind(saved, context.projectId));
 
     if (reconnects) {
       if (!holdsLiveSession) continue;
@@ -329,6 +332,65 @@ function electResumeSuppression(
 }
 
 /**
+ * The only agent whose resume-latest fallback can be resolved to a name before
+ * launch. Claude's `--continue` and Gemini's `-r latest` have no equivalent
+ * read-only index to ask, so they keep the anonymous fallback.
+ */
+const CODEX_AGENT_ID = "codex";
+
+/**
+ * Name the conversation a pane's resume-latest fallback is about to open, so it
+ * launches as `codex resume <id>` rather than `codex resume --last` (#12178).
+ *
+ * `--last` leaves the pane running a session Daintree never learns the id of,
+ * which is how the id was lost to begin with: the next teardown scrape becomes
+ * the only capture path all over again. Asking Codex's own index which session
+ * `--last` resolves to freezes that choice — the same conversation, on the
+ * record from the moment the PTY exists.
+ *
+ * Deliberately narrow. Only a pane that is actually going to run the fallback
+ * asks: one already carrying an exact id resumes that instead, and one the
+ * election suppressed must not learn what the winner is holding, since the
+ * whole point of suppressing it was to keep a second writer off that transcript.
+ * Every failure is answered with `undefined`, which is today's behaviour.
+ *
+ * Which is also why a pane with its own `CODEX_HOME` is skipped outright. The
+ * app-server answers from MAIN's profile while the pane spawns against its own
+ * (the captured launch env is replayed on respawn, #10922), so a hit there
+ * names a session the pane cannot open — and unlike `--last`, which resolves to
+ * nothing and falls through, that id would be recorded and replayed on every
+ * later restore. It is the one case where naming the session could be worse
+ * than leaving it anonymous, so it does not run at all.
+ */
+async function resolveNamedResumeLatestSession(
+  saved: TerminalState,
+  kind: PanelKind,
+  projectRoot: string,
+  allowResumeLatest: boolean
+): Promise<string | undefined> {
+  if (!allowResumeLatest || saved.agentSessionId) return undefined;
+  const agentId = resolveRespawnAgentId(saved, kind);
+  if (agentId !== CODEX_AGENT_ID) return undefined;
+  // The same capability probe the election and the respawn builder use, so a
+  // Codex build whose config drops the fallback can't be queried for one.
+  if (buildResumeLatestCommand(agentId) === undefined) return undefined;
+  // The launch env is captured and persisted (#10922), so a pane that ever ran
+  // under a redirected profile still carries it here — preset envs included.
+  if (Object.keys(saved.env ?? {}).some((key) => key.toUpperCase() === "CODEX_HOME")) {
+    return undefined;
+  }
+  const cwd = saved.cwd || projectRoot;
+  if (!cwd) return undefined;
+
+  try {
+    return (await codexClient.resolveResumeLatestSession({ cwd })) ?? undefined;
+  } catch {
+    // A restore that can't reach main still has a pane to bring back.
+    return undefined;
+  }
+}
+
+/**
  * Rebase a restore arg's `cwd` from a moved worktree's old root to its new one.
  * No-op when the panel's worktree didn't move or the arg carries no cwd. Used on
  * the surviving-PTY paths, whose cwd comes from the live backend record (the old
@@ -381,6 +443,18 @@ export interface PanelRestoreContext {
    */
   workspaceHasWorktreesPromise: Promise<boolean>;
   projectRoot: string;
+  /**
+   * Identity of the project being restored INTO, as distinct from
+   * {@link projectRoot}, which is its path. A plugin-contributed panel kind is
+   * persisted portably and re-qualified against this (#12280), so a layout
+   * written under one project identity resolves under whichever one opens it.
+   * `null` for a restore with no project in scope: `requalifyPersistedKind`
+   * then qualifies a project-local kind against an unresolvable sentinel
+   * project rather than leaving it portable, where it would alias onto an
+   * installed global plugin's kind. The panel reaches the missing-plugin
+   * placeholder with its state intact, as an uninstalled plugin's would.
+   */
+  projectId: string | null;
   agentSettings: AgentSettings | undefined;
   clipboardDirectory: string | undefined;
   projectPresetsByAgent: Record<string, AgentPreset[]>;
@@ -457,6 +531,7 @@ export async function restorePanelsPhase(
     activeWorktreeId,
     workspaceHasWorktreesPromise,
     projectRoot,
+    projectId,
     agentSettings,
     clipboardDirectory,
     projectPresetsByAgent,
@@ -662,6 +737,7 @@ export async function restorePanelsPhase(
     // the common single-pane case — is never touched.
     const resumeSuppression = electResumeSuppression(panels, {
       projectRoot: projectRoot || "",
+      projectId,
       backendTerminalMap,
       prefetchedReconnectResults,
     });
@@ -695,7 +771,7 @@ export async function restorePanelsPhase(
       if (backendTerminal) {
         taskIsPty = true;
       } else {
-        const inferredKind = inferKind(saved);
+        const inferredKind = inferKind(saved, projectId);
         taskIsPty = inferredKind === "assistant" ? false : panelKindHasPty(inferredKind);
       }
 
@@ -772,7 +848,7 @@ export async function restorePanelsPhase(
 
             backendTerminalMap.delete(saved.id);
           } else {
-            const kind = inferKind(saved);
+            const kind = inferKind(saved, projectId);
 
             if (kind === "assistant") {
               logHydrationInfo(`Skipping legacy assistant panel: ${saved.id}`);
@@ -837,12 +913,30 @@ export async function restorePanelsPhase(
                 // not_found on cold app restart means the PTY process was killed
                 // on quit and needs to be respawned.
                 const savedAgentId = resolveAgentId(saved.launchAgentId);
-                const resolvedAgentBaseCommand = savedAgentId
-                  ? resolveAgentLaunchBaseCommand(
-                      getAgentConfig(savedAgentId)?.command ?? savedAgentId,
-                      await getCurrentLaunchCliDetail(savedAgentId)
+                const allowResumeLatest = !resumeSuppression.resumeLatest.has(saved.id);
+                // Both are lookups this respawn needs and neither depends on the
+                // other, so they overlap rather than queue. The election already
+                // ran synchronously over the saved array — nothing awaited here
+                // can change who won a resume slot (#11052).
+                const baseCommandPromise = savedAgentId
+                  ? getCurrentLaunchCliDetail(savedAgentId).then((detail) =>
+                      resolveAgentLaunchBaseCommand(
+                        getAgentConfig(savedAgentId)?.command ?? savedAgentId,
+                        detail
+                      )
                     )
-                  : undefined;
+                  : Promise.resolve(undefined);
+                const [resolvedAgentBaseCommand, resolvedResumeLatestSessionId] = await Promise.all(
+                  [
+                    baseCommandPromise,
+                    resolveNamedResumeLatestSession(
+                      saved,
+                      kind,
+                      projectRoot || "",
+                      allowResumeLatest
+                    ),
+                  ]
+                );
                 const respawnArgs = buildArgsForRespawn(
                   saved,
                   kind,
@@ -853,8 +947,9 @@ export async function restorePanelsPhase(
                   projectPresetsByAgent,
                   {
                     resolvedAgentBaseCommand,
-                    allowResumeLatest: !resumeSuppression.resumeLatest.has(saved.id),
+                    allowResumeLatest,
                     allowSessionIdResume: !resumeSuppression.sessionId.has(saved.id),
+                    resolvedResumeLatestSessionId,
                   }
                 );
 

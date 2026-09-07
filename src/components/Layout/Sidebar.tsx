@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ProjectResourceBadge, QuickRun } from "@/components/Project";
+import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
@@ -187,6 +188,8 @@ export function Sidebar({
           <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
 
           {projectId != null && <QuickRun projectId={projectId} />}
+
+          <ProjectPluginIndicator />
 
           <ProjectResourceBadge />
 

@@ -5,6 +5,7 @@ import { combosFieldsEqual, keybindingService } from "@/services/KeybindingServi
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { COMMAND_HUD_PREFIX, usePendingChord } from "./useGlobalKeybindings";
+import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 /** A single entry in the curated Cmd+K power-command layer. */
 export interface CommandHudItem {
@@ -161,6 +162,10 @@ export function useCommandHud(): UseCommandHudReturn {
         if (result.ok) return;
         // DISABLED is already visible on the originating surface.
         if (result.error.code === "DISABLED") return;
+        // So is a parked confirmation: the action reports CONFIRMATION_REQUIRED
+        // rather than a silent no-op (#12120), but the dialog it just opened is
+        // what the user should be answering — not an error toast over it.
+        if (isStagedConfirmation(result.error)) return;
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",

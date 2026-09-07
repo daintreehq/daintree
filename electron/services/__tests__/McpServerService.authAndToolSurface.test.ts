@@ -1222,7 +1222,12 @@ describe("McpServerService", () => {
     });
 
     await service.start(winA.window);
-    service.setHelpTokenValidator((token) => (token === "help-A" ? "system" : false));
+    // `action`, not `system`: since #12116 this is the DEFAULT tier for
+    // worktree.delete, so authenticating here makes the assertions below —
+    // unconfirmed dispatch, host-resolved confirm, client elicitation ignored —
+    // the regression sentinel for the promotion. At a cumulative wider tier
+    // they would stay green even if the floor moved back.
+    service.setHelpTokenValidator((token) => (token === "help-A" ? "action" : false));
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-A" ? winA.webContents.id : null
     );

@@ -178,6 +178,7 @@ describe("useE2EBridges", () => {
       recipeId: "inrepo-my-recipe",
       recipeName: "my-recipe",
       updates: { name: "my-recipe" },
+      reason: "stale",
     });
   });
 

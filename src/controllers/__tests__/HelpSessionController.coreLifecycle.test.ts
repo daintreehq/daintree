@@ -57,6 +57,24 @@ const {
   grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
   outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    dismissIntro: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
+    setWidth: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    addFigure: vi.fn(),
+    markConversationStarted: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
+    // What `selectOpenSlots` reports. The flat fixture above is slot 0; a test
+    // that wants a sibling lane behind the tab strip adds it here.
+    openSlots: [0] as number[],
     isOpen: false,
     terminalId: null as string | null,
     agentId: null as string | null,
@@ -97,7 +115,18 @@ vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (s: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
   store.getState = () => helpPanelState;
-  return { useHelpPanelStore: store };
+  return {
+    useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
+    selectOpenSlots: () => helpPanelState.openSlots,
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
+  };
 });
 
 vi.mock("@/store", () => {
@@ -154,6 +183,7 @@ function syncWorkspaceInputs(
 }
 
 function resetState() {
+  helpPanelState.openSlots = [0];
   helpPanelState.isOpen = false;
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
@@ -392,6 +422,8 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
   });
 
   it("notifies listeners when state changes via patch", () => {
+    // #12108: pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     const listener = vi.fn();
@@ -438,7 +470,9 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   }
   function fireToolStart(payload: { turnId?: string }) {
     toolStartedListeners[0]!({
-      sessionId: "s1",
+      // Follow whichever session the lane is bound to — since #12108 a push
+      // for another session is correctly ignored.
+      sessionId: helpPanelState.sessionId ?? "s1",
       toolId: "agent.getState",
       argsSummary: "{}",
       startedAt: Date.now(),
@@ -448,6 +482,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   }
 
   it("surfaces agent-stuck as outcomeAlert and notifies listeners", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     const listener = vi.fn();
@@ -461,6 +496,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("surfaces reasoning-loop and clears on user dismiss", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
@@ -472,6 +508,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("auto-clears the pip when a tool call from a different turn starts", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
@@ -488,6 +525,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("auto-clears an agent-stuck pip (no turn id) on the next turn-stamped call", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "agent-stuck" });
@@ -499,6 +537,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("does not clear the pip for a call with no turn id", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
@@ -578,7 +617,7 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     expect(helpPanelState.clearFigures).toHaveBeenCalled();
     // Stop is destructive, not pause: the persisted hibernate slot is dropped so
     // the discarded conversation can't resume on next open.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     // No fresh terminal is reserved — unlike newSession(), stop does not relaunch.
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
     // #11833: Stop slides the sidebar out rather than lingering on the empty
@@ -598,7 +637,7 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
 
     ctrl.endSession();
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("scratch-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("scratch-1", 0);
   });
 
   it("revokes the bearer before killing the PTY (revoke-before-kill, #7522)", () => {
@@ -732,7 +771,7 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     // Full stop: the hibernate slot is dropped and the sidebar slides out.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(ctrl.getSnapshot().phase).toBe("idle");
   });
@@ -820,7 +859,7 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     // Full stop, and the sidebar slides out — same as the Stop button (#11833).
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(ctrl["_hasAutoLaunched"]).toBe(true);
     expect(ctrl.getSnapshot().phase).toBe("idle");
@@ -864,6 +903,92 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
+  });
+});
+
+describe("HelpSessionController — the sidebar stays open while a sibling lane exists (#12108)", () => {
+  // Every stop path used to decide the slide-out for itself, and most decided
+  // wrong: Stop, the agent's own `/exit` and a PTY exit all hid the whole panel
+  // while a second session was still running behind the tab strip. Only the
+  // tab's close control checked. These pin the one shared guard.
+  function bindLiveSessionBesideAnother(ctrl: HelpSessionController) {
+    helpPanelState.isOpen = true;
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "sess-bound";
+    helpPanelState.openSlots = [0, 1];
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", cwd: "/help" },
+    };
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" });
+  }
+
+  it("Stop tears this lane down but leaves the panel up for the other one", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSessionBesideAnother(ctrl);
+
+    ctrl.endSession();
+
+    // The stop itself is complete…
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+    // …and the sidebar is still on screen.
+    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
+  });
+
+  it("an agent exiting inside its shell does not hide a sibling's conversation", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSessionBesideAnother(ctrl);
+
+    ctrl.handleAgentExited("term-1");
+
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
+    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
+  });
+
+  it("a PTY exit does not hide a sibling's conversation", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSessionBesideAnother(ctrl);
+
+    ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
+  });
+
+  it("still slides out for the last lane, on every path", () => {
+    // The guard must not over-correct: with nothing behind the strip, the
+    // existing behaviour — and the reason for it — is unchanged.
+    for (const trigger of ["endSession", "handleAgentExited", "handleTerminalPanelMissing"]) {
+      resetState();
+      const ctrl = new HelpSessionController();
+      ctrl["_patch"]({ phase: "live" });
+      bindLiveSessionBesideAnother(ctrl);
+      helpPanelState.openSlots = [0];
+
+      if (trigger === "endSession") ctrl.endSession();
+      else if (trigger === "handleAgentExited") ctrl.handleAgentExited("term-1");
+      else ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
+
+      expect(helpPanelState.setOpen, trigger).toHaveBeenCalledWith(false);
+    }
+  });
+
+  it("counts an opened-but-unlaunched sibling as a reason to stay", () => {
+    // A tab the user opened and has not typed into yet is still a tab they are
+    // looking at. The predicate is "another slot exists", not "another agent is
+    // running" — the same predicate the tab strip's close uses.
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSessionBesideAnother(ctrl);
+
+    ctrl.endSession();
+
     expect(helpPanelState.setOpen).not.toHaveBeenCalled();
   });
 });

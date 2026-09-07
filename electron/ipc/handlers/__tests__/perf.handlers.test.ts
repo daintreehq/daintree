@@ -102,6 +102,62 @@ describe("registerPerfHandlers", () => {
     expect((record.meta as Record<string, unknown>).webContentsId).toBe(7);
   });
 
+  it("stamps each record with the sender view's project id via the per-window manager", () => {
+    const deps = {
+      projectViewManager: { getProjectIdForWebContents: () => "proj-static" },
+      windowRegistry: {
+        getByWebContentsId: (id: number) =>
+          id === 22
+            ? {
+                services: {
+                  projectViewManager: {
+                    getProjectIdForWebContents: (wcId: number) =>
+                      wcId === 22 ? "proj-window-b" : null,
+                  },
+                },
+              }
+            : undefined,
+      },
+    } as unknown as HandlerDependencies;
+
+    registerPerfHandlers(deps);
+    const handler = getHandler();
+
+    handler(makeEvent(22), {
+      marks: [
+        {
+          mark: "project_switch.pty_port_ready",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          elapsedMs: 100,
+          meta: { switchId: "abc" },
+        },
+      ],
+      rendererTimeOrigin: 1_000_100,
+      rendererT0: 5,
+    });
+
+    const record = appendedPayloads[0] as Record<string, unknown>;
+    expect((record.meta as Record<string, unknown>).projectId).toBe("proj-window-b");
+    expect((record.meta as Record<string, unknown>).switchId).toBe("abc");
+  });
+
+  it("omits projectId when no manager knows the sender", () => {
+    const deps = {
+      projectViewManager: { getProjectIdForWebContents: () => null },
+    } as unknown as HandlerDependencies;
+    registerPerfHandlers(deps);
+    const handler = getHandler();
+
+    handler(makeEvent(5), {
+      marks: [{ mark: "hydrate_start", timestamp: "2026-01-01T00:00:00.000Z", elapsedMs: 1 }],
+      rendererTimeOrigin: 1_000_100,
+      rendererT0: 5,
+    });
+
+    const record = appendedPayloads[0] as Record<string, unknown>;
+    expect(record.meta as Record<string, unknown>).not.toHaveProperty("projectId");
+  });
+
   it("omits webContents id when the sender is destroyed", () => {
     registerPerfHandlers();
     const handler = getHandler();

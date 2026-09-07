@@ -317,7 +317,37 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
   // in `mcpWireBudget.test.ts`; the total simply reflects seven more of them.
   // #11909's two owned-cleanup tools land in the same cohort on top of that.
-  const MAX_COHORT_TOTAL_BYTES = 50_400;
+  // 50_400 → 50_600 for #12091's `git.fetch`. The floor above is 120 B, so a
+  // new tool cannot land inside the old ceiling's 79 B of headroom at any
+  // wording — the raise is the cost of the tool, not of its prose, and its
+  // description is 151 B against the 400 B per-description ceiling.
+  // 50_600 → 51_000 for #12123's `terminal.killBatch`, on the same terms: its
+  // description is 347 B, under the per-description ceiling, and the tool's
+  // whole point is the five per-target outcomes a caller has to be able to tell
+  // apart. The raise is 400 B for a tool that could not exist inside the old
+  // ceiling's headroom at any wording.
+  // 51_000 → 51_600 for `forge.getPRs` and `worktree.waitUntilReady`. Both are
+  // in-app only, so the external total above does not move. Each sits under the
+  // 400 B per-description ceiling; the total simply reflects two more tools,
+  // and the 120 B floor means neither could have been squeezed inside the old
+  // ceiling's headroom without saying less than a caller needs.
+  // 51_600 → 52_500 for #12214's three plugin-authoring tools: a manifest
+  // check, a diagnostics read, and the project re-scan. All three are in-app
+  // only, so the external total above does not move. They were written at 625,
+  // 546 and 502 B and cut to 381, 376 and 344 to sit under the 400 B
+  // per-description ceiling; what is left is the part a caller cannot work
+  // without — that the manifest rules differ by where a plugin lives, that a
+  // refused plugin is reported rather than absent, and that a re-scan still
+  // stages an id the project has never run. Three tools against a 120 B floor
+  // cannot land inside the old ceiling's headroom at any wording.
+  // 52_500 → 52_553 for #12224, which adds no tool: `terminal.new` grew 252 →
+  // 342 B because it now takes `cwd` and `command`, and a caller that cannot
+  // see it can open a terminal somewhere other than the active worktree and run
+  // something in it will not reach for it. 342 B is mid-pack against the 400 B
+  // per-description ceiling, and the prose names the capability without
+  // restating the schema, so there is nothing to tighten. This is the measured
+  // total of all 167 descriptions, not a rounded allowance.
+  const MAX_COHORT_TOTAL_BYTES = 52_553;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -428,6 +458,179 @@ describe("LLM-facing tool descriptions (#11542)", () => {
       for (const prop of props) {
         if (text.includes(`\`${prop}\``)) {
           violations.push(`${id} quotes \`${prop}\``);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("advertises an object-rooted input schema for every tool a tier exposes", async () => {
+    const rows = await cohortDefinitions();
+
+    // `buildToolInputSchema` forwards a generated schema only when its root is
+    // `type: "object"`; anything else is replaced with an EMPTY object schema,
+    // silently and with no error. A tool whose args are a root-level union or a
+    // bare primitive therefore ships advertising no parameters at all while
+    // still requiring them — the worst failure mode this surface has, because
+    // every other check here would stay green.
+    const violations: string[] = [];
+    for (const { id, def } of rows) {
+      if (!def.argsSchema) continue;
+      const emitted = emitSchema(def.argsSchema, "input") as Record<string, unknown>;
+      if (emitted?.["type"] !== "object") {
+        violations.push(
+          `${id} emits root ${JSON.stringify(emitted?.["type"] ?? Object.keys(emitted ?? {}))}`
+        );
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("declares a required argument as required in the schema, not only in run()", async () => {
+    const rows = await cohortDefinitions();
+
+    // A handler that throws on a missing argument the schema advertises as
+    // optional tells every model reading the manifest that an incomplete call
+    // is valid, and the only way to learn otherwise is to make the call. The
+    // pairs below are the ones where the handler's requirement is load-bearing;
+    // this is a contract table rather than a derivation because no test can
+    // infer an arbitrary handler's requirements by inspecting its body.
+    const MUST_BE_REQUIRED: Record<string, string[]> = {
+      "git.commit": ["message"],
+      "forge.getPR": ["prNumber"],
+      "forge.getPRs": ["prNumbers"],
+      "worktree.createWithRecipe": ["source"],
+      "forge.getIssue": ["issueNumber"],
+      "forge.getCIStatus": ["prNumber"],
+      "forge.getChecks": ["prNumber"],
+    };
+
+    // Pinned so the table cannot be silently emptied. A curated contract table
+    // that shrinks is a gate that stops gating, and nothing else in the suite
+    // would notice — deleting the row for the action you just broke is the
+    // cheapest way to make this test pass.
+    expect(Object.keys(MUST_BE_REQUIRED).sort()).toEqual([
+      "forge.getCIStatus",
+      "forge.getChecks",
+      "forge.getIssue",
+      "forge.getPR",
+      "forge.getPRs",
+      "git.commit",
+      "worktree.createWithRecipe",
+    ]);
+
+    const violations: string[] = [];
+    for (const [id, required] of Object.entries(MUST_BE_REQUIRED)) {
+      // An emptied row keeps the pinned keyset above while gating nothing,
+      // which is the cheapest way to make this test stop noticing.
+      if (required.length === 0) {
+        violations.push(`${id} lists no required arguments — an emptied row gates nothing`);
+        continue;
+      }
+      const def = rows.find((r) => r.id === id)?.def;
+      if (!def) {
+        violations.push(`${id} is not on any tier — update this table or the allowlist`);
+        continue;
+      }
+      if (!def.argsSchema) {
+        violations.push(`${id} advertises no argsSchema at all`);
+        continue;
+      }
+      const emitted = emitSchema(def.argsSchema, "input") as {
+        required?: string[];
+        properties?: Record<string, unknown>;
+      };
+      for (const prop of required) {
+        // Both halves: a name in `required` that is absent from `properties`
+        // describes an argument the caller is told to send and never told the
+        // shape of.
+        if (!emitted.required?.includes(prop)) violations.push(`${id}.${prop} not required`);
+        if (!emitted.properties?.[prop]) violations.push(`${id}.${prop} not advertised`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("documents the bounds of every plural read, since the schema's are stripped", async () => {
+    const rows = await cohortDefinitions();
+
+    // `toWireSchema` strips `minItems`/`maxItems`, so a model never sees an
+    // array bound in the advertised schema — prose is the only place it can
+    // learn one, and a batch tool whose limit is invisible gets called with
+    // fifty numbers and rejected.
+    // DERIVED from the schemas, not a hand-kept list: a new bounded array
+    // property is covered the moment it exists, and no entry can be deleted to
+    // silence the gate. A curated list would have had to be remembered.
+    //
+    // The walk RECURSES through nested objects and through the `oneOf`/`anyOf`
+    // arms a discriminated union emits. A top-level-only scan would have made
+    // the gate's own claim false: moving a bounded array one level down, or
+    // into a union arm, would have taken it out of scope silently — which is
+    // exactly the kind of edit that happens while refactoring a schema.
+    const bounded: Array<{
+      id: string;
+      prop: string;
+      schema: { description?: string; minItems?: number; maxItems?: number };
+    }> = [];
+    const collectBounded = (id: string, node: unknown, path: string): void => {
+      if (node === null || typeof node !== "object" || Array.isArray(node)) return;
+      const schema = node as {
+        type?: string;
+        description?: string;
+        minItems?: number;
+        maxItems?: number;
+        properties?: Record<string, unknown>;
+        items?: unknown;
+        oneOf?: unknown[];
+        anyOf?: unknown[];
+        allOf?: unknown[];
+      };
+      // A ceiling always matters — a caller can hit it and be rejected without
+      // ever having been told it exists. A floor only matters above 1:
+      // `minItems: 1` says "do not send an empty array", which is already
+      // implied by the field meaning anything at all, and demanding prose for
+      // it would bury the bounds that do matter in noise.
+      const documentsFloor = schema.minItems !== undefined && schema.minItems > 1;
+      if (schema.type === "array" && (documentsFloor || schema.maxItems !== undefined)) {
+        bounded.push({ id, prop: path, schema });
+      }
+      for (const [name, child] of Object.entries(schema.properties ?? {})) {
+        collectBounded(id, child, path ? `${path}.${name}` : name);
+      }
+      if (schema.items !== undefined) collectBounded(id, schema.items, `${path}[]`);
+      for (const key of ["oneOf", "anyOf", "allOf"] as const) {
+        (schema[key] ?? []).forEach((arm, index) =>
+          collectBounded(id, arm, `${path}.${key}[${index}]`)
+        );
+      }
+    };
+    for (const { id, def } of rows) {
+      if (!def.argsSchema) continue;
+      collectBounded(id, emitSchema(def.argsSchema, "input"), "");
+    }
+
+    // A floor, so a refactor that stopped emitting bounds entirely — and would
+    // therefore find nothing to check — fails instead of passing vacuously.
+    expect(bounded.length).toBeGreaterThanOrEqual(2);
+
+    const violations: string[] = [];
+    {
+      for (const { id, prop, schema } of bounded) {
+        // The prose is checked against the schema's OWN bounds, as WHOLE
+        // numbers. A bare `/\d/` would pass for any unrelated digit, and a
+        // substring match would let the "20" in a maximum satisfy a minimum of
+        // 2. Both bounds are checked independently, so deleting one while the
+        // other stays is caught.
+        const description = schema.description ?? "";
+        const states = (value: number) => new RegExp(`(?<!\\d)${value}(?!\\d)`).test(description);
+        if (schema.minItems !== undefined && schema.minItems > 1 && !states(schema.minItems)) {
+          violations.push(`${id}.${prop} omits its minimum (${schema.minItems})`);
+        }
+        if (schema.maxItems !== undefined && !states(schema.maxItems)) {
+          violations.push(`${id}.${prop} omits its maximum (${schema.maxItems})`);
         }
       }
     }
@@ -659,12 +862,20 @@ describe("duplicate registrations", () => {
 const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "git.push",
   "git.pullRebase",
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
+  "git.forcePushWithLease",
   "terminal.kill",
+  "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
   "terminal.arm",
   "worktree.delete",
+  // Delegates into `worktree.delete` from the main process, so it has to carry
+  // the same danger class — the delegation is what raises the modal.
+  "worktree.deleteOwned",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
@@ -695,6 +906,9 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "forge.editPR",
   "forge.closeIssue",
   "forge.editIssue",
+  "forge.createIssue",
+  "forge.addIssueComment",
+  "forge.reopenIssue",
   "session.bookmarkAndClose",
   "session.bookmark.delete",
 ];
@@ -748,9 +962,25 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired there but the action
   // ID string is not present in that file (direct IPC call, not ActionService dispatch).
   "git.pullRebase",
+  // Deferred-promise via gitWorktreeOperationConfirmStore (#12092); the action
+  // run() awaits confirmation before calling IPC, and
+  // GitWorktreeOperationConfirmDialog resolves the Promise. The dialog is
+  // mounted globally in ModalHostLayer, so the action ID is not co-located with
+  // it — the same shape as git.push above.
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
+  // Deferred-promise via gitForcePushStore; action run() awaits confirmation
+  // before calling IPC; GitForcePushConfirmDialog resolves the Promise. Same
+  // shape as git.push, and the action ID is not co-located with the dialog.
+  "git.forcePushWithLease",
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
+  // MCP-only (#11909), and it never reaches a dialog under its own id: the main
+  // process checks session ownership and then delegates to `worktree.delete`,
+  // so the modal a user answers is wired under that id, above.
+  "worktree.deleteOwned",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the
@@ -760,6 +990,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",
+  // Agent/MCP-only batch kill (#12123). Palette-hidden because it acts only on
+  // explicit caller-supplied ids, so there is no user-facing dispatch path to
+  // co-locate a dialog with. Its confirmation is the selectable checklist inside
+  // the generic McpConfirmDialog, which is mounted globally and keyed on the
+  // pending request rather than on any one action id.
+  "terminal.killBatch",
   // Agent/MCP-only — palette-hidden and unbound, configured from Settings via the
   // client (not ActionService). danger:"confirm" gates agent dispatch (resetting
   // all agents at once is destructive-local with no undo); there is no UI
@@ -786,6 +1022,22 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // dispatch happens through the forge UI, not these actions.
   "forge.closeIssue",
   "forge.editIssue",
+  // Forge issue writes that publish a record nobody can retract (#12118):
+  // `forge.createIssue` files a public issue and notifies watchers,
+  // `forge.addIssueComment` posts a comment this capability cannot edit or
+  // delete. Both are agent/MCP-only, so the confirm they gate on is
+  // `McpConfirmDialog` — which, since #12118, previews the actual title, body,
+  // labels and target worktree rather than the redacted argument summary. There
+  // is no user-side dispatch path to co-locate a ConfirmDialog with.
+  "forge.createIssue",
+  "forge.addIssueComment",
+  // `forge.reopenIssue` joins them for symmetry with its own inverse
+  // `forge.closeIssue`, which has been `confirm` since #10653: both are
+  // publicly visible issue-state transitions that notify watchers, and
+  // re-closing does not restore the `stateReason` the issue was closed for. It
+  // needs no content preview — it authors nothing, and its only argument is an
+  // issue number the argument disclosure shows verbatim.
+  "forge.reopenIssue",
   "session.bookmarkAndClose",
   "session.bookmark.delete",
 ];
@@ -868,10 +1120,18 @@ describe("destructive-action danger metadata", () => {
       issueNumber: 1,
       // terminal.kill/restart require a terminalId before their confirm gate runs.
       terminalId: "term-placeholder",
+      // terminal.killBatch takes an explicit list and has no scalar spelling, so
+      // the placeholder above does not reach its confirm gate.
+      terminalIds: ["term-placeholder"],
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
       // validation and reach the confirm gate.
       label: "placeholder",
       sessionId: "session-placeholder",
+      // git.rebaseOntoBase/mergeBaseIntoBranch require the base branch before
+      // their confirm gate runs (#12092). It is deliberately NOT optional: a
+      // base-branch default resolved inside a destructive submit is exactly the
+      // silent fallback the D-tier rules call a review blocker.
+      baseBranch: "develop",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
@@ -885,6 +1145,7 @@ describe("destructive-action danger metadata", () => {
       ]),
       statusCheckedAt: new Map(),
       workingTreeChangedAtById: new Map(),
+      workingTreeChangedDirsById: new Map(),
       manualAssociations: new Map(),
       version: { epoch: "test", seq: 1 },
       tombstones: new Map(),

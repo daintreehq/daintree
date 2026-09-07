@@ -197,11 +197,9 @@ describe("FileChangeList — row-recency cue (#6544)", () => {
     expect(newRows(container).sort()).toEqual(["d.ts"]);
   });
 
-  it("marks new rows correctly under groupByFolder", () => {
+  it("marks new rows correctly across folder groups", () => {
     const initial = [file("src/a.ts"), file("src/b.ts")];
-    const { container, rerender } = render(
-      <FileChangeList changes={initial} rootPath={ROOT} groupByFolder />
-    );
+    const { container, rerender } = render(<FileChangeList changes={initial} rootPath={ROOT} />);
     expect(newRows(container)).toEqual([]);
 
     act(() => {
@@ -209,7 +207,6 @@ describe("FileChangeList — row-recency cue (#6544)", () => {
         <FileChangeList
           changes={[...initial, file("src/c.ts"), file("test/d.ts")]}
           rootPath={ROOT}
-          groupByFolder
         />
       );
     });
@@ -238,6 +235,117 @@ describe("FileChangeList — row-recency cue (#6544)", () => {
   });
 });
 
+describe("FileChangeList — folder grouping is an invariant (#12102)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function headers(container: HTMLElement): string[] {
+    return Array.from(
+      container.querySelectorAll<HTMLElement>('[data-testid="file-change-group-header"]')
+    ).map((el) => el.querySelector(".font-mono")?.textContent ?? "");
+  }
+
+  function rowLabels(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[role="button"]')).map(
+      (el) => el.getAttribute("aria-label") ?? ""
+    );
+  }
+
+  it("groups two files, which the old count gate would have left flat", () => {
+    // The gate was `changedFileCount > 5`. Below it the list restructured
+    // itself the moment a sixth file landed, and every row paid for its own
+    // directory prefix out of the filename's width.
+    const { container } = render(
+      <FileChangeList changes={[file("src/a.ts"), file("bin/b.ts")]} rootPath={ROOT} />
+    );
+    expect(headers(container)).toEqual(["bin", "src"]);
+  });
+
+  it("shows the directory only in the header, and the bare filename on the row", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("src/components/Worktree/a.ts")]} rootPath={ROOT} />
+    );
+    expect(headers(container)).toEqual(["src/components/Worktree"]);
+
+    const row = container.querySelector<HTMLElement>('[role="button"]')!;
+    const name = row.querySelector(".truncate.min-w-0.font-medium")!;
+    expect(name.textContent).toBe("a.ts");
+    // The whole point: the filename is the row's ONLY flexible child, so it
+    // owns the entire shrink budget. A second `flex-1` sibling, or dropping
+    // this one, puts the truncation race back.
+    const flexible = Array.from(row.children).filter((el) =>
+      el.className.toString().split(/\s+/).includes("flex-1")
+    );
+    expect(flexible).toEqual([name]);
+    // Nothing on the row spends width on the path...
+    expect(row.textContent).not.toContain("src/components");
+    // ...but the whole path is still what the row announces and what its
+    // tooltip carries, so the folder header is a convenience, not the only
+    // way to tell two same-named files apart.
+    expect(row.getAttribute("aria-label")).toBe("Open src/components/Worktree/a.ts");
+  });
+
+  it("puts root files under a (root) header, ahead of every folder", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("src/a.ts"), file("README.md")]} rootPath={ROOT} />
+    );
+    expect(headers(container)).toEqual(["(root)", "src"]);
+    expect(rowLabels(container)).toEqual(["Open README.md", "Open src/a.ts"]);
+  });
+
+  it("abbreviates a deep directory to its last three segments and counts the group", () => {
+    const { container } = render(
+      <FileChangeList
+        changes={[file("a/b/c/d/e/one.ts"), file("a/b/c/d/e/two.ts")]}
+        rootPath={ROOT}
+      />
+    );
+    expect(headers(container)).toEqual(["…/c/d/e"]);
+    const header = container.querySelector<HTMLElement>(
+      '[data-testid="file-change-group-header"]'
+    )!;
+    expect(header.textContent).toContain("(2)");
+  });
+
+  it("keeps a directory literally named (root) separate from the repo root", () => {
+    // Root is the empty string internally precisely so this cannot merge —
+    // and the two groups need distinct React keys, or the poll below
+    // reconciles one of them onto the other's rows.
+    const initial = [file("(root)/x.ts"), file("y.ts")];
+    const { container, rerender } = render(<FileChangeList changes={initial} rootPath={ROOT} />);
+    expect(headers(container)).toHaveLength(2);
+    expect(rowLabels(container)).toEqual(["Open y.ts", "Open (root)/x.ts"]);
+
+    act(() => {
+      rerender(<FileChangeList changes={[...initial, file("(root)/z.ts")]} rootPath={ROOT} />);
+    });
+
+    expect(headers(container)).toHaveLength(2);
+    expect(rowLabels(container).sort()).toEqual([
+      "Open (root)/x.ts",
+      "Open (root)/z.ts",
+      "Open y.ts",
+    ]);
+  });
+
+  it("renders no header for a folder whose files are all past maxVisible", () => {
+    // Groups are built from the visible slice, so the overflow can never
+    // leave a folder heading an empty list. The hidden files are represented
+    // once, by the list-level overflow line.
+    const changes = [
+      { ...file("src/a.ts"), insertions: 100 },
+      { ...file("bin/b.ts"), insertions: 1 },
+    ];
+    const { container } = render(
+      <FileChangeList changes={changes} rootPath={ROOT} maxVisible={1} />
+    );
+    expect(headers(container)).toEqual(["src"]);
+    expect(container.textContent).toContain("...and 1 more");
+    expect(container.textContent).toContain("b.ts");
+  });
+});
+
 describe("FileChangeList — stale state (#8069)", () => {
   afterEach(() => {
     cleanup();
@@ -258,7 +366,7 @@ describe("FileChangeList — stale state (#8069)", () => {
     expect(el.getAttribute("aria-busy")).toBeNull();
   });
 
-  it("applies surface-stale and aria-busy in the flat branch when isStale", () => {
+  it("applies surface-stale and aria-busy when isStale", () => {
     const { container } = render(
       <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} isStale />
     );
@@ -276,21 +384,16 @@ describe("FileChangeList — stale state (#8069)", () => {
     expect(el.getAttribute("aria-busy")).toBeNull();
   });
 
-  it("applies surface-stale and aria-busy in the grouped branch when isStale", () => {
+  it("carries the stale marker on exactly one container, with folders present", () => {
     const { container } = render(
-      <FileChangeList
-        changes={[file("src/a.ts"), file("test/b.ts")]}
-        rootPath={ROOT}
-        groupByFolder
-        isStale
-      />
+      <FileChangeList changes={[file("src/a.ts"), file("test/b.ts")]} rootPath={ROOT} isStale />
     );
     const el = scroll(container);
     expect(el.classList.contains("surface-stale")).toBe(true);
     expect(el.getAttribute("aria-busy")).toBe("true");
-    // Prove the grouped code path was entered, not the flat fallback.
     expect(el.querySelectorAll(".font-mono").length).toBeGreaterThan(0);
-    // Exactly one container carries the stale class — never both branches.
+    // The scroll container is the only thing that goes stale — a second
+    // marked element would mean two list containers rendered at once.
     expect(container.querySelectorAll(".surface-stale").length).toBe(1);
   });
 
@@ -398,28 +501,32 @@ describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
     cleanup();
   });
 
-  it.each([false, true])(
-    "opens the highest-churn file first (groupByFolder=%s)",
-    (groupByFolder) => {
-      const ref = createRef<FileChangeListHandle>();
-      // Raw order lists b.ts first, but a.ts has more churn, so it sorts to index 0.
-      const changes = [
-        { ...file("b.ts"), insertions: 1 },
-        { ...file("a.ts"), insertions: 100 },
-      ];
-      render(
-        <FileChangeList ref={ref} changes={changes} rootPath={ROOT} groupByFolder={groupByFolder} />
-      );
+  it("opens the highest-churn file first, not the first one folder sorting renders", async () => {
+    const ref = createRef<FileChangeListHandle>();
+    // The churn winner has to be the row that renders LAST, or the assertion
+    // passes on either behaviour. `zzz` sorts after `src` alphabetically and
+    // carries the churn, so DOM order and churn order genuinely disagree.
+    const changes = [
+      { ...file("src/a.ts"), insertions: 1 },
+      { ...file("zzz/b.ts"), insertions: 100 },
+    ];
+    const { container } = render(<FileChangeList ref={ref} changes={changes} rootPath={ROOT} />);
 
-      act(() => ref.current!.openFirstFile(document.createElement("button")));
+    // Prove the disagreement rather than assuming it.
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>('[role="button"]')).map((el) =>
+        el.getAttribute("aria-label")
+      )
+    ).toEqual(["Open src/a.ts", "Open zzz/b.ts"]);
 
-      const options = openPanelDialogMock.mock.calls[0]?.[0];
-      expect(options).toMatchObject({ kind: "diff", filePath: "a.ts" });
-      // The set is handed over in the same sorted order the handle opened from.
-      const changeSet = options!.changeSet as Array<{ path: string }>;
-      expect(changeSet.map((entry) => entry.path)).toEqual(["a.ts", "b.ts"]);
-    }
-  );
+    await act(async () => ref.current!.openFirstFile(document.createElement("button")));
+
+    const options = openPanelDialogMock.mock.calls[0]?.[0];
+    expect(options).toMatchObject({ kind: "diff", filePath: "zzz/b.ts" });
+    // The set is handed over in the same sorted order the handle opened from.
+    const changeSet = options!.changeSet as Array<{ path: string }>;
+    expect(changeSet.map((entry) => entry.path)).toEqual(["zzz/b.ts", "src/a.ts"]);
+  });
 
   it("keeps the handle available across an empty→populated transition and no-ops while empty", () => {
     const ref = createRef<FileChangeListHandle>();

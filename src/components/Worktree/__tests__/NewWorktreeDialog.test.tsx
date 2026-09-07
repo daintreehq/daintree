@@ -336,7 +336,10 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
-    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockDispatch.mockResolvedValue({
+      ok: true,
+      result: { worktreeId: "new-wt-id", branch: "feature/test" },
+    });
     // Default: no authenticated viewer. Existing-branch tests don't exercise
     // self-assignment, and the render effect awaiting an unresolved promise
     // keeps `canAssignIssue` false without leaking toasts/state.
@@ -468,6 +471,11 @@ describe("NewWorktreeDialog — existing branch mode", () => {
       },
       { source: "user" }
     );
+
+    // The action resolves to an object, not a bare id: read `worktreeId` off it
+    // or the selection store pends and selects the whole result.
+    expect(mockSetPendingWorktree).toHaveBeenCalledWith("new-wt-id");
+    expect(mockSelectWorktree).toHaveBeenCalledWith("new-wt-id");
   });
 
   it("does not call getAvailableBranch in existing mode", async () => {
@@ -752,7 +760,10 @@ describe("NewWorktreeDialog — branch list cache", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
-    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockDispatch.mockResolvedValue({
+      ok: true,
+      result: { worktreeId: "new-wt-id", branch: "feature/test" },
+    });
     mockGetCurrentUser.mockResolvedValue(null);
   });
 
@@ -932,7 +943,10 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
-    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockDispatch.mockResolvedValue({
+      ok: true,
+      result: { worktreeId: "new-wt-id", branch: "feature/test" },
+    });
     mockGetCurrentUser.mockResolvedValue(null);
     mockAssignIssue.mockResolvedValue(undefined);
   });
@@ -1140,7 +1154,10 @@ describe("NewWorktreeDialog — self-assign cache mutation", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
-    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockDispatch.mockResolvedValue({
+      ok: true,
+      result: { worktreeId: "new-wt-id", branch: "feature/test" },
+    });
     mockGetCurrentUser.mockResolvedValue({
       login: "testuser",
       avatarUrl: "https://example.com/avatar.png",
@@ -1433,7 +1450,10 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
-    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockDispatch.mockResolvedValue({
+      ok: true,
+      result: { worktreeId: "new-wt-id", branch: "feature/test" },
+    });
     mockGetCurrentUser.mockResolvedValue(null);
     mockAssignIssue.mockResolvedValue(undefined);
   });
@@ -1525,7 +1545,10 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
-    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockDispatch.mockResolvedValue({
+      ok: true,
+      result: { worktreeId: "new-wt-id", branch: "feature/test" },
+    });
     mockGetCurrentUser.mockResolvedValue(null);
     mockAssignIssue.mockResolvedValue(undefined);
   });

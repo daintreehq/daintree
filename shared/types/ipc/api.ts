@@ -26,6 +26,7 @@ import type {
   PushErrorClassification,
   Issue,
   PR,
+  PRLookupResult,
   Page,
   RepoMetadata,
   ListOptions,
@@ -190,6 +191,8 @@ export interface NotificationSettings {
   workingPulseEnabled: boolean;
   workingPulseSoundFile: string;
   uiFeedbackSoundEnabled: boolean;
+  /** When true, the screen flashes once every agent goes idle (the "all-clear"). */
+  flashEnabled: boolean;
   /** When true, non-urgent notifications are suppressed during the scheduled window. */
   quietHoursEnabled: boolean;
   /** Start of the quiet window, minutes since local midnight (0-1439). */
@@ -235,7 +238,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     refreshPullRequests(): Promise<void>;
     getPRStatus(): Promise<import("../workspace-host.js").PRServiceStatus | null>;
     setActive(worktreeId: string): Promise<void>;
-    create(options: CreateWorktreeOptions, rootPath: string): Promise<string>;
+    /**
+     * Create a worktree, reporting the branch the host actually landed on and
+     * its initial setup state alongside the id.
+     *
+     * The branch is not always the one requested: the host resolves collisions
+     * atomically against the failing `git worktree add`, so it can suffix the
+     * name or switch to reusing an existing local branch. Both extra fields
+     * travel with the result because worktree rows reach the renderer over a
+     * different port, so reading them back afterwards races this response.
+     */
+    create(
+      options: CreateWorktreeOptions,
+      rootPath: string
+    ): Promise<import("../worktree.js").WorktreeCreateResult>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
     fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void>;
     getRecentBranches(rootPath: string): Promise<string[]>;
@@ -299,7 +315,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
     onAgentExited(callback: (data: AgentExitedPayload) => void): () => void;
     onFallbackTriggered(callback: (data: AgentFallbackTriggeredPayload) => void): () => void;
-    onAllAgentsClear(callback: (data: { timestamp: number }) => void): () => void;
+    onAllAgentsClear(
+      callback: (data: { timestamp: number; shouldFlash: boolean }) => void
+    ): () => void;
     onActivity(callback: (data: TerminalActivityPayload) => void): () => void;
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
@@ -502,7 +520,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * re-runs its terminal redraw then, since the wake fan-out driven by
      * visibilitychange/resume ran while the view was still occluded.
      */
-    onViewRevealed(callback: () => void): () => void;
+    onViewRevealed(callback: (payload?: { switchId?: string }) => void): () => void;
     /**
      * Subscribe to the warm-activation wake signal. Main fires this the moment
      * it re-attaches a cached view behind the anti-flash bridge (or reveals it
@@ -513,7 +531,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * lifecycle event (the Efficiency-profile freeze path), and every other
      * warm swap stalled until the warm paint gate's hard timeout.
      */
-    onViewWarmActivated(callback: () => void): () => void;
+    onViewWarmActivated(callback: (payload?: { switchId?: string }) => void): () => void;
     onViewCached(callback: () => void): () => void;
     /**
      * Whether main currently has this view cached. The three signals above are
@@ -586,7 +604,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     switch(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
+      options?: {
+        focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
+        trace?: import("./project.js").ProjectSwitchTrace;
+      }
     ): Promise<Project>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
@@ -596,14 +617,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     prefetchHydrate(projectId: string): Promise<void>;
     openDialog(): Promise<string | null>;
-    onSwitch(
-      callback: (payload: {
-        project: Project;
-        switchId: string;
-        worktreeLoadError?: string;
-        hydrateResult?: import("./app.js").HydrateResult;
-      }) => void
-    ): () => void;
+    onSwitch(callback: (payload: import("./project.js").ProjectSwitchPayload) => void): () => void;
     onWorktreeLoadStatus(
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
@@ -645,7 +659,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
      */
-    reopen(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
+    reopen(
+      projectId: string,
+      outgoingState?: ProjectSwitchOutgoingState,
+      options?: { trace?: import("./project.js").ProjectSwitchTrace }
+    ): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
     getNotificationOverrides(
@@ -898,7 +916,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
-  git: {
+  git: GeneratedElectronAPI["git"] & {
     getFileDiff(
       cwd: string,
       filePath: string,
@@ -945,6 +963,37 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branchName: string,
       limit?: number
     ): Promise<import("../git.js").GitRebaseCommitPreview>;
+    /**
+     * The commits a base-branch integration would act on (#12092).
+     *
+     * Distinct from `listRebaseCommits`, which measures against the branch's
+     * OWN upstream: this measures against the base branch the worktree card
+     * shows a behind count for, and `kind` decides the direction.
+     */
+    listBaseIntegrationCommits(
+      cwd: string,
+      baseBranch: string,
+      kind: import("../git.js").GitBaseIntegrationKind,
+      limit?: number
+    ): Promise<import("../git.js").GitBaseIntegrationCommitPreview>;
+    /**
+     * Replay this worktree's commits on top of the base branch's ref.
+     *
+     * `expected*Oid` pin the operation to the commits a confirm dialog
+     * previewed: the write refuses if either moved. Omit both when there was no
+     * preview to bind to.
+     */
+    rebaseOntoBase(
+      cwd: string,
+      baseBranch: string,
+      expected?: { branch?: string; headOid?: string; baseOid?: string }
+    ): Promise<void>;
+    /** Merge the base branch's ref into this worktree's branch. */
+    mergeBaseIntoBranch(
+      cwd: string,
+      baseBranch: string,
+      expected?: { branch?: string; headOid?: string; baseOid?: string }
+    ): Promise<void>;
     onPushProgress(callback: (event: PushProgressEvent) => void): () => void;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
     abortRepositoryOperation(cwd: string): Promise<void>;
@@ -1092,9 +1141,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stopConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
     /** Clear tracked object references for a webview panel */
     clearConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
-    /** Fetch properties for a CDP remote object */
+    /**
+     * Fetch properties for a CDP remote object. `paneId`/`rowId` name the
+     * console row that owns the handle, so main can attribute the nested
+     * handles this returns and release them when that row is evicted.
+     */
     getConsoleProperties(
       webContentsId: number,
+      paneId: string,
+      rowId: number,
       objectId: string
     ): Promise<import("./webviewConsole.js").CdpGetPropertiesResult>;
     /** Subscribe to structured console messages */
@@ -1107,8 +1162,19 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     /** Reload a webview bypassing HTTP cache */
     reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
-    /** Read the current scroll position from Blink layout — works on frozen pages */
-    getScrollPosition(webContentsId: number): Promise<number>;
+    /**
+     * Read the current scroll position from Blink layout — works on frozen
+     * pages. Resolves `null` when the position could not be read at all, which
+     * callers must distinguish from a genuine `0` (page is at the top).
+     */
+    getScrollPosition(webContentsId: number): Promise<number | null>;
+    /**
+     * Apply (or, with `emulation: null`, clear) device emulation on a webview
+     * guest: viewport metrics, DPR, user agent and touch/pointer traits.
+     */
+    setDeviceEmulation(
+      payload: import("./webviewEmulation.js").DeviceEmulationRequest
+    ): Promise<{ applied: boolean }>;
     /** Capture the panel's webview viewport as a PNG, returned base64-encoded */
     captureScreenshot(
       panelId: string
@@ -1726,8 +1792,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * don't resolve are omitted. `[]` when the capability is absent.
      */
     getIssuesByNumbers(payload: { cwd: string; numbers: number[] }): Promise<Issue[]>;
-    /** Batch-fetch PRs by number. See {@link getIssuesByNumbers}. */
-    getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PR[]>;
+    /**
+     * Batch-fetch PRs by number, one entry per requested number in the
+     * requested order, each carrying its own outcome.
+     *
+     * Unlike {@link getIssuesByNumbers} above, this does NOT silently omit
+     * numbers that failed to resolve: `not_found` (the forge answered "no such
+     * PR") and `unresolved` (nothing was learned — failed chunk, rate limit,
+     * or an unsupported provider) are distinct, and a caller acting on the
+     * second as though it were the first closes work that exists. Duplicates
+     * collapse to their first occurrence.
+     */
+    getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PRLookupResult[]>;
     /**
      * Opaque review threads for a PR via the provider's `reviews`
      * capability. `[]` when the capability is absent. Note this is the
@@ -2363,7 +2439,7 @@ export interface HelpAssistantSettings {
   daintreeControl: boolean;
   /**
    * MCP capability tier the help assistant runs at — controls which Daintree
-   * actions the assistant can call without prompting. Defaults to `"action"`.
+   * actions the assistant can call. Defaults to `"action"`.
    */
   tier: HelpAssistantTier;
   /**

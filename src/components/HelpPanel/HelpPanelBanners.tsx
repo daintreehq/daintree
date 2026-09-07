@@ -35,8 +35,9 @@ function computeRemainingSeconds(expiresAt: number): number {
 }
 
 /**
- * Ambient countdown for a live "Approve once" grant (#10042). Tier 1 — a
- * non-blocking pane-chrome state, not a toast. The countdown derives from the
+ * Ambient countdown for a live per-tool grant (#10042), minted by the
+ * tier-mismatch banner's "Allow this tool". Tier 1 — a non-blocking
+ * pane-chrome state, not a toast. The countdown derives from the
  * grant's `expiresAt` with a component-local 1s tick; the timestamp is the
  * source of truth, so a missed tick can't drift the displayed value (and the
  * interval is keyed on `expiresAt`, restarting cleanly under StrictMode's
@@ -152,6 +153,10 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
   "skills-sync-failed":
     "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Retry, or check the logs if it keeps failing.",
   "spawn-failed": "The agent didn't start. Try again.",
+  // Same wording as the command/MCP path in `helpActions.ts` — one refusal,
+  // one sentence, whichever surface the user hit it from.
+  "mixed-agent-lanes":
+    "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.",
   "folder-unavailable":
     "Daintree's bundled assistant files are missing. Reinstall Daintree or check the logs.",
 };
@@ -162,7 +167,11 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
 // kept for the transient kinds (spawn/probe/server). `skills-sync-failed`
 // pairs both: some causes clear on retry, but a corrupt manifest or an
 // unremovable stale file fails identically forever, so the log — which names
-// the session dir to clear — is the only way out. The CTA handler is
+// the session dir to clear — is the only way out. `mixed-agent-lanes` carries
+// no CTA at all: the one way out is stopping the sibling session, which lives
+// in another lane's tab, and every button this banner can offer would either
+// fail identically (Retry) or point somewhere irrelevant. The body names the
+// action; the dismiss × is the only control. The CTA handler is
 // resolved in the component from this discriminator — no callbacks in the
 // data, so the data stays serializable and easy to assert against.
 type LaunchErrorCtaHandler = "retry" | "settings" | "logs" | "installer";
@@ -187,6 +196,7 @@ const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCta[]> = {
     { label: "Open logs", handler: "logs", variant: "secondary" },
   ],
   "spawn-failed": [{ label: "Retry", handler: "retry", variant: "primary" }],
+  "mixed-agent-lanes": [],
   "folder-unavailable": [
     { label: "Open logs", handler: "logs", variant: "secondary" },
     { label: "Open installer page", handler: "installer", variant: "primary" },
@@ -295,6 +305,13 @@ export function HelpPanelBanners({
                   ? `${tierMismatch.toolId} needs ${tierMismatch.targetTier} tier access.`
                   : `${tierMismatch.toolId} isn't available at any project tier.`}
               </p>
+              {tierMismatch.targetTier && (
+                <p className="mt-1 text-text-secondary">
+                  Allowing the tool covers repeat calls for 15 minutes after the last one, 30 at
+                  most. The project default applies to Claude Code and Daintree Assistant panes
+                  launched in this project, and raises this session for 30 minutes.
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -306,6 +323,16 @@ export function HelpPanelBanners({
             </button>
           </div>
           {tierMismatch.targetTier && (
+            // Labels name the scope; the body above carries the windows. These
+            // read "Approve once" and "Always allow for this project" before
+            // #12119 and both overstated their mechanism. `onApproveOnce` mints
+            // a *reusable* per-tool grant (15min sliding, 30min ceiling), so it
+            // was never once. `onAlwaysAllow` does persist a project default for
+            // the project's own agent panes — never for new help sessions, which
+            // provision from the global settings tier — but lifts *this* session
+            // for only 30min of awake time, so it was never always. Handler names and the main-process
+            // comments keep the original spelling as the flow names (#8442,
+            // #10042); this is the anchor that maps them to the shipped labels.
             <div className="flex items-center gap-2 flex-wrap pl-5">
               <button
                 type="button"
@@ -318,7 +345,7 @@ export function HelpPanelBanners({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                Approve once
+                Allow this tool
               </button>
               <button
                 type="button"
@@ -331,7 +358,7 @@ export function HelpPanelBanners({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                Always allow for this project
+                Set project default
               </button>
               <button
                 type="button"
@@ -379,35 +406,37 @@ export function HelpPanelBanners({
               <X className="w-3 h-3" />
             </button>
           </div>
-          <div className="flex items-center gap-2 flex-wrap pl-5">
-            {LAUNCH_ERROR_CTAS[launchError.kind].map((cta) => {
-              const onClick =
-                cta.handler === "retry"
-                  ? onRetryLaunch
-                  : cta.handler === "settings"
-                    ? onOpenAssistantSettings
-                    : cta.handler === "logs"
-                      ? onOpenLogs
-                      : onOpenInstallerPage;
-              return (
-                <button
-                  key={cta.label}
-                  type="button"
-                  onClick={onClick}
-                  className={cn(
-                    "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-                    cta.variant === "primary"
-                      ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary"
-                      : "text-text-secondary hover:text-text-primary",
-                    "transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  )}
-                >
-                  {cta.label}
-                </button>
-              );
-            })}
-          </div>
+          {LAUNCH_ERROR_CTAS[launchError.kind].length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap pl-5">
+              {LAUNCH_ERROR_CTAS[launchError.kind].map((cta) => {
+                const onClick =
+                  cta.handler === "retry"
+                    ? onRetryLaunch
+                    : cta.handler === "settings"
+                      ? onOpenAssistantSettings
+                      : cta.handler === "logs"
+                        ? onOpenLogs
+                        : onOpenInstallerPage;
+                return (
+                  <button
+                    key={cta.label}
+                    type="button"
+                    onClick={onClick}
+                    className={cn(
+                      "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
+                      cta.variant === "primary"
+                        ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary"
+                        : "text-text-secondary hover:text-text-primary",
+                      "transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                    )}
+                  >
+                    {cta.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       {sessionRevoked && (

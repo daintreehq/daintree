@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { GitCompare, FileIcon, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  GitCompare,
+  FileIcon,
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  WrapText,
+} from "lucide-react";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
@@ -13,6 +20,8 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import { isProseFilePath } from "@/components/FileViewer/isProseFile";
 
 interface CrossWorktreeDiffProps {
   isOpen: boolean;
@@ -184,6 +193,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   }, [leftId, rightId, fetchComparison]);
 
   const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
+  const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
 
   const fetchFileDiff = useCallback(
     async (file: CrossWorktreeFile) => {
@@ -222,6 +233,11 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // File stepping through the comparison set, mirroring the diff modals:
   // `[` / `]` keys plus a footer stepper in the diff panel.
   const files = result?.files ?? null;
+  // `null` means auto — prose wraps, code doesn't. Derived from the file on
+  // screen during render so the diff is already wrapped on first paint (#12170).
+  const effectiveWrapLines =
+    diffWrapLines ?? (selectedFile !== null && isProseFilePath(selectedFile.path));
+
   const selectedFileIndex = useMemo(() => {
     if (!files || !selectedFile) return -1;
     return files.findIndex((f) => f.path === selectedFile.path && f.status === selectedFile.status);
@@ -366,35 +382,56 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
 
         {/* Diff panel */}
         <div className="flex-1 flex flex-col overflow-hidden bg-surface-canvas">
-          {selectedFile && files && files.length > 1 && (
-            <div className="flex items-center justify-end gap-1 px-2 py-1 border-b border-border-subtle shrink-0">
-              <button
-                type="button"
-                onClick={() => navigateFile(-1)}
-                disabled={selectedFileIndex <= 0}
-                aria-label="Previous file"
-                title="Previous file ([)"
-                className="p-1 rounded transition-colors text-text-muted hover:text-text-primary hover:bg-surface-panel-elevated disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              <span
-                data-testid="cross-worktree-file-position"
-                className="text-xs text-text-muted tabular-nums"
-              >
-                {selectedFileIndex + 1} of {files.length}
-              </span>
-              <button
-                type="button"
-                onClick={() => navigateFile(1)}
-                disabled={selectedFileIndex >= files.length - 1}
-                aria-label="Next file"
-                title="Next file (])"
-                className="p-1 rounded transition-colors text-text-muted hover:text-text-primary hover:bg-surface-panel-elevated disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+          {/* One row for every selected file, not just multi-file comparisons:
+              wrap applies to a single-file diff exactly as much, and gating the
+              whole row on the file count is what left this surface with no
+              reachable toggle at all (#12170). Only stepping is count-gated. */}
+          {selectedFile && files && (
+            <FileViewerToolbar.Root label="Comparison controls">
+              <FileViewerToolbar.Actions>
+                {files.length > 1 && (
+                  <div
+                    role="group"
+                    aria-label="File navigation"
+                    className="flex items-center gap-1"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => navigateFile(-1)}
+                      disabled={selectedFileIndex <= 0}
+                      aria-label="Previous file"
+                      title="Previous file ([)"
+                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span
+                      data-testid="cross-worktree-file-position"
+                      className="text-xs text-text-muted tabular-nums"
+                    >
+                      {selectedFileIndex + 1} of {files.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => navigateFile(1)}
+                      disabled={selectedFileIndex >= files.length - 1}
+                      aria-label="Next file"
+                      title="Next file (])"
+                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+                <FileViewerToolbar.IconButton
+                  label="Wrap long lines"
+                  pressed={effectiveWrapLines}
+                  onClick={() => setDiffWrapLines(!effectiveWrapLines)}
+                >
+                  <WrapText className={TOOLBAR_ICON_CLASS} />
+                </FileViewerToolbar.IconButton>
+              </FileViewerToolbar.Actions>
+            </FileViewerToolbar.Root>
           )}
           <div className="flex-1 overflow-auto diff-scroll-root">
             {!selectedFile && (
@@ -435,6 +472,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 diff={fileDiff}
                 viewType="split"
                 rootPath={rightWorktree?.path}
+                wrapLines={effectiveWrapLines}
                 onRetry={() => void fetchFileDiff(selectedFile)}
               />
             )}

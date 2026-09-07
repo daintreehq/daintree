@@ -49,6 +49,7 @@ import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
 import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js";
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
+import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
@@ -1074,6 +1075,28 @@ export class HttpLifecycle {
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    // Node drops some repeated headers and joins others. Trust decisions must
+    // reject ambiguity before those normalised values select a bearer or session.
+    const securityHeaders = new Set([
+      "authorization",
+      "host",
+      "origin",
+      "mcp-session-id",
+      MCP_WORKSPACE_ID_HEADER,
+    ]);
+    const seen = new Set<string>();
+    const rawHeaders = req.rawHeaders ?? [];
+    for (let index = 0; index < rawHeaders.length; index += 2) {
+      const name = rawHeaders[index].toLowerCase();
+      if (!securityHeaders.has(name)) continue;
+      if (seen.has(name)) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Ambiguous request headers");
+        return;
+      }
+      seen.add(name);
+    }
+
     const host = req.headers.host ?? "";
     if (!(host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`)) {
       res.writeHead(403, { "Content-Type": "text/plain" });
@@ -1094,49 +1117,13 @@ export class HttpLifecycle {
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
 
-    // Extract the claimed session identifier before the auth gate so a 401 on
-    // a session-carrying request feeds the per-session abuse policy. Handshake-
-    // level requests (GET /sse, initial Streamable HTTP without a session
-    // header) have no session to associate with and remain global-only.
-    let claimedSessionId: string | undefined;
-    if (req.method === "POST" && url.pathname === "/messages") {
-      claimedSessionId = url.searchParams.get("sessionId") ?? undefined;
-    } else if (url.pathname === "/mcp") {
-      const headerValue = req.headers["mcp-session-id"];
-      const mcpSessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-      if (mcpSessionId) claimedSessionId = mcpSessionId;
-    }
-
     const authHeader = req.headers.authorization ?? "";
     if (!isAuthorized(authHeader, this.apiKeyBearerHash, this.helpTokenValidator)) {
+      // A session id is a routing handle, not proof of ownership. Attributing
+      // this rejection to the claimed id lets an unauthenticated caller revoke
+      // somebody else's session by repeatedly naming it. Keep global telemetry;
+      // session abuse accounting belongs after bearer and ownership validation.
       this.deps.auditService.recordAuth401();
-      if (claimedSessionId) {
-        const result = this.deps.abusePolicy.recordDenial(claimedSessionId, "auth401");
-        if (result.tripped) {
-          // Same origin gate as the notification closures in
-          // `buildSessionServerDeps` (#11789): a workspace-bound external
-          // session has a renderer route, but its revocation is not an
-          // Assistant event and must not raise a banner in someone's HelpPanel.
-          const pinnedId = this.deps.sessionStore.isRendererOwnedOrigin(claimedSessionId)
-            ? this.deps.sessionStore.sessionWebContentsMap.get(claimedSessionId)
-            : undefined;
-          this.deps.sessionStore.revokeSession(claimedSessionId);
-          this.deps.abusePolicy.dropSession(claimedSessionId);
-          if (pinnedId !== undefined) {
-            const wc = webContentsModule.fromId(pinnedId);
-            if (wc && !wc.isDestroyed()) {
-              try {
-                wc.send(CHANNELS.MCP_SESSION_REVOKED, {
-                  sessionId: claimedSessionId,
-                  denialKind: "auth401",
-                });
-              } catch (err) {
-                console.error("[MCP] session-revoked send failed:", err);
-              }
-            }
-          }
-        }
-      }
       res.writeHead(401, {
         "Content-Type": "text/plain",
         "WWW-Authenticate": 'Bearer realm="Daintree MCP"',
@@ -1891,7 +1878,9 @@ export class HttpLifecycle {
   }
 
   /**
-   * Promote a help-session's tier in-memory (Approve once). Refuses downgrades
+   * Promote a help-session's tier in-memory — the tier-mismatch banner's "Set
+   * project default", never its per-tool "Allow this tool" grant. Refuses
+   * downgrades
    * — a malicious renderer cannot drop its own privileges. When `callerWcId`
    * is supplied, also requires the caller to be the WebContents the session
    * was pinned to at handshake (cross-window forgery defence). Returns the
@@ -1945,9 +1934,12 @@ export class HttpLifecycle {
     }
     this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
     // Bound the renderer-approved elevation: after MCP_TIER_ELEVATION_TTL_MS
-    // of awake time the session silently decays back to its token-resolved
-    // baseline (`current`, the pre-elevation tier) so a stale "Always allow"
-    // can't outlive the user's intent (#8462). Each accepted approval
+    // of awake time the session silently decays back to its pre-elevation
+    // baseline. `current` is only the candidate — on a chained elevation
+    // `armTierElevationTimer` keeps the baseline the first one captured, so
+    // workbench→action→system still decays all the way to workbench. A stale
+    // elevation therefore can't outlive the user's intent (#8462), which is
+    // why the banner no longer labels this "always" (#12119). Each approval
     // refreshes the window from now; a chained re-elevation preserves the
     // original baseline.
     this.deps.sessionStore.armTierElevationTimer(sessionId, tier, current);
@@ -2096,6 +2088,21 @@ export class HttpLifecycle {
     const ungrantable = allowedTools.filter((t) => minimumPermittingTier(t) === null);
     if (ungrantable.length > 0) {
       throw new Error(`Unknown or non-grantable tool(s): ${ungrantable.join(", ")}`);
+    }
+    // A grant's `maxUses` is what the Settings card shows the user, so it has
+    // to mean something. For a tool that fans out across every target it
+    // resolves at dispatch time it cannot: the count isn't known when the use
+    // is charged, so "10 uses" would authorize ten unbounded sweeps (#12121).
+    // Reject the whole request rather than quietly dropping the offender —
+    // the minted scope must be exactly the scope the user approved.
+    const fanOut = allowedTools.filter((t) => !isGenericNativeGrantEligible(t));
+    if (fanOut.length > 0) {
+      throw new Error(
+        `A native grant cannot cover ${fanOut.join(", ")}: each call acts on every target it ` +
+          `finds, so a use ceiling bounds how many calls run, never how much they affect. ` +
+          `Remove ${fanOut.length > 1 ? "them" : "it"} — those calls still run under the ` +
+          `session's normal tier and confirmation rules.`
+      );
     }
 
     const maxUses = params.maxUses ?? MCP_NATIVE_GRANT_DEFAULT_MAX_USES;

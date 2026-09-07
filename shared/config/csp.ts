@@ -18,6 +18,15 @@ const HTML_PREVIEW_SCHEME = "daintree-html:";
 // `application/pdf`, so this allowance can never resolve to anything else.
 const PDF_PREVIEW_SCHEME = "daintree-pdf:";
 
+// Direct media playback (#12242). Only appears in `media-src`, so
+// `<video>`/`<audio>` can point straight at `daintree-media://load/?…` instead
+// of playing a blob of the whole file. `standard: true` — the privilege the
+// upstream report behind that blob detour identified as missing — lives on this
+// scheme rather than `daintree-file:` so that scheme's consumers (markdown
+// images, WebAudio fetch, the file viewer) keep their existing registration.
+// The handler serves nothing but audio/video under a caller-supplied root.
+const MEDIA_SCHEME = "daintree-media:";
+
 // Plugin-served renderer modules. `plugin:` is a hardened first-party scheme
 // (`standard: true, secure: true`, no `bypassCSP`) — see
 // `electron/main.ts:120-130` — that resolves to the plugin's installed-on-disk
@@ -114,12 +123,12 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
-    // blob:: the file viewer fetch()es video bytes from daintree-file:// and
-    // plays them through a blob object URL — Chromium's custom-scheme media
-    // loader can't consume follow-up range requests (electron#51442), so
-    // <video src> never points at FILE_SCHEMES directly. FILE_SCHEMES stays
-    // for WebAudio-style consumers that stream media without the blob detour.
-    `media-src 'self' ${FILE_SCHEMES} blob:`,
+    // daintree-media:: the file viewer points <video>/<audio> straight at the
+    // range-serving scheme rather than a blob of the whole file (#12242).
+    // FILE_SCHEMES stays here for media loaded by tag from that scheme; the
+    // viewer's size probe and WebAudio read it via fetch(), which connect-src
+    // governs. blob: stays for renderer-minted object URLs.
+    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} blob:`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
@@ -153,8 +162,8 @@ export function getDaintreeAppDevCSP(): string {
     `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
-    // blob: mirrors the production policy — see getDaintreeAppProdCSP.
-    `media-src 'self' ${FILE_SCHEMES} blob:`,
+    // Mirrors the production policy — see getDaintreeAppProdCSP.
+    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} blob:`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",

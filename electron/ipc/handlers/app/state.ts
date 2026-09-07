@@ -277,7 +277,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           `app:hydrate(project:${workspaceId})`
         ).map((t) => ({
           ...t,
-          kind: inferKind(t),
+          kind: inferKind(t, workspaceId),
           location: t.location as "grid" | "dock",
         }));
         terminalsSource = "per-project";
@@ -333,7 +333,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             (t) =>
               ({
                 ...t,
-                kind: inferKind(t),
+                kind: inferKind(t, workspaceId),
                 cwd: t.cwd || currentProject?.path || "",
               }) as import("../../../../shared/types/project.js").TerminalSnapshot
           );
@@ -1022,6 +1022,15 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         webContentsId: ctx.webContentsId,
       });
       signalFirstInteractive(ctx.webContentsId);
+      // Close the cold-start timeline for a view this window's manager
+      // cold-started (input-ready log + trace mark); no-op for warm views.
+      // Same per-window resolution as APP_VIEW_PAINTED below.
+      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const pvm =
+        (senderWindow &&
+          deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
+        deps?.projectViewManager;
+      pvm?.recordFirstInteractive?.(ctx.webContentsId);
     })
   );
 

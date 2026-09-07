@@ -26,6 +26,7 @@ import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import type { PluginCapabilityConsentRecord } from "../shared/types/pluginCapabilityConsent.js";
+import type { ProjectPluginTrustRecord } from "../shared/types/plugin.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
@@ -223,6 +224,7 @@ export interface StoreSchema {
     workingPulseEnabled: boolean;
     workingPulseSoundFile: string;
     uiFeedbackSoundEnabled: boolean;
+    flashEnabled: boolean;
     quietHoursEnabled: boolean;
     quietHoursStartMin: number;
     quietHoursEndMin: number;
@@ -533,14 +535,47 @@ export interface StoreSchema {
   };
   /**
    * Just-in-time (JIT) consent grants for plugin host capabilities (#10524).
-   * Each grant is a `(pluginId, capability)` pair the user approved on first
-   * use of a high-risk host surface (`shell:exec`, `fs:*-write`, `git:write`),
-   * so later calls run without re-prompting. Plaintext, matching the
-   * `pluginMcpConsent` precedent — a grant holds no secret, only the pair and a
-   * timestamp.
+   * Each grant is a `(scopeKey, pluginId, capability)` triple the user approved
+   * on first use of a high-risk host surface (`shell:exec`, `fs:*-write`,
+   * `git:write`), so later calls run without re-prompting. Plaintext, matching
+   * the `pluginMcpConsent` precedent — a grant holds no secret, only the triple
+   * and a timestamp. Records written before the scope key existed have no
+   * `scopeKey` field and hydrate as `"global"`.
    */
   pluginCapabilityConsent: {
     grants?: PluginCapabilityConsentRecord[];
+  };
+  /**
+   * Per-project trust decisions for `<projectRoot>/.daintree/plugins/`, keyed by
+   * `projectId`. Deliberately here and never in the repository: a decision that
+   * a repository could carry would be a decision the repository makes for you,
+   * and the whole gate exists because a project folder is writable by everyone
+   * who can push to it — agents included.
+   *
+   * Absence means no decision, which means disabled: discovery still parses
+   * manifests so the UI can say what is there, but nothing runs. An
+   * enable-for-this-session choice is held in memory by
+   * `ProjectPluginController` and never reaches this key.
+   *
+   * Additive key with no numbered migration, matching `forgeDefaultProviderId`,
+   * `pluginMcpConfig` and `pluginCapabilityConsent` — every read goes through
+   * `?? {}` and a missing key is indistinguishable from an empty one.
+   */
+  projectPluginTrust?: Record<string, ProjectPluginTrustRecord>;
+
+  /**
+   * Per-project visibility for INSTALLED (global) plugins: which manifest ids
+   * are hidden by default, plus each project's explicit answers, which win in
+   * either direction. Absence everywhere means visible.
+   *
+   * Kept here rather than in the project's own repository on purpose: which
+   * plugins one person wants surfaced in one checkout is not a fact about the
+   * project, and committing it would push a personal choice onto everyone who
+   * clones it. Same additive-key convention as `projectPluginTrust` above.
+   */
+  projectPluginVisibility?: {
+    defaultHiddenPluginIds: string[];
+    projectOverrides: Record<string, Record<string, boolean>>;
   };
 }
 
@@ -603,7 +638,7 @@ const storeOptions = {
       enabled: true,
       completedEnabled: false,
       waitingEnabled: true,
-      soundEnabled: true,
+      soundEnabled: false,
       completedSoundFile: "complete.wav",
       waitingSoundFile: "waiting.wav",
       escalationSoundFile: "ping.wav",
@@ -612,6 +647,7 @@ const storeOptions = {
       workingPulseEnabled: false,
       workingPulseSoundFile: "pulse.wav",
       uiFeedbackSoundEnabled: false,
+      flashEnabled: false,
       quietHoursEnabled: false,
       quietHoursStartMin: 22 * 60,
       quietHoursEndMin: 8 * 60,
@@ -738,6 +774,7 @@ const storeOptions = {
       maxToolsPerSession: PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION,
     },
     pluginCapabilityConsent: {},
+    projectPluginTrust: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

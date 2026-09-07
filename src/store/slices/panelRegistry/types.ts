@@ -255,6 +255,17 @@ export interface PanelRegistrySlice {
   ) => void;
   setFilePanelPath: (id: string, filePath: string) => void;
   setFileViewMode: (id: string, viewMode: import("@shared/types/panel.js").FileViewMode) => void;
+  /**
+   * Merge a patch into a plugin panel's `extensionState` — the write half of
+   * the bag its view reads as `PanelViewProps.initialArgs`. No-op for a
+   * built-in kind, which has its own typed setters.
+   *
+   * Returns whether the state is now what the caller asked for — `false` when
+   * the update was rejected (unknown panel, not plugin-owned, over the size
+   * cap, or not JSON round-trippable), `true` when it was applied or was
+   * already stored.
+   */
+  setPanelExtensionState: (id: string, patch: Record<string, unknown>) => boolean;
   setDiffPanelFile: (
     id: string,
     filePath: string,

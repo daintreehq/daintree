@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeAlarmTier } from "../worktreeAlarmTier";
+import { computeAlarmTier, formatAlarmDetail } from "../worktreeAlarmTier";
 
 describe("computeAlarmTier", () => {
   describe("tier 0 (none)", () => {
@@ -119,5 +119,173 @@ describe("computeAlarmTier — base-branch drift", () => {
 
   it("keeps an auth failure above base drift", () => {
     expect(computeAlarmTier({ authFailed: true, baseBehindCount: 9 }).kind).toBe("auth-failed");
+  });
+});
+
+/**
+ * The collapsed pill dropped its label, and on a collapsed row nothing else
+ * states the drift — the upstream badge only renders expanded. So this string
+ * is the only place the counts appear, and the thing it must never do is
+ * invent one: an absent count is "not measured", not zero.
+ */
+describe("formatAlarmDetail", () => {
+  it("says nothing for the no-alarm kind", () => {
+    expect(formatAlarmDetail("none", { behindCount: 3 })).toBeUndefined();
+  });
+
+  describe("behind", () => {
+    it("names the upstream distance, pluralised", () => {
+      expect(formatAlarmDetail("behind", { behindCount: 3 })).toBe("Upstream: 3 commits behind");
+      expect(formatAlarmDetail("behind", { behindCount: 1 })).toBe("Upstream: 1 commit behind");
+    });
+
+    it("adds the ahead count behind the behind one, which is what raised the alarm", () => {
+      expect(formatAlarmDetail("behind", { behindCount: 3, aheadCount: 2 })).toBe(
+        "Upstream: 3 commits behind, 2 ahead"
+      );
+    });
+
+    it("falls back to the base when the branch has no upstream count at all", () => {
+      // A worktree branch created without tracking never reports an upstream
+      // distance; its drift from the base is the only "behind" it will have.
+      expect(
+        formatAlarmDetail("behind", { baseBehindCount: 4, baseCompareRef: "upstream/develop" })
+      ).toBe("Base (upstream/develop): 4 commits behind");
+    });
+
+    it("prefers the compare ref over the bare branch name — that is what was measured", () => {
+      expect(
+        formatAlarmDetail("behind", {
+          baseBehindCount: 4,
+          baseBranchName: "develop",
+          baseCompareRef: "upstream/develop",
+        })
+      ).toBe("Base (upstream/develop): 4 commits behind");
+    });
+
+    it("falls back to the branch name, then to no name at all", () => {
+      expect(formatAlarmDetail("behind", { baseBehindCount: 4, baseBranchName: "develop" })).toBe(
+        "Base (develop): 4 commits behind"
+      );
+      expect(formatAlarmDetail("behind", { baseBehindCount: 4 })).toBe("Base: 4 commits behind");
+    });
+
+    it("names both distances when they are genuinely different measurements", () => {
+      expect(
+        formatAlarmDetail("behind", {
+          behindCount: 1,
+          baseBehindCount: 4,
+          baseCompareRef: "upstream/develop",
+        })
+      ).toBe("Upstream: 1 commit behind · Base (upstream/develop): 4 commits behind");
+    });
+
+    it("drops the unlabelled pair when the two refs are the same commit", () => {
+      // The dedupe `UpstreamSyncBadge` already does: one measurement written
+      // twice, and only the labelled half says what it was counted against.
+      expect(
+        formatAlarmDetail("behind", {
+          behindCount: 4,
+          baseBehindCount: 4,
+          // Both names, as the producer emits them — the expanded badge gates
+          // its own dedupe on `baseBranchName`, so a fixture carrying only the
+          // compare ref would not be testing the same state it sees.
+          baseBranchName: "develop",
+          baseCompareRef: "upstream/develop",
+          baseMatchesUpstream: true,
+        })
+      ).toBe("Base (upstream/develop): 4 commits behind");
+    });
+
+    it("keeps the upstream pair when the two refs match but the base has no name", () => {
+      // `UpstreamSyncBadge` gates its own dedupe on the base name. An
+      // unlabelled `Base:` is not the labelled half, so deduping onto it would
+      // trade the clearer line for a vaguer one.
+      expect(
+        formatAlarmDetail("behind", {
+          behindCount: 4,
+          baseBehindCount: 4,
+          baseMatchesUpstream: true,
+        })
+      ).toBe("Upstream: 4 commits behind");
+    });
+
+    it("names an unnamed base count rather than leaving the alarm unexplained", () => {
+      // Wider than the expanded badge, deliberately: this tooltip is the only
+      // place a collapsed row says anything about the drift.
+      expect(formatAlarmDetail("behind", { baseBehindCount: 4 })).toBe("Base: 4 commits behind");
+    });
+
+    it("carries a base-ahead count alongside an upstream-behind one", () => {
+      expect(
+        formatAlarmDetail("behind", {
+          behindCount: 2,
+          baseAheadCount: 5,
+          baseBranchName: "develop",
+        })
+      ).toBe("Upstream: 2 commits behind · Base (develop): 5 ahead");
+    });
+
+    it("ignores counts below zero rather than rendering them", () => {
+      expect(formatAlarmDetail("behind", { behindCount: -1, aheadCount: -2 })).toBeUndefined();
+    });
+
+    it("keeps the upstream pair when the base counts raced to zero", () => {
+      // `baseMatchesUpstream` with nothing to dedupe onto must not render
+      // nothing — the upstream pair is the fresher of the two.
+      expect(
+        formatAlarmDetail("behind", {
+          behindCount: 4,
+          baseBehindCount: 0,
+          baseMatchesUpstream: true,
+        })
+      ).toBe("Upstream: 4 commits behind");
+    });
+
+    it("claims no distance it was not given", () => {
+      expect(formatAlarmDetail("behind", {})).toBeUndefined();
+      expect(formatAlarmDetail("behind", { behindCount: 0, baseBehindCount: 0 })).toBeUndefined();
+      expect(formatAlarmDetail("behind", { behindCount: undefined })).toBeUndefined();
+    });
+  });
+
+  describe("ci-failed", () => {
+    it("counts the failing checks when the forge reported them", () => {
+      expect(formatAlarmDetail("ci-failed", { ciFailed: 2, ciTotal: 7 })).toBe(
+        "2 of 7 checks failing"
+      );
+      expect(formatAlarmDetail("ci-failed", { ciFailed: 1, ciTotal: 1 })).toBe(
+        "1 of 1 check failing"
+      );
+    });
+
+    it("still says what happened when it has no counts to give", () => {
+      expect(formatAlarmDetail("ci-failed", {})).toBe("Checks failed on the linked pull request");
+      expect(formatAlarmDetail("ci-failed", { ciFailed: 0, ciTotal: 0 })).toBe(
+        "Checks failed on the linked pull request"
+      );
+    });
+
+    it("needs BOTH counts before it states a ratio", () => {
+      // Half a pair is not a ratio. Either half missing has to fall back, or
+      // the tooltip invents a number the forge never reported.
+      expect(formatAlarmDetail("ci-failed", { ciTotal: 7 })).toBe(
+        "Checks failed on the linked pull request"
+      );
+      expect(formatAlarmDetail("ci-failed", { ciFailed: 2 })).toBe(
+        "Checks failed on the linked pull request"
+      );
+      expect(formatAlarmDetail("ci-failed", { ciFailed: -1, ciTotal: 7 })).toBe(
+        "Checks failed on the linked pull request"
+      );
+    });
+  });
+
+  describe("auth-failed", () => {
+    it("points at the affordance rather than implying the mark is one", () => {
+      expect(formatAlarmDetail("auth-failed", {})).toBe(
+        "Expand the card to reconnect your code forge"
+      );
+    });
   });
 });

@@ -68,6 +68,16 @@ export const PLUGIN_PROCESS_MAX_CONCURRENT = 8;
 export const PLUGIN_PROCESS_KILL_GRACE_MS = 3_000;
 
 /**
+ * How long a plain child's terminal bookkeeping waits after `exit` for its
+ * stdio to finish draining. Node fires `exit` when the process is reaped and
+ * `close` when the pipes are shut, and the tail of a one-shot command's output
+ * lands between them — so the handle settles on `close`, and this only bounds
+ * the case where `close` never comes because a surviving grandchild inherited
+ * the pipe. Generous for an ordinary flush, short enough to be invisible.
+ */
+export const PLUGIN_PROCESS_STDIO_DRAIN_MS = 2_000;
+
+/**
  * Channel name (under the plugin's `postToPanel` namespace) carrying process
  * stream events. `as const` pins the literal `"process"` type through
  * declaration emit — without it, the re-exported constant widens to `string`

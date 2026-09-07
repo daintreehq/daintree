@@ -7,6 +7,7 @@ import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionContext } from "@shared/types/actions";
 import type { HelpProjectRef, LaunchErrorKind } from "./HelpSessionController";
+import { DEFAULT_ASSISTANT_SLOT } from "@shared/config/assistantSlots";
 
 export interface HelpSessionRef {
   sessionId: string;
@@ -32,6 +33,7 @@ export type ProvisionFailureCode =
   | "MCP_SERVER_NOT_STARTED"
   | "MCP_PROBE_FAILED"
   | "USER_CONTENT_SYNC_FAILED"
+  | "MIXED_AGENT_LANES"
   | "UNKNOWN";
 
 export type ProvisionOutcome =
@@ -41,13 +43,20 @@ export type ProvisionOutcome =
 export async function provisionHelpSession(
   project: HelpProjectRef,
   agentId: string,
-  context?: ActionContext
+  context?: ActionContext,
+  /**
+   * The assistant lane to provision into (#12108). Main displaces only the
+   * prior session in this lane, so naming it is what lets sibling sessions
+   * survive a launch.
+   */
+  slot: number = DEFAULT_ASSISTANT_SLOT
 ): Promise<ProvisionOutcome> {
   try {
     const result = await window.electron.help.provisionSession({
       projectId: project.id,
       projectPath: project.path,
       agentId,
+      slot,
       ...(context && { context }),
     });
     if (!result) {
@@ -68,7 +77,8 @@ export async function provisionHelpSession(
       code === "MCP_SERVER_NOT_STARTED" ||
       code === "MCP_PROBE_FAILED" ||
       code === "MCP_NOT_READY" ||
-      code === "USER_CONTENT_SYNC_FAILED"
+      code === "USER_CONTENT_SYNC_FAILED" ||
+      code === "MIXED_AGENT_LANES"
     ) {
       return { ok: false, code, message };
     }
@@ -87,6 +97,11 @@ export function provisionFailureKind(code: ProvisionFailureCode): LaunchErrorKin
       return "mcp-probe-failed";
     case "USER_CONTENT_SYNC_FAILED":
       return "skills-sync-failed";
+    // Not a failure — a refusal. Retrying repeats it verbatim until the
+    // sibling lane stops, so it gets its own kind rather than the
+    // `spawn-failed` retry banner.
+    case "MIXED_AGENT_LANES":
+      return "mixed-agent-lanes";
     default:
       return "spawn-failed";
   }

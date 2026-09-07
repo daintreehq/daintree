@@ -1,16 +1,16 @@
 import { useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type SessionLostReason } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { selectHasMultipleSessionLost } from "@/store/slices/panelRegistry/selectors";
 
 export interface SessionLostBanner {
   /**
-   * True while this pane has an unacknowledged lost-session signal. Feeds
-   * `getRestartBannerVariant`, which gates the banner below the in-flight
-   * restart states.
+   * Set while this pane has an unacknowledged lost-session signal, naming why
+   * (#12182). Feeds `getRestartBannerVariant`, which gates the banner below
+   * the in-flight restart states.
    */
-  sessionLostOnRestore: boolean;
+  sessionLostOnRestore: SessionLostReason | undefined;
   /** Acknowledge this pane's signal. */
   dismiss: () => void;
   /**
@@ -41,7 +41,7 @@ export function useSessionLostBanner(panelId: string): SessionLostBanner {
     useShallow((state) => {
       const panel = state.panelsById[panelId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
-      const flagged = pty?.sessionLostOnRestore ?? false;
+      const flagged = pty?.sessionLostOnRestore;
       return {
         sessionLostOnRestore: flagged,
         // Gate the cross-panel scan on this pane's own flag: with no banner to

@@ -35,27 +35,48 @@ export function registerTerminalSpawnActions(
     id: "terminal.new",
     title: "New Terminal",
     description:
-      "Open a new terminal in the active worktree, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
+      "Open a new terminal, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Defaults to the active worktree, and can instead open at a chosen directory and run something there immediately. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     category: "terminal",
     kind: "command",
+    // Stays statically safe: a plain "New Terminal" must not be gated. An
+    // agent- or plugin-sourced dispatch carrying `cwd` or `command` is elevated
+    // to "confirm" per-dispatch by `resolveEffectiveActionDanger`, so the shell
+    // authority those arguments carry is gated without confirmation-gating the
+    // ordinary case (#12216). Not `denyPluginDispatch`: that would also refuse
+    // a plugin opening a plain terminal, which stays legitimate.
     danger: "safe",
     scope: "renderer",
     argsSchema: z
       .object({
         spawnedBy: TerminalSpawnSourceSchema.optional(),
         focusPolicy: AddPanelFocusPolicySchema.optional(),
+        cwd: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Absolute directory to open the terminal in. Defaults to the active worktree's root. Supplying this requires a confirmation."
+          ),
+        command: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Shell command to run in the new terminal immediately, instead of leaving it at a prompt. Supplying this requires a confirmation."
+          ),
       })
       .optional(),
     run: async (args) => {
-      const { spawnedBy, focusPolicy } = args ?? {};
+      const { spawnedBy, focusPolicy, cwd, command } = args ?? {};
       const addPanel = usePanelStore.getState().addPanel;
       const terminalId = await addPanel({
         kind: "terminal",
-        cwd: callbacks.getDefaultCwd(),
+        cwd: cwd ?? callbacks.getDefaultCwd(),
         location: "grid",
         worktreeId: callbacks.getActiveWorktreeId(),
         spawnedBy,
         focusPolicy,
+        ...(command !== undefined && { command }),
       });
       if (!terminalId) return;
       return { terminalId };
@@ -142,6 +163,11 @@ export function registerTerminalSpawnActions(
         if (focusPolicy) {
           options.focusPolicy = focusPolicy;
         }
+        // Land the copy directly after the panel it was copied from instead of
+        // at the end of the list (#12095). Passed as an id, not a position:
+        // `buildPanelDuplicateOptions` above can await agent-settings IPC, so
+        // any index computed here would be stale by the time the store commits.
+        options.insertAfterId = targetId;
         await state.addPanel(options);
       } else if (nonTrashed.length === 0) {
         const lastClosed = state.lastClosedConfig;
@@ -349,7 +375,7 @@ export function registerTerminalSpawnActions(
       // returns.
       if (ctx.dispatchSource === "agent") {
         throw new Error(
-          "terminal.moveToNewWorktree can't be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Don't retry it. Create the worktree headlessly with `worktree.createWithRecipe` (pass `branchName`, and omit `recipeId` when no recipe is wanted), then call `terminal.moveToWorktree` with the original `terminalId` and the `worktreeId` it returns."
+          'terminal.moveToNewWorktree can\'t be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Don\'t retry it. Create the worktree headlessly with `worktree.createWithRecipe` (pass `source: { kind: "newBranch", branchName: "..." }`, and omit `recipeId` when no recipe is wanted), then call `terminal.moveToWorktree` with the original `terminalId` and the `worktreeId` it returns.'
         );
       }
       const state = usePanelStore.getState();

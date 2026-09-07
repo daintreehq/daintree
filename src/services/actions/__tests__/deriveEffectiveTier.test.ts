@@ -10,6 +10,7 @@ const worktreeCtx = (over: Partial<WorktreeDeleteTierCtx> = {}): WorktreeDeleteT
   isProtectedBranch: false,
   isMainWorktree: false,
   hasTrackedChanges: false,
+  submoduleFilesAtRisk: false,
   ...over,
 });
 
@@ -45,6 +46,28 @@ describe("deriveEffectiveTier — worktree.delete", () => {
     expect(
       deriveEffectiveTier("worktree.delete", worktreeCtx({ force: true, hasTrackedChanges: true }))
     ).toBe("D3");
+  });
+
+  it("escalates to D3 with force + nested submodule files", () => {
+    // The parent collapses a submodule into one ` M vendor/lib` row and can be
+    // configured not to report it at all, so this cannot ride hasTrackedChanges.
+    expect(
+      deriveEffectiveTier(
+        "worktree.delete",
+        worktreeCtx({ force: true, submoduleFilesAtRisk: true })
+      )
+    ).toBe("D3");
+  });
+
+  it("leaves nested submodule files at D2 without force", () => {
+    // Symmetrical with hasTrackedChanges: the host refuses the unforced delete
+    // on this state, so the gate waits for the flag that lifts the refusal.
+    expect(
+      deriveEffectiveTier(
+        "worktree.delete",
+        worktreeCtx({ force: false, submoduleFilesAtRisk: true })
+      )
+    ).toBe("D2");
   });
 
   it("stays D2 with force but only untracked files (#4927 regression guard)", () => {

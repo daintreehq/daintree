@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { getSpawnablePanelKinds } from "@/registry";
+import { getPanelKindOrigin, type PanelKindOrigin } from "@shared/config/panelKindRegistry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   subscribeToPluginAgentRegistry,
@@ -27,6 +28,11 @@ export interface PanelKindOption {
   description?: string;
   searchAliases?: string[];
   category: "agent" | "tool" | "resume";
+  /**
+   * Which tier contributed a `tool` option's panel kind. Absent on agent and
+   * resume options, which are not panel kinds and have no such tier.
+   */
+  origin?: PanelKindOrigin;
   installed?: boolean;
   resumeSession?: AgentSessionRecord;
   /**
@@ -124,6 +130,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       description: config.shortcut,
       searchAliases: config.searchAliases,
       category: "tool" as const,
+      origin: getPanelKindOrigin(config),
     }));
 
     const isAgentHidden = (agentId: string): boolean => {

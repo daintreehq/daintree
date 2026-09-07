@@ -154,6 +154,10 @@ export interface GeneratedIpcInvokeMap {
     args: [text: string];
     result: void;
   };
+  "codex:find-sessions": {
+    args: [__0: { cwd: string; codexHome?: string | undefined }];
+    result: import("./agentSubagents.js").CodexFolderSessionsResult;
+  };
   "codex:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
@@ -161,6 +165,10 @@ export interface GeneratedIpcInvokeMap {
   "codex:read-subagent-transcript": {
     args: [__0: { terminalId: string; subagentId: string }];
     result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
+  };
+  "codex:resolve-resume-latest-session": {
+    args: [__0: { cwd: string }];
+    result: string | null;
   };
   "commands:execute": {
     args: [payload: import("../commands.js").CommandExecutePayload];
@@ -561,7 +569,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:get-prs-by-numbers": {
     args: [payload: { cwd: string; numbers: number[] }];
-    result: import("../forge.js").PR[];
+    result: import("../forge.js").PRLookupResult[];
   };
   "forge:get-rate-limit-details": {
     args: [payload: { cwd: string }];
@@ -648,6 +656,21 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
   };
+  "git:fetch": {
+    args: [payload: { cwd: string; prune?: boolean | undefined }];
+    result: void;
+  };
+  "git:list-base-integration-commits": {
+    args: [
+      payload: {
+        cwd: string;
+        baseBranch: string;
+        kind: import("../git.js").GitBaseIntegrationKind;
+        limit?: number | undefined;
+      },
+    ];
+    result: import("../git.js").GitBaseIntegrationCommitPreview;
+  };
   "git:list-push-commits": {
     args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
     result: import("../git.js").GitPushCommitPreview;
@@ -655,6 +678,30 @@ export interface GeneratedIpcInvokeMap {
   "git:list-rebase-commits": {
     args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
     result: import("../git.js").GitRebaseCommitPreview;
+  };
+  "git:merge-base-into-branch": {
+    args: [
+      payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedBranch?: string | undefined;
+        expectedHeadOid?: string | undefined;
+        expectedBaseOid?: string | undefined;
+      },
+    ];
+    result: void;
+  };
+  "git:rebase-onto-base": {
+    args: [
+      payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedBranch?: string | undefined;
+        expectedHeadOid?: string | undefined;
+        expectedBaseOid?: string | undefined;
+      },
+    ];
+    result: void;
   };
   "global-env:get": {
     args: [];
@@ -710,6 +757,10 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: import("./help.js").PinnedActionContextSnapshot | null;
   };
+  "help:list-pending-hibernation-slots": {
+    args: [projectId: string];
+    result: number[];
+  };
   "help:mark-terminal": {
     args: [terminalId: string];
     result: void;
@@ -719,7 +770,7 @@ export interface GeneratedIpcInvokeMap {
     result: { path: string; opened: boolean } | null;
   };
   "help:peek-pending-hibernation": {
-    args: [projectId: string];
+    args: [projectId: string, rawSlot?: number | undefined];
     result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;
   };
   "help:provision-session": {
@@ -729,6 +780,7 @@ export interface GeneratedIpcInvokeMap {
         projectPath: string;
         agentId: string;
         context?: import("../actions.js").ActionContext | undefined;
+        slot?: number | undefined;
       },
     ];
     result: {
@@ -745,7 +797,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "help:restore-pending-hibernation": {
-    args: [projectId: string, claimId: string];
+    args: [projectId: string, claimId: string, rawSlot?: number | undefined];
     result: boolean;
   };
   "help:revoke-session": {
@@ -753,7 +805,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "help:take-pending-hibernation": {
-    args: [projectId: string];
+    args: [projectId: string, rawSlot?: number | undefined];
     result: { agentId: string; agentSessionId: string; cwd: string; claimId: string } | null;
   };
   "help:unmark-terminal": {
@@ -1170,6 +1222,38 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
   };
+  "plugin:project-activate-staged": {
+    args: [pluginId: string];
+    result: void;
+  };
+  "plugin:project-list": {
+    args: [];
+    result: import("../plugin.js").ProjectPluginInfo[];
+  };
+  "plugin:project-reload": {
+    args: [];
+    result: void;
+  };
+  "plugin:project-set-muted": {
+    args: [pluginId: string, muted: boolean];
+    result: void;
+  };
+  "plugin:project-set-trust": {
+    args: [decision: import("../plugin.js").ProjectPluginTrustDecision];
+    result: void;
+  };
+  "plugin:project-surfaces-get": {
+    args: [];
+    result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceClaim>>;
+  };
+  "plugin:project-visibility-get": {
+    args: [];
+    result: import("../plugin.js").ProjectPluginVisibility;
+  };
+  "plugin:project-visibility-set": {
+    args: [pluginId: string, visible: boolean | null];
+    result: void;
+  };
   "plugin:recipe-metadata-update": {
     args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
     result: import("../project.js").TerminalRecipe;
@@ -1185,6 +1269,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:report-panel-lifecycle": {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
     result: void;
+  };
+  "plugin:restart-worker": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginRuntimeStatus | null;
+  };
+  "plugin:runtime-statuses-get": {
+    args: [];
+    result: import("../plugin.js").PluginRuntimeStatus[];
   };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
@@ -1246,6 +1338,14 @@ export interface GeneratedIpcInvokeMap {
     args: [actionIds: string[]];
     result: void;
   };
+  "plugin:validate-manifest": {
+    args: [targetPath: string];
+    result: import("./pluginValidation.js").PluginManifestValidationResult;
+  };
+  "plugin:visibility-default-set": {
+    args: [pluginId: string, hidden: boolean];
+    result: void;
+  };
   "plugin:worktree-status-get": {
     args: [path: string];
     result: import("../plugin.js").PluginWorktreeStatus | null;
@@ -1301,7 +1401,7 @@ export interface GeneratedIpcInvokeMap {
   "privacy:get-settings": {
     args: [];
     result: {
-      telemetryLevel: "off" | "errors" | "full";
+      telemetryLevel: "errors" | "off" | "full";
       logRetentionDays: 0 | 7 | 30 | 90;
       dataFolderPath: string;
     };
@@ -1319,7 +1419,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "privacy:set-telemetry-level": {
-    args: [level: "off" | "errors" | "full"];
+    args: [level: "errors" | "off" | "full"];
     result: void;
   };
   "project-history:peek": {
@@ -1469,7 +1569,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "sentry:get-consent-state": {
     args: [];
-    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
+    result: { level: "errors" | "off" | "full"; hasSeenPrompt: boolean };
   };
   "shortcut-hints:get-counts": {
     args: [];
@@ -1788,6 +1888,10 @@ export interface GeneratedIpcInvokeMap {
     args: [webContentsId: number, index: number];
     result: void;
   };
+  "webview:set-device-emulation": {
+    args: [payload: import("./webviewEmulation.js").DeviceEmulationRequest];
+    result: { applied: boolean };
+  };
   "window-chrome:set-banner-severity": {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;
@@ -1833,10 +1937,12 @@ export interface GeneratedIpcInvokeMap {
           sourcePrUrl?: string | undefined;
           sourcePrState?: "merged" | "open" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
+          submoduleInit?: "inherit" | "all" | "none" | undefined;
+          collisionPolicy?: "error" | "suffix" | undefined;
         };
       },
     ];
-    result: string;
+    result: import("../worktree.js").WorktreeCreateResult;
   };
   "worktree:delete": {
     args: [payload: import("./worktree.js").WorktreeDeletePayload];

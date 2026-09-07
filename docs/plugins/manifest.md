@@ -40,6 +40,11 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     { "name": "Grace Hopper", "email": "grace@example.com" },
   ],
 
+  // Declares the plugin is only ever loaded from a project's own
+  // .daintree/plugins/. REQUIRED there, REJECTED under the user and builtin
+  // roots. Omit it for a normal, app-wide plugin. See "scope" below.
+  "scope": "project",
+
   // Path to the compiled ESM entry, relative to the plugin directory.
   // Optional — plugins with only static contributions (themes, static MCP
   // server configs) don't need one.
@@ -48,7 +53,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // Host version compatibility. Optional but strongly recommended.
   // Uses semver range syntax.
   "engines": {
-    "daintree": "^0.11.0",
+    "daintree": ">=0.11.0",
   },
 
   // Declared capabilities, surfaced in the plugin manager after install.
@@ -83,9 +88,12 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "settings": [/* ... */],
     "views": [/* ... */],
     "mcpServers": [/* ... */],
+    "skills": [/* markdown knowledge served through Daintree's own MCP server */],
+    "recipes": [/* named multi-terminal launch layouts */],
     "forgeProviders": [/* ... */],
     "fileDecorationProviders": [/* ... */],
     "processTools": [/* command → terminal-tab icon detections */],
+    "surfaces": {/* project-scope only; see "contributes.surfaces" below */},
   },
 }
 ```
@@ -157,15 +165,30 @@ Plugins with only static contributions (a theme pack, a standalone MCP server co
 
 ### `engines.daintree`
 
-Semver range expressing which Daintree versions the plugin supports. Examples track the latest pre-1.0 minor; the scaffolder (`npx daintree-plugin new`) generates `"^0.11.0"`:
+Semver range expressing which Daintree versions the plugin supports. The scaffolder (`npx daintree-plugin new`) generates `">=0.11.0"` — an open-ended lower bound, deliberately not a caret:
 
-- `"^0.11.0"` — compatible with 0.11 (scaffolder default)
+- `">=0.11.0"` — 0.11 and every later release (scaffolder default)
 - `">=0.11.0 <0.13.0"` — explicit range
 - `"0.11.x"` — any 0.11 release
+
+**Never use a caret on a 0.x range.** `"^0.11.0"` resolves to `>=0.11.0 <0.12.0` under semver's 0.x rule, so it stops matching at the very next minor and the plugin is rejected on every release after the one you wrote it against.
 
 If the running Daintree version doesn't satisfy the range, the plugin is rejected at load with a user-visible warning toast. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
 
 Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
+
+### `scope`
+
+The only accepted value is `"project"`, and it declares that the plugin is a **project-local** plugin — one that lives in a project's own repository at `<projectRoot>/.daintree/plugins/` and loads only while that project is open. Omit the field entirely for a normal, app-wide plugin.
+
+The manifest gate enforces it in both directions, against the root the manifest was discovered under:
+
+- Discovered under a project's `.daintree/plugins/` **without** `"scope": "project"` → rejected (`project_scope_required`). The host will not load a project-local plugin that has not opted in.
+- Discovered under the user or builtin plugins root **with** `"scope": "project"` → rejected (`project_scope_not_allowed`).
+
+This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
+
+Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` becomes available, and eight contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
 
 ### `capabilities`
 
@@ -196,7 +219,7 @@ Declare honestly. The plugin manager's detail pane lists what you've declared (a
 Per-capability allowlists that declare what a capability intends to reach. Both buckets are schema-validated, but neither is a runtime sandbox — they do not block actual calls or writes. Two buckets, with different runtime weight today:
 
 - `scopes.network.allowedUrls` — outbound request targets the plugin intends to reach under `network:fetch`. Wildcards and private/loopback targets are rejected. **Live but advisory:** a non-empty allowlist suppresses the compound-capability elevation (the host won't force a confirm dialog when `network:fetch` is paired with a sensitive read), proving the fetch is tightly bound rather than a generic exfiltration channel. It does not actually block requests to other URLs.
-- `scopes.fs.allowedPaths` — absolute paths the filesystem capabilities may touch. Entries may also use the dynamic tokens `${project}` or `${worktree}` (optionally with a `/sub/path` suffix, e.g. `"${project}/src"`), which expand at call time to the active project root and active worktree path. Wildcards, relative paths, `..` segments, and unknown tokens are rejected by the manifest schema. **Enforced for the host `fs`/`git` API:** every path argument to `host.fs.*` and `host.git.*` is realpath-resolved and contained to one of these roots (traversal and symlink-escape rejected, mirroring the `plugin://` protocol handler); an out-of-scope path rejects with a `PATH_NOT_ALLOWED:` prefix. It still does not attenuate the compound-capability lattice (fs writes elevate unconditionally). **Honest scope limit:** this enforces the sanctioned, audited `host.fs`/`host.git` path only — a plugin's `main` is un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can still call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `allowedPaths` contains the host-mediated surface; it does not seal the un-mediated one.
+- `scopes.fs.allowedPaths` — absolute paths the filesystem capabilities may touch. Entries may also use the dynamic tokens `${project}` or `${worktree}` (optionally with a `/sub/path` suffix, e.g. `"${project}/src"`), which expand at call time to the active project root and active worktree path. Wildcards, relative paths, `..` segments, and unknown tokens are rejected by the manifest schema. **Enforced for the host `fs`/`git` API:** every path argument to `host.fs.*` and `host.git.*` is realpath-resolved and contained to one of these roots (traversal and symlink-escape rejected, mirroring the `plugin://` protocol handler); an out-of-scope path rejects with a `PATH_NOT_ALLOWED:` prefix. It still does not attenuate the compound-capability lattice (fs writes elevate unconditionally). **Honest scope limit:** this enforces the sanctioned, audited `host.fs`/`host.git` path only — a plugin's `main` is un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can still call raw `node:fs` directly, which the host cannot intercept without a real sandbox. `allowedPaths` contains the host-mediated surface; it does not seal the un-mediated one.
 - `scopes.socket.allowedPaths` — local endpoints the plugin intends to connect to under `socket:connect`: absolute Unix-domain socket paths (`/var/run/docker.sock`) and/or Windows named pipes (`\\.\pipe\docker_engine`). Both forms are accepted on every platform, so a cross-platform manifest parses everywhere it's read. Wildcards, relative paths, and `..` segments are rejected. **Purely advisory:** nothing enforces this, because a plugin's `main` reaches `node:net` directly and the host has no interception point. It exists so the plugin manager can render "connects to `/var/run/docker.sock`" instead of the bare capability — which is the entire value of the disclosure. Optional; declare `socket:connect` without it if the endpoint varies.
 
 A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently dropped. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
@@ -209,15 +232,21 @@ Plugins are lazy by default. Omitting `activationEvents` (or passing an empty ar
 
 ### `contributes`
 
-Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays.
+Object containing an array per contribution type — fifteen of them (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests.
+
+Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a `views[].id` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting.
+
+A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for all sixteen.
 
 - `views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
 - `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (killed on Daintree exit; on crash it transitions to `crashed` and tool calls reject until an explicit manual restart — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert.
 - `settings` — beyond `string` / `number` / `boolean` / `enum` / `json` / `secret`, the field `type` accepts `path` / `directory` / `file`, which render a read-only path input plus a native folder/file chooser (`file` narrows the chooser by an `extensions` array; `mustExist` advisory-flags a stored path that no longer resolves). A `secret`-typed setting is encrypted at rest through the OS keychain when one is available, transparently to the plugin. Full field reference in the [Contribution points → Settings schema](./contribution-points.md#settings-schema--shipped).
+- `skills` and `recipes` — declarative content, requiring no capability. Skills are markdown served to agents through Daintree's own MCP server; recipes are named multi-terminal launch layouts, registered app-wide and immutable to the user. See [Skills](./contribution-points.md#skills--shipped) and [Recipes](./contribution-points.md#recipes--shipped).
+- `agents` — registers a launchable agent CLI as a selectable agent. Requires the `agent:register` capability; the schema rejects the contribution without it. An optional `detection` block wires it into the same agent-state UI built-in agents use.
+- `forgeProviders` and `fileDecorationProviders` — the manifest entry is read eagerly so the host's routing tables are populated before any plugin code runs; the implementation binds lazily in `activate()`. Forge providers are **built-in plugins only** — their host methods are synchronous and cannot cross the plugin worker's message port.
+- `surfaces` — **project-scope only.** An object, not an array: fixed slots a project-local plugin claims to replace one of the host's own surfaces for its own project. `emptyCanvas` (`{ "viewId": "..." }`) is the only slot accepted today; `viewId` must name a declared `contributes.views` entry, and at most one plugin may claim a slot per project. A manifest without `"scope": "project"` that declares any surface is rejected. See [Project-local plugins → Surfaces](./project-local.md#surfaces).
 
-> These two points were named `experimental_views` and `experimental_mcpServers` before the 1.0 freeze. The old keys are still accepted as deprecated aliases — a manifest using them parses and runs identically, but logs a one-time deprecation warning naming the stable replacement. Rename to `views` / `mcpServers`; the aliases may be removed in a future major.
-
-The `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. `agents` registers a launchable agent CLI as a selectable agent and requires the `agent:register` capability — see the [Contribution points reference](./contribution-points.md) for its shape. That reference also lists the per-point status of every type.
+> `views` and `mcpServers` were named `experimental_views` and `experimental_mcpServers` until #10466. The old keys are still accepted as deprecated aliases — a manifest using them parses and runs identically, but logs a one-time deprecation warning naming the stable replacement. Rename to `views` / `mcpServers`; the aliases may be removed in a future major.
 
 ## Validation
 

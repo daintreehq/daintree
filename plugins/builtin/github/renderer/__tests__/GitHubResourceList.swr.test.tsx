@@ -6,6 +6,7 @@ import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-libra
 import React, { Activity, type ReactNode } from "react";
 import type { Issue, ListOptions, Page } from "@shared/types/forge";
 import { setCache, getCache, buildCacheKey, _resetForTests } from "@/lib/forgeResourceCache";
+import { MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import { useGitHubFilterStore } from "../stores/githubFilterStore";
 import { useIssueSelectionStore } from "@/store/issueSelectionStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
@@ -28,6 +29,8 @@ const mockListIssues = vi.fn();
 const mockListPRs = vi.fn();
 const mockGetIssueByNumber = vi.fn();
 const mockGetPRByNumber = vi.fn();
+const mockGetIssuesByNumbers = vi.fn();
+const mockGetPRsByNumbers = vi.fn();
 
 // The shim merges `cwd` into the options object so assertions can keep
 // matching a single flat shape.
@@ -38,8 +41,8 @@ vi.mock("@/clients/forgeClient", () => ({
     getIssue: (cwd: string, issueNumber: number) => mockGetIssueByNumber(cwd, issueNumber),
     getPR: (cwd: string, prNumber: number) => mockGetPRByNumber(cwd, prNumber),
     getIssueUrl: vi.fn().mockResolvedValue("https://github.com/acme/repo/issues/1"),
-    getIssuesByNumbers: vi.fn().mockResolvedValue([]),
-    getPRsByNumbers: vi.fn().mockResolvedValue([]),
+    getIssuesByNumbers: (cwd: string, numbers: number[]) => mockGetIssuesByNumbers(cwd, numbers),
+    getPRsByNumbers: (cwd: string, numbers: number[]) => mockGetPRsByNumbers(cwd, numbers),
   },
 }));
 
@@ -86,17 +89,24 @@ const mockSelectionClear = vi.fn();
 // Stable identities — the component memoizes and effects off these.
 const EMPTY_ITEMS = new Map();
 const mockReconcile = vi.fn();
+const mockSelectAll = vi.fn();
+// Seeded per test, so the selection menu's "everything visible is already
+// picked" branch is reachable. Reassigned rather than mutated: the identity
+// still changes only when a test means it to.
+let mockSelectedIds = new Set<number>();
 
 vi.mock("@/hooks/useIssueSelection", () => ({
   useIssueSelection: () => ({
-    selectedIds: new Set<number>(),
+    get selectedIds() {
+      return mockSelectedIds;
+    },
     get isSelectionActive() {
       return mockIsSelectionActive;
     },
     selectedItems: EMPTY_ITEMS,
     toggle: vi.fn(),
     toggleRange: vi.fn(),
-    selectAll: vi.fn(),
+    selectAll: mockSelectAll,
     reconcile: mockReconcile,
     clear: mockSelectionClear,
   }),
@@ -176,11 +186,22 @@ vi.mock("framer-motion", () => {
   };
 });
 
-vi.mock("../components/GitHubDropdownSkeletons", () => ({
-  GitHubResourceRowsSkeleton: () => <div data-testid="skeleton">Loading...</div>,
-  MAX_SKELETON_ITEMS: 6,
-  RESOURCE_ITEM_HEIGHT_PX: 68,
-}));
+vi.mock("../components/GitHubDropdownSkeletons", async () => {
+  const actual = await vi.importActual<typeof import("../components/GitHubDropdownSkeletons")>(
+    "../components/GitHubDropdownSkeletons"
+  );
+  return {
+    ...actual,
+    // Flattened to a marker: these tests are about when the list loads, not
+    // what a row looks like. The real constants stay — a mocked copy of the
+    // row height is one more thing to drift, and this one already had.
+    GitHubResourceRowsSkeleton: ({ type }: { type: "issue" | "pr" }) => (
+      <div data-testid="skeleton" data-type={type}>
+        Loading...
+      </div>
+    ),
+  };
+});
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
@@ -261,11 +282,17 @@ beforeEach(() => {
   mockListPRs.mockReset();
   mockGetIssueByNumber.mockReset();
   mockGetPRByNumber.mockReset();
+  // Reset drops the default, and the hook calls `.filter` straight on the
+  // result — leave every batch lookup resolving to an empty array.
+  mockGetIssuesByNumbers.mockReset().mockResolvedValue([]);
+  mockGetPRsByNumbers.mockReset().mockResolvedValue([]);
   LiveTimeAgoMock.mockClear();
   dispatchMock.mockReset();
   notifyMock.mockReset();
   initializeMock.mockClear();
   mockSelectionClear.mockReset();
+  mockSelectAll.mockReset();
+  mockSelectedIds = new Set<number>();
   mockOpenCreateDialog.mockReset();
   mockOpenCreateDialogForPR.mockReset();
   mockSelectWorktree.mockReset();
@@ -505,6 +532,33 @@ describe("GitHubResourceList SWR behavior", () => {
 
     expect(screen.getByTestId("skeleton")).toBeTruthy();
   });
+
+  it.each(["issue", "pr"] as const)(
+    "tells the skeleton it is loading %s (#12294)",
+    async (type) => {
+      // The rail an issue reserves is not the one a PR reserves, so a skeleton
+      // that is not told the type cannot reserve either of them correctly.
+      // Both types run: hardcoding one at the call site would pass a test that
+      // only ever asked for the other.
+      const fetcher = type === "issue" ? mockListIssues : mockListPRs;
+      let release!: (page: Page<Issue>) => void;
+      fetcher.mockImplementation(
+        () =>
+          new Promise<Page<Issue>>((resolve) => {
+            release = resolve;
+          })
+      );
+
+      render(<GitHubResourceList type={type} projectPath="/test/proj" />);
+
+      await waitFor(() => expect(fetcher).toHaveBeenCalled());
+      expect(screen.getByTestId("skeleton").getAttribute("data-type")).toBe(type);
+
+      // Settle it: a request left pending outlives the test and surfaces as an
+      // unhandled rejection in whichever file happens to run next.
+      await act(async () => release(makeResponse([makeIssue(1)])));
+    }
+  );
 
   it("shows cached data immediately on warm remount (no skeleton)", async () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
@@ -2492,6 +2546,192 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
     });
     expect(screen.queryByText("Showing issue #42")).toBeNull();
   });
+
+  const FALLBACK_COPY = "Showing text matches — separate numbers with commas or spaces";
+
+  it("routes a trailing-comma list to the batch lookup, not full-text search", async () => {
+    mockGetIssuesByNumbers.mockResolvedValue([makeIssue(123), makeIssue(124)]);
+    useGitHubFilterStore.getState().setIssueSearchQuery("123, 124,");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing #123, #124")).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", [123, 124]);
+    expect(mockListIssues).not.toHaveBeenCalled();
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("routes a whitespace-separated list to the batch lookup", async () => {
+    mockGetIssuesByNumbers.mockResolvedValue([makeIssue(12036), makeIssue(12037)]);
+    useGitHubFilterStore.getState().setIssueSearchQuery("12036 12037");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing #12036, #12037")).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", [12036, 12037]);
+    expect(mockListIssues).not.toHaveBeenCalled();
+  });
+
+  it("caps an explicit list at the multi-fetch cap and says so", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP + 1 }, (_, i) => i + 1);
+    mockGetIssuesByNumbers.mockResolvedValue(asked.slice(0, MULTI_FETCH_CAP).map(makeIssue));
+    useGitHubFilterStore.getState().setIssueSearchQuery(asked.join(", "));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(`Showing first ${MULTI_FETCH_CAP} of ${asked.length} numbers (capped)`)
+      ).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith(
+      "/test/proj",
+      asked.slice(0, MULTI_FETCH_CAP)
+    );
+    // The point of the cap is one batch, not a sequential fan-out over the rest.
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a list of exactly the cap uncapped", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP }, (_, i) => i + 1);
+    mockGetIssuesByNumbers.mockResolvedValue(asked.map(makeIssue));
+    useGitHubFilterStore.getState().setIssueSearchQuery(asked.join(", "));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing #1, #2, #3 + 17 more")).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", asked);
+    expect(screen.queryByText(/\(capped\)/)).toBeNull();
+  });
+
+  it("caps the PR variant through its own batch lookup", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP + 5 }, (_, i) => i + 1);
+    mockGetPRsByNumbers.mockResolvedValue(
+      asked.slice(0, MULTI_FETCH_CAP).map((n) => ({
+        ...makeIssue(n),
+        isDraft: false,
+        ciStatus: "SUCCESS" as const,
+      }))
+    );
+    useGitHubFilterStore.getState().setPrSearchQuery(asked.join(" "));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(`Showing first ${MULTI_FETCH_CAP} of ${asked.length} numbers (capped)`)
+      ).toBeTruthy();
+    });
+    expect(mockGetPRsByNumbers).toHaveBeenCalledWith("/test/proj", asked.slice(0, MULTI_FETCH_CAP));
+    expect(mockGetPRsByNumbers).toHaveBeenCalledTimes(1);
+    expect(mockListPRs).not.toHaveBeenCalled();
+  });
+
+  it("says the results are text matches when a number list fails to parse", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(500)]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ search: "123,,124" }));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(FALLBACK_COPY)).toBeTruthy();
+    });
+    // The chip has to sit over the text-search rows it describes, not over a
+    // skeleton.
+    expect(screen.getByTestId("item-500")).toBeTruthy();
+    expect(mockGetIssuesByNumbers).not.toHaveBeenCalled();
+  });
+
+  it("holds the text-match chip back until the search settles", async () => {
+    mockListIssues.mockImplementation(() => new Promise(() => {}));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("skeleton")).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("yields the chip slot to an error rather than claiming text matches", async () => {
+    mockListIssues.mockRejectedValue(new Error("Couldn't reach GitHub."));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't reach GitHub/)).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("drops a stale exact-number miss when the query falls back to text search", async () => {
+    mockGetIssueByNumber.mockResolvedValue(null);
+    // Empty on purpose: a returned row would hide the empty state whether or
+    // not the stale miss was cleared, which is exactly how this test can pass
+    // without testing anything.
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("#999");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No issue #999 in this view/)).toBeTruthy();
+    });
+
+    // Falling through to text search must not leave the miss behind, or the
+    // empty state goes on naming #999 over rows that have nothing to do with it.
+    act(() => {
+      useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+    });
+
+    // The empty state must stop naming #999 and start naming the query that
+    // actually ran.
+    await waitFor(() => {
+      expect(screen.getByText('No matches for "123,,124"')).toBeTruthy();
+    });
+    expect(screen.queryByText(/No issue #999 in this view/)).toBeNull();
+  });
+
+  it("yields the chip slot to a rate-limit pause", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    setRateLimit(true, "primary", Date.now() + 60_000);
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/paused/i)).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("stays quiet for an ordinary text search that contains numbers", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(500)]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("fix 123 crash");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledWith(
+        expect.objectContaining({ search: "fix 123 crash" })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Issue #500")).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
 });
 
 describe("GitHubResourceList spinner gate (#6867)", () => {
@@ -3125,5 +3365,361 @@ describe("GitHubResourceList — the keyboard cursor across a refresh", () => {
     view.rerender(<GitHubResourceList type="issue" projectPath="/other/proj" />);
 
     await waitFor(() => expect(activeDescendant()).toBeNull());
+  });
+});
+
+describe("GitHubResourceList bulk selection menu (#12124)", () => {
+  const assigned = (issue: Issue): Issue => ({
+    ...issue,
+    assignees: [{ login: "octocat", avatarUrl: "", rawData: null }],
+  });
+  const closed = (issue: Issue): Issue => ({ ...issue, state: "closed", rawState: "CLOSED" });
+
+  /** The always-present header trigger, by its accessible name. */
+  const trigger = (kind: "issues" | "pull requests" = "issues") =>
+    screen.findByRole("button", { name: `Select ${kind}` });
+
+  const openMenu = async (kind: "issues" | "pull requests" = "issues") => {
+    const button = await trigger(kind);
+    // The trigger is inert until there is something to select, so a click
+    // fired mid-load would silently do nothing.
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    act(() => {
+      button.click();
+    });
+    await screen.findByRole("dialog", { name: "Selection actions" });
+    return button;
+  };
+
+  it("selects every visible result with no row ticked first", async () => {
+    // The reported workflow: a comma-separated number query, then one press.
+    // Ticking a row to reveal the helper is exactly what must not be needed.
+    useGitHubFilterStore.getState().setIssueSearchQuery("#1, #2, #3");
+    mockGetIssuesByNumbers.mockResolvedValue([makeIssue(1), makeIssue(2), makeIssue(3)]);
+    mockIsSelectionActive = false;
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await screen.findByTestId("item-3");
+
+    await openMenu();
+    const selectAll = await screen.findByRole("button", { name: "Select all (3)" });
+    act(() => {
+      selectAll.click();
+    });
+
+    expect(mockSelectAll).toHaveBeenCalledTimes(1);
+    expect((mockSelectAll.mock.calls[0]![0] as Issue[]).map((i) => i.number)).toEqual([1, 2, 3]);
+  });
+
+  it("keeps the trigger in the header's fixed icon row, selection live or not", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    // Same parent as Refresh and Sort — that row is the one whose height does
+    // not move, which is the whole point of putting the control there.
+    const sharesTheIconRow = async () => {
+      const row = (await trigger()).parentElement;
+      expect(row?.contains(screen.getByRole("button", { name: /refresh issues/i }))).toBe(true);
+      expect(row?.contains(screen.getByRole("button", { name: /^sort/i }))).toBe(true);
+    };
+
+    const view = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await screen.findByTestId("item-1");
+    await sharesTheIconRow();
+    view.unmount();
+
+    mockIsSelectionActive = true;
+    mockSelectedIds = new Set([1]);
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await screen.findByTestId("item-1");
+    await sharesTheIconRow();
+  });
+
+  it("never puts the helpers in a header row of their own", async () => {
+    // The old row was a whole extra band in a vertically stacked header, so it
+    // could only ever be gated — on selection mode (unreachable) or on the
+    // query (which grew the header on the first keystroke). Inside the menu it
+    // is neither, and it must not be on the page until the menu is opened.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+    mockIsSelectionActive = true;
+    mockSelectedIds = new Set([1]);
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await screen.findByTestId("item-1");
+
+    // The header is the search/icon row plus the state tabs, and stays that
+    // way with a live selection. Nothing about the helpers is on the page
+    // until the menu is opened.
+    const header = (await trigger()).closest(".space-y-2");
+    expect(header?.children).toHaveLength(2);
+    expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+  });
+
+  it("offers unassigned again, and skips the assigned rows", async () => {
+    mockListIssues.mockResolvedValue(
+      makeResponse([makeIssue(1), assigned(makeIssue(2)), makeIssue(3)])
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const unassigned = await screen.findByRole("button", { name: "Select unassigned (2)" });
+    act(() => {
+      unassigned.click();
+    });
+
+    expect((mockSelectAll.mock.calls[0]![0] as Issue[]).map((i) => i.number)).toEqual([1, 3]);
+  });
+
+  it("does not narrow unassigned to open items the way the worktree preset does", async () => {
+    // Assignment and worktree readiness measure different things. A closed
+    // issue with nobody on it is still unassigned; the worktree preset drops it
+    // because the bulk planner would skip it anyway.
+    useGitHubFilterStore.getState().setIssueFilter("all");
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), closed(makeIssue(2))]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    expect(screen.getByRole("button", { name: "Select unassigned (2)" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Select without worktrees (1)" })).toBeTruthy();
+  });
+
+  it("excludes rows that already have a worktree", async () => {
+    worktreeMap.set("wt-2", { id: "wt-2", issueNumber: 2 });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), makeIssue(2)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const withoutWorktree = await screen.findByRole("button", {
+      name: "Select without worktrees (1)",
+    });
+    act(() => {
+      withoutWorktree.click();
+    });
+
+    expect((mockSelectAll.mock.calls[0]![0] as Issue[]).map((i) => i.number)).toEqual([1]);
+  });
+
+  it("omits unassigned for pull requests, which carry no assignment model", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([makeIssue(5)]));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await openMenu("pull requests");
+    expect(screen.getByRole("button", { name: "Select all (1)" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /select unassigned/i })).toBeNull();
+  });
+
+  it("keeps an empty preset listed but disabled rather than dropping it", async () => {
+    // A menu whose entries come and go between openings has to be re-read every
+    // time, and an empty preset would replace the selection with nothing.
+    worktreeMap.set("wt-1", { id: "wt-1", issueNumber: 1 });
+    mockListIssues.mockResolvedValue(makeResponse([assigned(makeIssue(1))]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const unassigned = screen.getByRole("button", { name: "Select unassigned (0)" });
+    const withoutWorktree = screen.getByRole("button", { name: "Select without worktrees (0)" });
+    expect((unassigned as HTMLButtonElement).disabled).toBe(true);
+    expect((withoutWorktree as HTMLButtonElement).disabled).toBe(true);
+
+    act(() => {
+      unassigned.click();
+    });
+    expect(mockSelectAll).not.toHaveBeenCalled();
+  });
+
+  it("turns the first entry into deselect all once everything visible is picked", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), makeIssue(2)]));
+    mockSelectedIds = new Set([1, 2]);
+    mockIsSelectionActive = true;
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    expect(screen.queryByRole("button", { name: /^select all/i })).toBeNull();
+    act(() => {
+      screen.getByRole("button", { name: "Deselect all" }).click();
+    });
+
+    expect(mockSelectionClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays present but disabled once the list has settled on nothing", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    // Wait for the settled empty list, or this passes on the first frame —
+    // `data` starts empty whatever the response turns out to be.
+    await screen.findByText("No open issues");
+    expect((await trigger()).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("still offers select all when only some rows are ticked", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), makeIssue(2)]));
+    mockSelectedIds = new Set([1]);
+    mockIsSelectionActive = true;
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    expect(screen.getByRole("button", { name: "Select all (2)" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deselect all" })).toBeNull();
+  });
+
+  it("matches pull requests on prNumber, not on a same-numbered issue worktree", async () => {
+    // The worktree index is built per resource type. An issue worktree that
+    // happens to carry the same number must not make PR #5 look covered.
+    worktreeMap.set("wt-issue-5", { id: "wt-issue-5", issueNumber: 5 });
+    worktreeMap.set("wt-pr-6", { id: "wt-pr-6", prNumber: 6 });
+    mockListPRs.mockResolvedValue(makeResponse([makeIssue(5), makeIssue(6)]));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await openMenu("pull requests");
+    const withoutWorktree = screen.getByRole("button", { name: "Select without worktrees (1)" });
+    act(() => {
+      withoutWorktree.click();
+    });
+
+    expect((mockSelectAll.mock.calls[0]![0] as Issue[]).map((i) => i.number)).toEqual([5]);
+  });
+
+  it("closes itself once a preset has been applied", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    const button = await openMenu();
+    act(() => {
+      screen.getByRole("button", { name: "Select all (1)" }).click();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("closes on Escape without disturbing the selection", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    const button = await openMenu();
+    const dialog = screen.getByRole("dialog", { name: "Selection actions" });
+    act(() => {
+      fireEvent.keyDown(dialog, { key: "Escape" });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(mockSelectAll).not.toHaveBeenCalled();
+    expect(mockSelectionClear).not.toHaveBeenCalled();
+  });
+
+  it("does not stand over a list that emptied out from under it", async () => {
+    // A background revalidation keeps the cached rows and the trigger live, so
+    // the menu can be open when the fresh page comes back with nothing. Left
+    // open, its select-all would replace a live selection with an empty one.
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(1)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+    });
+    let resolveRevalidate: ((page: Page<Issue>) => void) | undefined;
+    mockListIssues.mockImplementation(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          resolveRevalidate = resolve;
+        })
+    );
+    mockIsSelectionActive = true;
+    mockSelectedIds = new Set([1]);
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await openMenu();
+
+    await act(async () => {
+      resolveRevalidate?.(makeResponse([]));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
+    expect(mockSelectAll).not.toHaveBeenCalled();
+    // The trigger went `disabled` in the same commit that closed the menu, so
+    // Radix's restoring `.focus()` on it is a no-op and focus would land on
+    // `document.body` — every grid key dead until the user clicks back in.
+    expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
+  });
+
+  it("hands focus back to the search input when the menu closes", async () => {
+    // The grid keeps DOM focus in the search input so `aria-activedescendant`
+    // is legal; left on the trigger, the arrow keys, Shift+Space and Enter are
+    // all inert until the user tabs back.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const dialog = screen.getByRole("dialog", { name: "Selection actions" });
+    act(() => {
+      fireEvent.keyDown(dialog, { key: "Escape" });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
+    expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
+  });
+
+  it("does not carry an open menu across a project switch", async () => {
+    // The panel survives a project change without remounting, so the presets
+    // would rebind to the new project while still listing the old one's rows.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    const view = render(<GitHubResourceList type="issue" projectPath="/test/proj-a" />);
+    await openMenu();
+
+    await act(async () => {
+      view.rerender(<GitHubResourceList type="issue" projectPath="/test/proj-b" />);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
+    expect(mockSelectAll).not.toHaveBeenCalled();
+  });
+
+  it("closes the menu when the parent dropdown goes away", async () => {
+    // Nothing of this panel's may stay portaled on document.body after the
+    // toolbar dropdown closes.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    const view = render(
+      <FixedDropdownVisibleContext.Provider value={true}>
+        <GitHubResourceList type="issue" projectPath="/test/proj" />
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    await openMenu();
+
+    view.rerender(
+      <FixedDropdownVisibleContext.Provider value={false}>
+        <GitHubResourceList type="issue" projectPath="/test/proj" />
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
   });
 });

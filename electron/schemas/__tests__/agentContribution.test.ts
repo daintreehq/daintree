@@ -187,7 +187,7 @@ describe("AgentContributionSchema (issue #9560)", () => {
 });
 
 describe("manifest-level agent contribution gates (issue #9560)", () => {
-  const schema = getPluginManifestSchema(false);
+  const schema = getPluginManifestSchema("user");
 
   it("rejects contributes.agents without the agent:register capability", () => {
     const result = schema.safeParse(manifestWith({ contributes: { agents: [VALID_AGENT] } }));

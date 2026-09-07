@@ -57,6 +57,7 @@ const optimisticPanelCloseMock = vi.hoisted(() => ({
 vi.mock("@/services/terminal/optimisticPanelClose", () => optimisticPanelCloseMock);
 
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
+import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 
 type MockPanel = {
   id: string;
@@ -389,7 +390,7 @@ describe("terminal.kill confirm gate", () => {
     expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
   });
 
-  it("does not kill when an agent is mid-work without confirmed:true — requests confirmation instead", async () => {
+  it("does not kill when an agent is mid-work without confirmed:true — requests confirmation and fails", async () => {
     const { removePanel } = setRichPanelState({
       focusedId: "p1",
       panels: [
@@ -403,7 +404,7 @@ describe("terminal.kill confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.kill", { terminalId: "p1" });
+    await expect(run("terminal.kill", { terminalId: "p1" })).rejects.toThrow(/needs confirmation/);
 
     expect(removePanel).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -435,6 +436,338 @@ describe("terminal.kill confirm gate", () => {
   });
 });
 
+describe("terminal.killBatch", () => {
+  function killBatchArgsSchema() {
+    const actions: ActionRegistry = new Map();
+    registerTerminalLifecycleActions(actions, {} as ActionCallbacks);
+    const def = actions.get("terminal.killBatch")?.() as AnyActionDefinition;
+    return def.argsSchema;
+  }
+
+  // The action and the MCP bridge share one schema (shared/types/terminalKillBatch),
+  // so the bridge never renders a checklist the dispatch would then refuse. These
+  // assert the action's own end of that contract still carries every constraint —
+  // `.describe()` returning a schema that had dropped the refinements would let
+  // duplicate ids through, and duplicates are two rows with one checkbox identity.
+  it("rejects a repeated id", () => {
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: ["p1", "p1"] }).success).toBe(false);
+  });
+
+  it("rejects more ids than a human can be asked to read", () => {
+    const overCap = Array.from({ length: MAX_KILL_BATCH_TERMINALS + 1 }, (_, i) => `t${i}`);
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: overCap }).success).toBe(false);
+    const atCap = overCap.slice(0, MAX_KILL_BATCH_TERMINALS);
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: atCap }).success).toBe(true);
+  });
+
+  it("rejects an empty list rather than treating it as a no-op batch", () => {
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: [] }).success).toBe(false);
+  });
+
+  function approve(ids: string[], observed: Record<string, boolean> = {}) {
+    return {
+      hostConfirmed: true,
+      hostApprovedTargets: ids.map((id) => ({
+        id,
+        observedAgentRunning: observed[id] ?? false,
+      })),
+    };
+  }
+
+  it("refuses without a per-target attestation, even when the host confirmed", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [{ id: "p1", location: "grid" }],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.killBatch", { terminalIds: ["p1"] }, { hostConfirmed: true })
+    ).rejects.toThrow(/per-target approval/);
+
+    expect(removePanel).not.toHaveBeenCalled();
+  });
+
+  it("kills every approved target and reports them in request order", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid" },
+      ],
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p2", "p1"] },
+      approve(["p1", "p2"])
+    );
+
+    expect(result).toEqual({
+      killedIds: ["p2", "p1"],
+      excludedIds: [],
+      notFoundIds: [],
+      skippedIds: [],
+      failedIds: [],
+    });
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(removePanel).toHaveBeenCalledWith("p2");
+  });
+
+  it("reports a deselected id as excluded and never touches it", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid" },
+      ],
+    });
+    const run = setupActions();
+
+    const result = await run("terminal.killBatch", { terminalIds: ["p1", "p2"] }, approve(["p1"]));
+
+    expect(result).toEqual({
+      killedIds: ["p1"],
+      excludedIds: ["p2"],
+      notFoundIds: [],
+      skippedIds: [],
+      failedIds: [],
+    });
+    expect(removePanel).not.toHaveBeenCalledWith("p2");
+  });
+
+  it("reports an id with no live panel as notFound rather than killed", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [{ id: "p1", location: "grid" }],
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p1", "gone"] },
+      approve(["p1", "gone"])
+    );
+
+    expect(result).toEqual({
+      killedIds: ["p1"],
+      excludedIds: [],
+      notFoundIds: ["gone"],
+      skippedIds: [],
+      failedIds: [],
+    });
+    expect(removePanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resolve an id off Object.prototype", async () => {
+    const { removePanel } = setRichPanelState({ panels: [] });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["constructor"] },
+      approve(["constructor"])
+    );
+
+    expect(result).toEqual({
+      killedIds: [],
+      excludedIds: [],
+      notFoundIds: ["constructor"],
+      skippedIds: [],
+      failedIds: [],
+    });
+    expect(removePanel).not.toHaveBeenCalled();
+  });
+
+  it("skips a target that started running an agent after the list froze", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid", detectedAgentId: "claude", agentState: "working" },
+      ],
+    });
+    const run = setupActions();
+
+    // The dialog showed both as idle; p2 is mid-work by the time this runs.
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p1", "p2"] },
+      approve(["p1", "p2"])
+    );
+
+    expect(result).toEqual({
+      killedIds: ["p1"],
+      excludedIds: [],
+      notFoundIds: [],
+      skippedIds: ["p2"],
+      failedIds: [],
+    });
+    expect(removePanel).not.toHaveBeenCalledWith("p2");
+  });
+
+  it("still kills a target the approver saw running an agent", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "claude", agentState: "working" }],
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p1"] },
+      approve(["p1"], { p1: true })
+    );
+
+    expect(result).toEqual({
+      killedIds: ["p1"],
+      excludedIds: [],
+      notFoundIds: [],
+      skippedIds: [],
+      failedIds: [],
+    });
+    expect(removePanel).toHaveBeenCalledWith("p1");
+  });
+
+  it("re-reads agent state per target rather than snapshotting once", async () => {
+    const first: AgentPanel = { id: "p1", location: "grid" };
+    const second: AgentPanel = { id: "p2", location: "grid" };
+    const panels = [first, second];
+    const panelsById: Record<string, AgentPanel> = { p1: first, p2: second };
+    const removePanel = vi.fn((id: string) => {
+      // Killing p1 is what sets p2 working — a snapshot taken before the loop
+      // would never see it and would destroy p2 mid-work.
+      if (id === "p1") {
+        second.detectedAgentId = "claude";
+        second.agentState = "working";
+      }
+    });
+    panelStoreMock.getState.mockImplementation(() => ({
+      focusedId: null,
+      panelIds: panels.map((panel) => panel.id),
+      panelsById,
+      removePanel,
+    }));
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p1", "p2"] },
+      approve(["p1", "p2"])
+    );
+
+    expect(result).toEqual({
+      killedIds: ["p1"],
+      excludedIds: [],
+      notFoundIds: [],
+      skippedIds: ["p2"],
+      failedIds: [],
+    });
+  });
+
+  it("ignores an attested id the call never requested", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "other", location: "grid" },
+      ],
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p1"] },
+      approve(["p1", "other"])
+    );
+
+    expect(result).toEqual({
+      killedIds: ["p1"],
+      excludedIds: [],
+      notFoundIds: [],
+      skippedIds: [],
+      failedIds: [],
+    });
+    expect(removePanel).not.toHaveBeenCalledWith("other");
+  });
+
+  it("puts every requested id in exactly one bucket, in request order", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "keep", location: "grid" },
+        { id: "refused", location: "grid" },
+        { id: "busy", location: "grid", detectedAgentId: "claude", agentState: "working" },
+      ],
+    });
+    const run = setupActions();
+
+    const requested = ["keep", "refused", "vanished", "busy"];
+    const result = (await run(
+      "terminal.killBatch",
+      { terminalIds: requested },
+      approve(["keep", "vanished", "busy"])
+    )) as Record<string, string[]>;
+
+    expect(result).toEqual({
+      killedIds: ["keep"],
+      excludedIds: ["refused"],
+      notFoundIds: ["vanished"],
+      skippedIds: ["busy"],
+      failedIds: [],
+    });
+    // Total and disjoint: the caller can account for every id it sent exactly
+    // once, which is what makes the four outcomes actionable rather than a hint.
+    const all = Object.values(result).flat();
+    expect([...all].sort()).toEqual([...requested].sort());
+    expect(new Set(all).size).toBe(requested.length);
+    expect(removePanel).toHaveBeenCalledTimes(1);
+    expect(removePanel).toHaveBeenCalledWith("keep");
+  });
+
+  it("keeps the rest of the batch and the record when one teardown throws", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid" },
+        { id: "p3", location: "grid" },
+      ],
+    });
+    removePanel.mockImplementation((id: string) => {
+      if (id === "p2") throw new Error("teardown exploded");
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p1", "p2", "p3"] },
+      approve(["p1", "p2", "p3"])
+    );
+
+    // p1's kill already happened and is irreversible — a thrown batch would
+    // have reported only an execution error and invited a retry.
+    expect(result).toEqual({
+      killedIds: ["p1", "p3"],
+      excludedIds: [],
+      notFoundIds: [],
+      skippedIds: [],
+      failedIds: ["p2"],
+    });
+    expect(removePanel).toHaveBeenCalledWith("p3");
+  });
+
+  it("destroys nothing when the approver unchecked every row", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [{ id: "p1", location: "grid" }],
+    });
+    const run = setupActions();
+
+    const result = await run("terminal.killBatch", { terminalIds: ["p1"] }, approve([]));
+
+    expect(result).toEqual({
+      killedIds: [],
+      excludedIds: ["p1"],
+      notFoundIds: [],
+      skippedIds: [],
+      failedIds: [],
+    });
+    expect(removePanel).not.toHaveBeenCalled();
+  });
+});
+
 describe("terminal.restart confirm gate", () => {
   it("restarts immediately when the terminal is a bare PTY", async () => {
     const { restartTerminal } = setRichPanelState({
@@ -463,7 +796,9 @@ describe("terminal.restart confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.restart", { terminalId: "p1" });
+    await expect(run("terminal.restart", { terminalId: "p1" })).rejects.toThrow(
+      /needs confirmation/
+    );
 
     expect(restartTerminal).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -544,7 +879,7 @@ describe("terminal.killAll confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.killAll");
+    await expect(run("terminal.killAll")).rejects.toThrow(/needs confirmation/);
 
     expect(removePanel).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -603,7 +938,7 @@ describe("terminal.restartAll confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.restartAll");
+    await expect(run("terminal.restartAll")).rejects.toThrow(/needs confirmation/);
 
     expect(bulkRestartAll).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -994,7 +1329,12 @@ describe("agent dispatch target binding (#11532)", () => {
     }));
     const run = setupActions();
 
-    await run("terminal.kill", { terminalId: "explicit-panel" }, { dispatchSource: "agent" });
+    // Agent source alone is NOT approval — only a host-attested `hostConfirmed`
+    // is (#12120). An agent that reached run() without one still stages, and now
+    // fails rather than reporting a kill it did not perform.
+    await expect(
+      run("terminal.kill", { terminalId: "explicit-panel" }, { dispatchSource: "agent" })
+    ).rejects.toThrow(/needs confirmation/);
 
     expect(spies.requestConfirm).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "kill", terminalId: "explicit-panel" })
@@ -1085,5 +1425,116 @@ describe("agent dispatch target binding (#11532)", () => {
         "No terminal selected"
       );
     });
+  });
+});
+
+// #12120: the MCP bridge sets the approval in the dispatch OPTIONS and leaves
+// the model's args alone, so `run()` could only see the client-settable
+// `args.confirmed` — it re-asked after the host modal was already approved,
+// staged a second dialog, and returned `ok` on a terminal that was still alive.
+// `ctx.hostConfirmed` is the attestation ActionService stamps from those options.
+describe("host-attested confirmation (#12120)", () => {
+  const WORKING_AGENT = {
+    location: "grid" as const,
+    detectedAgentId: "claude",
+    agentState: "working",
+  };
+
+  it("kills a running-agent terminal without staging a second confirmation", async () => {
+    const { removePanel } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", ...WORKING_AGENT }],
+    });
+    const run = setupActions();
+
+    await run("terminal.kill", { terminalId: "p1" }, { hostConfirmed: true });
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("restarts a running-agent terminal without staging a second confirmation", async () => {
+    const { restartTerminal } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", ...WORKING_AGENT }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restart", { terminalId: "p1" }, { hostConfirmed: true });
+
+    expect(restartTerminal).toHaveBeenCalledWith("p1");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  // killAll/restartAll took no `ctx` at all before this fix, so they could not
+  // have read the attestation even if it existed.
+  it("kills all without staging a second confirmation", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", ...WORKING_AGENT },
+      ],
+    });
+    const run = setupActions();
+
+    await run("terminal.killAll", undefined, { hostConfirmed: true });
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(removePanel).toHaveBeenCalledWith("p2");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("restarts all without staging a second confirmation", async () => {
+    const { bulkRestartAll } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", ...WORKING_AGENT },
+      ],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartAll", undefined, { hostConfirmed: true });
+
+    expect(bulkRestartAll).toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  // Only `true` attests. A stray falsy/garbage value must fall through to the
+  // confirmation rather than be read as approval.
+  it.each([[false], [undefined], ["true"]])(
+    "does not treat hostConfirmed=%p as approval",
+    async (hostConfirmed) => {
+      const { removePanel } = setRichPanelState({
+        focusedId: "p1",
+        panels: [{ id: "p1", ...WORKING_AGENT }],
+      });
+      const run = setupActions();
+
+      await expect(run("terminal.kill", { terminalId: "p1" }, { hostConfirmed })).rejects.toThrow(
+        /needs confirmation/
+      );
+
+      expect(removePanel).not.toHaveBeenCalled();
+      expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalled();
+    }
+  );
+
+  // The user-facing dialog re-dispatches with args.confirmed; a host-attested
+  // dispatch arrives with neither that nor any pending entry of its own. Both
+  // paths must clear a parked confirmation so it can't outlive the kill.
+  it("clears a parked confirmation when the host attested instead", async () => {
+    const { removePanel } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", ...WORKING_AGENT }],
+    });
+    const run = setupActions();
+
+    await expect(run("terminal.kill", { terminalId: "p1" })).rejects.toThrow();
+    expect(pendingDestructiveStoreMock.state.pending).toMatchObject({ kind: "kill" });
+
+    await run("terminal.kill", { terminalId: "p1" }, { hostConfirmed: true });
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(pendingDestructiveStoreMock.state.clear).toHaveBeenCalled();
   });
 });

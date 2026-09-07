@@ -23,13 +23,12 @@ It is the orchestration layer where you direct agent work, monitor agent fleets,
 5. **Review & Intervention** — Review agent output, stage changes, diff across worktrees, and push — without leaving Daintree
 6. **Dev Server Management** — Auto-detect and manage dev servers per worktree with embedded preview
 7. **Visual Identity & Comfort** — A rich theme system that makes Daintree feel like a native app, reduces eye strain during long sessions, and supports accessibility needs
-8. **Automation & Recipes** — Terminal recipes for repeatable multi-agent setups, and workflow engine for reactive automation
+8. **Automation & Recipes** — Terminal recipes for repeatable multi-agent setups, and actions that automate worktree creation, agent launch, and context injection
 
 **Strategic Features** (not pillars, but significant capabilities):
 
 - **Daintree Assistant** — Built-in AI assistant with orchestration-layer context (sees all panels, worktrees, actions)
 - **Voice Input** — Hands-free delegation while monitoring other agents
-- **Notes** — Annotation and note-taking alongside agent work
 - **Portal** — Tabbed dock for web-based AI agent UIs alongside terminal agents
 
 **Brand Voice:** "Calm partner" — helpful, not flashy. Reduces cognitive load. Opinionated defaults.
@@ -117,7 +116,7 @@ Ask yourself:
 
 If the answer is **Workshop**, we don't build the feature. At most, we build a **button that opens the Workshop** to the right place (like the existing "Open in Editor" integration).
 
-**The grey area:** Read-only viewing, annotation, and lightweight interaction (staging files, reviewing diffs, writing notes) belong in the Orchestration Layer. Editing code, running linters, resolving merge conflicts belong in the Workshop.
+**The grey area:** Read-only viewing, annotation, and lightweight interaction (staging files, reviewing diffs) belong in the Orchestration Layer. Editing code, running linters, resolving merge conflicts belong in the Workshop.
 
 ## Decision Examples
 
@@ -134,10 +133,10 @@ If the answer is **Workshop**, we don't build the feature. At most, we build a *
 | Voice Input | **APPROVE** | Bridges gap. Hands-free delegation while monitoring other agents. Accessibility value. |
 | Integrated Browser | **APPROVE** | Localhost preview, console capture, and agent-app debugging. Bridges gap. Not a general-purpose browser. |
 | Daintree Assistant | **APPROVE** | Wraps AI with orchestration context (panels, worktrees, actions). Not a generic chat — it's orchestration-aware. |
-| Notes Panel | **APPROVE** | Annotation alongside agent work. Markdown editing for note-taking, not code editing. Bridges gap. |
+| Notes Panel | **REJECT** | Daintree is a terminal manager, not a document store. Removed in #5616: the save bug was architectural, not a tractable defect, and the agent-facing copy link never resolved. Markdown files in the worktree cover this. |
 | Terminal Recipes | **APPROVE** | Enables automation. Repeatable multi-agent setups reduce manual panel configuration. |
 | Portal (Web Agent Dock) | **APPROVE** | Bridges gap between CLI agents and web agent UIs. Manages multiplicity across agent interfaces. |
-| Workflow Engine | **APPROVE** | Enables automation. DAG-based reactive workflows with approval gates. Core orchestration. |
+| Reintroducing the DAG Workflow Engine | **REJECT** | Removed in #4118: zero usage, ~8,000 lines of maintenance, and it bypassed the action system entirely. Scoped to the old DAG engine only — terminal recipes and worktree actions like `workflow.startWorkOnIssue` stay core. |
 | Chat History Search | **APPROVE** | Manages multiplicity. Essential for auditing agent work across sessions. |
 | npm Script Runner | **APPROVE (Simplified)** | Only start/stop via Dev Preview. Not editing package.json. |
 | Random Theme Cycler | **APPROVE** | Habitat principle: helps users discover the theme that feels right. Reinforces identity through exploration. |

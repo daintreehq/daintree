@@ -113,6 +113,9 @@ const TERMINALS = new Map<string, Record<string, unknown>>([
     "t-worktreed",
     { ...makeTerminal("t-worktreed", "project-a"), worktreeId: "/repo/.worktrees/backend" },
   ],
+  // The assistant's overlay PTY, recognised from its spawn-time record stamp
+  // rather than the renderer's mark (#12183).
+  ["t-assistant", { ...makeTerminal("t-assistant", "project-a"), isAssistantTerminal: true }],
 ]);
 
 /** An invoke event whose URL can be mutated mid-flight, to prove identity is snapshotted. */
@@ -172,6 +175,20 @@ beforeEach(() => {
   mockIsHelpTerminal.mockReturnValue(false);
   getProjectForWebContentsMock.mockImplementation((id) => VIEW_TO_PROJECT.get(id) ?? null);
   getWindowForWebContentsMock.mockReturnValue(null);
+});
+
+describe("terminal:reconnect — assistant overlay", () => {
+  it("refuses a stamped assistant terminal the renderer has not marked", async () => {
+    // Reconnect is hydration's fallback for panes `getForProject` missed, so
+    // reading only the renderer's mark let a cold-boot bulk restore adopt the
+    // assistant as a grid pane before that mark landed.
+    mockIsHelpTerminal.mockReturnValue(false);
+    register();
+
+    await expect(reconnect(senderEvent(SENDER_A), "t-assistant")).resolves.toMatchObject({
+      exists: false,
+    });
+  });
 });
 
 describe("terminal:reconnect — workspace ownership", () => {

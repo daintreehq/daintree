@@ -196,7 +196,7 @@ describe("serializePtyPanel — detectedAgentId is never persisted", () => {
 // restart, so the serializer must never write it into project JSON.
 describe("serializePtyPanel — sessionLostOnRestore is never persisted", () => {
   it("omits sessionLostOnRestore even when the panel currently carries it", () => {
-    const panel = makePanel({ sessionLostOnRestore: true });
+    const panel = makePanel({ sessionLostOnRestore: "no-resume-command" });
     const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
     expect("sessionLostOnRestore" in snapshot).toBe(false);
   });

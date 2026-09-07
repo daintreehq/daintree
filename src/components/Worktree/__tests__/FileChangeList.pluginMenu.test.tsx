@@ -27,7 +27,11 @@ vi.mock("@/hooks/usePluginContextMenuItems", () => ({
 // stand up; the menu item's enabled/disabled branch is covered in the hook's
 // own suite.
 vi.mock("@/hooks/useInsertFileReference", () => ({
-  useInsertFileReference: () => ({ canInsert: false, insert: () => false }),
+  useInsertFileReference: () => ({
+    canInsert: false,
+    refusalReason: "no-eligible-agent",
+    insert: () => false,
+  }),
 }));
 
 import {
@@ -76,6 +80,16 @@ function renderInWorktreeCard(props: Partial<React.ComponentProps<typeof FileCha
   );
 }
 
+/**
+ * Opens a nested submenu and hands back its content. `SubContent` is
+ * Presence-gated, so its items are not in the DOM until the trigger fires;
+ * clicked rather than hovered because Radix opens synchronously on click.
+ */
+async function openSubmenu(menu: HTMLElement, name: string): Promise<HTMLElement> {
+  fireEvent.click(within(menu).getByRole("menuitem", { name }));
+  return screen.findByRole("menu", { name });
+}
+
 // Radix is behind a dynamic import; priming it once up front means the very
 // first right-click in each test has real primitives to open.
 beforeAll(async () => {
@@ -100,7 +114,8 @@ describe("FileChangeList — the file row owns its menu", () => {
 
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: /Open file/ })).toBeTruthy();
-    expect(within(menu).getByRole("menuitem", { name: /Copy path/ })).toBeTruthy();
+    const copy = await openSubmenu(menu, "Copy");
+    expect(within(copy).getByRole("menuitem", { name: "Copy path" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: WORKTREE_SENTINEL })).toBeNull();
   });
 
@@ -118,13 +133,15 @@ describe("FileChangeList — the file row owns its menu", () => {
     expect(row.getAttribute("data-state")).toBe("open");
   });
 
-  it("opens the file menu on a grouped row too", async () => {
+  it("opens the file menu on a row in the last folder group", async () => {
+    // `zzz` sorts after `src`, so this row is genuinely the second group's —
+    // with `bin` it was the FIRST one rendered and the test proved nothing
+    // about rows reached after a group reorder.
     renderInWorktreeCard({
-      changes: [file("src/a.ts"), file("bin/b.ts")],
-      groupByFolder: true,
+      changes: [file("src/a.ts"), file("zzz/b.ts")],
     });
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Open bin/b.ts" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Open zzz/b.ts" }));
 
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: /Open file/ })).toBeTruthy();
@@ -136,7 +153,6 @@ describe("FileChangeList — the file row owns its menu", () => {
     // filesystem object — it must keep falling through to the card.
     const { container } = renderInWorktreeCard({
       changes: [file("bin/b.ts")],
-      groupByFolder: true,
     });
 
     const header = container.querySelector("[data-testid='card'] .font-mono");
@@ -171,21 +187,24 @@ describe("FileChangeList — the file row owns its menu", () => {
 });
 
 describe("FileChangeList — plugin items", () => {
-  it("appends plugin items after the built-in core rather than replacing it", async () => {
+  it("nests plugin items under Extensions rather than replacing the core", async () => {
     itemsRef.current = [fileItem("acme.open")];
     renderInWorktreeCard();
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Open src/index.ts" }));
     const menu = await screen.findByRole("menu");
 
-    const items = within(menu).getAllByRole("menuitem");
-    const revealIndex = items.findIndex((item) => /Reveal|Show in/.test(item.textContent ?? ""));
-    const pluginIndex = items.findIndex((item) => item.textContent === "Open with Acme");
+    const rootLabels = within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent ?? "");
+    expect(rootLabels.some((label) => /Reveal|Show in/.test(label))).toBe(true);
+    // Document order, not a count: the trigger trails the core wherever the
+    // core's own length lands, and the plugin's own row never reaches the root.
+    expect(rootLabels).not.toContain("Open with Acme");
+    expect(rootLabels.at(-1)).toBe("Extensions");
 
-    expect(revealIndex).toBeGreaterThanOrEqual(0);
-    // Document order, not a count: the section trails the core wherever the
-    // core's own length lands.
-    expect(pluginIndex).toBeGreaterThan(revealIndex);
+    const extensions = await openSubmenu(menu, "Extensions");
+    expect(within(extensions).getByRole("menuitem", { name: "Open with Acme" })).toBeTruthy();
   });
 
   it("dispatches the clicked file's real absolute path, not undefined", async () => {
@@ -194,7 +213,8 @@ describe("FileChangeList — plugin items", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Open src/index.ts" }));
     const menu = await screen.findByRole("menu");
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open with Acme" }));
+    const extensions = await openSubmenu(menu, "Extensions");
+    fireEvent.click(within(extensions).getByRole("menuitem", { name: "Open with Acme" }));
 
     const call = dispatchMock.mock.calls.find(([actionId]) => actionId === "acme.open");
     expect(call).toBeDefined();
@@ -211,7 +231,8 @@ describe("FileChangeList — plugin items", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Open src/abs.ts" }));
     const menu = await screen.findByRole("menu");
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open with Acme" }));
+    const extensions = await openSubmenu(menu, "Extensions");
+    fireEvent.click(within(extensions).getByRole("menuitem", { name: "Open with Acme" }));
 
     const call = dispatchMock.mock.calls.find(([actionId]) => actionId === "acme.open");
     expect(call![1]).toMatchObject({ path: "/repo/src/abs.ts", status: "added" });

@@ -62,7 +62,7 @@ export function isSvgFilePath(filePath: string): boolean {
   return extensionOf(filePath) === SVG_EXTENSION;
 }
 
-/** Videos Chromium plays natively — served via daintree-file:// to a <video> element. */
+/** Videos Chromium plays natively — served from daintree-media:// to a <video> element. */
 export function isVideoFilePath(filePath: string): boolean {
   return VIDEO_EXTENSIONS.has(extensionOf(filePath));
 }
@@ -81,7 +81,7 @@ export function isPdfFilePath(filePath: string): boolean {
 export const UNSUPPORTED_VIDEO_MESSAGE =
   "Can't play this video format — only MP4, WebM, and Ogg are supported";
 
-/** Audio Chromium plays natively — served via daintree-file:// to an <audio> element. */
+/** Audio Chromium plays natively — served from daintree-media:// to an <audio> element. */
 export function isAudioFilePath(filePath: string): boolean {
   return AUDIO_EXTENSIONS.has(extensionOf(filePath));
 }
@@ -100,12 +100,50 @@ export const UNSUPPORTED_AUDIO_MESSAGE =
   "Can't play this audio format — only MP3, WAV, FLAC, Ogg, Opus, M4A, and AAC are supported";
 
 /**
+ * Whether a path is worth offering "copy contents" for, judged on extension
+ * alone — the answer a surface needs *before* reading anything.
+ *
+ * "Candidate" rather than "isText": the negative is authoritative (a `.png` has
+ * no text to copy and never will), while the positive only says nothing here
+ * rules it out. An extensionless binary still reads as a candidate and is
+ * caught at read time, where `files:read` already reports BINARY_FILE.
+ *
+ * Surfaces that have already loaded the file must gate on their own load state
+ * instead: that knows about binary detection, the 512KiB cap and LFS pointers,
+ * none of which an extension can see.
+ */
+export function isFileContentsCopyCandidate(filePath: string): boolean {
+  return !(
+    isImageFilePath(filePath) ||
+    isVideoFilePath(filePath) ||
+    isUnsupportedVideoFilePath(filePath) ||
+    isAudioFilePath(filePath) ||
+    isUnsupportedAudioFilePath(filePath) ||
+    isPdfFilePath(filePath)
+  );
+}
+
+/**
  * URL for the custom `daintree-file://` protocol, which serves a file from
  * inside a known root. Used as an `<img>` src so raster images never round-trip
  * through a base64 IPC read.
  */
 export function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
   return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+}
+
+/**
+ * URL for the custom `daintree-media://` protocol — the range-serving sibling of
+ * `daintree-file://`, used directly as a `<video>`/`<audio>` src so the element
+ * requests what it needs instead of this side downloading the whole file
+ * (#12242). It is registered `standard: true`, the privilege the upstream report
+ * behind the old blob detour identified as the missing one.
+ */
+export function buildDaintreeMediaUrl(filePath: string, rootPath: string): string {
+  // Trailing `/` on the authority is written out rather than left to Chromium:
+  // a `standard: true` scheme canonicalizes to it anyway, and matching that
+  // shape here keeps the URL we set identical to the one the handler receives.
+  return `daintree-media://load/?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
 }
 
 /**

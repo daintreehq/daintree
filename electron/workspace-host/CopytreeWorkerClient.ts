@@ -380,10 +380,14 @@ export class CopytreeWorkerClient {
       memory: null,
       eligibility: { trim: false, dispose: false, restart: false },
       state: this.workerFailed ? "fallback-pinned" : this.worker ? "running" : "not-spawned",
-      detail: {
-        lastCompletedAt: this.lastCompletedAt,
-        workerGeneration: this.workerGeneration,
-      },
+      ...(this.workerGeneration === 0 && this.lastCompletedAt === null
+        ? {}
+        : {
+            detail: {
+              ...(this.lastCompletedAt === null ? {} : { lastCompletedAt: this.lastCompletedAt }),
+              workerGeneration: this.workerGeneration,
+            },
+          }),
     };
   }
 }

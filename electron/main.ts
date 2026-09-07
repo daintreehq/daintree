@@ -25,6 +25,7 @@ import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
   registerDaintreeHtmlProtocol,
+  registerDaintreeMediaProtocol,
   registerDaintreePdfProtocol,
   registerDeepLinkProtocolClient,
   registerPluginProtocol,
@@ -53,6 +54,7 @@ import {
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
+import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
@@ -157,7 +159,7 @@ protocol.registerSchemesAsPrivileged([
     // range requests — electron#51442). It only makes the scheme *eligible*
     // for cross-origin fetch: reads still require the handler to echo
     // Access-Control-Allow-Origin, which it does solely for trusted app
-    // origins (see daintreeFileCorsOrigin in setup/protocols.ts), so browser
+    // origins (see trustedAppCorsOrigin in setup/protocols.ts), so browser
     // panels hosting remote sites gain no access.
     scheme: "daintree-file",
     privileges: {
@@ -178,6 +180,28 @@ protocol.registerSchemesAsPrivileged([
     privileges: {
       standard: true,
       secure: true,
+    },
+  },
+  {
+    // Direct range-streamed media playback (#12242). `standard: true` is the
+    // load-bearing flag: electron#51442 reported a custom-scheme media loader
+    // that appeared single-shot, and closed when the reporter traced it to a
+    // registration missing exactly this privilege. This applies that fix so
+    // <video>/<audio> can point straight at the protocol instead of downloading
+    // the whole file into a blob first. Whether the loader really issues
+    // follow-up ranges on this build is measured by
+    // e2e/mechanism/media-range-streaming.spec.ts, not assumed here.
+    // `stream` is the documented privilege for serving media bodies.
+    // Deliberately no supportFetchAPI/corsEnabled: tag loads are
+    // no-cors and never consult CORS, so the fetch surface would be dead weight
+    // (see trustedAppCorsOrigin in setup/protocols.ts). Kept off daintree-file://
+    // on purpose — adding `standard` there would change URL parsing and origin
+    // semantics for markdown images, WebAudio and the file viewer all at once.
+    scheme: "daintree-media",
+    privileges: {
+      standard: true,
+      secure: true,
+      stream: true,
     },
   },
   {
@@ -202,6 +226,10 @@ protocol.registerSchemesAsPrivileged([
     // as `id`. codeCache enables V8 bytecode persistence for JS bundles (same
     // rationale as app://). bypassCSP intentionally omitted — defaults to false
     // (#3757: never opt back in; add `plugin:` to source directives if needed).
+    // corsEnabled only makes the scheme ELIGIBLE for cross-origin fetch(); the
+    // handler still echoes Access-Control-Allow-Origin solely for the trusted
+    // app document (trustedAppCorsOrigin), which is what lets the renderer read
+    // a view module's own text to compile its Tailwind classes (#12220).
     scheme: "plugin",
     privileges: {
       standard: true,
@@ -378,7 +406,8 @@ if (!gotTheLock) {
       // electron/window/ so the eviction controller stays free of both services.
       // The static import is free: PtyClient already value-imports
       // HelpSessionService, so it is in the eager graph either way.
-      assistantBackendForProject: (projectId) => helpSessionService.getAssistantBackend(projectId),
+      assistantBackendsForProject: (projectId) =>
+        helpSessionService.getAssistantBackends(projectId),
       // The liveness half. PtyClient's spawn registry is main-local and
       // synchronous — written by spawn() before the host round-trip, dropped on
       // exit and on kill — so it is authoritative from the assistant's first
@@ -470,6 +499,20 @@ if (!gotTheLock) {
         const wCtx = windowRegistry.getByWindowId(win.id);
         if (wCtx) {
           distributePortsToView(win, wCtx, wc, getPtyClient());
+          // A cold-started view gets its first PTY port here, not from the
+          // switch handler — mark it under the switch's trace while the entry
+          // still carries its cold-start timeline (cleared at first-interactive,
+          // so a later crash reload does not re-report under a stale id).
+          const readyEntry = pvm
+            .getAllViews()
+            .find((v) => !v.view.webContents.isDestroyed() && v.view.webContents.id === wc.id);
+          if (readyEntry?.switchTrace && readyEntry.coldStartAt !== undefined) {
+            markPerformance(PERF_MARKS.PROJECT_SWITCH_PTY_PORT_SENT, {
+              switchId: readyEntry.switchTrace.switchId,
+              projectId: readyEntry.projectId,
+              isNew: true,
+            });
+          }
         }
         // Refresh workspace direct port (preload context is reset on reload)
         getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
@@ -501,6 +544,13 @@ if (!gotTheLock) {
         // a separate path; this is the push path that lets the existing
         // persistent listeners overtake a slow IPC pull. Dynamically imported
         // to avoid pulling PluginService into main.ts's static graph (#9285).
+        //
+        // The replay is project-scoped: it carries the global contributions
+        // plus this view's own project, resolved from `wc`'s project-view
+        // registration — the same mapping `pvm.getProjectIdForWebContents`
+        // reads above. A view restored after LRU eviction must never be handed
+        // another project's panels, and this is the one path where that leak
+        // is invisible until it happens.
         const wcId = wc.id;
         import("./services/PluginService.js")
           .then(({ pluginService }) => pluginService.pushSnapshotTo(wc))
@@ -555,6 +605,10 @@ if (!gotTheLock) {
       (globalThis as Record<string, unknown>).__daintreeGetPvm = getProjectViewManager;
       (globalThis as Record<string, unknown>).__daintreeWriteHeapSnapshot = (filePath: string) =>
         nodeV8.writeHeapSnapshot(filePath);
+      // Fresh process-tree sweep joined to every window's view inventory, so
+      // the switch benchmark can attribute renderer memory per cached view.
+      (globalThis as Record<string, unknown>).__daintreeGetMemoryAttribution = () =>
+        buildMemoryAttribution(windowRegistry);
     }
 
     // E2E hook: crash a window's workspace host to exercise the
@@ -689,12 +743,13 @@ if (!gotTheLock) {
       registerDaintreeFileProtocol();
       registerDaintreeHtmlProtocol();
       registerDaintreePdfProtocol();
+      registerDaintreeMediaProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every
       // request, keeping the heavy ~2900-line PluginService module off the
       // first-paint critical path (#10322). The handler must exist before
       // `createWindow()` so `registerProtocolsForSession` wires per-session
       // handlers; the deferred `plugin-service` task later calls
-      // `setPluginDirResolver()` to point it at the real `getPluginDir` and
+      // `setPluginDirResolver()` to point it at the real authority resolver and
       // drains queued `.dntr` paths via `activateOpenFileInstaller`. The
       // placeholder is unobservable because a renderer can only learn a
       // `plugin://` module URL from a panel-kind contribution, and those are

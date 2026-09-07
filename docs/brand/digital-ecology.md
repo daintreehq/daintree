@@ -42,7 +42,15 @@ The app's icons are Lucide, full stop. There is no commissioned Daintree glyph s
 
 The metaphor still does work here: it's why agents read as a `Plug` rather than a `Bot`, why origin is a `Sprout`, why pulse is an `Activity` heartbeat. When a new concept needs an icon, pick the closest Lucide icon that carries the ecology cue and add it to the alias list — don't draw a new glyph.
 
-The only bespoke SVG components left in `src/components/icons/` are the brand mark (`DaintreeIcon`), the MCP mark (`McpServerIcon`, which mirrors the official MCP logo), the multi-dot agent-state indicator (`AgentStateCircles`), and third-party brand marks under `brands/`. Bespoke components are reserved for real brand marks with recognition value, never for app concepts.
+The only bespoke SVG components left in `src/components/icons/` are the brand mark (`DaintreeIcon`), the MCP mark (`McpServerIcon`, which mirrors the official MCP logo), the multi-dot agent-state indicator (`AgentStateCircles`), and the third-party brand marks under `brands/` — a large set covering the supported agent CLIs plus the languages, runtimes and tools the process detector surfaces. Bespoke components are reserved for real brand marks with recognition value, never for app concepts.
+
+Three files there are plumbing rather than artwork: `BrandMark.tsx` and `BrandSurface.tsx` (the ink/backdrop system described below) and `pluginIconRegistry.ts` (how a plugin contributes an icon).
+
+### Brand-mark ink is computed, never authored
+
+Third-party marks carry vendor hexes from `AgentConfig.color`, so they are the one colour family the semantic palette cannot reach — and the one place where "just pick a colour" would break contrast on some theme. Never hand a colour to a brand glyph. The SVG stays on `currentColor`, `BrandMark` publishes a rest ink and an active ink, and `resolveBrandMarkInk` (`src/lib/brandIcon.ts`) derives both against the backdrop the mark is actually painted on: active is the brand colour untouched where it clears its contrast floors and the smallest move along its own hue line where it does not; rest is that colour drawn back _away from the backdrop_, so hovering reads as a bloom of colour rather than a wash-out. `BrandSurface` is how the backdrop is known.
+
+The full rules — the ceiling that keeps a resting mark from outshouting the controls beside it, the achromatic-brand carve-out, and the crossfade sampling — are in [../themes/interaction-state-recipes.md](../themes/interaction-state-recipes.md#brand-mark-states). Treat that as the spec; this section exists so the brand side of the house knows the ink is not a design decision made per mark.
 
 ## Where the metaphor still applies
 
@@ -50,6 +58,8 @@ Illustrations and marketing — anything outside the Lucide-driven UI icon set �
 
 ## Adjacent reference
 
-Authoritative current icon policy: `src/components/icons/README.md`.
-
-Lucide construction rules (grid, stroke, optical alignment), useful when judging which stock icon fits or when drawing a brand mark: <https://lucide.dev/contribute/icon-design-guide>
+- Authoritative current icon policy: `src/components/icons/README.md`.
+- Icon rules that bind in the app (monochrome, no opacity dimming, solid tokens over slash-alpha): [`.claude/rules/design-system.md`](../../.claude/rules/design-system.md) and [../themes/theme-tokens.md](../themes/theme-tokens.md#text-tokens).
+- Brand-mark ink and backdrop system: [../themes/interaction-state-recipes.md](../themes/interaction-state-recipes.md#brand-mark-states).
+- Theme hero artwork, which is the other place the metaphor is drawn rather than described: `.claude/skills/daintree-theme-creator/resources/theme-preview-images.md`.
+- Lucide construction rules (grid, stroke, optical alignment), useful when judging which stock icon fits or when drawing a brand mark: <https://lucide.dev/contribute/icon-design-guide>

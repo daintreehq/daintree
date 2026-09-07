@@ -35,3 +35,11 @@ For the architecture, tuning model, and code ownership, see [Agent Activity Moni
 ## Pass Criteria
 
 All required steps show the expected state transitions with no false Working on idle prompts.
+
+## Related
+
+- [architecture/agent-activity-monitoring.md](./architecture/agent-activity-monitoring.md) — the detection layers, tuning constants, and failure modes behind these states.
+- [architecture/agent-state-tracking-strategy.md](./architecture/agent-state-tracking-strategy.md) — why detection is passive PTY observation, and the rubric any replacement has to pass.
+- [architecture/terminal-identity.md](./architecture/terminal-identity.md) — the runtime-identity gate that decides whether a terminal enters the state machine at all.
+
+Where a manual step here disagrees with the app, the replay fixtures are the faster reproduction: `npm run pattern-discovery:eval` runs recorded `.cast` traces through the production detection chain and reports per-agent pass rates.

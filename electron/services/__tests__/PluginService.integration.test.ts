@@ -302,15 +302,15 @@ describe("PluginService integration — panel contributions", () => {
 
   it("makes the plugin dir plugin://-resolvable before publishing an addressable panel (#11728)", async () => {
     // The invariant: at the instant a panel kind carrying a `componentPath` is
-    // published, `getPluginDir` — the resolver the `plugin://` protocol handler
-    // calls — must already answer for that plugin. Publishing first handed the
-    // renderer a URL the protocol could not resolve; it 404'd, and a rejected
-    // dynamic import is permanent for that specifier, so the panel stayed broken
-    // until a full window reload.
+    // published, the authority in that URL — and the manifest-id alias beside
+    // it — must already resolve. Publishing first handed the renderer a URL the
+    // protocol could not resolve; it 404'd, and a rejected dynamic import is
+    // permanent for that specifier, so the panel stayed broken until a full
+    // window reload.
     //
     // A `skills` contribution is what made this reliably reproducible: its
-    // `await` sat between the old publication point and the plugins-map commit
-    // that `getPluginDir` reads. The fixture declares one so the await is real.
+    // `await` sat between the old publication point and the registry commit the
+    // resolver reads. The fixture declares one so the await is real.
     const dir = await writePlugin("acme.gated-view", {
       name: "acme.gated-view",
       version: "1.0.0",
@@ -346,10 +346,18 @@ describe("PluginService integration — panel contributions", () => {
     // broadcast is scheduled on, which is what the renderer ultimately reads.
     // Asserting after initialize() would prove nothing: by then everything is in
     // the map regardless of the order it got there.
-    const observed: Array<{ id: string; resolvedDir: string | undefined }> = [];
+    const observed: Array<{
+      id: string;
+      resolvedDir: string | undefined;
+      aliasDir: string | undefined;
+    }> = [];
     const unsubscribe = onPanelKindRegistered((config) => {
       if (!config.componentPath || !config.extensionId) return;
-      observed.push({ id: config.id, resolvedDir: service.getPluginDir(config.extensionId) });
+      observed.push({
+        id: config.id,
+        resolvedDir: service.getPluginRootByAuthority(new URL(config.componentPath).hostname),
+        aliasDir: service.getPluginRootByAuthority(config.extensionId),
+      });
     });
 
     try {
@@ -365,9 +373,15 @@ describe("PluginService integration — panel contributions", () => {
       "acme.plain-view.viewer",
     ]);
     // Before the fix these were `undefined` — the panel was published while the
-    // plugin was still absent from the map `getPluginDir` reads.
-    expect(observed.find((o) => o.id === "acme.gated-view.viewer")!.resolvedDir).toBe(dir);
-    expect(observed.find((o) => o.id === "acme.plain-view.viewer")!.resolvedDir).toBe(plainDir);
+    // plugin was still absent from the map the resolver reads.
+    const gated = observed.find((o) => o.id === "acme.gated-view.viewer")!;
+    const plain = observed.find((o) => o.id === "acme.plain-view.viewer")!;
+    expect(gated.resolvedDir).toBe(dir);
+    expect(plain.resolvedDir).toBe(plainDir);
+    // The manifest-id alias is seeded by the same commit, so hand-written
+    // `plugin://{pluginId}/…` URLs are addressable at the same instant.
+    expect(gated.aliasDir).toBe(dir);
+    expect(plain.aliasDir).toBe(plainDir);
   });
 
   it("registers multiple panels from one plugin with full config per panel", async () => {

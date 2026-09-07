@@ -130,4 +130,53 @@ describe("useToolbarRoving", () => {
     fireEvent.click(screen.getByText("toggle"));
     expect(tabIndexes().filter((t) => t === 0)).toHaveLength(1);
   });
+
+  it("moves the tab stop to a clicked control even with no re-render", () => {
+    // The repair cannot wait for a commit: a descendant can re-render alone, so
+    // clicking a control the row marks `tabindex="-1"` would otherwise leave
+    // focus on an untabbable element — the exact state that lets Tab escape a
+    // focus trap, which excludes negative tabindex when computing its boundary.
+    render(<Toolbar labels={["a", "b", "c"]} />);
+    const c = screen.getByText("c");
+    expect(c.tabIndex).toBe(-1);
+
+    fireEvent.focus(c, { target: c });
+    c.focus();
+
+    expect(c.tabIndex).toBe(0);
+    expect(screen.getByText("a").tabIndex).toBe(-1);
+    expect(tabIndexes().filter((t) => t === 0)).toHaveLength(1);
+  });
+
+  it("leaves the tab stop on the control that holds focus after a click", () => {
+    // Clicking focuses without going through the arrow handler, so the
+    // remembered index is stale by the time the re-render's effect runs. Handing
+    // the stop to some other control would set `tabindex="-1"` on the focused
+    // one — and `TABBABLE_SELECTOR` excludes negative tabindex, so AppDialog's
+    // trap would stop recognising it as the row's last element and let Tab walk
+    // out of the modal.
+    render(<Growing />);
+    const toggle = screen.getByText("toggle");
+    toggle.focus();
+
+    fireEvent.click(toggle);
+
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.tabIndex).toBe(0);
+    expect(tabIndexes().filter((t) => t === 0)).toHaveLength(1);
+  });
+
+  it("keeps the stop with the focused control when one appears ahead of it", () => {
+    // A control inserted before the focused one shifts every index after it, so
+    // a remembered index now names the wrong button. Keyed by label, so React
+    // reconciles "c" to the same node and it keeps focus across the re-render.
+    const { rerender } = render(<Toolbar labels={["a", "b", "c"]} />);
+    screen.getByText("c").focus();
+
+    rerender(<Toolbar labels={["a", "new", "b", "c"]} />);
+
+    expect(document.activeElement).toBe(screen.getByText("c"));
+    expect(screen.getByText("c").tabIndex).toBe(0);
+    expect(tabIndexes().filter((t) => t === 0)).toHaveLength(1);
+  });
 });

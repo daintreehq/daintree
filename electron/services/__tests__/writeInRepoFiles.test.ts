@@ -582,6 +582,59 @@ describe("readInRepoRecipesWithHashes", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("names what it cannot represent, and still returns the parts it can (#12261)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await fs.mkdir(path.join(tmpDir, DAINTREE_RECIPES_DIR), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, DAINTREE_RECIPES_DIR, "future.json"),
+      JSON.stringify(
+        {
+          id: "r1",
+          name: "Future",
+          createdAt: 1,
+          ritual: "nightly",
+          terminals: [
+            { type: "terminal", command: "echo hi", retryPolicy: "always" },
+            { type: "future-agent" },
+          ],
+        },
+        null,
+        2
+      ) + "\n",
+      "utf-8"
+    );
+
+    const { recipes } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+
+    // The supported half still loads — the guard is about writing, not reading.
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0].terminals).toHaveLength(1);
+
+    const warning = warnSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((message) => message.includes("does not support"));
+    expect(warning).toBeDefined();
+    expect(warning).toContain("future.json");
+    expect(warning).toContain('terminal #2 (type "future-agent")');
+    expect(warning).toContain("retryPolicy");
+    expect(warning).toContain("ritual");
+    warnSpy.mockRestore();
+  });
+
+  it("stays quiet for a recipe it fully understands", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r1", name: "Plain" }));
+
+    await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+
+    expect(
+      warnSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((m) => m.includes("does not support"))
+    ).toEqual([]);
+    warnSpy.mockRestore();
+  });
+
   it("returns hash matching the file bytes for each loaded recipe", async () => {
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r1", name: "First" }));
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r2", name: "Second" }));

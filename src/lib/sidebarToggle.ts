@@ -1,6 +1,6 @@
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { isDocumentHidden, revealUntilStable } from "@/services/terminal/revealUntilStable";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectActiveSlot, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { lockSidebarLayoutTransition } from "./layoutTransitionLock";
@@ -23,9 +23,11 @@ import { SIDEBAR_TOGGLE_LOCK_MS } from "./terminalLayout";
  * Terminal ids affected by a sidebar/assistant-panel width change on the active
  * worktree: every grid panel on the active worktree plus the assistant's dock
  * terminal. Shared by the toggle-time suppression (suppressSidebarResizes,
- * TTL-based) and the drag-time resize lock (AppLayout's sidebar/assistant
- * divider drag, boolean lockResize). Both reflow `<main flex:1>`, which holds
- * the grid.
+ * TTL-based), the drag-time resize lock (AppLayout's sidebar/assistant divider
+ * drag, boolean lockResize), and the diagnostics dock's height transition
+ * (signalDiagnosticsDockLayoutChange, #12264). All of them reflow
+ * `<main flex:1>`, which holds the grid — the affected set is the same whether
+ * the row loses width or height.
  */
 export function getSidebarAffectedTerminalIds(): string[] {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
@@ -37,9 +39,10 @@ export function getSidebarAffectedTerminalIds(): string[] {
       ids.push(panel.id);
     }
   }
-  const assistantTerminalId = useHelpPanelStore.getState().terminalId;
-  if (assistantTerminalId && panelState.panelsById[assistantTerminalId]) {
-    ids.push(assistantTerminalId);
+  // Every lane (#12108): a background assistant's xterm is still mounted and
+  // still needs its resizes suppressed during the transition.
+  for (const assistantTerminalId of selectSlotTerminalIds(useHelpPanelStore.getState())) {
+    if (panelState.panelsById[assistantTerminalId]) ids.push(assistantTerminalId);
   }
   return ids;
 }
@@ -196,14 +199,21 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
     start() {
       unsubscribe?.();
       const dispose = useHelpPanelStore.subscribe((state, prev) => {
+        // The ACTIVE lane only (#12108): a reveal repaints what is on screen,
+        // and a background lane has no visible geometry to correct. Switching
+        // tabs runs its own fit, so nothing is dropped by ignoring siblings.
+        const next = selectActiveSlot(state);
+        const previous = selectActiveSlot(prev);
         // sessionId as well as terminalId: a reserved id is finalized in place
         // when provisioning resolves, so the id alone can be edge-less on the
         // retry path after an attach-wait timeout.
-        if (state.terminalId === prev.terminalId && state.sessionId === prev.sessionId) return;
-        if (!state.terminalId || !pending || !visible) return;
+        if (next.terminalId === previous.terminalId && next.sessionId === previous.sessionId) {
+          return;
+        }
+        if (!next.terminalId || !pending || !visible) return;
         // A re-bind supersedes whatever the previous binding was chasing.
         generation++;
-        discharge(state.terminalId);
+        discharge(next.terminalId);
       });
       // Deliberately NOT cancelled on app:view-cached. Yielding the obligation to
       // the switch-back sweep looks tempting, but that sweep only covers the
@@ -239,7 +249,7 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
       pending = true;
       inFlight = null;
 
-      const assistantTerminalId = useHelpPanelStore.getState().terminalId;
+      const assistantTerminalId = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
       // No terminal yet (the cold first open — the #11070 case). Hold the
       // obligation; the help-store subscription discharges it once one binds.
       if (!assistantTerminalId) return;

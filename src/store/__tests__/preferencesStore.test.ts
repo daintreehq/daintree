@@ -710,6 +710,61 @@ describe("preferencesStore migration", () => {
     });
   });
 
+  describe("markdownFontSize (#12134)", () => {
+    it("defaults to the rung rendered markdown has always used", async () => {
+      const store = await loadStore();
+      expect(store.getState().markdownFontSize).toBe("sm");
+    });
+
+    it("migrates pre-v18 state to the default rather than leaving it undefined", async () => {
+      // Drive `migrate` directly: hydration's sanitizer would supply the same
+      // default, so a store-level assertion passes with the v18 branch deleted.
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 17);
+
+      expect(migrated).toMatchObject({ markdownFontSize: "sm", dockDensity: "compact" });
+      // Pin the bump too: `migrate` only runs for a blob below the configured
+      // version, so leaving it at 17 would skip the branch above entirely and
+      // hydration's sanitizer would quietly supply the same default.
+      expect(store.persist.getOptions().version).toBe(20);
+    });
+
+    it("leaves an already-valid rung alone when migrating", async () => {
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ markdownFontSize: "2xl" }, 17);
+
+      expect(migrated).toMatchObject({ markdownFontSize: "2xl" });
+    });
+
+    it("replaces a value that is not a rung, including a plausible pixel number", async () => {
+      // The persisted value names a step of the type scale, never a size. A
+      // blob carrying 18 came from somewhere else and must not reach the
+      // token lookup, which would resolve to `var(--text-18)`.
+      for (const corrupt of [18, "18px", "huge", null]) {
+        vi.resetModules();
+        _resetPersistedStoreRegistryForTests();
+        setStoredState({ diffViewType: "split", markdownFontSize: corrupt }, 18);
+        const store = await loadStore();
+        expect(store.getState().markdownFontSize).toBe("sm");
+      }
+    });
+
+    it("keeps an explicit rung across a reload and persists it", async () => {
+      let store = await loadStore();
+      store.getState().setMarkdownFontSize("lg");
+      await vi.waitFor(() => {
+        const persisted = storageMock.getItem(STORAGE_KEY);
+        expect(persisted).not.toBeNull();
+        expect(JSON.parse(persisted!).state.markdownFontSize).toBe("lg");
+      });
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      store = await loadStore();
+      expect(store.getState().markdownFontSize).toBe("lg");
+    });
+  });
+
   describe("fileBrowserAlwaysHiddenPatterns", () => {
     it("is a non-empty curated default list on a fresh install", async () => {
       const store = await loadStore();
@@ -1119,5 +1174,101 @@ describe("preferencesStore migration", () => {
       const store = await loadStore();
       expect(store.getState().hasSeenActionPalettePrefixHint).toBe(false);
     });
+  });
+
+  describe("diffWrapLines auto mode (#12170)", () => {
+    it("defaults to auto rather than off", async () => {
+      const store = await loadStore();
+      expect(store.getState().diffWrapLines).toBeNull();
+    });
+
+    it("migrates a pre-v19 explicit `true` through untouched", async () => {
+      // `true` could only ever have come from a deliberate toggle, since `false`
+      // was the old default — so it is the one legacy value worth preserving.
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ diffWrapLines: true }, 18);
+
+      expect(migrated).toMatchObject({ diffWrapLines: true });
+    });
+
+    it("migrates a pre-v19 `false` to auto", async () => {
+      // Ambiguous on disk: the store persists the whole default snapshot with no
+      // per-field provenance, so "never touched it" and "on, then off again" are
+      // the same bytes. Auto reads that in favour of shipping the prose default.
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ diffWrapLines: false }, 18);
+
+      expect(migrated).toMatchObject({ diffWrapLines: null });
+    });
+
+    it("migrates an absent or corrupt pre-v19 value to auto", async () => {
+      const store = await loadStore();
+      for (const legacy of [{}, { diffWrapLines: "yes" }, { diffWrapLines: 1 }]) {
+        expect(store.persist.getOptions().migrate?.(legacy, 18)).toMatchObject({
+          diffWrapLines: null,
+        });
+      }
+    });
+
+    it("keeps an explicit `false` set at the current version", async () => {
+      // The migration only reinterprets pre-v19 blobs. A `false` written since
+      // is a real override and must survive a reload, or turning wrap off on a
+      // markdown diff would not stick.
+      setStoredState({ diffWrapLines: false }, 20);
+      const store = await loadStore();
+      expect(store.getState().diffWrapLines).toBe(false);
+    });
+
+    it("sanitises a corrupt current-version value to auto, not to off", async () => {
+      setStoredState({ diffWrapLines: "yes" }, 20);
+      const store = await loadStore();
+      expect(store.getState().diffWrapLines).toBeNull();
+    });
+
+    it("persists both explicit states to localStorage", async () => {
+      const store = await loadStore();
+      store.getState().setDiffWrapLines(true);
+      await vi.waitFor(() => {
+        expect(JSON.parse(storageMock.getItem(STORAGE_KEY)!).state.diffWrapLines).toBe(true);
+      });
+
+      store.getState().setDiffWrapLines(false);
+      await vi.waitFor(() => {
+        expect(JSON.parse(storageMock.getItem(STORAGE_KEY)!).state.diffWrapLines).toBe(false);
+      });
+    });
+  });
+});
+
+describe("diffMarkdownRendered (v20 migration, #12171)", () => {
+  it("defaults to the source diff, so the new layout opts nobody in", async () => {
+    const store = await loadStore();
+    expect(store.getState().diffMarkdownRendered).toBe(false);
+  });
+
+  it("setDiffMarkdownRendered updates the value", async () => {
+    const store = await loadStore();
+    store.getState().setDiffMarkdownRendered(true);
+    expect(store.getState().diffMarkdownRendered).toBe(true);
+    store.getState().setDiffMarkdownRendered(false);
+    expect(store.getState().diffMarkdownRendered).toBe(false);
+  });
+
+  it("gives a pre-v20 blob the default rather than leaving it undefined", async () => {
+    const store = await loadStore();
+    const migrated = store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 19);
+
+    expect(migrated).toMatchObject({ diffMarkdownRendered: false, dockDensity: "compact" });
+    // Same pin the v18 branch carries: `migrate` only runs for a blob below the
+    // configured version, so a version that fell back to 18 would skip the
+    // branch above and hydration's sanitizer would quietly supply the default.
+    expect(store.persist.getOptions().version).toBeGreaterThan(18);
+  });
+
+  it("keeps an existing choice through the migration", async () => {
+    const store = await loadStore();
+    const migrated = store.persist.getOptions().migrate?.({ diffMarkdownRendered: true }, 19);
+
+    expect(migrated).toMatchObject({ diffMarkdownRendered: true });
   });
 });

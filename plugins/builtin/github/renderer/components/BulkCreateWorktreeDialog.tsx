@@ -571,7 +571,7 @@ export function BulkCreateWorktreeDialog({
                   // keep a cancelled item from putting a worktree on disk.
                   if (runIdRef.current !== currentRunId) return;
 
-                  const createdId = await createWorktree({
+                  const created = await createWorktree({
                     baseBranch: createBaseBranch,
                     newBranch: planned.headRefName,
                     path,
@@ -579,12 +579,17 @@ export function BulkCreateWorktreeDialog({
                     useExistingBranch: createUseExisting,
                   });
 
-                  if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+                  if (!created?.worktreeId) {
+                    throw new Error("Failed to create worktree: no ID returned");
+                  }
                   activeRun.created++;
 
-                  worktreeId = createdId;
+                  worktreeId = created.worktreeId;
                   worktreePath = path;
-                  resolvedBranch = planned.headRefName;
+                  // The branch the host landed on. In PR mode that is normally
+                  // the PR's head ref verbatim, but the host owns collision
+                  // handling and this is the only race-free way to know.
+                  resolvedBranch = created.branch;
                 } else {
                   // Issue mode: create new branch from base. Branch name and
                   // path were resolved once in the pre-query phase; fall back
@@ -608,7 +613,7 @@ export function BulkCreateWorktreeDialog({
                   // keep a cancelled item from putting a worktree on disk.
                   if (runIdRef.current !== currentRunId) return;
 
-                  const createdId = await createWorktree({
+                  const created = await createWorktree({
                     baseBranch,
                     newBranch: availableBranch,
                     path,
@@ -616,12 +621,17 @@ export function BulkCreateWorktreeDialog({
                     useExistingBranch: false,
                   });
 
-                  if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+                  if (!created?.worktreeId) {
+                    throw new Error("Failed to create worktree: no ID returned");
+                  }
                   activeRun.created++;
 
-                  worktreeId = createdId;
+                  worktreeId = created.worktreeId;
                   worktreePath = path;
-                  resolvedBranch = availableBranch;
+                  // The branch the HOST landed on, not the name proposed above:
+                  // `getAvailableBranch` reserves nothing, so a bulk run racing
+                  // itself can have the host suffix past the candidate.
+                  resolvedBranch = created.branch;
                 }
 
                 tracking.set(itemNumber, {

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { allScenarios } from "../scenarios";
 import {
   BASELINE_FRESHNESS_DAYS,
   checkBaselineCoverage,
@@ -18,7 +22,6 @@ function scenario(id: string): PerfScenario {
 }
 
 const budgetConfig: PerfBudgetConfig = {
-  criticalScenarios: ["PERF-001"],
   defaultBudget: { p95Ms: 5000, maxRegressionPct: 15 },
   scenarios: {
     "PERF-001": { p95Ms: 3500, maxRegressionPct: 15 },
@@ -29,7 +32,6 @@ const budgetConfig: PerfBudgetConfig = {
 // A config whose defaultBudget has no regression gate, so a scenario without an
 // override is genuinely not regression-gated (the merge can't reintroduce it).
 const noRegressionConfig: PerfBudgetConfig = {
-  criticalScenarios: [],
   defaultBudget: { p95Ms: 5000 },
   scenarios: {
     "PERF-200": { p95Ms: 1000 },
@@ -48,18 +50,18 @@ describe("checkBaselineFreshness", () => {
     vi.restoreAllMocks();
   });
 
-  it("warns when the baseline is older than the threshold", () => {
+  it("warns when an entry is older than the threshold", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const now = new Date("2026-06-07T00:00:00.000Z");
-    const old = baseline({}, "2026-01-01T00:00:00.000Z"); // ~157 days
+    const old = baseline({ "PERF-001": 1 }, "2026-01-01T00:00:00.000Z"); // ~157 days
     checkBaselineFreshness(old, "ci", BASELINE_FRESHNESS_DAYS, now);
     expect(warn).toHaveBeenCalledOnce();
   });
 
-  it("does not warn when the baseline is within the threshold", () => {
+  it("does not warn when every entry is within the threshold", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const now = new Date("2026-06-07T00:00:00.000Z");
-    const fresh = baseline({}, "2026-06-01T00:00:00.000Z"); // 6 days
+    const fresh = baseline({ "PERF-001": 1 }, "2026-06-01T00:00:00.000Z"); // 6 days
     checkBaselineFreshness(fresh, "ci", BASELINE_FRESHNESS_DAYS, now);
     expect(warn).not.toHaveBeenCalled();
   });
@@ -67,7 +69,7 @@ describe("checkBaselineFreshness", () => {
   it("does not warn exactly at the threshold boundary", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const now = new Date("2026-02-01T00:00:00.000Z");
-    const atBoundary = baseline({}, "2026-01-02T00:00:00.000Z"); // exactly 30 days
+    const atBoundary = baseline({ "PERF-001": 1 }, "2026-01-02T00:00:00.000Z"); // exactly 30 days
     checkBaselineFreshness(atBoundary, "ci", 30, now);
     expect(warn).not.toHaveBeenCalled();
   });
@@ -80,7 +82,7 @@ describe("checkBaselineFreshness", () => {
 
   it("does not throw or warn on an unparseable timestamp", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const bad = baseline({}, "not-a-date");
+    const bad = baseline({ "PERF-001": 1 }, "not-a-date");
     expect(() => checkBaselineFreshness(bad, "ci")).not.toThrow();
     expect(warn).not.toHaveBeenCalled();
   });
@@ -94,19 +96,6 @@ describe("checkBaselineCoverage", () => {
     expect(gaps).toEqual([{ scenarioId: "PERF-070" }]);
   });
 
-  it("does not flag a calibrating scenario absent from the baseline", () => {
-    // A calibrating scenario inherits maxRegressionPct from defaultBudget but
-    // has deliberately not been baselined yet, so its absence is expected.
-    const calibratingConfig: PerfBudgetConfig = {
-      ...budgetConfig,
-      scenarios: { ...budgetConfig.scenarios, "PERF-070": { calibrating: true } },
-    };
-    const gaps = checkBaselineCoverage(baseline({ "PERF-001": 1 }), calibratingConfig, [
-      scenario("PERF-070"),
-    ]);
-    expect(gaps).toEqual([]);
-  });
-
   it("does not flag a scenario present in the baseline", () => {
     const gaps = checkBaselineCoverage(baseline({ "PERF-070": 900 }), budgetConfig, [
       scenario("PERF-070"),
@@ -114,9 +103,12 @@ describe("checkBaselineCoverage", () => {
     expect(gaps).toEqual([]);
   });
 
-  it("ignores critical scenarios (gate.ts owns those)", () => {
+  it("reports every scenario with a reference but no baseline entry, with no exemptions", () => {
+    // PERF-001 was formerly exempt as a "critical" scenario, on the theory that
+    // gate.ts failed closed for it at run time. Nothing fails closed now, so the
+    // exemption only hid the warning for the scenarios it was meant to protect.
     const gaps = checkBaselineCoverage(baseline({}), budgetConfig, [scenario("PERF-001")]);
-    expect(gaps).toEqual([]);
+    expect(gaps).toEqual([{ scenarioId: "PERF-001" }]);
   });
 
   it("ignores scenarios without a regression budget", () => {
@@ -148,5 +140,103 @@ describe("checkBaselineCoverage", () => {
     ]);
     // PERF-072 is missing from the baseline but is not in this run's scenario set.
     expect(gaps).toEqual([]);
+  });
+});
+
+/**
+ * The direction `checkBaselineCoverage` does not cover.
+ *
+ * It answers "which scenario has a budget but no reference". The inverse —
+ * a reference naming a scenario that no longer exists — has no reader at all:
+ * nothing prunes `config/baseline.*.json` when an id is retired, so the entry
+ * survives every future run, is never compared against anything, and reads to
+ * the next person as a measurement rather than as litter. Four such entries
+ * (PERF-040/041/050/051, dated 2026-08-04) outlived their scenarios and were
+ * only found by counting a live baseline against a live run.
+ *
+ * This drives the REAL committed files rather than a fixture, because the
+ * defect is rot in those files specifically; a fixture would pass forever
+ * while the shipped baselines drifted.
+ */
+describe("committed baselines name only live scenarios", () => {
+  const CONFIG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "config");
+
+  const baselineFiles = readdirSync(CONFIG_DIR)
+    .filter((name) => name.startsWith("baseline.") && name.endsWith(".json"))
+    .sort();
+
+  /**
+   * Ids a given mode can actually compare against.
+   *
+   * Scoped per mode, not to the whole matrix: `baseline.soak.json` holding a
+   * reference for a smoke-only scenario is exactly as uncomparable as one for a
+   * scenario that was deleted, because no soak run will ever produce a number
+   * to put beside it.
+   */
+  function liveIdsForMode(mode: string): Set<string> {
+    return new Set(
+      allScenarios
+        .filter((entry) => (entry.modes as readonly string[]).includes(mode))
+        .map((entry) => entry.id)
+    );
+  }
+
+  /**
+   * Both supported shapes, merged rather than preferred.
+   *
+   * `scenarios ?? p95ByScenario` silently ignores legacy entries in a file
+   * carrying both, which is the state a partly-migrated baseline is in — and a
+   * partly-migrated baseline is precisely where an orphan hides.
+   */
+  function referencedIds(parsed: unknown): { ids: string[]; keysFound: string[] } {
+    if (typeof parsed !== "object" || parsed === null) return { ids: [], keysFound: [] };
+    const record = parsed as Record<string, unknown>;
+    const ids: string[] = [];
+    const keysFound: string[] = [];
+    for (const key of ["scenarios", "p95ByScenario"] as const) {
+      const map = record[key];
+      if (typeof map === "object" && map !== null) {
+        keysFound.push(key);
+        ids.push(...Object.keys(map));
+      }
+    }
+    return { ids: [...new Set(ids)], keysFound };
+  }
+
+  it("finds baseline files to check", () => {
+    // A rename that emptied this list would turn every assertion below into a
+    // vacuous pass, which is the failure mode this whole file exists to catch.
+    expect(baselineFiles.length).toBeGreaterThan(0);
+  });
+
+  it.each(baselineFiles)("%s is readable and carries references", (name) => {
+    // Asserted separately from the orphan check below, because every way this
+    // can go wrong — a renamed key, an empty map, a shape nobody recognises —
+    // yields ZERO ids, and zero ids pass an orphan check trivially. A guard
+    // whose silent-failure mode is a green tick is not a guard.
+    const parsed: unknown = JSON.parse(readFileSync(path.join(CONFIG_DIR, name), "utf8"));
+    const { ids, keysFound } = referencedIds(parsed);
+    expect(keysFound, `${name} has neither a "scenarios" nor a "p95ByScenario" map`).not.toEqual(
+      []
+    );
+    expect(ids.length, `${name} carries no references at all`).toBeGreaterThan(0);
+  });
+
+  it.each(baselineFiles)("%s references no scenario its mode cannot run", (name) => {
+    const parsed: unknown = JSON.parse(readFileSync(path.join(CONFIG_DIR, name), "utf8"));
+    const mode = name.replace(/^baseline\./, "").replace(/\.json$/, "");
+    const live = liveIdsForMode(mode);
+    expect(
+      live.size,
+      `no scenario declares mode "${mode}" — is the filename right?`
+    ).toBeGreaterThan(0);
+
+    const { ids } = referencedIds(parsed);
+    const orphans = ids.filter((id) => !live.has(id));
+    expect(
+      orphans,
+      `${name} carries references for scenarios ${mode} cannot run: ${orphans.join(", ")}. ` +
+        "A reference that can never be compared is litter — delete the entries."
+    ).toEqual([]);
   });
 });

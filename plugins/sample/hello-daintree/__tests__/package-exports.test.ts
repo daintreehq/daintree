@@ -20,6 +20,21 @@ describe("@daintreehq package boundaries resolve by public name", () => {
     expect(typeof react.usePluginEvent).toBe("function");
   });
 
+  it("plugin-sdk/files subpath exports the file-listing machinery", async () => {
+    const files = await import("@daintreehq/plugin-sdk/files");
+    expect(typeof files.flattenTree).toBe("function");
+    expect(typeof files.getFileTypeCategory).toBe("function");
+    expect(typeof files.resolveTreeKey).toBe("function");
+    // Not just present but usable through the published boundary: the model
+    // must build rows from a listing without any host wiring.
+    const rows = files.flattenTree(
+      new Map([["", [{ name: "src", path: "src", isDirectory: true }]]]),
+      new Set(),
+      new Set()
+    );
+    expect(rows.map((row) => row.path)).toEqual(["src"]);
+  });
+
   it("plugin-testing exports createMockHost", async () => {
     const testing = await import("@daintreehq/plugin-testing");
     expect(typeof testing.createMockHost).toBe("function");

@@ -51,7 +51,10 @@ vi.mock("../TerminalAddonManager", () => ({
 
 type BatchTestService = {
   instances: Map<string, ManagedTerminal>;
-  resizePassScheduler: { batchResize: (ids: string[]) => void };
+  resizePassScheduler: {
+    batchResize: (ids: string[]) => void;
+    runResizePass: (ids: string[]) => void;
+  };
   suppressResizesDuringLayoutTransition: (ids: string[], durationMs: number) => void;
   resizeController: {
     resize: (id: string, width: number, height: number) => { cols: number; rows: number } | null;
@@ -341,5 +344,49 @@ describe("TerminalInstanceService suppressResizesDuringLayoutTransition", () => 
     expect(service.resizeController.isResizeLocked("a")).toBe(false);
     expect(resizeSpy).toHaveBeenCalledTimes(1);
     expect(resizeSpy).toHaveBeenCalledWith("a", 800, 600);
+  });
+
+  // #12264: one service-wide timer serves every overlapping transition. A later
+  // arm used to replace the earlier one wholesale, so ids only the earlier call
+  // named were unlocked by their dead-man TTL and never corrected — the TTL
+  // stops `isResizeLocked` reporting, it schedules nothing. Opening the
+  // diagnostics dock arms the broad set, and the grid's own scroll-geometry
+  // effect immediately arms a narrower one, so this overlap is the common case.
+  it("corrects every id still owed a pass when a narrower transition overlaps a broader one", () => {
+    service.instances.set("a", makeManaged({ id: "a" }));
+    service.instances.set("b", makeManaged({ id: "b" }));
+    // Asserted on the pass rather than on resize(): runResizePass chunks and
+    // yields, so only the first chunk lands synchronously here.
+    const passSpy = vi
+      .spyOn(service.resizePassScheduler, "runResizePass")
+      .mockImplementation(() => {});
+
+    service.suppressResizesDuringLayoutTransition(["a", "b"], 200);
+    service.suppressResizesDuringLayoutTransition(["a"], 200);
+
+    vi.advanceTimersByTime(200);
+
+    expect(service.resizeController.isResizeLocked("a")).toBe(false);
+    expect(service.resizeController.isResizeLocked("b")).toBe(false);
+    expect(passSpy).toHaveBeenCalledTimes(1);
+    expect([...passSpy.mock.calls[0]![0]].sort()).toEqual(["a", "b"]);
+  });
+
+  it("holds the longer window when a shorter transition layers on top of it", () => {
+    service.instances.set("a", makeManaged({ id: "a" }));
+    const passSpy = vi
+      .spyOn(service.resizePassScheduler, "runResizePass")
+      .mockImplementation(() => {});
+
+    service.suppressResizesDuringLayoutTransition(["a"], 250);
+    service.suppressResizesDuringLayoutTransition(["a"], 200);
+
+    // The 200ms dock window must not cut the 250ms sidebar window short — a
+    // corrective pass at 200ms would measure a mid-animation box.
+    vi.advanceTimersByTime(200);
+    expect(passSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(50);
+    expect(passSpy).toHaveBeenCalledTimes(1);
   });
 });

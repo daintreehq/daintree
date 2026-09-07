@@ -8,7 +8,12 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PtyPanelData,
+  type SessionLostReason,
+} from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -94,7 +99,7 @@ function seed(panels: PanelInstance[], panelIds?: string[]) {
   });
 }
 
-function signalOf(id: string): boolean | undefined {
+function signalOf(id: string): SessionLostReason | undefined {
   const panel = usePanelStore.getState().panelsById[id];
   return panel && isPtyPanel(panel) ? panel.sessionLostOnRestore : undefined;
 }
@@ -106,7 +111,7 @@ beforeEach(() => {
 
 describe("dismissSessionLost", () => {
   it("consumes the signal so a remount can't resurface the banner", () => {
-    seed([ptyPanel("t-1", { sessionLostOnRestore: true })]);
+    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" })]);
 
     usePanelStore.getState().dismissSessionLost("t-1");
 
@@ -115,21 +120,21 @@ describe("dismissSessionLost", () => {
 
   it("leaves other flagged panels alone", () => {
     seed([
-      ptyPanel("t-1", { sessionLostOnRestore: true }),
-      ptyPanel("t-2", { sessionLostOnRestore: true }),
+      ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }),
+      ptyPanel("t-2", { sessionLostOnRestore: "no-resume-command" }),
     ]);
 
     usePanelStore.getState().dismissSessionLost("t-1");
 
     expect(signalOf("t-1")).toBeUndefined();
-    expect(signalOf("t-2")).toBe(true);
+    expect(signalOf("t-2")).toBe("no-resume-command");
   });
 
   // Whole-object equality, not a sampled field list: an implementation that
   // rebuilt the panel and dropped unrelated fields would pass a spot check.
   it("changes nothing on the panel but the consumed signal", () => {
     const before = ptyPanel("t-1", {
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       agentState: "working",
       exitCode: 3,
       isRestarting: true,
@@ -149,7 +154,7 @@ describe("dismissSessionLost", () => {
   // against the previous state, so an in-place mutation would leave every value
   // assertion above green while the banner stayed on screen.
   it("writes immutably so subscribers are notified", () => {
-    const before = ptyPanel("t-1", { sessionLostOnRestore: true });
+    const before = ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" });
     seed([before]);
     const carrierBefore = usePanelStore.getState().panelsById;
 
@@ -161,11 +166,11 @@ describe("dismissSessionLost", () => {
     expect(notified).toHaveBeenCalledTimes(1);
     expect(usePanelStore.getState().panelsById).not.toBe(carrierBefore);
     expect(usePanelStore.getState().panelsById["t-1"]).not.toBe(before);
-    expect(before.sessionLostOnRestore).toBe(true);
+    expect(before.sessionLostOnRestore).toBe("no-resume-command");
   });
 
   it("is a no-op for an unknown id", () => {
-    seed([ptyPanel("t-1", { sessionLostOnRestore: true })]);
+    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" })]);
     const before = usePanelStore.getState().panelsById;
 
     usePanelStore.getState().dismissSessionLost("nope");
@@ -183,7 +188,7 @@ describe("dismissSessionLost", () => {
   });
 
   it("keeps the same carrier identity on a repeat dismissal", () => {
-    seed([ptyPanel("t-1", { sessionLostOnRestore: true })]);
+    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" })]);
     usePanelStore.getState().dismissSessionLost("t-1");
     const afterFirst = usePanelStore.getState().panelsById;
 
@@ -193,7 +198,7 @@ describe("dismissSessionLost", () => {
   });
 
   it("ignores a non-PTY panel", () => {
-    seed([browserPanel("b-1", { sessionLostOnRestore: true })]);
+    seed([browserPanel("b-1", { sessionLostOnRestore: "no-resume-command" })]);
     const before = usePanelStore.getState().panelsById;
 
     usePanelStore.getState().dismissSessionLost("b-1");
@@ -204,7 +209,7 @@ describe("dismissSessionLost", () => {
   // The signal is deliberately excluded from the persisted snapshot, so
   // consuming it must not schedule a write.
   it("does not persist", () => {
-    seed([ptyPanel("t-1", { sessionLostOnRestore: true })]);
+    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" })]);
 
     usePanelStore.getState().dismissSessionLost("t-1");
 
@@ -215,9 +220,9 @@ describe("dismissSessionLost", () => {
 describe("dismissAllSessionLost", () => {
   it("clears every flagged panel regardless of worktree, keeping them all", () => {
     seed([
-      ptyPanel("t-1", { sessionLostOnRestore: true, worktreeId: "wt-a" }),
-      ptyPanel("t-2", { sessionLostOnRestore: true, worktreeId: "wt-b" }),
-      ptyPanel("t-3", { sessionLostOnRestore: true, worktreeId: undefined }),
+      ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command", worktreeId: "wt-a" }),
+      ptyPanel("t-2", { sessionLostOnRestore: "no-resume-command", worktreeId: "wt-b" }),
+      ptyPanel("t-3", { sessionLostOnRestore: "no-resume-command", worktreeId: undefined }),
     ]);
 
     usePanelStore.getState().dismissAllSessionLost();
@@ -236,9 +241,9 @@ describe("dismissAllSessionLost", () => {
   // fresh carrier, which React memo boundaries reading a panel would miss.
   it("notifies once and replaces each flagged panel object", () => {
     const before = [
-      ptyPanel("t-1", { sessionLostOnRestore: true }),
-      ptyPanel("t-2", { sessionLostOnRestore: true }),
-      ptyPanel("t-3", { sessionLostOnRestore: true }),
+      ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }),
+      ptyPanel("t-2", { sessionLostOnRestore: "no-resume-command" }),
+      ptyPanel("t-3", { sessionLostOnRestore: "no-resume-command" }),
     ];
     seed(before);
 
@@ -250,7 +255,7 @@ describe("dismissAllSessionLost", () => {
     expect(notified).toHaveBeenCalledTimes(1);
     for (const panel of before) {
       expect(usePanelStore.getState().panelsById[panel.id]).not.toBe(panel);
-      expect(panel.sessionLostOnRestore).toBe(true);
+      expect(panel.sessionLostOnRestore).toBe("no-resume-command");
     }
   });
 
@@ -260,8 +265,8 @@ describe("dismissAllSessionLost", () => {
   it("clears a panel that is not in panelIds yet", () => {
     seed(
       [
-        ptyPanel("t-1", { sessionLostOnRestore: true }),
-        ptyPanel("t-batched", { sessionLostOnRestore: true }),
+        ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }),
+        ptyPanel("t-batched", { sessionLostOnRestore: "no-resume-command" }),
       ],
       ["t-1"]
     );
@@ -273,8 +278,8 @@ describe("dismissAllSessionLost", () => {
 
   it("clears panels parked outside the grid", () => {
     seed([
-      ptyPanel("t-dock", { sessionLostOnRestore: true, location: "dock" }),
-      ptyPanel("t-trash", { sessionLostOnRestore: true, location: "trash" }),
+      ptyPanel("t-dock", { sessionLostOnRestore: "no-resume-command", location: "dock" }),
+      ptyPanel("t-trash", { sessionLostOnRestore: "no-resume-command", location: "trash" }),
     ]);
 
     usePanelStore.getState().dismissAllSessionLost();
@@ -285,7 +290,7 @@ describe("dismissAllSessionLost", () => {
 
   it("leaves unflagged panels untouched by identity", () => {
     const untouched = ptyPanel("t-2");
-    seed([ptyPanel("t-1", { sessionLostOnRestore: true }), untouched]);
+    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }), untouched]);
 
     usePanelStore.getState().dismissAllSessionLost();
 
@@ -307,8 +312,8 @@ describe("dismissAllSessionLost", () => {
 
   it("is idempotent", () => {
     seed([
-      ptyPanel("t-1", { sessionLostOnRestore: true }),
-      ptyPanel("t-2", { sessionLostOnRestore: true }),
+      ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }),
+      ptyPanel("t-2", { sessionLostOnRestore: "no-resume-command" }),
     ]);
     usePanelStore.getState().dismissAllSessionLost();
     const afterFirst = usePanelStore.getState().panelsById;
@@ -319,8 +324,8 @@ describe("dismissAllSessionLost", () => {
   });
 
   it("skips non-PTY panels", () => {
-    const browser = browserPanel("b-1", { sessionLostOnRestore: true });
-    seed([ptyPanel("t-1", { sessionLostOnRestore: true }), browser]);
+    const browser = browserPanel("b-1", { sessionLostOnRestore: "no-resume-command" });
+    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }), browser]);
 
     usePanelStore.getState().dismissAllSessionLost();
 
@@ -329,7 +334,7 @@ describe("dismissAllSessionLost", () => {
   });
 
   it("does not persist", () => {
-    seed([ptyPanel("t-1", { sessionLostOnRestore: true })]);
+    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" })]);
 
     usePanelStore.getState().dismissAllSessionLost();
 

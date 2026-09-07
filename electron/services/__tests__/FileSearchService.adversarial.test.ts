@@ -41,6 +41,13 @@ function writeFile(filePath: string): void {
 
 describe("FileSearchService adversarial", () => {
   const tempDirs: string[] = [];
+  // Each cached listing arms the module's sweep interval, and `vi.resetModules()`
+  // hands the next test a different module with a different timer. Re-importing
+  // the service after a reset would dispose the wrong one, so the instances are
+  // tracked as they are created — they close over the module that armed the
+  // timer. `unref()` stops these from holding the worker open; it does not stop
+  // them retaining a 20,000-entry index or firing during a later test.
+  const services: Array<{ dispose: () => void }> = [];
 
   beforeEach(() => {
     vi.resetModules();
@@ -49,6 +56,8 @@ describe("FileSearchService adversarial", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const service of services) service.dispose();
+    services.length = 0;
     for (const dir of tempDirs) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -57,7 +66,9 @@ describe("FileSearchService adversarial", () => {
 
   async function createService() {
     const { FileSearchService } = await import("../FileSearchService.js");
-    return new FileSearchService();
+    const service = new FileSearchService();
+    services.push(service);
+    return service;
   }
 
   it("deduplicates concurrent cold-cache loads for the same cwd", async () => {

@@ -1,26 +1,64 @@
 import { useEffect } from "react";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
-import { requestMcpConfirmation, useMcpConfirmStore } from "@/store/mcpConfirmStore";
+import {
+  MAIN_DISPATCH_DEADLINE_MS,
+  requestMcpConfirmation,
+  useMcpConfirmStore,
+  type McpConfirmResolution,
+  type McpConfirmSelectableTarget,
+} from "@/store/mcpConfirmStore";
+import { usePanelStore } from "@/store/panelStore";
+import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
   buildWorktreeDeletePreview,
   formatWorktreeDeletePreviewLines,
+  settleWorktreeDeleteOutcome,
+  worktreeDeleteBlockedBy,
+  worktreeDeleteContentRisk,
+  type WorktreeDeletePreviewOutcome,
 } from "@/components/Worktree/worktreeDeletePreview";
+import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
+import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
 import {
   buildGitRemoteOperationPreview,
   formatGitRemoteOperationPreviewLines,
 } from "@/components/Git/gitRemoteOperationPreview";
 import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
-import { readDispatchRecipeId } from "@/services/actions/effectiveDanger";
-import { MAX_AGENT_RECIPE_TERMINALS, useRecipeStore } from "@/store/recipeStore";
+import {
+  formatForgeCreateIssuePreviewLines,
+  formatForgeIssueCommentPreviewLines,
+  type ForgeCreateIssuePreview,
+  type ForgeIssueCommentPreview,
+} from "@/components/Forge/forgeWritePreview";
+import {
+  readDispatchRecipeId,
+  readDispatchTerminalCommand,
+  readDispatchTerminalCwd,
+  TERMINAL_LAUNCH_ACTION_ID,
+} from "@/services/actions/effectiveDanger";
+import {
+  formatTerminalLaunchPreviewLines,
+  type TerminalLaunchPreview,
+} from "@/lib/mcpTerminalLaunchPreview";
+import { useRecipeStore } from "@/store/recipeStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import {
   resolveWorktreeLocation,
   type WorktreeLocationArgs,
 } from "@/services/actions/definitions/locationArgs";
-import type { ActionContext, ActionDispatchResult, ActionId } from "@shared/types/actions";
+import type {
+  ActionContext,
+  ActionDispatchResult,
+  ActionId,
+  HostApprovedRecipeRun,
+  HostApprovedTarget,
+} from "@shared/types/actions";
 import type { McpConfirmationDecision, McpSessionOrigin } from "@shared/types/ipc/mcpServer";
 import type { TerminalSpawnSource } from "@shared/types/panel";
+import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -30,6 +68,25 @@ const REJECTION_RESULT: ActionDispatchResult = {
   error: {
     code: "USER_REJECTED",
     message: "User rejected the confirmation request.",
+  },
+};
+
+/**
+ * The approval arrived, but main had already given up on the request.
+ *
+ * Distinct from {@link TIMEOUT_RESULT}, which means nobody answered: here a
+ * human DID approve, and the point is that we must not act on it. Main dropped
+ * the pending dispatch at its deadline and told the agent the call timed out,
+ * so starting an irreversible delete now would destroy a worktree on the
+ * strength of a result the caller was told never happened. The response itself
+ * is very likely discarded; refusing is about not doing the work.
+ */
+const EXPIRED_APPROVAL_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_TIMEOUT",
+    message:
+      "Force delete refused: the request passed its dispatch deadline before the approval could be re-checked, so nothing was deleted.",
   },
 };
 
@@ -43,11 +100,16 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
 
 /**
  * Of the gated actions that carry a `recipeId`, the ones that actually START
- * the recipe's terminals. Purely a wording concern for the confirm preview:
- * `recipe.delete` and `recipe.saveToRepo` are also gated and preview the same
- * content, but telling the approver those terminals are about to run would be
- * false. Getting this list wrong understates a dispatch's framing; it can never
- * skip a gate, which `resolveEffectiveActionDanger` owns from the args alone.
+ * the recipe's terminals. `recipe.delete` and `recipe.saveToRepo` are gated too
+ * and preview the same content, but telling the approver those terminals are
+ * about to run would be false.
+ *
+ * No longer only a wording concern: membership is also what issues the run
+ * approval (#12263), so an action dropped from this list previews its recipe
+ * honestly and then silently falls back to the three-terminal unapproved cap.
+ * Still cannot skip a gate in either direction — `resolveEffectiveActionDanger`
+ * owns that from the args alone — and a wrongly-added action would issue an
+ * approval nothing reads, since only the three launch paths forward it.
  */
 const RECIPE_SPAWNING_ACTIONS = new Set([
   "recipe.run",
@@ -76,7 +138,14 @@ function shouldTagMcpSpawn(actionId: string): boolean {
  * the modal just shows args as before.
  */
 export type McpConfirmPreviewTarget =
-  | { kind: "worktreeDelete"; worktreeId: string }
+  /**
+   * `force` is read here, once, from the dispatch args, and carried so the
+   * preview fetch, the typed-name gate and the pre-dispatch re-check all read
+   * the same flag (#12115). It decides whether a gate is possible at all — a
+   * non-force delete cannot destroy anything the host does not first refuse —
+   * and that is the ONLY influence a caller's arguments have over the gate.
+   */
+  | { kind: "worktreeDelete"; worktreeId: string; force: boolean }
   | { kind: "gitPush"; cwd: string }
   | { kind: "gitPullRebase"; cwd: string }
   /**
@@ -87,7 +156,38 @@ export type McpConfirmPreviewTarget =
    * terminals — `recipe.delete` and `recipe.saveToRepo` are gated and preview
    * the same content, but describing it as "starts" would be a lie.
    */
-  | { kind: "recipe"; recipeId: string; resolvedRecipeId: string; spawns: boolean };
+  | { kind: "recipe"; recipeId: string; resolvedRecipeId: string; spawns: boolean }
+  /**
+   * A batch kill's explicit target list (#12123). Unlike every kind above, this
+   * one previews no async fetch: the rows come straight out of the renderer's
+   * own panel store, synchronously, at request time. That is the requirement,
+   * not a shortcut — the list must be complete and frozen before the dialog is
+   * interactive, and a late-arriving row is a row that appears under a cursor
+   * already moving toward the confirm button.
+   */
+  | { kind: "terminalKillBatch"; terminalIds: readonly string[] }
+  /**
+   * The two forge writes that publish something nobody can retract (#12118).
+   *
+   * Unlike every other kind here, the content is already IN the dispatch
+   * arguments — so no fetch, on the `recipe` model. The preview exists anyway
+   * because the arguments an approver actually sees are redacted: any body over
+   * `MCP_ARGS_INLINE_STRING_LIMIT` reaches `ArgumentsDisclosure` as
+   * `<string: N chars>`, which is the "count instead of content" the D2 rule
+   * exists to forbid. `worktreePath` is resolved the same way a push target is,
+   * because neither action takes a repository — it is derived from the worktree,
+   * and filing into the wrong one is the mistake nothing used to catch.
+   */
+  | ({ kind: "forgeCreateIssue" } & ForgeCreateIssuePreview)
+  | ({ kind: "forgeAddIssueComment" } & ForgeIssueCommentPreview)
+  /**
+   * The launch target a `terminal.new` dispatch named (#12216). Synchronous and
+   * argument-derived like the forge kinds, and for the same reason: the
+   * elevation these arguments earn makes the modal the only gate on an
+   * agent-initiated shell, and `ArgumentsDisclosure` redacts every command long
+   * enough to be worth reading.
+   */
+  | ({ kind: "terminalLaunch" } & TerminalLaunchPreview);
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -95,6 +195,12 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   gitPush: "Branch and local commits",
   gitPullRebase: "Branch and local commits",
   recipe: "Recipe contents",
+  // Unused: this kind renders a selectable checklist with its own heading
+  // rather than the preview card. Present so the map stays exhaustive.
+  terminalKillBatch: "Terminals",
+  forgeCreateIssue: "Issue to be filed",
+  forgeAddIssueComment: "Comment to be posted",
+  terminalLaunch: "Terminal to be opened",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
@@ -111,6 +217,21 @@ function worktreeIdArg(args: unknown): string | undefined {
   // no-unsafe-type-assertion warning).
   const worktreeId = args.worktreeId;
   return typeof worktreeId === "string" && worktreeId.length > 0 ? worktreeId : undefined;
+}
+
+/**
+ * Whether a `worktree.delete` dispatch asked to force past the host's refusal.
+ *
+ * Strict identity, never truthiness: `argsSchema` types this as an optional
+ * boolean, and coercing `"false"` or `0` here would let a caller reach the
+ * destructive path through a value the schema would have rejected — or, worse,
+ * duck the gate with one the schema accepts as true. Anything that is not
+ * literally `true` is a non-force delete, which is what `run()` passes through
+ * to `worktreeClient.delete` anyway.
+ */
+function forceArg(args: unknown): boolean {
+  if (args === null || typeof args !== "object" || !("force" in args)) return false;
+  return args.force === true;
 }
 
 /**
@@ -136,6 +257,13 @@ type GitLocationArg =
 
 const GIT_LOCATION_KEYS = ["worktreeId", "worktreePath", "cwd"] as const;
 
+/**
+ * Every spelling that identifies a worktree, including the two legacy aliases
+ * `readGitLocationArg` does not read. The pin strips all of them so the
+ * approved dispatch carries exactly the one selector that was previewed.
+ */
+const WORKTREE_SELECTOR_KEYS = new Set(["worktreeId", "worktreePath", "cwd", "rootPath", "path"]);
+
 function readGitLocationArg(args: unknown): GitLocationArg {
   if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
   const record = args as Record<string, unknown>;
@@ -151,6 +279,194 @@ function readGitLocationArg(args: unknown): GitLocationArg {
 }
 
 /**
+ * The terminal ids a `terminal.killBatch` names, or undefined when the args
+ * carry no usable list (#12123).
+ *
+ * Validated against the SAME schema the action's `argsSchema` uses, not a
+ * looser hand-rolled shape. A list this accepted but the action would not is a
+ * dialog raised for a dispatch that then fails validation — and for duplicate
+ * ids specifically, two rows sharing a key and a checkbox identity, where
+ * unchecking one silently unchecks its twin.
+ *
+ * Deliberately silent on failure: a malformed list gets no checklist and falls
+ * through to `argsSchema` validation, which rejects it. Repairing it here into
+ * something dispatchable would put a target list in front of an approver that
+ * the action would never have accepted.
+ */
+function terminalIdsArg(args: unknown): readonly string[] | undefined {
+  if (args === null || typeof args !== "object" || !("terminalIds" in args)) return undefined;
+  const parsed = TerminalKillBatchIdsSchema.safeParse(args.terminalIds);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The checklist rows for a batch kill, read synchronously from the renderer's
+ * own stores (#12123).
+ *
+ * Every requested id gets a row, including one that names no live panel: the
+ * approver decides about the list the caller actually sent, and silently
+ * dropping an unknown id would show a shorter batch than the one requested.
+ *
+ * `agentRunning` is the state this row is frozen at. `run()` re-reads it live
+ * immediately before it destroys anything and skips a target that has escalated
+ * past what the row said, so this value is what binds the approval to what was
+ * on screen.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export function buildTerminalKillBatchTargets(
+  terminalIds: readonly string[]
+): McpConfirmSelectableTarget[] {
+  const { panelsById } = usePanelStore.getState();
+  // Fails soft: `getCurrentViewStore()` throws when no worktree view store is
+  // mounted, and a missing worktree name costs a row a subtitle, never the
+  // dialog. Same trade `resolveMcpConfirmSubject` makes.
+  let worktrees: ReadonlyMap<string, { branch?: string; name?: string }> | undefined;
+  try {
+    worktrees = getCurrentViewStore().getState().worktrees;
+  } catch {
+    worktrees = undefined;
+  }
+
+  return terminalIds.map((id) => {
+    // `Object.hasOwn`: `panelsById` is a plain object, so an id like
+    // "constructor" would otherwise resolve off the prototype and describe a
+    // function as if it were a panel.
+    const panel = Object.hasOwn(panelsById, id) ? panelsById[id] : undefined;
+    if (panel === undefined) {
+      return { id, name: id, kindLabel: "No longer open", agentRunning: false };
+    }
+    const chrome = deriveTerminalChrome(panel);
+    const worktree = panel.worktreeId === undefined ? undefined : worktrees?.get(panel.worktreeId);
+    const worktreeName = worktree?.branch || worktree?.name;
+    return {
+      id,
+      // The panel's own title, matching what the grid and sidebar show — the
+      // derived chrome label is the panel's kind, not its name.
+      name: panel.title !== undefined && panel.title.length > 0 ? panel.title : id,
+      ...(worktreeName ? { worktree: worktreeName } : {}),
+      kindLabel: chrome.label,
+      agentRunning: terminalHasRunningAgentSession(panel),
+    };
+  });
+}
+
+/**
+ * How a forge write named the content its preview would show.
+ *
+ * Three states rather than `T | undefined`, for the reason
+ * {@link GitLocationArg} has three: the two non-supplied states are different
+ * facts and NEITHER may be repaired with a default. `"omitted"` is a caller
+ * that named no content; `"invalid"` is a caller that named content of the
+ * wrong shape. `argsSchema` rejects both, and both give up the preview and fall
+ * through to that rejection — exactly as an unusable location does for
+ * `git.push`. Substituting a placeholder for either would put text in front of
+ * an approver that nobody is about to publish.
+ */
+type ForgeContentArg<T> =
+  { state: "omitted" } | { state: "invalid" } | { state: "supplied"; value: T };
+
+type ForgeCreateIssueContent = Omit<ForgeCreateIssuePreview, "worktreePath">;
+type ForgeIssueCommentContent = Omit<ForgeIssueCommentPreview, "worktreePath">;
+
+/**
+ * Read `forge.createIssue`'s authored content from the dispatch arguments.
+ *
+ * Mirrors `argsSchema` rather than approximating it — non-empty title, optional
+ * string body, optional array of string labels — so a preview can only ever
+ * describe a dispatch that would also pass validation. Strings are carried
+ * through untouched: normalizing them here would show an approver something
+ * other than what the dispatch carries. (The forge provider trims the title of
+ * its own accord, so the published title can be this one minus surrounding
+ * whitespace; nothing else is rewritten downstream.)
+ */
+function readForgeCreateIssueContent(args: unknown): ForgeContentArg<ForgeCreateIssueContent> {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
+  // `in` rather than a cast to `Record<string, unknown>`: it narrows each
+  // property to `unknown` on its own, which is what the guards below want, and
+  // keeps the reader free of the type assertion the lint ratchet counts.
+  if (!("title" in args)) return { state: "omitted" };
+  const title = args.title;
+  const body = "body" in args ? args.body : undefined;
+  const labels = "labels" in args ? args.labels : undefined;
+  if (title === undefined) return { state: "omitted" };
+  if (typeof title !== "string" || title.length === 0) return { state: "invalid" };
+  if (body !== undefined && typeof body !== "string") return { state: "invalid" };
+  let labelList: readonly string[] | undefined;
+  if (labels !== undefined) {
+    if (!Array.isArray(labels)) return { state: "invalid" };
+    const collected: string[] = [];
+    for (const label of labels) {
+      if (typeof label !== "string") return { state: "invalid" };
+      collected.push(label);
+    }
+    labelList = collected;
+  }
+  return { state: "supplied", value: { title, body, labels: labelList } };
+}
+
+/** The same contract as {@link readForgeCreateIssueContent}, for a comment. */
+function readForgeIssueCommentContent(args: unknown): ForgeContentArg<ForgeIssueCommentContent> {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
+  const issueNumber = "issueNumber" in args ? args.issueNumber : undefined;
+  const body = "body" in args ? args.body : undefined;
+  if (issueNumber === undefined && body === undefined) return { state: "omitted" };
+  // `Number.isSafeInteger`, not `isInteger`: zod's `.int()` accepts only safe
+  // integers, so `isInteger` would render a preview for an issue number
+  // `argsSchema` then rejects.
+  if (typeof issueNumber !== "number" || !Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+    return { state: "invalid" };
+  }
+  if (typeof body !== "string" || body.length === 0) return { state: "invalid" };
+  return { state: "supplied", value: { issueNumber, body } };
+}
+
+/**
+ * The worktree a dispatch would act on, resolved exactly as `run()` will.
+ *
+ * Shared by the git remote previews and the forge writes so the two can never
+ * drift: both pin the result back into the dispatch arguments, and a preview
+ * measured against one worktree while `run()` resolved another would attest to
+ * a repository the approver never saw.
+ *
+ * `undefined` means the worktree could not be established — a named but
+ * unusable selector, contradictory path spellings, or no active worktree — and
+ * NEVER that the active worktree should be substituted (#7880). What the two
+ * callers do with it differs by what their preview is FOR: a git remote preview
+ * has nothing left to show without a repository, so it gives up the card
+ * entirely; a forge write's content stands on its own, so it previews that and
+ * says the target is unknown. Neither pins anything.
+ */
+function resolvePreviewWorktreePath(
+  args: unknown,
+  context: ActionContext | undefined
+): string | undefined {
+  const named = readGitLocationArg(args);
+  // A named-but-unusable selector gets no preview and no pinning — it falls
+  // through to schema/`run()` validation and fails, as it did before #11538.
+  if (named.state === "invalid") return undefined;
+  // Run the action's OWN resolver (`worktreeId` wins, then a path spelling,
+  // then the active worktree) so the previewed repository is byte-for-byte the
+  // one `run()` will act on. And mirror ActionService's WHOLE-OBJECT
+  // `contextOverride ?? live` precedence (ActionService.ts:349): a per-field
+  // fallback would diverge, because a pinned context that carries no worktree
+  // path must NOT borrow the live one.
+  const effectiveContext = context ?? actionService.getContext();
+  let cwd: string | undefined;
+  try {
+    cwd = resolveWorktreeLocation(
+      named.state === "named" ? named.location : undefined,
+      effectiveContext
+    ).worktreePath;
+  } catch {
+    // Contradictory path spellings, which `argsSchema` rejects anyway.
+    // Previewing either one would attest to a dispatch that never runs.
+    return undefined;
+  }
+  return cwd === undefined || cwd.length === 0 ? undefined : cwd;
+}
+
+/**
  * Resolve what this dispatch should preview, or `undefined` when it has no
  * preview. Called ONCE per dispatch: the result drives `previewPending`, the
  * fetch, the modal heading, and — for git — the cwd the approved dispatch is
@@ -163,35 +479,63 @@ export function resolveMcpConfirmPreviewTarget(
   args: unknown,
   context: ActionContext | undefined
 ): McpConfirmPreviewTarget | undefined {
+  if (actionId === "terminal.killBatch") {
+    const terminalIds = terminalIdsArg(args);
+    return terminalIds === undefined ? undefined : { kind: "terminalKillBatch", terminalIds };
+  }
   if (actionId === "worktree.delete") {
     const worktreeId = worktreeIdArg(args);
-    return worktreeId === undefined ? undefined : { kind: "worktreeDelete", worktreeId };
+    return worktreeId === undefined
+      ? undefined
+      : { kind: "worktreeDelete", worktreeId, force: forceArg(args) };
   }
   if (actionId === "git.push" || actionId === "git.pullRebase") {
-    const named = readGitLocationArg(args);
-    // A named-but-unusable selector gets no preview and no pinning — it falls
-    // through to schema/`run()` validation and fails, as it did before #11538.
-    if (named.state === "invalid") return undefined;
-    // Run the action's OWN resolver (`worktreeId` wins, then a path spelling,
-    // then the active worktree) so the previewed repository is byte-for-byte the
-    // one `run()` will push. And mirror ActionService's WHOLE-OBJECT
-    // `contextOverride ?? live` precedence (ActionService.ts:349): a per-field
-    // fallback would diverge, because a pinned context that carries no worktree
-    // path must NOT borrow the live one.
-    const effectiveContext = context ?? actionService.getContext();
-    let cwd: string | undefined;
-    try {
-      cwd = resolveWorktreeLocation(
-        named.state === "named" ? named.location : undefined,
-        effectiveContext
-      ).worktreePath;
-    } catch {
-      // Contradictory path spellings, which `argsSchema` rejects anyway.
-      // Previewing either one would attest to a dispatch that never runs.
-      return undefined;
-    }
-    if (cwd === undefined || cwd.length === 0) return undefined;
+    const cwd = resolvePreviewWorktreePath(args, context);
+    if (cwd === undefined) return undefined;
     return actionId === "git.push" ? { kind: "gitPush", cwd } : { kind: "gitPullRebase", cwd };
+  }
+  // The forge writes resolve their worktree the same way — neither takes a
+  // repository argument, so the worktree IS the repository selection — and then
+  // read the authored content straight out of the arguments.
+  //
+  // The CONTENT decides whether there is a preview at all; an unresolvable
+  // worktree does not suppress it. Withholding the card because the repository
+  // could not be identified would drop the approver back to the redacted
+  // argument summary for the one action whose content is the whole point, and
+  // an id absent from the index at modal-open can be present by the time
+  // `run()` re-resolves it — publishing on an approval that was never shown the
+  // text. The unresolved target is stated as a caution in the card instead, and
+  // nothing gets pinned, so `run()` resolves it live exactly as it would have.
+  if (actionId === "forge.createIssue") {
+    const content = readForgeCreateIssueContent(args);
+    return content.state === "supplied"
+      ? {
+          kind: "forgeCreateIssue",
+          worktreePath: resolvePreviewWorktreePath(args, context),
+          ...content.value,
+        }
+      : undefined;
+  }
+  if (actionId === "forge.addIssueComment") {
+    const content = readForgeIssueCommentContent(args);
+    return content.state === "supplied"
+      ? {
+          kind: "forgeAddIssueComment",
+          worktreePath: resolvePreviewWorktreePath(args, context),
+          ...content.value,
+        }
+      : undefined;
+  }
+  // `terminal.new`'s launch arguments (#12216). Scoped by action id, exactly as
+  // `resolveEffectiveActionDanger` scopes the elevation that opens this modal:
+  // `command` is an ordinary field name other safe actions take without running
+  // anything. A dispatch naming neither is not elevated and gets no card.
+  if (actionId === TERMINAL_LAUNCH_ACTION_ID) {
+    const command = readDispatchTerminalCommand(args);
+    const cwd = readDispatchTerminalCwd(args);
+    return command === undefined && cwd === undefined
+      ? undefined
+      : { kind: "terminalLaunch", command, cwd };
   }
   // Any dispatch carrying a recipe id — `recipe.run` and the two composites that
   // reach the same effect — previews the terminals it would start. Keyed on the
@@ -246,14 +590,117 @@ export function resolveMcpConfirmSubject(
       const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId);
       return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
     }
+    // The worktree the chosen directory IS, named from the store rather than
+    // from the path itself — the title must not become a place to render
+    // caller-supplied text. A cwd that is no worktree root, or none at all,
+    // resolves to nothing and keeps the generic title; the card names the
+    // directory and command in full either way.
+    if (target.kind === "terminalLaunch") {
+      if (target.cwd === undefined) return undefined;
+      for (const worktree of getCurrentViewStore().getState().worktrees.values()) {
+        if (worktree.path !== target.cwd) continue;
+        // `||`, not `??`: a detached worktree carries `branch: ""` as readily
+        // as `undefined`, and `??` would keep the empty string over the name.
+        const name = worktree.branch || worktree.name;
+        return name.length > 0 ? name : undefined;
+      }
+      return undefined;
+    }
   } catch {
     return undefined;
   }
   return undefined;
 }
 
+/** A `worktree.delete` target, narrowed. */
+type WorktreeDeleteTarget = Extract<McpConfirmPreviewTarget, { kind: "worktreeDelete" }>;
+
 /**
- * Build fresh preview lines for a resolved target (#11343, #11538).
+ * Whether this dispatch needs the D3 typed-name gate, and what the human must
+ * type (#12115).
+ *
+ * `"unresolvable"` is a third state on purpose. A force delete whose worktree
+ * this view cannot see has an UNKNOWABLE tier — the protected-branch and
+ * main-worktree inputs live on that record — so it is neither "no gate needed"
+ * nor a gate we can put up, and collapsing it into either direction is
+ * fail-open. The bridge refuses those rather than approving them on a D2 gate.
+ */
+export type McpWorktreeDeleteGate =
+  { state: "none" } | { state: "required"; typedNameTarget: string } | { state: "unresolvable" };
+
+/**
+ * Derive the typed-name gate for a force worktree delete from a fresh fetch.
+ *
+ * The tier inputs come from two places and neither is the caller's arguments:
+ * the content half from `outcome` (the same fetch whose lines the approver is
+ * reading), the identity half from the renderer's own worktree record. That is
+ * the whole point — the typed string is a human attestation about a specific
+ * worktree, so an MCP caller must not be able to name it, and `force` is the
+ * only argument that reaches this decision at all.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export function resolveWorktreeDeleteGate(
+  target: WorktreeDeleteTarget,
+  outcome: WorktreeDeletePreviewOutcome
+): McpWorktreeDeleteGate {
+  // A plain delete cannot destroy anything the host does not first refuse, so
+  // there is nothing for the most emphatic consent in the app to be about.
+  if (!target.force) return { state: "none" };
+  // Never gate a delete that cannot proceed: the host throws on these before it
+  // reads `force`, so a typed-name gate here asks for everything and then hands
+  // back a toast. Same rule, same predicates as `WorktreeDeleteDialog`.
+  if (worktreeDeleteBlockedBy(outcome) !== null) return { state: "none" };
+  let worktree;
+  try {
+    worktree = getCurrentViewStore().getState().worktrees.get(target.worktreeId);
+  } catch {
+    // No worktree view store mounted — same unknowable tier as a missing row.
+    worktree = undefined;
+  }
+  if (worktree === undefined) return { state: "unresolvable" };
+  // No seed to fall back on the way the local dialog has one: a `"gone"`
+  // outcome means the worktree is already removed, so `false` is the honest
+  // tracked-changes answer rather than a stale guess.
+  const risk = worktreeDeleteContentRisk(outcome, { hasTrackedChanges: false });
+  const tier = deriveEffectiveTier("worktree.delete", {
+    force: true,
+    isProtectedBranch: isProtectedBranchName(worktree.branch?.toLowerCase()),
+    isMainWorktree: worktree.isMainWorktree === true,
+    hasTrackedChanges: risk.hasTrackedChanges,
+    submoduleFilesAtRisk: risk.submoduleFilesAtRisk,
+  });
+  if (tier !== "D3") return { state: "none" };
+  // `||`, not `??`. A detached worktree carries `branch: ""` as readily as
+  // `undefined`, and `??` keeps the empty string — which `ConfirmDialog` reads
+  // as "no gate" and silently approves. That exact substitution is #7493.
+  const typedNameTarget = worktree.branch || worktree.name;
+  // Nothing to attest to. Refuse rather than substituting some other identity:
+  // asking the human to type a string the local dialog would never ask for is a
+  // silent swap of the thing being consented to.
+  return typedNameTarget ? { state: "required", typedNameTarget } : { state: "unresolvable" };
+}
+
+/** Fresh lines for the modal, plus the gate the same fetch decided. */
+export interface McpConfirmPreviewResult {
+  lines: string[];
+  /** Present only when the fetch put a D3 typed-name gate up (#12115). */
+  typedNameTarget?: string;
+  /**
+   * What a spawning recipe dispatch's preview offered, for the approval to
+   * carry into the run (#12263). Built from the same resolved recipe the lines
+   * describe, so the count travelling with the approval is by construction the
+   * count the approver read.
+   */
+  approvedRecipeRun?: HostApprovedRecipeRun;
+}
+
+/**
+ * Build fresh preview lines for a resolved target (#11343, #11538), and the
+ * typed-name gate a force worktree delete earns from the same fetch (#12115).
+ *
+ * One fetch answers both: the tier and the lines describe the same snapshot, so
+ * a gate can never be decided from content the approver was not shown.
  *
  * Never rejects: a fetch failure yields the kind's "couldn't verify" note
  * rather than an empty preview that would imply a clean tree / nothing to push.
@@ -262,59 +709,210 @@ export function resolveMcpConfirmSubject(
  *
  * Exported for unit tests; the bridge is the only production caller.
  */
-export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): Promise<string[]> {
+export async function buildMcpConfirmPreview(
+  target: McpConfirmPreviewTarget
+): Promise<McpConfirmPreviewResult> {
+  // The checklist IS this kind's preview, and it is already on the item before
+  // the modal opens. There is nothing to fetch and nothing to patch in later.
+  if (target.kind === "terminalKillBatch") return { lines: [] };
   if (target.kind === "recipe") {
     // Renderer state, so no fetch — but re-read here rather than closing over
     // the resolve-time recipe so the lines reflect the store at modal-open.
     const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId) ?? null;
-    return formatRecipePreviewLines(recipe, {
-      agentTerminalCap: MAX_AGENT_RECIPE_TERMINALS,
-      spawns: target.spawns,
-    });
+    return {
+      lines: formatRecipePreviewLines(recipe, { spawns: target.spawns }),
+      // Only for a dispatch that will actually start them, and only from the
+      // recipe the lines came from. A gated dispatch that merely names the
+      // recipe (delete, save, open the editor) starts nothing, so there is no
+      // spawn for an approval to authorize (#12263).
+      ...(target.spawns && recipe
+        ? {
+            approvedRecipeRun: {
+              recipeId: recipe.id,
+              terminalCount: recipe.terminals.length,
+              terminalsDigest: recipeApprovalDigest(recipe.terminals),
+            },
+          }
+        : {}),
+    };
   }
   if (target.kind === "worktreeDelete") {
-    try {
-      const preview = await buildWorktreeDeletePreview(target.worktreeId);
-      // Monitor gone / already removed → nothing meaningful to preview.
-      if (!preview) return [];
-      return formatWorktreeDeletePreviewLines(preview);
-    } catch {
-      return formatWorktreeDeletePreviewLines(null);
-    }
+    const outcome = await settleWorktreeDeleteOutcome(
+      buildWorktreeDeletePreview(target.worktreeId)
+    );
+    // Deliberately the SAME formatter the local dialog's data comes from,
+    // submodule half included: this surface is the one an agent-driven force
+    // delete gates on, and a preview that listed only what the parent's status
+    // can see would leave the approver consenting to nested files and
+    // unrecoverable submodule commits they were never shown.
+    const lines =
+      outcome.state === "verified"
+        ? formatWorktreeDeletePreviewLines(outcome.preview)
+        : outcome.state === "failed"
+          ? formatWorktreeDeletePreviewLines(null)
+          : // Monitor gone / already removed → nothing meaningful to preview.
+            [];
+    const gate = resolveWorktreeDeleteGate(target, outcome);
+    return gate.state === "required" ? { lines, typedNameTarget: gate.typedNameTarget } : { lines };
+  }
+  // Synchronous, like `recipe`: the content is already in hand, so there is
+  // nothing to fetch and nothing that could fail mid-modal.
+  if (target.kind === "forgeCreateIssue") {
+    return { lines: formatForgeCreateIssuePreviewLines(target) };
+  }
+  if (target.kind === "forgeAddIssueComment") {
+    return { lines: formatForgeIssueCommentPreviewLines(target) };
+  }
+  if (target.kind === "terminalLaunch") {
+    return { lines: formatTerminalLaunchPreviewLines(target) };
   }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
-    return formatGitRemoteOperationPreviewLines(
-      preview,
-      target.kind === "gitPush"
-        ? "Nothing to publish — the destination already has everything on this branch."
-        : "No local commits to replay.",
-      operation
-    );
+    return {
+      lines: formatGitRemoteOperationPreviewLines(
+        preview,
+        target.kind === "gitPush"
+          ? "Nothing to publish — the destination already has everything on this branch."
+          : "No local commits to replay.",
+        operation
+      ),
+    };
   } catch {
-    return formatGitRemoteOperationPreviewLines(null, "", operation);
+    return { lines: formatGitRemoteOperationPreviewLines(null, "", operation) };
   }
 }
 
 /**
- * Pin an approved git dispatch to the cwd the human actually previewed.
+ * How long the pre-dispatch re-check may spend re-reading the worktree.
  *
- * The preview resolves cwd when the modal opens; `ActionService.dispatch` would
- * otherwise re-resolve live context AFTER the wait, so switching worktrees
- * mid-modal could push a different repository than the one just approved
- * (#8725). Non-git targets are untouched — only these two carry a cwd.
- *
- * A target only exists when the caller named no worktree or named a resolvable
- * one, and `target.cwd` is what that action's own resolver returned — so writing
- * it back can never point the dispatch somewhere the approver did not see.
- * Where the caller named a `worktreeId`, that id still wins in `run()` and
- * resolves to this same path; where it named a path, this is that path. Malformed
- * args produce no target and pass through untouched, for validation to reject
- * rather than being repaired into a valid push.
+ * Deliberately far below main's 30s dispatch deadline. The re-check runs AFTER
+ * the human has clicked, so every millisecond it takes is spent against a
+ * budget the approval already consumed most of — and the port client's own
+ * deadline is generous enough that an unbounded wait could return after main
+ * had already failed the call, starting a delete on the strength of an
+ * approval the caller was told never landed. An expired re-check is treated as
+ * an unread status, which fails closed exactly like a fetch that errored.
  */
-function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | undefined): unknown {
+const GATE_RECHECK_BUDGET_MS = 5_000;
+
+/**
+ * How long after RECEIVING a dispatch the bridge may still start a force
+ * delete on the strength of its approval.
+ *
+ * Not main's deadline itself, and short of it by exactly the re-check budget.
+ * Two clocks are involved and the renderer holds the later one: main starts its
+ * 30s timer when it queues the dispatch, before a routed send that may first
+ * have to thaw an evicted view, so `Date.now() - receivedAt` UNDERSTATES how
+ * long main has been waiting by however long that took. Reserving the re-check
+ * budget means even a delete that spends its full allowance re-reading the
+ * worktree cannot begin later than main's deadline measured from receipt — the
+ * unseen send latency is what the remaining margin is for.
+ *
+ * Refusing early is the safe direction: nothing is deleted, and the caller can
+ * ask again. Dispatching late is not — the worktree would be destroyed after
+ * the caller was told the call timed out.
+ */
+const APPROVAL_ACTION_DEADLINE_MS = MAIN_DISPATCH_DEADLINE_MS - GATE_RECHECK_BUDGET_MS;
+
+/**
+ * The pre-dispatch re-check, bounded. Resolves to an unverified outcome rather
+ * than rejecting or hanging, so the gate below fails closed on a slow read the
+ * same way it does on a failed one.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export function recheckWorktreeDeleteOutcome(
+  worktreeId: string,
+  budgetMs: number = GATE_RECHECK_BUDGET_MS
+): Promise<WorktreeDeletePreviewOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<WorktreeDeletePreviewOutcome>((resolve) => {
+    timer = setTimeout(() => resolve({ state: "failed", submodules: null }), budgetMs);
+  });
+  // Clear on the winner either way: the loser of a race stays pending, and a
+  // live timer holding the renderer awake for the rest of the budget after the
+  // fetch already answered is a handle nobody asked for.
+  return Promise.race([
+    settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktreeId)),
+    expired,
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Re-derive the gate immediately before an approved force delete executes, and
+ * refuse the dispatch when the approval no longer covers it (#12115).
+ *
+ * The approval a human gave is bound to a snapshot: the tier the fetch found,
+ * and the worktree identity they typed. Both can move while the modal is open —
+ * an agent writing tracked files turns a D2 delete into a D3 one, and a branch
+ * rename moves the attestation target — and `ActionService.dispatch` would
+ * otherwise run against whatever is true afterwards. So the gate is re-derived
+ * here and compared against what was actually shown and typed.
+ *
+ * Refusing, rather than re-arming the modal: the confirmation promise has
+ * already resolved and its resolver is keyed by `requestId`, so re-prompting
+ * means either a second modal for a settled request or a second gate stacked on
+ * the bridge's own — the hang that #11909 avoided. A refused call is
+ * self-healing instead: the caller re-issues, a fresh modal opens, and this
+ * time the fetch puts the typed-name gate up before anyone can approve.
+ *
+ * Returns `undefined` when the dispatch may proceed. A downgrade never refuses:
+ * an approval gated on MORE than the current tier requires is still consent.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export function worktreeDeleteGateRefusal(
+  gate: McpWorktreeDeleteGate,
+  approvedTypedNameTarget: string | undefined
+): ActionDispatchResult | undefined {
+  if (gate.state === "unresolvable") {
+    return {
+      ok: false,
+      error: {
+        code: "CONFIRMATION_REQUIRED",
+        message:
+          "Force delete refused: this window cannot resolve the worktree named, so the tier this delete would run at is unknowable and no approval can cover it. Nothing was deleted.",
+      },
+    };
+  }
+  if (gate.state === "none") return undefined;
+  if (approvedTypedNameTarget === gate.typedNameTarget) return undefined;
+  return {
+    ok: false,
+    error: {
+      code: "CONFIRMATION_REQUIRED",
+      message: `Force delete refused: the worktree changed while the request was awaiting approval, and deleting it now requires the approver to type '${gate.typedNameTarget}'. Nothing was deleted. The change of state is itself the changed context a fresh call would be retried against, and that call raises the confirmation with the gate.`,
+    },
+  };
+}
+
+/**
+ * Pin an approved dispatch to the worktree the human actually previewed.
+ *
+ * The preview resolves the path when the modal opens; `ActionService.dispatch`
+ * would otherwise re-resolve live context AFTER the wait, so switching
+ * worktrees mid-modal could push — or, since #12118, file an issue against — a
+ * different repository than the one just approved (#8725).
+ *
+ * The path is what that action's own resolver returned, so writing it back can
+ * never point the dispatch somewhere the approver did not see — and it is
+ * written as the ONLY selector, every other spelling stripped, because
+ * `resolveWorktreeLocation` lets `worktreeId` win outright and a pin sitting
+ * beside one would never be read. A forge target whose repository could not be
+ * resolved carries no path and pins nothing; malformed args produce no target
+ * and pass through untouched, for validation to reject rather than being
+ * repaired into a valid dispatch.
+ */
+function withPreviewedWorktreeCwd(
+  args: unknown,
+  target: McpConfirmPreviewTarget | undefined
+): unknown {
   if (target === undefined || target.kind === "worktreeDelete") return args;
+  // The batch kill pins its approval through the dispatch options rather than
+  // through args, so there is nothing to rewrite here — and rewriting the id
+  // list would hide the excluded targets the action has to report on.
+  if (target.kind === "terminalKillBatch") return args;
   if (target.kind === "recipe") {
     // Same rationale as the git cwd pin: the dispatch must act on the recipe the
     // human saw. `getRecipeById` resolves a shadowed id to a different winner,
@@ -322,9 +920,41 @@ function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | un
     if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
     return { ...args, recipeId: target.resolvedRecipeId };
   }
-  if (args === undefined) return { cwd: target.cwd };
+  // `terminal.new`'s `cwd` is the directory the CALLER named, not a worktree
+  // selector the host resolved — there is nothing to re-resolve and so nothing
+  // to pin, and rewriting the args around it would strip selectors the action
+  // resolves for itself.
+  if (target.kind === "terminalLaunch") return args;
+  // Named per kind rather than left to a fall-through: every remaining kind
+  // happens to carry a path today, and a future one that does not would
+  // otherwise silently pin `cwd: undefined` onto a dispatch.
+  const cwd =
+    target.kind === "forgeCreateIssue" || target.kind === "forgeAddIssueComment"
+      ? target.worktreePath
+      : target.cwd;
+  // A forge target can carry no path (the repository was unresolvable). There
+  // is nothing to pin then, and writing `cwd: undefined` would replace a
+  // selector the caller did supply with a field that fails `.min(1)`.
+  if (cwd === undefined) return args;
+  if (args === undefined) return { cwd };
   if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
-  return { ...args, cwd: target.cwd };
+  // Drop every other spelling and leave exactly one canonical selector.
+  //
+  // Keeping them alongside the pin was both weaker and more brittle than it
+  // looked. Weaker: `resolveWorktreeLocation` lets `worktreeId` win outright,
+  // so a pinned `cwd` was never consulted for an id-named dispatch and the
+  // "acts on the previewed worktree" guarantee did not hold if that id's path
+  // changed behind the modal. More brittle: a caller naming `worktreeId` plus a
+  // DIFFERENT `worktreePath` used to dispatch fine (the id won, the path was
+  // ignored), but with a third spelling added it trips the resolver's
+  // contradictory-spellings guard — turning an approved dispatch into a failure
+  // it would not have had. One selector, the one that was previewed, is both
+  // the honest attestation and the only shape neither hazard applies to.
+  const pinned: Record<string, unknown> = { cwd };
+  for (const [key, value] of Object.entries(args)) {
+    if (!WORKTREE_SELECTOR_KEYS.has(key)) pinned[key] = value;
+  }
+  return pinned;
 }
 
 /**
@@ -405,13 +1035,75 @@ export function useMcpBridge(): void {
 
     const cleanupDispatch = window.electron.mcpBridge.onDispatchActionRequest(
       async ({ requestId, actionId, args, confirmed, context, callerInfo, sessionOrigin }) => {
+        // Main started its 30s clock when it sent this; ours starts a beat
+        // later, which is the safe direction to be wrong in only for reporting
+        // — for the destructive re-check below we compare against it directly.
+        const receivedAt = Date.now();
         let confirmationDecision: McpConfirmationDecision | undefined;
         // Declared outside the confirm block so the approved dispatch can pin
         // itself to the previewed cwd. Stays undefined for pre-granted
         // dispatches, which show no modal and so previewed nothing to pin to.
         let previewTarget: McpConfirmPreviewTarget | undefined;
+        // What the approver was actually asked to type, if anything (#12115).
+        // Set by the same patch that renders the gate, so it is necessarily
+        // settled before approval is possible — the modal keeps its confirm
+        // button disabled until `setPreview` lands. Compared against a freshly
+        // re-derived gate below, which is what binds the approval to the target
+        // and the content the human saw rather than to whatever is true after.
+        let approvedTypedNameTarget: string | undefined;
+        // The per-target half of the same attestation, for a confirmation that
+        // offered per-row deselection (#12123). Stays undefined for every other
+        // dispatch — including a pre-granted one, which shows no modal and so
+        // selected nothing — and an action that needs it refuses on its absence
+        // rather than reading "approved" as "approved all of these".
+        let hostApprovedTargets: HostApprovedTarget[] | undefined;
+        // The recipe half of the same attestation (#12263). Captured from the
+        // preview build, exactly like `approvedTypedNameTarget` above and for
+        // the same reason: the modal keeps approval disabled until `setPreview`
+        // lands, so a click can only ever land after this is set from the lines
+        // the approver is looking at. Stays undefined for a pre-granted
+        // dispatch, which builds no preview — so a standing automation grant
+        // keeps the smaller unapproved terminal cap rather than silently
+        // inheriting a ten-pane authority nobody was shown.
+        let approvedRecipeRun: HostApprovedRecipeRun | undefined;
         try {
           let effectiveConfirmed = confirmed;
+
+          // A native automation grant pre-authorises the `danger: "confirm"`
+          // modal — which is the D2 gate, and only that. It cannot stand in for
+          // a D3 one: the grant names a TOOL, issued in Settings ahead of time,
+          // with no target, no arguments and no preview in front of the person
+          // who issued it. The typed-name gate exists precisely because that
+          // class of consent is not enough to discard tracked work or delete a
+          // protected worktree irreversibly. So a granted force delete whose
+          // LIVE tier comes back D3 gives up its pre-authorisation and asks for
+          // the attestation on its own account (#12115).
+          if (effectiveConfirmed === true && actionId === "worktree.delete" && forceArg(args)) {
+            const grantedTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
+            if (grantedTarget?.kind === "worktreeDelete") {
+              const gate = resolveWorktreeDeleteGate(
+                grantedTarget,
+                await recheckWorktreeDeleteOutcome(grantedTarget.worktreeId)
+              );
+              if (disposed) return;
+              if (gate.state === "required") {
+                // Fall through to the modal, which re-derives the same gate
+                // from its own fresh fetch and raises the typed-name input.
+                effectiveConfirmed = false;
+              } else if (gate.state === "unresolvable") {
+                // Demoting would only strand the approver: the modal would
+                // reach the same unresolvable answer and refuse after the
+                // click. Refuse now, while nothing has been asked of anyone.
+                const refusal = worktreeDeleteGateRefusal(gate, undefined);
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: refusal ?? REJECTION_RESULT,
+                  confirmationDecision,
+                });
+                return;
+              }
+            }
+          }
 
           if (effectiveConfirmed !== true) {
             // Args-aware: a statically-safe composite carrying a recipeId has
@@ -434,12 +1126,20 @@ export function useMcpBridge(): void {
               // item and re-enables approval when the fetch lands (empty lines
               // when there's nothing to show); a no-op if already resolved.
               previewTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
-              const previewPending = previewTarget !== undefined;
-              if (previewTarget !== undefined) {
+              // The checklist kind resolves synchronously below and has no
+              // lines to fetch, so it must not arm the pending-preview gate —
+              // that would leave its approve button disabled with nothing in
+              // flight to ever re-enable it.
+              const hasAsyncPreview =
+                previewTarget !== undefined && previewTarget.kind !== "terminalKillBatch";
+              const previewPending = hasAsyncPreview;
+              if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
-                  .then((preview) => {
+                  .then(({ lines, typedNameTarget, approvedRecipeRun: offered }) => {
                     if (disposed) return;
-                    useMcpConfirmStore.getState().setPreview(requestId, preview);
+                    approvedTypedNameTarget = typedNameTarget;
+                    approvedRecipeRun = offered;
+                    useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
                   })
                   // The builder already fails soft, but a rejection escaping it
                   // would leave previewPending stuck true and the modal
@@ -447,12 +1147,20 @@ export function useMcpBridge(): void {
                   // it unconditionally.
                   .catch(() => {
                     if (disposed) return;
+                    approvedRecipeRun = undefined;
                     useMcpConfirmStore.getState().setPreview(requestId, []);
                   });
               }
-              let decision: McpConfirmationDecision;
+              // Frozen HERE, once, before the modal exists — not rebuilt on
+              // render and never appended to. The list the approver reads is
+              // the list their approval covers.
+              const selectableTargets =
+                previewTarget?.kind === "terminalKillBatch"
+                  ? buildTerminalKillBatchTargets(previewTarget.terminalIds)
+                  : undefined;
+              let resolution: McpConfirmResolution;
               try {
-                decision = await requestMcpConfirmation({
+                resolution = await requestMcpConfirmation({
                   requestId,
                   actionId,
                   actionTitle: definition.title,
@@ -483,12 +1191,25 @@ export function useMcpBridge(): void {
                   // absence that has two very different causes.
                   sessionOrigin,
                   previewPending,
-                  ...(previewTarget ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) } : {}),
+                  ...(hasAsyncPreview && previewTarget
+                    ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
+                    : {}),
+                  ...(selectableTargets
+                    ? {
+                        selectableTargets,
+                        selectionConfirmLabel: {
+                          verb: "Kill",
+                          one: "terminal",
+                          many: "terminals",
+                        },
+                      }
+                    : {}),
                 });
               } finally {
                 inFlightConfirms.delete(requestId);
               }
               if (disposed) return;
+              const decision = resolution.decision;
               if (decision === "rejected") {
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,
@@ -507,12 +1228,56 @@ export function useMcpBridge(): void {
               }
               confirmationDecision = "approved";
               effectiveConfirmed = true;
+              if (selectableTargets !== undefined) {
+                // Only the rows still checked, each carrying the agent state its
+                // row was SHOWING. `run()` re-reads that state live before it
+                // destroys anything, so an approval can only ever cover the
+                // consequence the approver was actually shown (#12123).
+                const approved = new Set(resolution.selectedTargetIds ?? []);
+                hostApprovedTargets = selectableTargets
+                  .filter((target) => approved.has(target.id))
+                  .map((target) => ({ id: target.id, observedAgentRunning: target.agentRunning }));
+              }
+
+              // Re-check the gate against LIVE state, immediately before the
+              // dispatch runs. The modal's fetch is minutes old by human
+              // standards and an agent can write tracked files into the
+              // worktree the whole time it is open; without this, a delete that
+              // looked D2 when it was previewed executes on the D2 approval it
+              // was given. Deliberately a separate step from resolving the
+              // modal — the promise is already settled, and folding a live
+              // re-fetch into its resolution would make the decision depend on
+              // the order two async paths happen to land in.
+              if (previewTarget?.kind === "worktreeDelete" && previewTarget.force) {
+                const outcome = await recheckWorktreeDeleteOutcome(previewTarget.worktreeId);
+                if (disposed) return;
+                // Approval near the modal's 28s timeout plus a slow re-read can
+                // land after main's 30s deadline, where the agent has already
+                // been told the call timed out. Deleting the worktree at that
+                // point destroys it behind a reported failure, so the deadline
+                // wins over the approval.
+                const refusal =
+                  Date.now() - receivedAt >= APPROVAL_ACTION_DEADLINE_MS
+                    ? EXPIRED_APPROVAL_RESULT
+                    : worktreeDeleteGateRefusal(
+                        resolveWorktreeDeleteGate(previewTarget, outcome),
+                        approvedTypedNameTarget
+                      );
+                if (refusal !== undefined) {
+                  window.electron.mcpBridge.sendDispatchActionResponse({
+                    requestId,
+                    result: refusal,
+                    confirmationDecision,
+                  });
+                  return;
+                }
+              }
             }
           }
 
           const dispatchArgs = tagMcpSpawnSource(
             actionId,
-            withPreviewedGitCwd(args, previewTarget),
+            withPreviewedWorktreeCwd(args, previewTarget),
             sessionOrigin
           );
           const result = await runWithMcpSpawnFocusSuppressed(
@@ -527,6 +1292,8 @@ export function useMcpBridge(): void {
                 // unpinned external dispatch — ActionService then falls
                 // back to live renderer context, unchanged behaviour.
                 contextOverride: context,
+                ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
+                ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
               }),
             actionId
           );

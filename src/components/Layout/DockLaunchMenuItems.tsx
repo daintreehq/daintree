@@ -17,6 +17,7 @@ import {
   type DockLaunchSurface,
 } from "./dockLaunchItems";
 import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
+import { PANEL_KIND_ORIGIN_LABELS } from "@/utils/panelKindOriginCopy";
 
 export type { DockLaunchAgent } from "./dockLaunchItems";
 
@@ -114,12 +115,25 @@ export function DockLaunchMenuItems({
     );
   };
 
-  const renderPanelItem = (item: DockLaunchPanelItem) => (
-    <C.Item key={item.key} onSelect={() => activate(item)}>
-      <PanelKindIcon iconId={item.iconId} color={item.color} size={14} className="mr-2" />
-      {item.name}
-    </C.Item>
-  );
+  const renderPanelItem = (item: DockLaunchPanelItem) => {
+    // The menu has no qualifier column of its own, so this is a new slot rather
+    // than a filled one. It follows the recipe row below — trailing, dimmed,
+    // shrink-proof — except on the colour: that row is on `text-muted`, which
+    // has no dark-theme contrast floor here, and provenance is not decoration.
+    // `role="menuitem"` takes its accessible name from its text content, so the
+    // marker reaches a screen reader by being rendered; an `aria-label` would
+    // only be a second copy to keep in sync.
+    const originLabel = PANEL_KIND_ORIGIN_LABELS[item.origin];
+    return (
+      <C.Item key={item.key} onSelect={() => activate(item)}>
+        <PanelKindIcon iconId={item.iconId} color={item.color} size={14} className="mr-2" />
+        <span className="truncate">{item.name}</span>
+        {originLabel && (
+          <span className="ml-auto pl-2 text-2xs text-text-secondary shrink-0">{originLabel}</span>
+        )}
+      </C.Item>
+    );
+  };
 
   const renderRecipeItem = (item: DockLaunchRecipeItem) => (
     <C.Item

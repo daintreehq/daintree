@@ -2,7 +2,7 @@ import path from "path";
 import { existsSync, readdirSync } from "fs";
 import { app, BrowserWindow } from "electron";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer, broadcastToVisibleRenderers } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 
 export function getSoundsDir(): string {
@@ -127,6 +127,14 @@ class SoundService {
     this.activeVoices = [];
 
     // Skip the renderer broadcast when no window is listening.
+    // Intentionally GLOBAL; do not "make this consistent" with the visible-only
+    // triggers above. A view can be cached after receiving a trigger, and
+    // caching neither unmounts the listener nor disposes its AudioContext, so
+    // cancelSound() must reach it to fade a live voice and advance that view's
+    // cancelGeneration (which is what aborts a pre-cache fetch/decode from
+    // starting a stale sound). Idle receivers return before touching their
+    // context, so this creates no audio; frozen receivers queue the message
+    // until reactivation rather than thawing on it.
     if (BrowserWindow.getAllWindows().length > 0) {
       broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "sound:cancel", payload: undefined });
     }
@@ -154,10 +162,13 @@ class SoundService {
   private playBypassed(soundFile: string, detune?: number): void {
     // Try Web Audio via renderer first — renderer fetches via daintree-file://
     // and falls through gracefully on a miss, so no need to stat here.
+    // Visible-only: every project view owns an AudioContext, so a global
+    // broadcast plays one copy per open project and wakes frozen cached
+    // renderers — Chromium won't keep an audible page frozen (#12177).
     if (BrowserWindow.getAllWindows().length > 0) {
       const payload: { soundFile: string; detune?: number } = { soundFile };
       if (detune !== undefined) payload.detune = detune;
-      broadcastToRenderer(CHANNELS.SOUND_TRIGGER, payload);
+      broadcastToVisibleRenderers(CHANNELS.SOUND_TRIGGER, payload);
       return;
     }
 
@@ -186,8 +197,9 @@ class SoundService {
 
     // Try Web Audio via renderer first — renderer fetches via daintree-file://
     // and falls through gracefully on a miss, so no need to stat here.
+    // Visible-only for the same reason as playBypassed (#12177).
     if (BrowserWindow.getAllWindows().length > 0) {
-      broadcastToRenderer(CHANNELS.SOUND_TRIGGER, {
+      broadcastToVisibleRenderers(CHANNELS.SOUND_TRIGGER, {
         soundFile,
         volume: effectiveVolume,
       });

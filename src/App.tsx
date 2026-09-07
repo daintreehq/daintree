@@ -26,6 +26,7 @@ import { usePluginRecipes } from "./hooks/usePluginRecipes";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
 import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
+import { useProjectPluginBridge } from "./hooks/useProjectPluginBridge";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
 import { useKeepMounted } from "./hooks/useKeepMounted";
@@ -281,7 +282,9 @@ function AppInner() {
 
   const {
     gitPushResetKey,
+    gitForcePushResetKey,
     gitPullRebaseResetKey,
+    gitWorktreeOperationResetKey,
     panelLimitResetKey,
     recipeConflictResetKey,
     mcpConfirmResetKey,
@@ -388,6 +391,7 @@ function AppInner() {
   usePluginKeybindings();
   usePluginMcpConsentBridge();
   usePluginCapabilityConsentBridge();
+  useProjectPluginBridge();
 
   useMenuActions();
 
@@ -593,7 +597,9 @@ function AppInner() {
                 panelLimitResetKey={panelLimitResetKey}
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}
+                gitForcePushResetKey={gitForcePushResetKey}
                 gitPullRebaseResetKey={gitPullRebaseResetKey}
+                gitWorktreeOperationResetKey={gitWorktreeOperationResetKey}
                 recipeConflictResetKey={recipeConflictResetKey}
                 gitInitDialogOpen={gitInitDialogOpen}
                 shouldMountGitInitDialog={shouldMountGitInitDialog}

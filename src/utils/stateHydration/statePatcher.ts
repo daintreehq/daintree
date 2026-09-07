@@ -9,6 +9,7 @@ import type {
   FileBrowserTreeSnapshot,
   PanelExitBehavior,
   PanelTitleMode,
+  SessionLostReason,
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -41,7 +42,8 @@ import {
   resolveRespawnAgentId,
 } from "@shared/utils/savedAgentIdentity";
 import { isAbsolute } from "@shared/utils/path";
-import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import { panelKindIsDockable, type PersistedPanelKindRef } from "@shared/config/panelKindRegistry";
+import { restoredExtensionStateVersion } from "@shared/utils/panelExtensionState";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
@@ -178,7 +180,15 @@ export interface SavedTerminalData {
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorColor?: string;
   extensionState?: Record<string, unknown>;
+  /** Version {@link extensionState} was persisted at (#12280). */
+  extensionStateVersion?: number;
   pluginId?: string;
+  /**
+   * Portable identity of a plugin-contributed kind (#12280). Restore qualifies
+   * it against the project being restored into; a snapshot written before the
+   * field existed carries the qualification inside `kind` instead.
+   */
+  kindRef?: PersistedPanelKindRef;
   /**
    * User-initiated focus timestamp from the saved snapshot. Read at the
    * hydration boundary and propagated to the live panel via the
@@ -262,7 +272,8 @@ interface AgentSettingsData {
   globalUseAltScreen?: boolean;
 }
 
-export const inferKind: (saved: SavedTerminalData) => PanelKind = inferKindShared;
+export const inferKind: (saved: SavedTerminalData, projectId?: string | null) => PanelKind =
+  inferKindShared;
 
 function resolveSavedCwd(savedCwd: string | undefined, projectRoot: string): string {
   if (savedCwd && isAbsolute(savedCwd)) return savedCwd;
@@ -367,6 +378,7 @@ export function buildArgsForBackendTerminal(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
@@ -442,6 +454,7 @@ export function buildArgsForReconnectedFallback(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
@@ -462,6 +475,18 @@ export interface BuildArgsForRespawnOptions {
    * two writers on one transcript, so the loser resumes nothing.
    */
   allowSessionIdResume?: boolean;
+  /**
+   * The session the agent's resume-latest fallback would itself have resolved
+   * to, looked up before this call (#12178). Present only for a pane that was
+   * actually going to use that fallback, so it upgrades `codex resume --last`
+   * to `codex resume <id>`: the same conversation, but named — which puts the id
+   * on the pane from the moment the PTY exists instead of leaving it for a
+   * teardown to observe, the way it was lost in the first place.
+   *
+   * Undefined whenever the lookup found nothing, could not choose, or failed;
+   * the fallback then runs exactly as it does today.
+   */
+  resolvedResumeLatestSessionId?: string;
 }
 
 export function buildArgsForRespawn(
@@ -493,10 +518,12 @@ export function buildArgsForRespawn(
   const isAgentPanel = Boolean(effectiveAgentId);
   const agentId = effectiveAgentId;
   let command = saved.command?.trim() || undefined;
-  // True when we fall through to a fresh agent launch because no resume command
+  // Set when we fall through to a fresh agent launch because no resume command
   // was available — the user's prior conversation is unreachable and we must
   // surface it rather than silently respawning a clean session (issue #9802).
-  let sessionLostOnRestore = false;
+  // The value names which of the causes below it was (#12182), so the banner
+  // can say something more specific than "gone".
+  let sessionLostOnRestore: SessionLostReason | undefined;
   // Session id this respawn will run under (#11782): the saved one when the
   // pane genuinely reattaches, a freshly minted one on every branch that gives
   // up and starts over, and undefined for agents that don't take an id at
@@ -597,7 +624,9 @@ export function buildArgsForRespawn(
         respawnSessionId = saved.agentSessionId;
       } else if (hasPersistedFlags) {
         command = buildFromPersistedFlags();
-        sessionLostOnRestore = true;
+        // Had the id and permission to resume it, but the agent couldn't turn
+        // that into a command — a config/build issue, not a collision.
+        sessionLostOnRestore = "no-resume-command";
       } else if (agentSettings) {
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
@@ -607,7 +636,7 @@ export function buildArgsForRespawn(
           globalUseAltScreen,
           sessionId: mintFreshSessionId(),
         });
-        sessionLostOnRestore = true;
+        sessionLostOnRestore = "no-resume-command";
       }
     } else {
       // Either no session id was captured (graceful-shutdown pattern match missed
@@ -622,16 +651,48 @@ export function buildArgsForRespawn(
       // not reach that same conversation through the back door, since the owner
       // replaying it is exactly what resume-latest would resolve to.
       let resumeLatestCmd: string | undefined;
+      // The id the fallback would have resolved to, when the caller looked it up
+      // (#12178). Naming it turns an anonymous "whatever is most recent" launch
+      // into the same conversation on the record, so this pane stops being an
+      // unknown live writer. Falls through to the bare fallback if the agent
+      // can't build an exact resume, which leaves today's behaviour intact.
+      const namedResumeLatestId = options?.resolvedResumeLatestSessionId;
       if (allowResumeLatest && !resumeWithheld) {
-        resumeLatestCmd = resolvedAgentBaseCommand
+        if (namedResumeLatestId) {
+          const namedCmd = resolvedAgentBaseCommand
+            ? buildResumeCommand(agentId, namedResumeLatestId, resumeFlags, baseCommand)
+            : buildResumeCommand(agentId, namedResumeLatestId, resumeFlags);
+          if (namedCmd) {
+            resumeLatestCmd = namedCmd;
+            respawnSessionId = namedResumeLatestId;
+          }
+        }
+        resumeLatestCmd ??= resolvedAgentBaseCommand
           ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
           : buildResumeLatestCommand(agentId, resumeFlags);
       }
+      // Why resume-latest didn't run, or didn't help — lazy and memoized so the
+      // capability probe below runs at most once, and never at all when
+      // `resumeLatestCmd` already succeeded. Reused across whichever
+      // fresh-launch path ends up building `command`, since that choice is
+      // orthogonal to what suppressed (or never offered) the resume this pane
+      // would otherwise have used (#12182).
+      let elseReasonCache: SessionLostReason | undefined;
+      const getElseReason = (): SessionLostReason =>
+        (elseReasonCache ??= resumeWithheld
+          ? "sibling-owns-session-id"
+          : // Config-only, so flag-independent and in agreement with the
+            // restore election's own probe — keeps resume-latest suppression
+            // from being mislabeled a slot collision for an agent that has no
+            // such fallback to collide over.
+            !allowResumeLatest && buildResumeLatestCommand(agentId) !== undefined
+            ? "sibling-owns-resume-latest-slot"
+            : "no-resume-path");
       if (resumeLatestCmd) {
         command = resumeLatestCmd;
       } else if (hasPersistedFlags) {
         command = buildFromPersistedFlags();
-        sessionLostOnRestore = true;
+        sessionLostOnRestore = getElseReason();
       } else if (agentSettings) {
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
@@ -641,24 +702,17 @@ export function buildArgsForRespawn(
           globalUseAltScreen,
           sessionId: mintFreshSessionId(),
         });
-        sessionLostOnRestore = true;
-      } else if (
-        resumeWithheld ||
-        (!allowResumeLatest && buildResumeLatestCommand(agentId) !== undefined)
-      ) {
+        sessionLostOnRestore = getElseReason();
+      } else if (getElseReason() !== "no-resume-path") {
         // Nothing above rebuilt the command, so `command` still holds
         // `saved.command` — which is itself a persisted resume command whenever an
         // earlier restore built one. Inheriting it would reinstate the very
-        // collision this suppression exists to prevent, so launch clean. The bare
-        // capability probe (config-only, so flag-independent and in agreement with
-        // the restore election's) keeps resume-latest suppression from touching an
-        // agent that has no such fallback; a withheld session id needs no probe,
-        // since the id in hand is proof the snapshot can carry a resume command.
+        // collision this suppression exists to prevent, so launch clean.
         command = buildLaunchCommandFromFlags(baseCommand, agentId, injectedFromEmpty, {
           clipboardDirectory,
           shareClipboardDirectory,
         });
-        sessionLostOnRestore = true;
+        sessionLostOnRestore = getElseReason();
       }
     }
   }
@@ -719,7 +773,7 @@ export function buildArgsForRespawn(
     originalPresetId: respawnOriginalPresetId,
     isUsingFallback: presetWasStale ? undefined : saved.isUsingFallback,
     fallbackChainIndex: presetWasStale ? undefined : saved.fallbackChainIndex,
-    sessionLostOnRestore: sessionLostOnRestore || undefined,
+    sessionLostOnRestore,
     // Prefer the launch env captured in the snapshot (#10922) so the restored
     // session replays the same provider environment (e.g. a Z.AI/GLM preset or a
     // recipe's inline env) even when that preset/recipe no longer resolves in the
@@ -727,6 +781,7 @@ export function buildArgsForRespawn(
     // before env was persisted, or when the saved env sanitizes to nothing safe.
     env: sanitizeAgentEnv(saved.env) ?? presetEnv,
     extensionState: saved.extensionState,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
@@ -768,6 +823,7 @@ export function buildArgsForNonPtyRecreation(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };

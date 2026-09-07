@@ -32,6 +32,7 @@ const CANONICAL_CATEGORIES = new Set<string>([
   "logs",
   "navigation",
   "panel",
+  "plugins",
   "portal",
   "preferences",
   "project",

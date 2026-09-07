@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 import type { DaintreeMcpTier, Project } from "@shared/types/project";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
@@ -42,12 +43,14 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
     value: "action",
     label: "Action",
-    description: "Workbench + create worktrees, inject context, stage changes.",
+    description:
+      "Workbench + create worktrees, inject context, send terminal commands, confirm-gated worktree deletes.",
   },
   {
     value: "system",
     label: "System",
-    description: "Action + commit, push, delete, send terminal commands.",
+    description:
+      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk.",
   },
 ];
 
@@ -296,7 +299,18 @@ export function GeneralTab({
         setInRepoExpanded(false);
       }
     } catch (err) {
-      setInRepoError(formatErrorMessage(err, "Failed to enable in-repo settings"));
+      // The forward-compat refusal (#12261) carries its per-file detail in
+      // `userMessage` — `context` never survives the contextBridge — so lead
+      // with why nothing was written and list the files underneath.
+      if (isClientAppError(err) && err.code === "RECIPE_FORWARD_COMPAT_CONFLICT") {
+        setInRepoError(
+          "In-repo settings weren't enabled. These recipe files hold content this version of " +
+            "Daintree doesn't understand, and enabling would delete it from them:\n" +
+            (err.userMessage ?? "")
+        );
+      } else {
+        setInRepoError(formatErrorMessage(err, "Failed to enable in-repo settings"));
+      }
     } finally {
       setInRepoEnabling(false);
     }
@@ -595,9 +609,10 @@ export function GeneralTab({
             >
               <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
               <div className="text-xs text-text-secondary leading-relaxed select-text">
-                System tier lets agents commit, push, delete worktrees, and send terminal commands —
-                some of these are irreversible or visible to teammates. Only enable it for projects
-                where you trust the agent to take that kind of action.
+                System tier adds git commits and pushes, forge issue/PR writes, clipboard and file
+                writes, terminal arming, and worktree creation anywhere on disk — some of these are
+                irreversible or visible to teammates. Only enable it for projects where you trust
+                the agent to take that kind of action.
               </div>
             </div>
           )}
@@ -716,7 +731,7 @@ export function GeneralTab({
 
         {inRepoError && (
           <div
-            className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
+            className="mt-2 whitespace-pre-line text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
             role="alert"
           >
             {inRepoError}

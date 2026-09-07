@@ -2,7 +2,7 @@
  * ESLint rule: no-legacy-daintree-utilities
  *
  * Bans the legacy `daintree-*` colour vocabulary. `--color-daintree-*` in
- * `src/index.css` is a thin alias layer over the semantic tokens the theme
+ * `src/styles/design-contract.css` is a thin alias layer over the semantic tokens the theme
  * system actually validates — `--color-daintree-text` is nothing but
  * `var(--theme-text-primary)` under an older name. Two names for one token
  * means neither reads as canonical, and the alias layer covers five tokens
@@ -31,7 +31,7 @@ import { createClassExpressionVisitor, normalizeToken, splitModifier } from "./c
  * Legacy alias → the semantic token that replaces it, as spelled in a utility.
  *
  * Seven entries against five live aliases: `daintree-accent-rgb` and
- * `daintree-focus` were deleted from `src/index.css` once their last call sites
+ * `daintree-focus` were deleted from the design contract once their last call sites
  * went, so a utility naming either now generates no CSS at all. They stay mapped
  * on purpose — that failure is worse than vocabulary mixing, and it deserves the
  * named replacement rather than the generic `unmapped` message.

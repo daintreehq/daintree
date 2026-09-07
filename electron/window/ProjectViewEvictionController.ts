@@ -62,11 +62,18 @@ function hasLiveAssistantBackend(
   projectId: string,
   entry: ViewEntry
 ): boolean {
-  const backend = host.assistantBackendForProject?.(projectId);
-  if (!backend) return false;
-  if (host.isTerminalLive?.(backend.terminalId) !== true) return false;
+  const backends = host.assistantBackendsForProject?.(projectId) ?? [];
+  if (backends.length === 0) return false;
   const wc = entry.view.webContents;
-  return !wc.isDestroyed() && wc.id === backend.webContentsId;
+  if (wc.isDestroyed()) return false;
+  // All three conditions must hold for the SAME lane (#12108): a dead lane
+  // must not borrow a live sibling's liveness, and a lane pinned to another
+  // window must not protect this view. Checking them per backend rather than
+  // across the set is what keeps both from happening.
+  return backends.some(
+    (backend) =>
+      host.isTerminalLive?.(backend.terminalId) === true && wc.id === backend.webContentsId
+  );
 }
 
 /**
@@ -435,6 +442,9 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
   const activeProjectId = host.activeProjectId;
 
   const memoryByPid = new Map<number, number>();
+  // The GPU process is shared by every view, so it is reported once per tick
+  // beside each sample rather than attributed to any one of them.
+  let gpuKb = 0;
   try {
     // Shared TTL snapshot — telemetry tolerates staleness; per-window
     // samplers near the 30s aligned sweeps reuse them instead of stacking
@@ -444,6 +454,7 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
       if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
       }
+      if (proc.type === "GPU") gpuKb += kb;
     }
   } catch {
     // app.getAppMetrics() throwing is non-fatal — skip this tick.
@@ -470,8 +481,10 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
       const guestMemoryKb = sumGuestMemoryKb(wc, memoryByPid);
       const ctx: Record<string, unknown> = {
         projectId,
+        state: entry.state,
         memoryKb,
         pid,
+        gpuKb,
       };
       if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
       logInfo("projectview.cached-memory", ctx);

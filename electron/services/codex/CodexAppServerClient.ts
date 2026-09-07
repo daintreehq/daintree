@@ -43,7 +43,7 @@ export function isAllowedCodexAppServerMethod(method: string): boolean {
   return (ALLOWED_METHODS as readonly string[]).includes(method);
 }
 
-/** Whole-session budget: spawn, handshake, every query, teardown. */
+/** Whole-session budget: the wait for a slot, spawn, handshake, every query, teardown. */
 const SESSION_TIMEOUT_MS = 15_000;
 /** Per-request budget, so one wedged call can't eat the whole session. */
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -80,16 +80,38 @@ const MAX_CONCURRENT_SESSIONS = 2;
 let activeSessions = 0;
 const sessionQueue: Array<() => void> = [];
 
-function acquireSessionSlot(): Promise<void> {
+/**
+ * The wait for a slot counts against the caller's budget, not on top of it.
+ * A restore-time lookup queued behind two wedged sessions would otherwise sit
+ * here for as long as they take, which is precisely when the gate is busiest —
+ * the cap above exists because a restore mounts every Codex pane at once.
+ */
+function acquireSessionSlot(deadlineAt: number): Promise<void> {
   if (activeSessions < MAX_CONCURRENT_SESSIONS) {
     activeSessions++;
     return Promise.resolve();
   }
-  return new Promise<void>((resolve) => {
-    sessionQueue.push(() => {
+  return new Promise<void>((resolve, reject) => {
+    // Whichever of these two runs first disarms the other: the waiter clears
+    // the timer, and the timer drops the waiter from the queue. So a slot can
+    // never be handed to a caller that already gave up and left it leaked.
+    // `waiter` closes over `timer` before it is assigned, which is safe — it
+    // only ever runs from the queue, long after this function has returned.
+    const waiter = (): void => {
+      clearTimeout(timer);
       activeSessions++;
       resolve();
-    });
+    };
+    const timer = setTimeout(
+      () => {
+        const index = sessionQueue.indexOf(waiter);
+        if (index !== -1) sessionQueue.splice(index, 1);
+        reject(new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot"));
+      },
+      Math.max(0, deadlineAt - Date.now())
+    );
+    timer.unref?.();
+    sessionQueue.push(waiter);
   });
 }
 
@@ -103,6 +125,13 @@ export interface CodexAppServerSessionOptions {
   command?: string;
   timeoutMs?: number;
   requestTimeoutMs?: number;
+  /**
+   * Overrides main's own `CODEX_HOME` for this session. A caller asking on
+   * behalf of a specific pane must pass the pane's own launch env here when it
+   * carries one (#12182) — without it, this client silently queries the
+   * default profile even though the pane itself ran against a redirected one.
+   */
+  codexHome?: string;
 }
 
 function classifySpawnError(error: NodeJS.ErrnoException): CodexAppServerError {
@@ -120,17 +149,17 @@ function classifySpawnError(error: NodeJS.ErrnoException): CodexAppServerError {
  * than a credential, and omitting it would silently point the query at the
  * default profile while the terminal itself runs against a relocated one.
  *
- * This inherits main's `CODEX_HOME`, not the terminal's own spawn env, so a
- * per-project override is invisible here. Usually that fails quiet — the
- * default profile holds no thread for that cwd, so the lookup reports
- * `no-session` and the UI stays hidden — but if the default profile also has
- * threads for the same folder, spawn-time correlation runs against the wrong
- * profile. Carrying the terminal's effective profile through pty-host metadata
- * is the real fix and is not wired yet.
+ * Falls back to inheriting main's own `CODEX_HOME` when no override is given.
+ * A caller that knows which pane it's asking on behalf of should pass
+ * `options.codexHome` — main's own env has no relation to a pane's redirected
+ * profile, so without it a query can silently run against the wrong index
+ * (#12182). Callers with no specific pane in mind (e.g. resume-latest
+ * resolution, which only ever asks against main's own profile today) are
+ * unaffected either way.
  */
-function buildAppServerEnv(): NodeJS.ProcessEnv {
+function buildAppServerEnv(codexHomeOverride?: string): NodeJS.ProcessEnv {
   const env = buildProbeEnv();
-  const codexHome = process.env.CODEX_HOME;
+  const codexHome = codexHomeOverride ?? process.env.CODEX_HOME;
   if (codexHome) env.CODEX_HOME = codexHome;
   return env;
 }
@@ -145,9 +174,14 @@ export async function runCodexAppServerSession<T>(
   run: (call: CodexAppServerCall) => Promise<T>,
   options: CodexAppServerSessionOptions = {}
 ): Promise<T> {
-  await acquireSessionSlot();
+  const deadlineAt = Date.now() + (options.timeoutMs ?? SESSION_TIMEOUT_MS);
+  await acquireSessionSlot(deadlineAt);
   try {
-    return await spawnCodexAppServerSession(run, options);
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      throw new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot");
+    }
+    return await spawnCodexAppServerSession(run, { ...options, timeoutMs: remainingMs });
   } finally {
     releaseSessionSlot();
   }
@@ -169,7 +203,7 @@ async function spawnCodexAppServerSession<T>(
     child = spawn(command, ["app-server", "--listen", "stdio://"], {
       shell: false,
       windowsHide: true,
-      env: buildAppServerEnv(),
+      env: buildAppServerEnv(options.codexHome),
       detached: useGroup,
       stdio: ["pipe", "pipe", "pipe"],
     });

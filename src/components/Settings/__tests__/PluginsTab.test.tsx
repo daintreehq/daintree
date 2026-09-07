@@ -23,6 +23,9 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 function makePlugin(name: string): LoadedPluginInfo {
   return {
+    instanceId: name,
+    origin: "global",
+    projectId: null,
     manifest: {
       name,
       version: "1.0.0",

@@ -228,7 +228,8 @@ export class BackpressureManager {
     status: TerminalFlowStatus,
     bufferUtilization?: number,
     pauseDuration?: number,
-    reason?: string
+    reason?: string,
+    timestamp?: number
   ): void {
     const previousStatus = this.terminalStatuses.get(id);
     if (previousStatus === status) {
@@ -242,7 +243,7 @@ export class BackpressureManager {
       bufferUtilization,
       pauseDuration,
       reason,
-      timestamp: Date.now(),
+      timestamp: timestamp ?? Date.now(),
     });
   }
 

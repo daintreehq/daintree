@@ -13,7 +13,7 @@ describe("Mann-Whitney U", () => {
   it("detects clear separation with low p-value", () => {
     const a = [10, 12, 14, 16, 18];
     const b = [1, 2, 3, 4, 5];
-    const { u, pValue } = mannWhitneyU(a, b, { exact: false });
+    const { pValue } = mannWhitneyU(a, b, { exact: false });
     expect(pValue).toBeLessThan(0.05);
   });
 
@@ -33,7 +33,7 @@ describe("Mann-Whitney U", () => {
   it("works with unequal sample sizes", () => {
     const a = [10, 20, 30];
     const b = [1, 2, 3, 4, 5];
-    const { u, pValue } = mannWhitneyU(a, b, { exact: false });
+    const { pValue } = mannWhitneyU(a, b, { exact: false });
     expect(pValue).toBeLessThan(0.05);
   });
 });

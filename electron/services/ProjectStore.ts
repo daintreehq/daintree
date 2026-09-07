@@ -53,6 +53,7 @@ import {
   cleanupUserDataRootQuarantineFiles,
 } from "./projectQuarantineCleanup.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
+import { describeRecipeForwardIncompat } from "../../shared/utils/recipeCompatibility.js";
 import { isInRepoRecipeId } from "../../shared/utils/recipeFilename.js";
 
 import { bumpFrecencyScore, decayFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
@@ -234,7 +235,11 @@ export class ProjectStore {
       if (!isScratch && !isProjectWorkspaceId(workspaceId)) return;
       const kind = isScratch ? "scratch" : "project";
       const count = state
-        ? countResumableAgentPanels(state.terminals, `resume-count(${kind}:${workspaceId})`)
+        ? countResumableAgentPanels(
+            state.terminals,
+            `resume-count(${kind}:${workspaceId})`,
+            workspaceId
+          )
         : // Cleared state restores nothing. That is an answer, not an absence
           // of one, so it is written rather than left unknown.
           0;
@@ -418,6 +423,14 @@ export class ProjectStore {
     options: { force?: boolean; previousName?: string } = {}
   ): Promise<void> {
     if (!options.force) {
+      // Checked before staleness: an unchanged file can still be one this build
+      // would strip on write-back, and that loss is invisible to a hash
+      // comparison taken from those same unchanged bytes (#12261). A rename
+      // reads both destinations, since the old-name file is deleted below.
+      await this.assertInRepoRecipesForwardCompatible(projectPath, [
+        recipe.name,
+        ...(options.previousName ? [options.previousName] : []),
+      ]);
       await this.assertRecipeFileNotStale(projectPath, recipe.id, recipe.name);
       if (
         options.previousName &&
@@ -433,6 +446,56 @@ export class ProjectStore {
     }
     const hash = await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
     this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipe.id), hash);
+  }
+
+  /**
+   * Refuses a write into `.daintree/recipes/` that would delete content this
+   * build cannot represent (#12261).
+   *
+   * `.daintree/recipes/*.json` is git-tracked and shared between machines on
+   * different builds. This build rebuilds every recipe from an explicit field
+   * list and drops terminals whose `type` it doesn't know, then serializes that
+   * reduced object straight back over the file — so without this guard an older
+   * build silently commits away whatever a newer one wrote. The staleness guard
+   * cannot catch it: the file hasn't changed, so its hash still matches.
+   *
+   * Each destination is read fresh rather than looked up in
+   * `inRepoRecipeHashes`. The files most at risk are the ones the reader
+   * dropped entirely, which never get a cache entry at all — a cold cache must
+   * never read as "safe to overwrite".
+   *
+   * Names are deduplicated by resolved filename so a rename whose two names
+   * collapse to one file is reported once.
+   *
+   * Public so the batch writers (enable-in-repo-settings, recipe sync) can
+   * pre-flight every destination before their first write and fail the whole
+   * operation, rather than stopping halfway with some files already rewritten.
+   */
+  async assertInRepoRecipesForwardCompatible(
+    projectPath: string,
+    recipeNames: string[]
+  ): Promise<void> {
+    const seen = new Set<string>();
+    const affected: string[] = [];
+    for (const name of recipeNames) {
+      const filename = safeRecipeFilename(name);
+      if (seen.has(filename)) continue;
+      seen.add(filename);
+      const loss = await this.identityFiles.inspectInRepoRecipeForwardCompat(projectPath, name);
+      if (loss) affected.push(`${filename} — ${describeRecipeForwardIncompat(loss)}`);
+    }
+    if (affected.length === 0) return;
+
+    // The detail has to travel in `userMessage`: `context` never crosses the
+    // contextBridge (the preload reconstructs only code/message/userMessage),
+    // and packaged builds strip it outright.
+    const detail = affected.join("\n");
+    throw new AppError({
+      code: "RECIPE_FORWARD_COMPAT_CONFLICT",
+      message: `Saving would delete unsupported content from ${affected.length} in-repo recipe file(s)`,
+      userMessage: detail,
+      context: { projectPath, affected },
+    });
   }
 
   private async assertRecipeFileNotStale(
@@ -1347,9 +1410,16 @@ export class ProjectStore {
       () =>
         this.enqueueProjectStateUpdate(projectId, (existing) => {
           if (!existing) return null;
-          const rewritten = rewriteProjectStatePaths(existing, oldPath, newPath);
-          // Same object reference back ⇒ nothing rebased ⇒ skip the disk write.
-          return rewritten === existing ? null : rewritten;
+          // Returned even when nothing was rebased, rather than null.
+          //
+          // "Nothing to rebase" and "someone else already rebased this" look
+          // identical from here — both hand back the same object reference. A
+          // null would resolve this promise without sharing the save's outcome,
+          // so a batch-mate's rewrite that then failed to reach disk would be
+          // reported to the relocation as a success. Returning the state costs
+          // an unchanged write on the genuinely-nothing-to-do path, which a
+          // relocation does once.
+          return rewriteProjectStatePaths(existing, oldPath, newPath);
         }),
       async () => {
         // Dynamic import breaks the ProjectStore ⇄ windowState cycle at module
@@ -1809,6 +1879,26 @@ export class ProjectStore {
             droppedId: recipe.id,
             droppedName: recipe.name,
           });
+          keptLocal.push(recipe);
+          continue;
+        }
+
+        // `seenFilenames` only knows about recipes the reader returned, so a
+        // file it dropped whole — every terminal of a type this build doesn't
+        // know — records no owner and would be promoted straight over (#12261).
+        // That is the worst case of all: it needs no user action, since an
+        // ordinary project load runs reconciliation. Unlike the write paths this
+        // one cannot throw, so keep the local recipe in the mirror and leave the
+        // file alone; both survive, and neither is silently dropped.
+        const loss = await this.identityFiles.inspectInRepoRecipeForwardCompat(
+          projectPath,
+          recipe.name
+        );
+        if (loss) {
+          console.warn(
+            `[ProjectStore] Not promoting recipe "${recipe.name}" — ${filename} holds content ` +
+              `this build does not support: ${describeRecipeForwardIncompat(loss)}`
+          );
           keptLocal.push(recipe);
           continue;
         }

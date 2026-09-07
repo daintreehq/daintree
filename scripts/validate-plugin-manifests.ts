@@ -2,12 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginManifestSchema } from "../electron/schemas/plugin.js";
+import type { PluginOrigin } from "../shared/types/plugin.js";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 interface PluginRoot {
   dir: string;
-  isBuiltin: boolean;
+  origin: PluginOrigin;
 }
 
 interface ManifestError {
@@ -24,9 +25,9 @@ interface ManifestError {
  */
 export function validatePluginManifests(roots: PluginRoot[]): ManifestError[] {
   const errors: ManifestError[] = [];
-  for (const { dir, isBuiltin } of roots) {
+  for (const { dir, origin } of roots) {
     if (!fs.existsSync(dir)) continue;
-    const schema = getPluginManifestSchema(isBuiltin);
+    const schema = getPluginManifestSchema(origin);
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const manifestPath = path.join(dir, entry.name, "plugin.json");
@@ -53,15 +54,25 @@ export function validatePluginManifests(roots: PluginRoot[]): ManifestError[] {
 }
 
 /**
- * Built-in plugins load with `isBuiltin: true`, and sample plugins are
- * sideloaded at runtime with `isBuiltin: true` too (PluginService.loadFromDir at
- * the sideload root) so their `daintree.*` names pass the namespace guard.
- * Validate both with the same flag the runtime uses.
+ * Built-in plugins load with the `"builtin"` origin, and sample plugins are
+ * sideloaded at runtime on the same footing (PluginService.loadFromDir at the
+ * sideload root) so their `daintree.*` names pass the namespace guard. Validate
+ * both with the same origin the runtime uses.
+ *
+ * `sample-project` is the third root because a project plugin is never loaded
+ * from `plugins/` at all — it loads from a project's own `.daintree/plugins/`,
+ * so no sideload footing exists to borrow. Validating it as `"builtin"` (the
+ * way `sample` is) would reject the `"scope": "project"` these manifests are
+ * required to carry, and the reserved `daintree.*` namespace is closed to them
+ * for the same reason. Kept out of `sample` so the build's sample copy steps,
+ * which mirror that root into the E2E sideload dir, don't stage a manifest the
+ * runtime would refuse.
  */
 function defaultRoots(base: string): PluginRoot[] {
   return [
-    { dir: path.join(base, "builtin"), isBuiltin: true },
-    { dir: path.join(base, "sample"), isBuiltin: true },
+    { dir: path.join(base, "builtin"), origin: "builtin" },
+    { dir: path.join(base, "sample"), origin: "builtin" },
+    { dir: path.join(base, "sample-project"), origin: "project" },
   ];
 }
 

@@ -18,6 +18,7 @@ import type {
   ActionHandler,
   PluginChannelSchema,
   PluginHostApi,
+  PluginIdentity,
   PluginIpcContext,
   PluginIpcHandler,
   PluginSettingsScope,
@@ -25,11 +26,14 @@ import type {
   PluginToastOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginHostCallOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
+  PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
+  PluginSystemWakeEvent,
   PluginFsDirEntry,
   PluginFsStat,
   PluginGitStatus,
@@ -40,6 +44,8 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
 } from "../../../shared/types/plugin.js";
+import { pathToFileURL } from "node:url";
+import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
@@ -51,6 +57,8 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { withTimeout } from "../../utils/withTimeout.js";
+import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import type {
   PluginHostCallMethod,
   PluginHostNotifyMethod,
@@ -80,10 +88,20 @@ interface RegisteredHandler {
   schema?: PluginChannelSchema<unknown, unknown>;
 }
 
+/**
+ * Budget for importing one manifest command's handler module (#12274). Matches
+ * the `IMPORT_TIMEOUT_MS` that bounded this import back when it ran in main, so
+ * moving the import out of the main process doesn't silently drop the bound: a
+ * handler module with a hanging top-level await must fail its dispatch rather
+ * than pin a pending invoke forever.
+ */
+const COMMAND_IMPORT_TIMEOUT_MS = 5000;
+
 export class PluginDevWorkerHostProxy {
   readonly host: PluginHostApi;
   private readonly post: Post;
   private readonly pluginId: string;
+  private readonly identity: PluginIdentity;
 
   private nextId = 1;
   private revoked = false;
@@ -94,10 +112,21 @@ export class PluginDevWorkerHostProxy {
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
+  /**
+   * Manifest command handlers (#12274), keyed by the file URL of the module
+   * main resolved. Holds the in-flight IMPORT promise, not the settled handler,
+   * so concurrent first dispatches of the same command share one import instead
+   * of racing two. A rejection is evicted rather than cached: a timeout is
+   * transient, and the main-process loader this replaces never cached failures
+   * either. Cleared on dispose — though the real reclamation of the imported
+   * module's state is the worker exiting, not this map.
+   */
+  private readonly commandModules = new Map<string, Promise<ActionHandler>>();
 
-  constructor(pluginId: string, post: Post) {
+  constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
     this.post = post;
+    this.identity = identity;
     this.host = this.buildHost();
   }
 
@@ -122,6 +151,7 @@ export class PluginDevWorkerHostProxy {
     this.ipcHandlers.clear();
     this.subscriptions.clear();
     this.fileDecorationProviders.clear();
+    this.commandModules.clear();
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -173,6 +203,30 @@ export class PluginDevWorkerHostProxy {
         this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
         return;
       }
+      if (msg.kind === "command") {
+        const handler = await this.loadCommandHandler(msg.namespacedId, msg.resolvedPath);
+        // A dispose that landed while the module was importing means the plugin
+        // is gone; running its handler now would let a torn-down generation take
+        // effect. `dispose()` has already rejected every pending host call, so
+        // the handler would fail on its first host API use anyway — fail here,
+        // before any side effect.
+        if (this.disposed) {
+          throw new Error(`Plugin dev worker disposed before command "${msg.namespacedId}" ran`);
+        }
+        let result: unknown;
+        try {
+          result = await handler(msg.args);
+        } catch (err) {
+          // Arity hint (#12214) applied HERE, against the plugin's real closure.
+          // Main only ever sees the synthetic RPC thunk, whose arity says nothing
+          // about how the author wrote their handler, so appending the hint
+          // main-side stopped working the moment this import moved off it.
+          appendHandlerHint(err, actionHandlerArityHint(handler, err));
+          throw err;
+        }
+        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        return;
+      }
       if (msg.kind === "file-decoration-method") {
         const impl = this.fileDecorationProviders.get(msg.providerId);
         if (!impl) {
@@ -201,6 +255,42 @@ export class PluginDevWorkerHostProxy {
         error: formatErrorMessage(err, "invocation failed"),
       });
     }
+  }
+
+  /**
+   * Import a manifest-declared command's handler module and return its default
+   * export (#12274). `resolvedPath` is the absolute path main already probed
+   * and containment-checked in `resolveCommandHandlerPath` — the worker takes
+   * it as given rather than re-deriving it, so the two sides can never disagree
+   * about which file a command maps to and the worker holds no second copy of
+   * the command registry.
+   */
+  private loadCommandHandler(namespacedId: string, resolvedPath: string): Promise<ActionHandler> {
+    const url = pathToFileURL(resolvedPath).href;
+    const cached = this.commandModules.get(url);
+    if (cached) return cached;
+    const pending = withTimeout(
+      import(url) as Promise<{ default?: unknown }>,
+      COMMAND_IMPORT_TIMEOUT_MS,
+      `Command "${namespacedId}" handler module "${resolvedPath}" did not import within ${COMMAND_IMPORT_TIMEOUT_MS}ms`
+    ).then((mod) => {
+      if (typeof mod.default !== "function") {
+        throw new Error(
+          `Command "${namespacedId}" handler module "${resolvedPath}" has no callable default export`
+        );
+      }
+      return mod.default as ActionHandler;
+    });
+    // Evict a failed import so the next dispatch retries. Only a timeout is
+    // genuinely transient — ESM's URL-keyed cache will hand a broken module the
+    // same failure again — but caching the rejection would turn a slow first
+    // import into a permanently dead command, and the main-process loader this
+    // replaces never cached failures either.
+    pending.catch(() => {
+      if (this.commandModules.get(url) === pending) this.commandModules.delete(url);
+    });
+    this.commandModules.set(url, pending);
+    return pending;
   }
 
   private async invokeIpcHandler(
@@ -235,12 +325,18 @@ export class PluginDevWorkerHostProxy {
   private callWithGrace<T>(
     method: PluginHostCallMethod,
     params: unknown,
-    graceValue: T
+    graceValue: T,
+    signal?: AbortSignal
   ): Promise<T> {
     if (this.disposed) {
       return Promise.resolve(graceValue);
     }
-    return this.call<T>(method, params, undefined, { value: graceValue });
+    if (signal?.aborted) {
+      return Promise.resolve(graceValue);
+    }
+    // Cancellation settles the grace value inside `call`'s abort branch, so a
+    // real validation or transport error is never rewritten into a dismissal.
+    return this.call<T>(method, params, signal, { value: graceValue });
   }
 
   private call<T>(
@@ -274,9 +370,23 @@ export class PluginDevWorkerHostProxy {
           if (!pending) return;
           this.pendingCalls.delete(requestId);
           cleanup();
-          // Tell main to abort the in-flight host call (AbortSignal itself is not
-          // structured-clone-safe, so the requestId is the cancellation handle).
-          this.post({ type: "host-cancel", requestId });
+          try {
+            // Tell main to abort the in-flight host call (AbortSignal itself is not
+            // structured-clone-safe, so the requestId is the cancellation handle).
+            this.post({ type: "host-cancel", requestId });
+          } catch {
+            // best-effort — the entry is already claimed, so a failed cancel
+            // post must not leave the caller's promise unsettled forever
+          }
+          // A grace-bearing call (the imperative prompts) treats cancellation as
+          // a dismissal rather than a failure. Settling it HERE is what makes
+          // that safe: this branch only runs when the abort actually claimed the
+          // pending entry, so a genuine error that already settled the call can
+          // never be rewritten into a dismissal (#12279).
+          if (grace) {
+            resolve(grace.value as T);
+            return;
+          }
           reject(abortError(signal));
         };
         signal.addEventListener("abort", onAbort, { once: true });
@@ -312,9 +422,33 @@ export class PluginDevWorkerHostProxy {
     // object literal, not this class instance. Every other member is an arrow
     // function that closes over the class `this` lexically.
     const pluginId = this.pluginId;
+    // The identity the main-process host computed, relayed verbatim in the
+    // `start` message. Not reconstructed from `pluginId`: `projectRoot` lives on
+    // the host's binding and cannot be recovered from an instance key, and a
+    // project plugin — which reaches this worker like any other plugin with a
+    // `main` — would otherwise report a project with no root.
+    const pluginInfo = this.identity;
+    const manifestId = pluginInfo.manifestId;
+    const projectId = pluginInfo.projectId;
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
+      },
+      pluginInfo,
+      panelKindId: (bareId: string) => {
+        if (typeof bareId !== "string" || bareId.length === 0) {
+          throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
+        }
+        const qualified = toRuntimePanelKindId(
+          { origin: pluginInfo.origin, pluginId: manifestId, kindId: bareId },
+          projectId
+        );
+        if (qualified === null) {
+          throw new Error(
+            `Plugin "${pluginId}" panelKindId: cannot qualify panel kind "${bareId}" for this plugin`
+          );
+        }
+        return qualified;
       },
       registerAction: (descriptor, handler) => {
         this.assertActivationOpen("registerAction");
@@ -440,6 +574,15 @@ export class PluginDevWorkerHostProxy {
       getActiveWorktree: () =>
         this.call<PluginWorktreeSnapshot | null>("getActiveWorktree", undefined),
       getWorktrees: () => this.call<PluginWorktreeSnapshot[]>("getWorktrees", undefined),
+      // callWithGrace, not call: the host contract for this method is that it
+      // degrades to an `unavailable` result on unload rather than throwing, so a
+      // dev-worker call in flight when the proxy is disposed must resolve the
+      // same way the real host would (#12174).
+      getWorktreesResult: () =>
+        this.callWithGrace<PluginWorktreesResult>("getWorktreesResult", undefined, {
+          status: "unavailable",
+          reason: "plugin-unloaded",
+        }),
       getWorktreeStatus: (path, options) =>
         this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path, options?.signal),
       getAgentState: () => this.call<PluginAgentSnapshot | null>("getAgentState", undefined),
@@ -463,6 +606,17 @@ export class PluginDevWorkerHostProxy {
         // hold for every user-installed plugin, which all run in a worker.
         const dispose = this.subscribe("panel-lifecycle", (payload) =>
           callback(Object.freeze(payload as PluginPanelLifecycleEvent))
+        );
+        return Promise.resolve(dispose);
+      },
+      onDidWake: (callback) => {
+        this.assertActivationOpen("onDidWake");
+        // Subscription wired synchronously; only the disposer is async. Same
+        // re-freeze as panel-lifecycle above: the port's structured clone hands
+        // back a plain mutable object, so main's freeze does not survive the
+        // hop and the documented contract has to be re-established here.
+        const dispose = this.subscribe("system-wake", (payload) =>
+          callback(Object.freeze(payload as PluginSystemWakeEvent))
         );
         return Promise.resolve(dispose);
       },
@@ -613,15 +767,26 @@ export class PluginDevWorkerHostProxy {
       // assertActivationOpen): plugins prompt from command handlers. They use
       // callWithGrace so a plugin unload mid-prompt resolves the dismiss value
       // (undefined / false) instead of rejecting — matching the host contract.
-      showQuickPick: ((items: PluginQuickPickItem[], options?: PluginQuickPickOptions) =>
+      showQuickPick: ((
+        items: PluginQuickPickItem[],
+        options?: PluginQuickPickOptions,
+        callOptions?: PluginHostCallOptions
+      ) =>
         this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
           "showQuickPick",
           { items, options },
-          undefined
+          undefined,
+          callOptions?.signal
         )) as PluginHostApi["showQuickPick"],
-      showInputBox: (options) =>
-        this.callWithGrace<string | undefined>("showInputBox", { options }, undefined),
-      showConfirm: (options) => this.callWithGrace<boolean>("showConfirm", { options }, false),
+      showInputBox: (options, callOptions) =>
+        this.callWithGrace<string | undefined>(
+          "showInputBox",
+          { options },
+          undefined,
+          callOptions?.signal
+        ),
+      showConfirm: (options, callOptions) =>
+        this.callWithGrace<boolean>("showConfirm", { options }, false, callOptions?.signal),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),
@@ -655,10 +820,16 @@ export class PluginDevWorkerHostProxy {
       fs: {
         readFile: (filePath, options) =>
           this.call<string>("fs.readFile", { path: filePath }, options?.signal),
+        readFileBytes: (filePath, options) =>
+          this.call<Uint8Array>("fs.readFileBytes", { path: filePath }, options?.signal),
         writeFile: (filePath, contents) =>
           this.call<void>("fs.writeFile", { path: filePath, contents }),
         readdir: (dirPath, options) =>
-          this.call<PluginFsDirEntry[]>("fs.readdir", { path: dirPath }, options?.signal),
+          this.call<PluginFsDirEntry[]>(
+            "fs.readdir",
+            { path: dirPath, ...(options?.detail === true && { detail: true }) },
+            options?.signal
+          ),
         stat: (targetPath, options) =>
           this.call<PluginFsStat>("fs.stat", { path: targetPath }, options?.signal),
         watch: async (paths, callback, options) => {

@@ -172,14 +172,33 @@ describe("Daintree app CSP", () => {
     });
   });
 
-  describe("daintree-file: scheme in media-src (#11382)", () => {
-    // The file viewer fetch()es video bytes from daintree-file:// and plays
-    // them through a blob object URL (Chromium's custom-scheme media loader
-    // can't consume follow-up range requests — electron#51442), so media-src
-    // must allow blob:. daintree-file: stays for consumers that stream media
-    // from the scheme without the blob detour. Without either entry the
-    // element is silently blocked with only a devtools warning — every
-    // protocol/MIME fix upstream still fails.
+  describe("media-src schemes (#11382, #12242)", () => {
+    // <video>/<audio> stream directly from daintree-media://, so that scheme
+    // must be allowed or playback is silently blocked with only a devtools
+    // warning — every protocol/MIME fix upstream still fails. daintree-file:
+    // stays for consumers that read media bytes through fetch() (the size
+    // probe, WebAudio); blob: stays for renderer-minted object URLs.
+    it("allows daintree-media: in media-src in production", () => {
+      const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
+      expect(mediaSrc).toContain("daintree-media:");
+    });
+
+    it("allows daintree-media: in media-src in development", () => {
+      const mediaSrc = getDaintreeAppDevCSP().match(/media-src ([^;]*);/)?.[1];
+      expect(mediaSrc).toContain("daintree-media:");
+    });
+
+    it("confines daintree-media: to media-src in both modes", () => {
+      // The scheme exists to serve media bytes to a media element and nothing
+      // else. Leaking it into frame-src or script-src would hand a repo file a
+      // document or an execution context.
+      for (const csp of [getDaintreeAppProdCSP(), getDaintreeAppDevCSP()]) {
+        const directives = csp.split(";").map((d) => d.trim());
+        const carrying = directives.filter((d) => d.includes("daintree-media:"));
+        expect(carrying.map((d) => d.split(" ")[0])).toEqual(["media-src"]);
+      }
+    });
+
     it("allows daintree-file: in media-src in production", () => {
       const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
       expect(mediaSrc).toContain("daintree-file:");

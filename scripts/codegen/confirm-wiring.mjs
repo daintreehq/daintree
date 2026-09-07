@@ -28,7 +28,12 @@ const TSCONFIG_PATH = path.join(REPO_ROOT, "tsconfig.json");
 const EXPECTED_CONFIRM_DANGER = new Set([
   "git.push",
   "git.pullRebase",
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
+  "git.forcePushWithLease",
   "terminal.kill",
+  "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
@@ -64,6 +69,9 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "forge.editPR",
   "forge.closeIssue",
   "forge.editIssue",
+  "forge.createIssue",
+  "forge.addIssueComment",
+  "forge.reopenIssue",
   "session.bookmarkAndClose",
   "session.bookmark.delete",
 ]);
@@ -102,9 +110,20 @@ const CONFIRMED_WIRED = [
 const BYPASS_WIRED = new Set([
   "git.push", // deferred-promise via gitPushConfirmStore; GitPushConfirmDialog resolves it
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
+  // Deferred-promise via gitWorktreeOperationConfirmStore (#12092); the dialog
+  // is mounted globally in ModalHostLayer, so the ID is not co-located with it.
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
+  "git.forcePushWithLease", // deferred-promise via gitForcePushStore; GitForcePushConfirmDialog resolves it
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
+  // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on
+  // explicit caller-supplied ids. Its confirmation is the generic
+  // McpConfirmDialog's selectable checklist, mounted globally, so the action id
+  // is not co-located with a ConfirmDialog-family component.
+  "terminal.killBatch",
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"
@@ -119,6 +138,22 @@ const BYPASS_WIRED = new Set([
   "forge.editPR",
   "forge.closeIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
   "forge.editIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
+  // Forge issue writes that publish a record nobody can retract (#12118):
+  // `forge.createIssue` files a public issue and notifies watchers,
+  // `forge.addIssueComment` posts a comment this capability cannot edit or
+  // delete. Both are agent/MCP-only, so the confirm they gate on is
+  // `McpConfirmDialog` — which, since #12118, previews the actual title, body,
+  // labels and target worktree rather than the redacted argument summary. There
+  // is no user-side dispatch path to co-locate a ConfirmDialog with.
+  "forge.createIssue",
+  "forge.addIssueComment",
+  // `forge.reopenIssue` joins them for symmetry with its own inverse
+  // `forge.closeIssue`, which has been `confirm` since #10653: both are
+  // publicly visible issue-state transitions that notify watchers, and
+  // re-closing does not restore the `stateReason` the issue was closed for. It
+  // needs no content preview — it authors nothing, and its only argument is an
+  // issue number the argument disclosure shows verbatim.
+  "forge.reopenIssue",
   // Session bookmarks (#11288): Phase 1 is programmatic/MCP-only and palette-hidden;
   // confirmation is the explicit `confirmed: true` arg. The Phase-2 pane dialog
   // will add a co-located ConfirmDialog; until then there is none to scan.

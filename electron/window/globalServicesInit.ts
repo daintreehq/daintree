@@ -135,7 +135,11 @@ function reconcileResumableAgentCounts(projects: Project[], states: (ProjectStat
     const count = projectStore.wasStateUnreadableThisSession(project.id)
       ? null
       : state
-        ? countResumableAgentPanels(state.terminals, `resume-count-backfill(project:${project.id})`)
+        ? countResumableAgentPanels(
+            state.terminals,
+            `resume-count-backfill(project:${project.id})`,
+            project.id
+          )
         : 0;
 
     try {
@@ -176,7 +180,11 @@ function reconcileScratchResumableAgentCounts(
     const count = projectStore.wasStateUnreadableThisSession(scratch.id)
       ? null
       : state
-        ? countResumableAgentPanels(state.terminals, `resume-count-backfill(scratch:${scratch.id})`)
+        ? countResumableAgentPanels(
+            state.terminals,
+            `resume-count-backfill(scratch:${scratch.id})`,
+            scratch.id
+          )
         : 0;
 
     try {
@@ -449,9 +457,10 @@ export async function initGlobalServices(
       // instant. Lazy, like the provider above — the PtyClient is not resolved
       // yet at wiring time.
       svc.setHasLiveAssistantBackend((projectId) => {
-        const backend = helpSessionService.getAssistantBackend(projectId);
-        if (!backend) return false;
-        return getPtyClient()?.hasTerminal(backend.terminalId) === true;
+        // Any live lane floors the project (#12108) — hibernating it would
+        // revoke every lane, taking running siblings with it.
+        const backends = helpSessionService.getAssistantBackends(projectId);
+        return backends.some((backend) => getPtyClient()?.hasTerminal(backend.terminalId) === true);
       });
     },
   });
@@ -1042,7 +1051,7 @@ export async function initGlobalServices(
     run: async () => {
       const { pluginService } = await import("../services/PluginService.js");
       // Point the already-registered `plugin://` handler at the live resolver
-      // BEFORE `initialize()` runs, not after (#11728). `getPluginDir` is a
+      // BEFORE `initialize()` runs, not after (#11728). The resolver is a
       // plain lookup in a map that exists from construction, so it is safe to
       // call at any point — it simply returns `undefined` until a plugin
       // registers. Wiring it after `initialize()` left the placeholder resolver
@@ -1053,7 +1062,7 @@ export async function initGlobalServices(
       // Every `plugin://` module request in that window 404'd, and a rejected
       // dynamic import is permanent for that specifier — the module map has no
       // eviction, so "Try again" re-imported the same poisoned URL forever.
-      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
+      setPluginDirResolver((authority) => pluginService.getPluginRootByAuthority(authority));
       try {
         await pluginService.initialize();
       } catch (err) {

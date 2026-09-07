@@ -38,13 +38,13 @@ const {
 const registerCommandsMock = vi.hoisted(() => vi.fn());
 const {
   pluginInitialize,
-  pluginGetPluginDir,
+  pluginGetPluginRoot,
   pluginActivateStartup,
   setPluginDirResolver,
   activateOpenFileInstaller,
 } = vi.hoisted(() => ({
   pluginInitialize: vi.fn(async () => {}),
-  pluginGetPluginDir: vi.fn((id: string) => `/plugins/${id}`),
+  pluginGetPluginRoot: vi.fn((authority: string) => `/plugins/${authority}`),
   pluginActivateStartup: vi.fn(),
   setPluginDirResolver: vi.fn(),
   activateOpenFileInstaller: vi.fn(async (_svc?: unknown) => {}),
@@ -130,7 +130,7 @@ vi.mock("../../services/plugin-mcp/instances.js", () => ({
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: {
     initialize: pluginInitialize,
-    getPluginDir: pluginGetPluginDir,
+    getPluginRootByAuthority: pluginGetPluginRoot,
     activateStartupFinishedPlugins: pluginActivateStartup,
   },
 }));
@@ -300,7 +300,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
-    getAssistantBackend: vi.fn(() => null),
+    getAssistantBackends: vi.fn(() => []),
   },
 }));
 
@@ -728,7 +728,7 @@ describe("initGlobalServices task ordering", () => {
     getPluginMcpConsentService.mockClear();
     getPluginMcpConsentStore.mockClear();
     pluginInitialize.mockClear();
-    pluginGetPluginDir.mockClear();
+    pluginGetPluginRoot.mockClear();
     pluginActivateStartup.mockClear();
     setPluginDirResolver.mockClear();
     activateOpenFileInstaller.mockClear();
@@ -871,18 +871,18 @@ describe("initGlobalServices task ordering", () => {
     ) => boolean;
     expect(typeof predicate).toBe("function");
 
-    const getAssistantBackend = helpSessionService.getAssistantBackend as unknown as Mock;
+    const getAssistantBackends = helpSessionService.getAssistantBackends as unknown as Mock;
     const hasTerminal = vi.fn<(terminalId: string) => boolean>(() => true);
 
     // No backend bound: nothing to protect, and resolving it must not throw
     // before the PtyClient exists (the predicate is wired lazily).
-    getAssistantBackend.mockReturnValue(null);
+    getAssistantBackends.mockReturnValue([]);
     expect(predicate("proj-1")).toBe(false);
 
     // Bound but the PtyClient isn't up yet — still false. Binding alone is NOT
     // liveness: it outlives an assistant that exited under its own steam
     // (#11162), so a stale binding must not pin the project forever.
-    getAssistantBackend.mockReturnValue({ terminalId: "t-help", webContentsId: 5 });
+    getAssistantBackends.mockReturnValue([{ terminalId: "t-help", webContentsId: 5, slot: 0 }]);
     expect(predicate("proj-1")).toBe(false);
 
     // Both halves satisfied.
@@ -897,7 +897,7 @@ describe("initGlobalServices task ordering", () => {
       expect(predicate("proj-1")).toBe(false);
     } finally {
       setPtyClientRef(null);
-      getAssistantBackend.mockReturnValue(null);
+      getAssistantBackends.mockReturnValue([]);
     }
   });
 
@@ -1028,10 +1028,13 @@ describe("initGlobalServices task ordering", () => {
     expect(pluginInitialize).toHaveBeenCalled();
     expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
     // The resolver handed to protocols.ts must delegate to the live singleton —
-    // calling it routes through pluginService.getPluginDir, not a frozen value.
-    const resolver = setPluginDirResolver.mock.calls[0]![0] as (id: string) => string | undefined;
-    expect(resolver("acme.tool")).toBe("/plugins/acme.tool");
-    expect(pluginGetPluginDir).toHaveBeenCalledWith("acme.tool");
+    // calling it routes through pluginService.getPluginRootByAuthority, not a
+    // frozen value.
+    const resolver = setPluginDirResolver.mock.calls[0]![0] as (
+      authority: string
+    ) => string | undefined;
+    expect(resolver("pi-abc123")).toBe("/plugins/pi-abc123");
+    expect(pluginGetPluginRoot).toHaveBeenCalledWith("pi-abc123");
   });
 
   it("plugin-service task installs the plugin:// resolver BEFORE initialize() runs (#11728)", async () => {

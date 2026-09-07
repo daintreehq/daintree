@@ -412,12 +412,22 @@ export function broadcastToProjectRenderers(
 }
 
 /**
- * Broadcast that skips cached (deactivated) project views. Only for
- * high-frequency streams the renderer can re-fetch on activation (e.g. log
- * batches via LOGS_GET_ALL) — cached renderers are CPU-throttled or frozen, so
- * pushed messages would queue unbounded in their task queues. State broadcasts
- * must keep using broadcastToRenderer: cached views have no replay path on
- * warm reactivation (#9490).
+ * Broadcast that skips cached (deactivated) project views. Two valid uses:
+ *
+ * - High-frequency streams the renderer can re-fetch on activation (e.g. log
+ *   batches via LOGS_GET_ALL) — cached renderers are CPU-throttled or frozen,
+ *   so pushed messages would queue unbounded in their task queues.
+ * - Visibility-scoped effects whose audience is *defined* as the non-cached
+ *   renderers at emission time (e.g. SOUND_TRIGGER — every view owns an
+ *   AudioContext, so a global broadcast plays one copy per open project and
+ *   un-freezes cached renderers). Dropping one must leave no stale state, no
+ *   pending cleanup, and no missed user-significant information.
+ *
+ * If you cannot prove all three, use broadcastToRenderer. "Ephemeral" is not
+ * the test: sound:cancel is a one-shot with nothing to replay, yet it must
+ * reach cached views to stop a voice that started before caching. State
+ * broadcasts likewise stay global — cached views have no replay path on warm
+ * reactivation (#9490).
  */
 export function broadcastToVisibleRenderers(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {

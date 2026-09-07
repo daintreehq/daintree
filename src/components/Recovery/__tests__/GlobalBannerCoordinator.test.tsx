@@ -21,6 +21,7 @@ import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
+import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
@@ -88,6 +89,7 @@ beforeAll(() => {
 });
 
 function resetStores() {
+  useProjectPluginStore.getState().reset();
   usePanelStore.setState({
     backendStatus: "connected",
     lastCrashType: null,
@@ -128,6 +130,18 @@ afterEach(() => {
 describe("GlobalBannerCoordinator", () => {
   it("renders nothing when no recovery state is active", () => {
     const { container } = render(<GlobalBannerCoordinator />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("leaves global chrome empty when project plugins need a trust decision", () => {
+    const { container } = render(<GlobalBannerCoordinator />);
+    act(() => {
+      useProjectPluginStore.getState().openPrompt({
+        projectId: "proj-a",
+        plugins: [{ id: "acme.dashboard", displayName: "Acme Dashboard" }],
+      });
+    });
+    expect(useProjectPluginStore.getState().prompt).not.toBeNull();
     expect(container.firstChild).toBeNull();
   });
 

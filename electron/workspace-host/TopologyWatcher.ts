@@ -1,10 +1,10 @@
-import parcelWatcher from "@parcel/watcher";
 import { existsSync, watch as fsWatch, type FSWatcher } from "fs";
 import { basename, dirname, resolve as pathResolve } from "path";
 import PQueue from "p-queue";
 import { MutableDisposable } from "../utils/lifecycle.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { getGitCommonDir } from "../utils/gitUtils.js";
+import { subscribeParcelWatcher } from "../utils/parcelWatcherBackend.js";
 import type { WorkspaceHostEvent } from "../../shared/types/workspace-host.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";
 
@@ -24,7 +24,7 @@ const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
 // several metadata files within a few milliseconds, so a short window still
 // coalesces one operation into one reconcile while keeping pickup latency low
 // (a reconcile is one `git worktree list` — cheap enough to run promptly).
-const TOPOLOGY_EVENT_DEBOUNCE_MS = 50;
+const TOPOLOGY_EVENT_DEBOUNCE_MS = 25;
 
 // Rate-limit window after a completed reconcile. Events that land inside it
 // set the dirty flag and drain via `armCooldownDrain()` at expiry — the
@@ -183,8 +183,9 @@ export class TopologyWatcher {
     const generation = ++this.generation;
     const drain = () => this.drainEventBuffer();
 
-    parcelWatcher
-      .subscribe(metadataDir, (err, events) => {
+    subscribeParcelWatcher(
+      metadataDir,
+      (err, events) => {
         if (err) {
           // A runtime error on an established subscription means the watcher is
           // no longer reliably reporting changes — same consequence as a
@@ -208,7 +209,9 @@ export class TopologyWatcher {
           clearTimeout(this.debounceTimer);
         }
         this.debounceTimer = setTimeout(drain, TOPOLOGY_EVENT_DEBOUNCE_MS);
-      })
+      },
+      {}
+    )
       .then((subscription) => {
         if (generation !== this.generation) {
           // stop() incremented the generation — discard.

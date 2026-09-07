@@ -40,6 +40,11 @@ const ENTRIES = [
     dist: path.join(root, "packages/plugin-sdk/dist/react.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/react.d.ts"),
   },
+  {
+    name: "./files",
+    dist: path.join(root, "packages/plugin-sdk/dist/files.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/files.d.ts"),
+  },
 ];
 
 const HEADER = [

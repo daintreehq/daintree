@@ -10,6 +10,7 @@ import type { Project } from "@shared/types/project";
 const wakeMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 const repaintMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
+  restoreTerminalFocusOnReveal: () => false,
   wakeActiveWorktreeTerminals: () => wakeMock(),
   repaintActiveWorktreeTerminals: () => repaintMock(),
 }));
@@ -157,6 +158,37 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     // The reveal path repaints only; it must not re-run the byte-pulling wake
     // (the headless-mirror sync already ran behind the bridge).
     expect(wakeMock).not.toHaveBeenCalled();
+  });
+
+  it("re-rasters document text after the reveal: attribute on frame one, gone on frame two", async () => {
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+  });
+
+  it("drops the text re-raster toggle when the view is cached mid-toggle", async () => {
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+
+    act(() => viewCachedCb?.());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
   });
 
   it("skips the post-reveal repaint when the view is re-hidden before the second frame", async () => {
@@ -357,6 +389,47 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(repaintMock).toHaveBeenCalledTimes(1);
   });
 
+  it("re-rasters text again on the 1 s backstop only, never on the 3 s one", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+
+    act(() => viewRevealedCb?.());
+    flushRepaintGate();
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+
+    act(() => vi.advanceTimersByTime(1000));
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+
+    // The 3 s backstop is terminal-only: a late text pass would be pure cost.
+    act(() => vi.advanceTimersByTime(2000));
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+  });
+
+  it("removes an in-flight text re-raster toggle when the provider unmounts", async () => {
+    const { unmount } = await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+
+    unmount();
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+  });
+
   it("cancels a prior switch's pending backstops on re-reveal (no stacking)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await renderProvider();
@@ -405,7 +478,7 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(repaintMock).toHaveBeenCalledTimes(1);
   });
 
-  it("runs the wake fan-out on the warm-activation signal through the double-rAF gate", async () => {
+  it("runs the wake fan-out synchronously on the warm-activation signal", async () => {
     await renderProvider();
     // Drain the mount-scheduled missed-event wake first.
     act(() => flushFrame());
@@ -415,11 +488,13 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
 
     // A detached setVisible(false) view receives no visibilitychange/resume on
     // reattach, so main's explicit warm-activation send is the only trigger
-    // this path can rely on — it must drive the same deferred wake fan-out.
+    // this path can rely on. It must NOT wait for animation frames: the view is
+    // undrawn behind the bridge and its frames are throttled, and main holds
+    // the bridge until the fan-out reports back.
     act(() => viewWarmActivatedCb?.());
-    act(() => flushFrame());
-    expect(wakeMock).not.toHaveBeenCalled();
+    expect(wakeMock).toHaveBeenCalledTimes(1);
 
+    act(() => flushFrame());
     act(() => flushFrame());
     expect(wakeMock).toHaveBeenCalledTimes(1);
   });
@@ -445,25 +520,22 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips a warm-activation wake when the view is hidden by execution time", async () => {
+  it("runs the warm-activation wake even while the document reports hidden", async () => {
     await renderProvider();
     act(() => flushFrame());
     act(() => flushFrame());
     wakeMock.mockClear();
     expect(viewWarmActivatedCb).not.toBeNull();
 
-    // The trigger itself has no entry-time visibility guard (main asserts the
-    // activation), but scheduleWake's execution-time re-check still applies:
-    // a view hidden again before the second frame must not run the fan-out.
+    // Main asserts the activation and is holding the anti-flash bridge on the
+    // reply, so a visibility guard here would only trade a fan-out for a stall.
     setVisibilityState("hidden");
     act(() => viewWarmActivatedCb?.());
-    act(() => flushFrame());
-    act(() => flushFrame());
 
-    expect(wakeMock).not.toHaveBeenCalled();
+    expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels a pending warm-activation wake when the view is cached mid-schedule", async () => {
+  it("folds a pending frame-deferred wake into the warm-activation wake and runs nothing more once cached", async () => {
     await renderProvider();
     act(() => flushFrame());
     act(() => flushFrame());
@@ -471,15 +543,17 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(viewWarmActivatedCb).not.toBeNull();
     expect(viewCachedCb).not.toBeNull();
 
-    // Rapid A→B→A→B: the warm activation schedules a wake, but the view is
-    // cached again (superseding switch) before the second frame — the pending
-    // rAF must be cancelled so the fan-out can't run against an occluded view.
+    // A lifecycle event queued a frame-deferred wake; the warm activation runs
+    // the fan-out immediately and absorbs that pending frame. Rapid A→B→A→B
+    // then caches the view again before any frame fires: nothing further runs.
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
     act(() => viewWarmActivatedCb?.());
-    act(() => flushFrame());
+    expect(wakeMock).toHaveBeenCalledTimes(1);
+
     act(() => viewCachedCb?.());
     act(() => flushFrame());
-
-    expect(wakeMock).not.toHaveBeenCalled();
+    act(() => flushFrame());
+    expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores visibilitychange dispatched while hidden", async () => {

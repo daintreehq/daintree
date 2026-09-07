@@ -133,8 +133,14 @@ describe("useWorktreeBulkRemove — execution", () => {
     });
 
     expect(worktreeClientMock.delete).toHaveBeenCalledTimes(2);
-    expect(worktreeClientMock.delete).toHaveBeenNthCalledWith(1, "a", true, false);
-    expect(worktreeClientMock.delete).toHaveBeenNthCalledWith(2, "b", true, false);
+    expect(worktreeClientMock.delete).toHaveBeenNthCalledWith(1, "a", {
+      force: true,
+      deleteBranch: false,
+    });
+    expect(worktreeClientMock.delete).toHaveBeenNthCalledWith(2, "b", {
+      force: true,
+      deleteBranch: false,
+    });
     expect(clearSelection).toHaveBeenCalled();
     expect(hook.result.current.isConfirmOpen).toBe(false);
   });

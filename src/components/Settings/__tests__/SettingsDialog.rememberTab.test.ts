@@ -27,6 +27,7 @@ const VALID_TABS: SettingsTab[] = [
   "project:commands",
   "project:notifications",
   "project:code-forge",
+  "project:plugins",
 ];
 
 /**

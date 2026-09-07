@@ -32,6 +32,7 @@ import {
 } from "@/components/FileViewer/filePreviewKinds";
 import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import {
@@ -42,6 +43,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { FolderListingView } from "./FolderListingView";
 import { FileBrowserViewOptions } from "./FileBrowserViewOptions";
 import { FileBrowserHiddenStrip } from "./FileBrowserHiddenStrip";
@@ -61,6 +63,8 @@ import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
 
 export interface FileBrowserViewerProps {
+  /** Owning panel's id, so a mode chosen in one panel stays in that panel. */
+  panelId: string;
   /** Absolute path of the selected file; null when nothing is selected. */
   filePath: string | null;
   /** Absolute worktree root — the containment root for reads and asset loads. */
@@ -78,12 +82,23 @@ export interface FileBrowserViewerProps {
   /**
    * Changes on a foreground refresh — pressing Refresh, or returning to this
    * project after it sat cached — never on an ambient worktree tick. The half
-   * of `revision` the media branches can safely honour. Typed `number` rather
-   * than `string | number` so handing it the merged `revision` (which also
-   * carries the change tick) is a compile error, not a silent regression to
-   * restarting playback on every background write.
+   * of `revision` the PDF frame can safely honour; media takes the narrower
+   * `mediaReloadNonce` below. Typed `number` rather than `string | number` so
+   * handing it the merged `revision` (which also carries the change tick) is a
+   * compile error, not a silent regression to re-navigating the frame on every
+   * background write.
    */
   surfaceRefreshNonce: number;
+  /**
+   * The media half of `surfaceRefreshNonce`, held back when the player on
+   * screen is mid-playback (#12165). Split from it rather than gated inside it
+   * so a stale playback flag can at worst skip a media re-fetch — never stall
+   * the text re-read, the PDF re-navigation, or the reclassification that
+   * brings a failed preview back.
+   */
+  mediaReloadNonce: number;
+  /** Reports the media preview's play state up to the pane that owns the nonce above. */
+  onMediaPlayingChange: (playing: boolean) => void;
   /** Runs the pane's manual refresh — re-reads the tree and the open file. */
   onRefresh: () => void;
   /** Whether that refresh is still draining; spins the Refresh icon. */
@@ -176,10 +191,10 @@ type ViewerState =
   | { status: "pdf" }
   | { status: "error"; message: string };
 
-// Markdown gets a Source/Rendered switch mirroring FilePane's toggle. Typed at
-// the constant so the option values stay `FileRenderMode` rather than widening
-// to `string`; a two-entry list only — the browser preview has no diff mode.
-const MARKDOWN_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> = [
+// Markdown and HTML both get a Source/Rendered switch mirroring FilePane's
+// toggle. Typed at the constant so the option values stay `FileRenderMode`
+// rather than widening to `string`; a two-entry list only — no diff mode here.
+const FILE_RENDER_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> = [
   { value: "source", label: "Source" },
   { value: "rendered", label: "Rendered" },
 ];
@@ -194,12 +209,15 @@ const MARKDOWN_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> = [
  * copy, so a file looks identical in either surface.
  */
 export function FileBrowserViewer({
+  panelId,
   filePath,
   rootPath,
   fileName,
   relativePath,
   revision,
   surfaceRefreshNonce,
+  mediaReloadNonce,
+  onMediaPlayingChange,
   onRefresh,
   isRefreshing,
   onCollapseAll,
@@ -225,12 +243,38 @@ export function FileBrowserViewer({
   hiddenCounts,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
-  // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
-  // this pane has always shown. Deliberately not reset on file change: a reader
-  // paging through docs in source keeps source, mirroring FilePane (whose
-  // per-panel mode also survives a file swap). Non-markdown files simply hide
-  // the toggle, so a stale "source" never applies where it can't be honoured.
-  const [markdownMode, setMarkdownMode] = useState<FileRenderMode>("rendered");
+  // The reader's explicit Source/Rendered choice, `null` until they touch the
+  // toggle. Untouched, each renderable type opens on the default that suits it:
+  // markdown is a document you read rendered, while HTML in a repo is code you
+  // opened to read, and a page that renders near-blank otherwise looks like a
+  // broken file (#12205). Once chosen the mode is sticky and shared across both
+  // types, deliberately not reset on file change: a reader paging through docs
+  // in source keeps source, mirroring FilePane (whose per-panel mode also
+  // survives a file swap). Files that are neither simply hide the toggle, so a
+  // stale mode never applies where it can't be honoured.
+  const [explicitRenderMode, setExplicitRenderMode] = useState<FileRenderMode | null>(null);
+  const isMarkdown = filePath !== null && isMarkdownFilePath(filePath);
+  const isHtml = filePath !== null && isHtmlFilePath(filePath);
+  const isRenderable = isMarkdown || isHtml;
+  const renderMode: FileRenderMode = explicitRenderMode ?? (isHtml ? "source" : "rendered");
+  // The panel id rides a sentinel because this component is not remounted per
+  // panel: a tab group renders one unkeyed GridPanel for whichever tab is
+  // active, so switching between two file browsers reuses this instance —
+  // `FileBrowserPane` guards its cursor the same way, and for the same reason.
+  // Adjusting state during render is React's documented alternative to an
+  // effect here: it re-renders before paint, so the new panel's first file is
+  // never briefly shown in the old panel's mode. Without it a Rendered choice
+  // made in one panel would decide how the next panel's first file opens, and
+  // an HTML file there would land on the very preview it is meant not to.
+  const [modeOwnerPanelId, setModeOwnerPanelId] = useState(panelId);
+  if (modeOwnerPanelId !== panelId) {
+    setModeOwnerPanelId(panelId);
+    setExplicitRenderMode(null);
+  }
+  // The same app-level reading size the file panel shows, so a document is the
+  // size the reader last chose in whichever surface they opened it (#12134).
+  const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);
+  const setMarkdownFontSize = usePreferencesStore((state) => state.setMarkdownFontSize);
   // Bumped on every load so `HtmlViewer` re-navigates its sandboxed frame when
   // an agent rewrites the file underneath it.
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -460,11 +504,11 @@ export function FileBrowserViewer({
         </FileViewerToolbar.IconButton>
         {filePath && (
           <>
-            {isMarkdownFilePath(filePath) && (
+            {isRenderable && (
               <SegmentedToggle<FileRenderMode>
-                options={MARKDOWN_MODE_OPTIONS}
-                value={markdownMode}
-                onChange={setMarkdownMode}
+                options={FILE_RENDER_MODE_OPTIONS}
+                value={renderMode}
+                onChange={setExplicitRenderMode}
               />
             )}
             <FileViewerToolbar.Path
@@ -507,8 +551,27 @@ export function FileBrowserViewer({
               data-testid="file-browser-view-options"
             />
           )}
+          {/* Rendered markdown only: source is CodeMirror, which this scale
+              does not reach, and every other preview kind has no prose to
+              tune. Sits ahead of the file actions so the controls that change
+              what you are looking at stay left of the ones that leave. */}
+          {isMarkdown && renderMode === "rendered" && (
+            <MarkdownTextSizeControl
+              value={markdownFontSize}
+              onValueChange={setMarkdownFontSize}
+              data-testid="file-browser-text-size"
+            />
+          )}
           {filePath && (
             <>
+              {/* Same control, same order as FilePane's action group. Raw text
+                  only: `svg` keeps sanitized markup rather than the source it
+                  was built from, and every media/error state carries none at
+                  all, so both fall through to `null` and render nothing. */}
+              <FileViewerToolbar.CopyContentsButton
+                key={filePath}
+                contents={state.status === "text" || state.status === "html" ? state.content : null}
+              />
               <FileViewerToolbar.IconButton
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}
@@ -777,17 +840,18 @@ export function FileBrowserViewer({
       case "video":
         return (
           <div className="h-full w-full overflow-auto">
-            {/* Reloaded on `surfaceRefreshNonce`, never on `revision`: that
-                ticks on every worktree write, and re-fetching would reset
-                playback whenever an agent touches any file. Only a foreground
-                refresh outranks continuity — pressing Refresh (#11586), or
-                coming back to this project (#11588) — so only those pull the
-                rewritten bytes. */}
+            {/* Reloaded on `mediaReloadNonce`, never on `revision`: that ticks
+                on every worktree write, and re-fetching would reset playback
+                whenever an agent touches any file. Only a foreground refresh
+                outranks continuity — pressing Refresh (#11586), or coming back
+                to this project while nothing is playing (#11588, #12165) — so
+                only those pull the rewritten bytes. */}
             <FileVideoPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              reloadKey={surfaceRefreshNonce}
+              reloadKey={mediaReloadNonce}
+              onPlayingChange={onMediaPlayingChange}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -809,7 +873,8 @@ export function FileBrowserViewer({
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              reloadKey={surfaceRefreshNonce}
+              reloadKey={mediaReloadNonce}
+              onPlayingChange={onMediaPlayingChange}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -834,12 +899,20 @@ export function FileBrowserViewer({
         );
 
       case "html":
+        // Source is the same CodeViewer the non-markdown text branch uses, off
+        // content the preview read already returned — switching modes never
+        // costs a second read. A null previewUrl still renders HtmlViewer in
+        // rendered mode rather than silently showing source: its empty state
+        // says why and points at the Source segment, which now exists here.
+        if (renderMode === "source") {
+          return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
+        }
         return (
           <HtmlViewer previewUrl={state.previewUrl} reloadNonce={reloadNonce} title={fileName} />
         );
 
       case "text":
-        if (!isMarkdownFilePath(filePath)) {
+        if (!isMarkdown) {
           return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
         }
         // Source mode was never part of #11441: CodeViewer's root is already a
@@ -850,13 +923,13 @@ export function FileBrowserViewer({
         // lines here don't wrap (CodeViewer defaults `wrapLines` to false).
         // `min-h-0` only replaces MarkdownViewer's min-h-[300px] floor, which
         // used to overflow a preview shorter than 300px.
-        if (markdownMode === "source") {
+        if (renderMode === "source") {
           return (
             <MarkdownViewer
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}
-              viewMode={markdownMode}
+              viewMode={renderMode}
               className="h-full min-h-0"
             />
           );
@@ -879,7 +952,8 @@ export function FileBrowserViewer({
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}
-              viewMode={markdownMode}
+              viewMode={renderMode}
+              fontSize={markdownFontSize}
               cacheBust={revision}
               className="min-h-full"
             />

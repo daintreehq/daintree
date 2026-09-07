@@ -8,6 +8,7 @@ import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -20,6 +21,7 @@ import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
+import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("help.shortcuts", () => ({
@@ -162,8 +164,19 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       } else {
         const { defaultAgent } = useAgentPreferencesStore.getState();
         const { availability, isInitialized } = useCliAvailabilityStore.getState();
+        // Constrain the implicit default to agents the assistant gate will
+        // actually admit — `getDefaultAgentId` otherwise answers with general
+        // launch eligibility and can name one `provisionSession` refuses (a
+        // deprecated tier, or an unimplemented injection mode). An explicit
+        // `args.agentId` still goes straight to that gate, so an experimental
+        // agent stays launchable by name.
         const resolved = isInitialized
-          ? getDefaultAgentId(defaultAgent, undefined, availability)
+          ? getDefaultAgentId(
+              defaultAgent,
+              undefined,
+              availability,
+              new Set(getAssistantSupportedAgentIds())
+            )
           : null;
         agentId = resolved ?? "claude";
       }
@@ -183,12 +196,19 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         return;
       }
 
+      // Name the lane explicitly (#12108) rather than letting main default it.
+      // Read once, before the provision, so the lane this session is minted for
+      // is the same one the terminal binds into below even if the user switches
+      // tabs while the await is outstanding.
+      const activeSlot = useHelpPanelStore.getState().activeSlot;
+
       try {
         session = await window.electron.help.provisionSession({
           projectId: workspace.id,
           projectPath: workspace.path,
           agentId,
           context: capturedContext,
+          slot: activeSlot,
         });
       } catch (err) {
         logError("Failed to provision help session", err);
@@ -205,6 +225,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         } else if (code === "USER_CONTENT_SYNC_FAILED") {
           message =
             "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Try again.";
+        } else if (code === "MIXED_AGENT_LANES") {
+          message =
+            "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.";
         }
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
@@ -254,9 +277,25 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       );
 
       if (result.ok && result.result?.terminalId) {
+        const launchedTerminalId = result.result.terminalId;
+        // The lane can be closed while the provision + dispatch awaits are
+        // outstanding (#12108). `setTerminal` refuses to bind into a lane that
+        // is gone, so binding blind would leave this PTY holding a live bearer,
+        // owned by no lane and no longer filtered out of the dock. Tear it down
+        // instead — revoke before kill, mirroring `_teardownBoundSession`.
+        if (!useHelpPanelStore.getState().sessions[activeSlot]) {
+          window.electron.help.revokeSession(session.sessionId).catch((err) => {
+            logError("Failed to revoke help session for a lane closed mid-launch", err);
+          });
+          usePanelStore.getState().removePanel(launchedTerminalId);
+          return;
+        }
+        // Bind into the lane the panel is showing (#12108). The action never
+        // picks a lane implicitly: provisioning targeted this same lane above,
+        // so binding anywhere else would leave that session unreachable.
         useHelpPanelStore
           .getState()
-          .setTerminal(result.result.terminalId, agentId, session?.sessionId ?? null);
+          .setTerminal(activeSlot, launchedTerminalId, agentId, session?.sessionId ?? null);
         useFocusStore.getState().clearAssistantGesture();
         if (!useHelpPanelStore.getState().isOpen) {
           suppressSidebarResizes();

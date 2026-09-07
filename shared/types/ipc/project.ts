@@ -1,7 +1,7 @@
 import type { Project, TerminalSnapshot } from "../project.js";
 import type { TabGroup } from "../panel.js";
 import type { AgentState, WaitingReason } from "../agent.js";
-import type { IdArrayDelta } from "../../utils/layoutMerge.js";
+import type { IdArrayDelta, IdArrayDeltaWire } from "../../utils/layoutMerge.js";
 import type { HydrateResult } from "./app.js";
 
 /**
@@ -64,8 +64,8 @@ export interface ProjectSwitchOutgoingState {
    * doesn't clobber that window's concurrent layout changes (#11350). Absent =
    * legacy full replace.
    */
-  terminalDelta?: IdArrayDelta;
-  tabGroupDelta?: IdArrayDelta;
+  terminalDelta?: IdArrayDeltaWire;
+  tabGroupDelta?: IdArrayDeltaWire;
   /**
    * What this window changed in `draftInputs` relative to its last-persisted
    * baseline (`changedIds`/`removedIds` are terminal ids). When present, Main
@@ -91,12 +91,31 @@ export interface ProjectSwitchOutgoingState {
 export type ProjectFocusOnActivateIntent =
   { intent: "focus-next-waiting" } | { intent: "focus-panel"; panelId: string };
 
+/** Which surface started a project switch — the first field of its perf trace. */
+export type ProjectSwitchEntryPoint =
+  "mru-shortcut" | "palette-keyboard" | "palette-mouse" | "toolbar" | "menu" | "api";
+
+/**
+ * Correlation handle threaded from the initiating renderer through main to the
+ * incoming view, so every `project_switch.*` perf mark of one switch shares an
+ * id. Minted where the gesture lands; main mints one itself when a caller has
+ * none (menu, MCP, tests).
+ */
+export interface ProjectSwitchTrace {
+  switchId: string;
+  entryPoint: ProjectSwitchEntryPoint;
+}
+
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {
   /** The project being switched to */
   project: Project;
   /** Unique identifier for this switch operation */
   switchId: string;
+  /** Where the switch started; absent on the legacy non-PVM path. */
+  entryPoint?: ProjectSwitchEntryPoint;
+  /** True when the view was reactivated from the LRU cache rather than cold-started. */
+  cacheHit?: boolean;
   /** If the workspace host failed to load worktrees (e.g. non-git directory) */
   worktreeLoadError?: string;
   /** Pre-built hydration data to skip the redundant APP_HYDRATE IPC round-trip */

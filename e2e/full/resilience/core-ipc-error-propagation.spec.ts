@@ -6,7 +6,8 @@ import { SEL } from "../../helpers/selectors";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { openTerminal } from "../../helpers/panels";
-import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
+import { waitForTerminalReady } from "../../helpers/terminal";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import type { ElectronApplication } from "@playwright/test";
 
 /* ---------- helpers ---------- */
@@ -147,8 +148,12 @@ async function openRecoveryMenu(
 ): Promise<Locator> {
   const trigger = banner.locator('[aria-label="More recovery options"]');
   await expect(trigger).toBeVisible();
-
-  await window.keyboard.press("Escape").catch(() => undefined);
+  await trigger.hover();
+  // The popover wrapper is upgraded after its deferred Radix chunk loads.
+  // Synchronize on that upgrade before sending a real pointer interaction;
+  // a DOM-level click can briefly expose the fallback content and then close
+  // it again while the primitive remounts.
+  await expect(trigger).toHaveAttribute("data-state", /closed|open/, { timeout: T_MEDIUM });
 
   const menu = window
     .locator("[data-radix-popper-content-wrapper]")
@@ -157,34 +162,24 @@ async function openRecoveryMenu(
     })
     .last();
 
-  let opened = false;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    // Lead with a DOM-level click: it re-resolves the locator each call and
-    // only needs the trigger momentarily attached, so it survives the banner
-    // re-rendering and detaching the button mid-action. Leading with focus()
-    // (the prior form) retried against the detaching node until its 30s
-    // timeout on headless Linux/Windows under release load.
-    await trigger.evaluate((element: HTMLElement) => element.click()).catch(() => undefined);
-    if (await menu.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
-      opened = true;
-      break;
+  await expect(async () => {
+    // A failed attempt can leave the controlled popover open while its portal
+    // is remounting. Close it before retrying so the next click always opens.
+    if ((await trigger.getAttribute("data-state", { timeout: T_SHORT })) === "open") {
+      await window.keyboard.press("Escape");
+      await expect(trigger).toHaveAttribute("data-state", "closed", { timeout: T_SHORT });
     }
-    // Keyboard fallback in case the click landed during a re-render and was
-    // dropped; focus is best-effort and must not block on a detaching node.
-    await trigger.focus({ timeout: T_SHORT }).catch(() => undefined);
-    await window.keyboard.press(attempt % 2 === 0 ? "Enter" : "Space").catch(() => undefined);
-    if (await menu.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-      opened = true;
-      break;
-    }
-    await window.keyboard.press("Escape").catch(() => undefined);
-  }
 
-  expect(opened).toBe(true);
-  await expect(menu).toBeVisible({ timeout: T_MEDIUM });
-  for (const label of expectedButtonLabels) {
-    await expect(menu.getByRole("button", { name: label, exact: true })).toBeVisible();
-  }
+    await trigger.click({ timeout: T_SHORT });
+    await expect(trigger).toHaveAttribute("data-state", "open", { timeout: T_SHORT });
+    await expect(menu).toBeVisible({ timeout: T_SHORT });
+    for (const label of expectedButtonLabels) {
+      await expect(menu.getByRole("button", { name: label, exact: true })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    }
+  }).toPass({ timeout: T_LONG });
+
   return menu;
 }
 
@@ -381,6 +376,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     // Wait for the real spawn-result success before injecting a synthetic
     // failure. Otherwise it can arrive afterward and clear the banner.
     await waitForSuccessfulSpawnResult(ctx.window, terminalId!);
+    await waitForTerminalReady(ctx.window, targetPanel, T_MEDIUM);
 
     // Send a synthetic spawn error result for this terminal
     await emitSpawnResult(ctx.app, terminalId!, "ENOENT", "spawn /nonexistent ENOENT");
@@ -414,6 +410,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     expect(terminalId).toBeTruthy();
 
     await waitForSuccessfulSpawnResult(ctx.window, terminalId!);
+    await waitForTerminalReady(ctx.window, lastPanel, T_MEDIUM);
 
     await emitSpawnResult(ctx.app, terminalId!, "ENOTDIR", "ENOTDIR: not a directory");
 

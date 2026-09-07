@@ -167,6 +167,67 @@ describe("terminal.duplicate (copy) suffix", () => {
     );
   });
 
+  it("terminal.duplicate asks the store to land the copy after its source (#12095)", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      focusedId: "p2",
+      panels: [
+        { id: "p1", location: "grid", kind: "terminal", title: "One" },
+        { id: "p2", location: "grid", kind: "terminal", title: "Two" },
+        { id: "p3", location: "grid", kind: "terminal", title: "Three" },
+      ],
+      addPanel,
+    });
+    const run = setupActions();
+
+    await run("terminal.duplicate");
+
+    expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ insertAfterId: "p2" }));
+  });
+
+  it("terminal.duplicate anchors on an explicitly targeted panel, not the focused one", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      focusedId: "p1",
+      panels: [
+        { id: "p1", location: "grid", kind: "terminal", title: "One" },
+        { id: "p2", location: "grid", kind: "terminal", title: "Two" },
+      ],
+      addPanel,
+    });
+    const run = setupActions();
+
+    await run("terminal.duplicate", { terminalId: "p2" });
+
+    expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ insertAfterId: "p2" }));
+  });
+
+  it("terminal.duplicate does not anchor the empty-state fallback terminal", async () => {
+    const addPanel = vi.fn().mockResolvedValue("p-new");
+    setPanelState({ panels: [], addPanel });
+    const run = setupActions();
+
+    await run("terminal.duplicate");
+
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel.mock.calls[0]![0]).not.toHaveProperty("insertAfterId");
+  });
+
+  it("terminal.duplicate does not anchor the last-closed reopen fallback", async () => {
+    const addPanel = vi.fn().mockResolvedValue("p-new");
+    setPanelState({
+      panels: [],
+      lastClosedConfig: { kind: "terminal", command: "bash", cwd: "/repo" },
+      addPanel,
+    });
+    const run = setupActions();
+
+    await run("terminal.duplicate");
+
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel.mock.calls[0]![0]).not.toHaveProperty("insertAfterId");
+  });
+
   it("terminal.duplicate preserves spawnedBy for MCP-origin duplicated agent panels", async () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     setPanelState({

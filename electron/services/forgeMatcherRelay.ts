@@ -7,7 +7,7 @@
  */
 import {
   listForgeProviderMatchers,
-  onForgeProviderRegistryChanged,
+  onForgeProviderMatchersChanged,
 } from "./forgeProviderRegistry.js";
 
 let initialized = false;
@@ -25,7 +25,7 @@ async function pushMatchersToWorkspaceHosts(): Promise<void> {
 export function initForgeMatcherRelay(): void {
   if (initialized) return;
   initialized = true;
-  onForgeProviderRegistryChanged(() => {
+  onForgeProviderMatchersChanged(() => {
     void pushMatchersToWorkspaceHosts();
   });
   // Initial push covers providers registered before the relay was wired.

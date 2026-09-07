@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useRef, useState, useEffect, useLayoutEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -11,7 +11,6 @@ import {
   DIAGNOSTICS_DEFAULT_HEIGHT,
 } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store";
-import { usePerfMetricsStore } from "@/store/perfMetricsStore";
 import { ProblemsContent } from "./ProblemsContent";
 import { LogsContent } from "./LogsContent";
 import { EventsContent } from "./EventsContent";
@@ -28,6 +27,8 @@ import {
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
+
+import { signalDiagnosticsDockLayoutChange } from "@/lib/diagnosticsDockLayout";
 
 import { DIAGNOSTICS_DOCK_REGION_ID } from "./regionIds";
 
@@ -93,7 +94,10 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       }))
     );
   const errorCount = useErrorStore((state) => state.errors.filter((e) => !e.dismissed).length);
-  const failedBudgetCount = usePerfMetricsStore((state) => state.failedBudgetCount);
+  // The Perf tab carries no badge. The tab-badge style is the error tone shared
+  // with Problems, and a perf number drifting past a reference value is not an
+  // error — the suite gates nothing. Wearing that tone made every 2% drift look
+  // like a fault and diluted the one badge that does mean something.
   // Auto-open on new errors lives in useDiagnosticsAutoOpen (always mounted in
   // AppLayout) — the dock is lazy-mounted, so a watcher here would never see
   // the first error.
@@ -247,6 +251,18 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     return () => observer.disconnect();
   }, [isOpen, setMaxHeight]);
 
+  // #12264: the dock claims (or releases) its height from the same flex column
+  // that holds the panel grid, so every commit that changes it is a reflow of
+  // `<main>` and owes the grid the same protocol a sidebar transition does.
+  // Published from a layout effect, not the store, for two reasons: the first
+  // open resolves a lazy chunk, so `isOpen` flips a frame or more before any
+  // dock DOM exists to measure against; and running post-commit means
+  // subscribers read the settled box rather than the one before it. `activeTab`
+  // is deliberately not a dependency — switching tabs moves nothing.
+  useLayoutEffect(() => {
+    signalDiagnosticsDockLayoutChange();
+  }, [isOpen, height]);
+
   useEffect(() => {
     if (!isResizing && isOpen) {
       const timer = setTimeout(async () => {
@@ -282,7 +298,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     { id: "logs", label: "Logs" },
     { id: "events", label: "Events" },
     { id: "telemetry", label: "Telemetry" },
-    { id: "perf", label: "Perf", badge: failedBudgetCount },
+    { id: "perf", label: "Perf" },
     { id: "whySlow", label: "Why slow?" },
   ];
 

@@ -201,8 +201,6 @@ describe("PRIntegrationService", () => {
         isRunning: true,
         candidateCount: 7,
         resolvedPRCount: 3,
-        lastCheckTime: undefined,
-        circuitBreakerTripped: false,
       });
     });
 
@@ -236,7 +234,7 @@ describe("PRIntegrationService", () => {
 
       const status = service.getStatus();
 
-      expect(status.circuitBreakerTripped).toBe(false);
+      expect(status.circuitBreakerTripped).toBeUndefined();
     });
   });
 

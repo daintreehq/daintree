@@ -12,6 +12,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
   TerminalSpawnOptionsSchema,
@@ -35,6 +36,7 @@ import {
   supportsExactSessionCapture,
 } from "../../../../shared/types/agentSettings.js";
 import {
+  declaresActiveAssistantTier,
   getAssistantWiredAgentIds,
   getEffectiveAgentConfig,
 } from "../../../../shared/config/agentRegistry.js";
@@ -411,12 +413,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // pool for every spawn. The spawn-side fallback stays absent below.
     const quotingShell = validatedOptions.shell || projectShell || getDefaultShell();
 
-    // Help-assistant launches arrive with a pre-provisioned session dir whose
-    // .mcp.json is already in cwd, baked with the literal session token, and
-    // a .claude/settings.json that sets `enableAllProjectMcpServers: true` so
-    // Claude Code auto-trusts the project-scoped servers without prompting.
-    // Skip per-pane MCP config injection (the session dir owns it) and let
-    // Claude's normal cwd discovery do its thing. The CLI bypass flag is
+    // Help-assistant launches arrive with a pre-provisioned session dir that
+    // every lane of the project shares. Claude's MCP wiring, with its literal
+    // per-lane bearer, is a per-lane file handed over with `--mcp-config`
+    // below; the shared `.mcp.json` in cwd is empty, and `.claude/settings.json`
+    // sets `enableAllProjectMcpServers: true` so nothing there prompts. Skip
+    // the per-pane MCP config injection (the help session owns its own) and let
+    // Claude's normal cwd discovery do the rest. The CLI bypass flag is
     // gated on the session's snapshotted `bypassPermissions` (independent
     // of `tier`), so an `action`-tier session can still skip permission
     // prompts and a `system`-tier session can still respect them.
@@ -431,6 +434,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const isAssistantAgent =
       typeof launchAgentId === "string" && getAssistantWiredAgentIds().includes(launchAgentId);
     const isHelpLaunch = helpTier !== false && isAssistantAgent && safeCommand.length > 0;
+    // The rejection below keys off this rather than `isAssistantAgent`, which
+    // now also requires an implemented `mcpInjection` mode: an agent excluded
+    // on that new ground would otherwise sail past the throw and fall through
+    // to the ordinary launch path with a help bearer still in its env (#12262).
+    // Deliberately the pre-#12262 admission set and no wider — a deprecated-tier
+    // agent could never provision a help session, so a user who carries their
+    // own DAINTREE_MCP_TOKEN in a preset or project env must still be able to
+    // launch it, exactly as before.
+    const couldProvisionHelpSession =
+      typeof launchAgentId === "string" && declaresActiveAssistantTier(launchAgentId);
 
     // If a help-session token was supplied but is invalid (revoked between
     // provision and spawn — typically because a sibling provision displaced
@@ -439,7 +452,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // renderer must always provision a fresh session before spawning the
     // assistant; falling through would resurrect the orphan-backend failure
     // mode (#7509) by spawning an unmanaged Claude in the assistant slot.
-    if (!isHelpLaunch && helpToken && isAssistantAgent && safeCommand.length > 0) {
+    if (!isHelpLaunch && helpToken && couldProvisionHelpSession && safeCommand.length > 0) {
       throw new Error(
         "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
       );
@@ -488,7 +501,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // `--dangerously-skip-permissions` flag (no DEFAULT_DANGEROUS_ARGS entry).
       // For it, the user's "bypass permissions" preference maps to skipping the
       // assistant's OWN per-action confirm sheet, which the CLI reads from this
-      // env var at startup. The capability tier remains the only safeguard.
+      // env var at startup. The capability tier is then the main safeguard, but
+      // not the only one: `danger: "confirm"` actions still open the host
+      // confirmation dialog unless a native automation grant covers them
+      // (#12119).
       if (launchAgentId === "daintree-assistant" && bypassPermissions) {
         spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_AUTO_APPROVE: "1" };
       }
@@ -577,6 +593,25 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         }
       }
 
+      // Claude help sessions read their MCP wiring from a per-lane file
+      // handed over with `--mcp-config`, not from the cwd's `.mcp.json`. Every
+      // lane of a project shares one session directory, so the shared file
+      // cannot carry a lane's bearer; the per-lane file can, and servers
+      // supplied this way raise no per-folder approval prompt. Same `null`
+      // contract as Codex and Copilot: a valid help token that does not
+      // belong to a Claude session is a cross-agent reuse and refuses to spawn.
+      if (launchAgentId === "claude") {
+        const claudeArgs = helpSessionService.getClaudeLaunchArgs(helpToken);
+        if (claudeArgs === null) {
+          throw new Error(
+            "Daintree Assistant help token does not belong to a Claude session; refusing to spawn"
+          );
+        }
+        if (claudeArgs.length > 0) {
+          safeCommand = `${safeCommand} ${claudeArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
+        }
+      }
+
       // Inject the per-session assistant scratch dir into the PTY spawn env
       // for every help-session agent (Claude, Codex, Copilot).
       // Paired with the markdown addendum written into the session dir at
@@ -597,7 +632,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // spawn (e.g. a stale resume against a session a sibling provision
       // already displaced) — refuse to launch as a help session rather
       // than silently degrading to a non-help Claude.
-      if (!helpSessionService.markTerminalForToken(helpToken, id)) {
+      if (!helpSessionService.markTerminalForToken(helpToken, id, launchAgentId)) {
         throw new Error(
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
         );
@@ -778,6 +813,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
+        // Seal the assistant's identity onto the record itself, for the
+        // generic terminal paths to read back through
+        // `isAssistantTerminalRecord`. Derived in main, never from a
+        // renderer-supplied field: a pane that could assert this would opt
+        // itself out of the session journal.
+        //
+        // The live binding is the second source because a restart respawns the
+        // same panel id with a rebuilt env that carries no help token
+        // (`buildRestartEnv`), so `isHelpLaunch` is false there — and nothing
+        // unbinds the session on a restart's kill. Without it, Restart All
+        // Terminals would quietly strip the assistant's identity.
+        isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         agentSessionId: validatedOptions.agentSessionId,
@@ -846,6 +893,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     generation?: number
   ): Promise<void> => {
     if (!sessionId || !info?.launchAgentId) return;
+    // The Daintree Assistant's overlay terminal must never surface in the
+    // resume picker as an ordinary agent pane (#12183). Both callers snapshot
+    // `info` before the kill, so the record still carries the stamp here.
+    if (isAssistantTerminalRecord(info)) return;
     try {
       const branch = await resolveBranchForMain(info.worktreeId, deps.worktreeService);
       // journalAgentSession is the exactly-once funnel: it gates on the

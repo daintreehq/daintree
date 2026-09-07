@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PluginViewContentConfig } from "../PluginViewContent";
@@ -12,6 +12,11 @@ vi.mock("@/components/ui/Skeleton", () => ({
 }));
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+// Its own lazy banner must not overwrite the plugin-view factory captured by
+// the React mocks below. Runtime-status behavior has a dedicated suite.
+vi.mock("@/components/Plugin/PluginViewRuntimeStatus", () => ({
+  PluginViewRuntimeStatus: () => null,
 }));
 
 // Note what is absent: this suite mocks none of the worktree/preferences/tooltip
@@ -126,7 +131,11 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup();
+  // A late dependency import can refill the module cache with the previous
+  // React mock after resetModules, bypassing the next test's lazy factory.
+  await vi.dynamicImportSettled();
   vi.resetModules();
   vi.unstubAllGlobals();
 });
@@ -194,6 +203,47 @@ describe("makePluginViewContent", () => {
       // the *visible* worktree rather than the panel's.
       expect(props.worktreeId).toBe("wt-7");
       expect(props.disposeSignal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("freezes initialArgs for the life of a mount even as the prop changes", async () => {
+    const capturedProps: Array<Record<string, unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: Record<string, unknown>) {
+            capturedProps.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      const spawned = { root: "src" };
+      const { rerender } = render(<Content panelId="panel-frozen" initialArgs={spawned} />);
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+
+      // `extensionState` reaches this component straight off the panel record,
+      // so once a view can WRITE that record through `persistState` the prop
+      // changes underneath it on every save. Re-rendering with a new bag stands
+      // in for exactly that.
+      const persisted = { root: "src", selected: "src/index.ts" };
+      rerender(<Content panelId="panel-frozen" initialArgs={persisted} />);
+
+      // Same mount, so the view keeps the snapshot it was given. Forwarding the
+      // new bag would turn a documented "what you were opened with" value into
+      // a live channel, and hand any view that persists state derived from
+      // `initialArgs` a render loop.
+      const latest = capturedProps[capturedProps.length - 1]!;
+      expect(latest.initialArgs).toBe(spawned);
+      expect(capturedProps.every((props) => props.initialArgs === spawned)).toBe(true);
     } finally {
       vi.doUnmock("react");
     }
@@ -606,7 +656,6 @@ describe("makePluginViewContent", () => {
       const first = signals[0]!;
       expect(first.aborted).toBe(false);
       const callsBeforeReset = lazyCalls.count;
-      const resetKeyBeforeReset = boundaryProps.last!.resetKeys?.[0];
 
       // Drive the very callback the boundary's "Try again" invokes. Going
       // through `onReset` rather than a thrown render keeps this deterministic:
@@ -628,15 +677,61 @@ describe("makePluginViewContent", () => {
       expect(first.aborted).toBe(true);
       expect(second.aborted).toBe(false);
       // ...and the module is genuinely re-imported rather than the controller
-      // merely being swapped: a fresh `lazy()` ref, and a bumped reset key so
-      // the boundary clears its error state.
+      // merely being swapped: a fresh `lazy()` ref. The boundary clears its
+      // error state by being remounted on a new `key` (#12278) rather than
+      // through `resetKeys`, which it no longer takes — a fresh wrapper alone
+      // does not remount a view whose resolved type is unchanged.
       expect(lazyCalls.count).toBeGreaterThan(callsBeforeReset);
-      expect(boundaryProps.last!.resetKeys?.[0]).not.toBe(resetKeyBeforeReset);
 
       // Kind removal must abort the CURRENT controller, resolved through the ref
       // at call time rather than the one captured when the effect was set up.
       act(() => emit!({ kinds: [] }));
       expect(second.aborted).toBe(true);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("aborts the outgoing signal the moment the view throws, not when retry is clicked", async () => {
+    // #12278: `handleRenderError` reported the failure but left the controller
+    // armed, so between the throw and the user clicking Try again or Close,
+    // anything the plugin tied to `disposeSignal` kept running — fetches,
+    // subscriptions, timers. `handleReset` already aborted correctly on retry,
+    // which is exactly what made the gap easy to miss: the leak is only visible
+    // in the window BEFORE any recovery action, so asserting on the state right
+    // after `onError` is the only way to see it.
+    const signals: AbortSignal[] = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: { disposeSignal: AbortSignal }) {
+            if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      render(<Content panelId="panel-abort-on-error" />);
+
+      await waitFor(() => expect(signals).not.toHaveLength(0));
+      const signal = signals[0]!;
+      expect(signal.aborted).toBe(false);
+
+      // The boundary's own `onError`, driven directly for the same reason the
+      // retry test drives `onReset`: a synchronously throwing view double fights
+      // React's concurrent initial-mount recovery.
+      const onError = boundaryProps.last!.onError;
+      expect(onError).toBeTypeOf("function");
+      act(() => onError!(new Error("view blew up"), { componentStack: "" }));
+
+      // No retry, no close, no unmount — just the throw.
+      expect(signal.aborted).toBe(true);
     } finally {
       vi.doUnmock("react");
     }

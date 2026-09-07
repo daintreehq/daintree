@@ -5,7 +5,13 @@ import { AllClearOverlay } from "../AllClearOverlay";
 
 const OVERLAY_SELECTOR = "[aria-hidden='true']";
 
-let onAllAgentsClearCb: ((data: { timestamp: number }) => void) | null = null;
+type AllClearPayload = { timestamp: number; shouldFlash: boolean };
+
+let onAllAgentsClearCb: ((data: AllClearPayload) => void) | null = null;
+
+function fireAllClear(shouldFlash = true) {
+  onAllAgentsClearCb?.({ timestamp: Date.now(), shouldFlash });
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -16,7 +22,7 @@ beforeEach(() => {
     writable: true,
     value: {
       terminal: {
-        onAllAgentsClear: vi.fn((callback: (data: { timestamp: number }) => void) => {
+        onAllAgentsClear: vi.fn((callback: (data: AllClearPayload) => void) => {
           onAllAgentsClearCb = callback;
           return () => {
             onAllAgentsClearCb = null;
@@ -38,11 +44,11 @@ afterEach(() => {
 });
 
 describe("AllClearOverlay", () => {
-  it("renders the overlay when onAllAgentsClear fires", () => {
+  it("renders the overlay when the event carries shouldFlash: true", () => {
     render(<AllClearOverlay />);
 
     act(() => {
-      onAllAgentsClearCb?.({ timestamp: Date.now() });
+      fireAllClear(true);
     });
 
     expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeTruthy();
@@ -53,12 +59,26 @@ describe("AllClearOverlay", () => {
     expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
   });
 
+  it("suppresses the overlay when the event carries shouldFlash: false", () => {
+    // shouldFlash is computed main-process-side (flashEnabled, the master
+    // enabled toggle, and the audio suppression chain) — see
+    // AgentNotificationService.checkAllClear (#12185). The overlay trusts it
+    // rather than recomputing suppression from its own settings mirror.
+    render(<AllClearOverlay />);
+
+    act(() => {
+      fireAllClear(false);
+    });
+
+    expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
+  });
+
   it("suppresses the overlay when prefers-reduced-motion is set", () => {
     (window.matchMedia as ReturnType<typeof vi.fn>).mockReturnValue({ matches: true });
     render(<AllClearOverlay />);
 
     act(() => {
-      onAllAgentsClearCb?.({ timestamp: Date.now() });
+      fireAllClear(true);
     });
 
     expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
@@ -70,7 +90,7 @@ describe("AllClearOverlay", () => {
       render(<AllClearOverlay />);
 
       act(() => {
-        onAllAgentsClearCb?.({ timestamp: Date.now() });
+        fireAllClear(true);
       });
 
       expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
@@ -85,7 +105,7 @@ describe("AllClearOverlay", () => {
       render(<AllClearOverlay />);
 
       act(() => {
-        onAllAgentsClearCb?.({ timestamp: Date.now() });
+        fireAllClear(true);
       });
 
       expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
@@ -98,7 +118,7 @@ describe("AllClearOverlay", () => {
     render(<AllClearOverlay />);
 
     act(() => {
-      onAllAgentsClearCb?.({ timestamp: Date.now() });
+      fireAllClear(true);
     });
 
     expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeTruthy();
@@ -114,7 +134,7 @@ describe("AllClearOverlay", () => {
     const { unmount } = render(<AllClearOverlay />);
 
     act(() => {
-      onAllAgentsClearCb?.({ timestamp: Date.now() });
+      fireAllClear(true);
     });
 
     unmount();

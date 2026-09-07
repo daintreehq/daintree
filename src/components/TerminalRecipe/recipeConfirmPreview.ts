@@ -56,41 +56,42 @@ function describeTerminal(terminal: RecipeTerminal): string[] {
  * Render the recipe's terminals for a confirmation dialog.
  *
  * `spawns` selects the framing. A dispatch that will actually start the
- * terminals says so and marks the ones the per-run agent cap trims off the tail
- * — an approver told "runs 5 terminals" when only 3 start has been shown
- * something untrue. A dispatch that merely names the recipe (deleting it,
- * copying it, opening its editor) is gated too and shows the same content, but
- * describing it as starting would be equally untrue.
+ * terminals says so; one that merely names the recipe (deleting it, copying it,
+ * opening its editor) is gated too and shows the same content, but describing
+ * it as starting would be untrue.
+ *
+ * Every terminal is listed as starting, with no trimmed tail. That is what the
+ * approval now buys: approving this dialog is the thing that lifts the smaller
+ * unapproved ceiling, so the offer and the run are the same size (#12263). The
+ * dialog used to say "Starts 3 of 5 terminals (an automated caller gets at most
+ * 3)" and strike out the rest, because approval covered only the first three.
+ * Framing it that way now would understate what the click authorizes, which is
+ * the same failure as overstating it — an approver has to be shown exactly what
+ * will run.
  *
  * `null` means the id resolved to nothing — surfaced explicitly rather than as
  * an empty preview, which would read as "this recipe does nothing".
  */
 export function formatRecipePreviewLines(
   recipe: TerminalRecipe | null,
-  options: { agentTerminalCap: number; spawns: boolean }
+  options: { spawns: boolean }
 ): string[] {
   if (!recipe) {
     return ["Couldn't resolve this recipe — it may have been deleted or its plugin unloaded."];
   }
 
   const total = recipe.terminals.length;
-  const running = options.spawns ? Math.min(total, Math.max(options.agentTerminalCap, 0)) : total;
   const lines = [`${recipe.name} — ${recipeOriginLabel(recipe)}`];
-  if (!options.spawns) {
-    lines.push(`Defines ${total} terminal${total === 1 ? "" : "s"}:`);
-  } else if (running === total) {
-    lines.push(`Starts ${total} terminal${total === 1 ? "" : "s"}:`);
-  } else {
-    lines.push(
-      `Starts ${running} of ${total} terminals (an automated caller gets at most ${options.agentTerminalCap}):`
-    );
-  }
+  lines.push(
+    options.spawns
+      ? `Starts ${total} terminal${total === 1 ? "" : "s"}:`
+      : `Defines ${total} terminal${total === 1 ? "" : "s"}:`
+  );
 
   recipe.terminals.forEach((terminal, index) => {
     const [head, ...rest] = describeTerminal(terminal);
-    const skipped = index >= running ? " — not started" : "";
     const title = terminal.title ? `${terminal.title}: ` : "";
-    lines.push(`${index + 1}. ${title}${head ?? terminal.type}${skipped}`);
+    lines.push(`${index + 1}. ${title}${head ?? terminal.type}`);
     for (const line of rest) lines.push(`   ${line}`);
   });
 

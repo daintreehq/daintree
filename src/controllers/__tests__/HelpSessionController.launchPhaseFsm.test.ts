@@ -57,6 +57,21 @@ const {
   grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
   outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    dismissIntro: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
+    setWidth: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    addFigure: vi.fn(),
+    markConversationStarted: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: false,
     terminalId: null as string | null,
     agentId: null as string | null,
@@ -97,7 +112,18 @@ vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (s: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
   store.getState = () => helpPanelState;
-  return { useHelpPanelStore: store };
+  return {
+    useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
+  };
 });
 
 vi.mock("@/store", () => {
@@ -127,6 +153,7 @@ vi.mock("@/utils/safeFireAndForget", () => ({
 
 import { HelpSessionController } from "../HelpSessionController";
 import { actionService } from "@/services/ActionService";
+import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
 
 function resetState() {
   helpPanelState.isOpen = false;
@@ -497,7 +524,7 @@ describe("HelpSessionController — launch phase FSM", () => {
     ctrl.start();
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      proj: { sessionId: "old-sess", agentId: "claude", cwd: "/help" },
+      [slotKey("proj", 0)]: { sessionId: "old-sess", agentId: "claude", cwd: "/help" },
     };
     // Store currentProject drifts away from the launch project after capture.
     projectStoreState.currentProject = { id: "other", path: "/other" };

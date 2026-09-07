@@ -135,9 +135,135 @@ describe("useDevPreviewScrollCapture — captureScrollViaCdp (frozen-safe) path"
     });
   });
 
-  it("does not persist a CDP-returned 0 (error-path guard), unlike the executeJavaScript path", async () => {
+  it("persists a successful 0 so a return to the top overwrites a stale offset", async () => {
     getScrollPositionMock.mockResolvedValue(0);
     const webview = makeWebview();
+    const setDevPreviewScrollPosition = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewScrollCapture({
+        id: PANE_ID,
+        status: "running",
+        webviewElement: null,
+        setDevPreviewScrollPosition,
+      })
+    );
+
+    await act(async () => {
+      result.current.captureScrollViaCdp(webview);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setDevPreviewScrollPosition).toHaveBeenCalledWith(PANE_ID, {
+      url: "http://localhost:3000/page",
+      scrollY: 0,
+    });
+  });
+
+  it("leaves any stored position untouched when the read fails (null sentinel)", async () => {
+    getScrollPositionMock.mockResolvedValue(null);
+    const webview = makeWebview();
+    const setDevPreviewScrollPosition = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewScrollCapture({
+        id: PANE_ID,
+        status: "running",
+        webviewElement: null,
+        setDevPreviewScrollPosition,
+      })
+    );
+
+    await act(async () => {
+      result.current.captureScrollViaCdp(webview);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setDevPreviewScrollPosition).not.toHaveBeenCalled();
+  });
+
+  it("discards a reading whose document changed while the request was in flight", async () => {
+    // The eviction path blanks the guest right after asking for the offset.
+    // Now that a zero is persisted, an answer arriving after that would file
+    // the blank page's 0 against the previous URL.
+    let urlNow = "http://localhost:3000/page";
+    const webview = makeWebview({ getURL: vi.fn(() => urlNow) });
+    getScrollPositionMock.mockImplementation(() => {
+      urlNow = "about:blank";
+      return Promise.resolve(0);
+    });
+    const setDevPreviewScrollPosition = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewScrollCapture({
+        id: PANE_ID,
+        status: "running",
+        webviewElement: null,
+        setDevPreviewScrollPosition,
+      })
+    );
+
+    await act(async () => {
+      result.current.captureScrollViaCdp(webview);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setDevPreviewScrollPosition).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unconfirmable non-zero offset from the eviction capture", async () => {
+    // The tag is detached by the time the reading lands. A real offset cannot
+    // have come from a freshly blanked page, and discarding it would lose the
+    // capture this path exists for.
+    const webview = makeWebview({
+      getURL: vi.fn(() => {
+        throw new Error("The WebView must be attached to the DOM");
+      }),
+    });
+    // The first call, before the request, has to succeed.
+    let firstCall = true;
+    (webview.getURL as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      if (firstCall) {
+        firstCall = false;
+        return "http://localhost:3000/page";
+      }
+      throw new Error("The WebView must be attached to the DOM");
+    });
+    getScrollPositionMock.mockResolvedValue(240);
+    const setDevPreviewScrollPosition = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewScrollCapture({
+        id: PANE_ID,
+        status: "running",
+        webviewElement: null,
+        setDevPreviewScrollPosition,
+      })
+    );
+
+    await act(async () => {
+      result.current.captureScrollViaCdp(webview);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setDevPreviewScrollPosition).toHaveBeenCalledWith(PANE_ID, {
+      url: "http://localhost:3000/page",
+      scrollY: 240,
+    });
+  });
+
+  it("discards an unconfirmable zero, which may be the blanked page", async () => {
+    let firstCall = true;
+    const webview = makeWebview({
+      getURL: vi.fn(() => {
+        if (firstCall) {
+          firstCall = false;
+          return "http://localhost:3000/page";
+        }
+        throw new Error("The WebView must be attached to the DOM");
+      }),
+    });
+    getScrollPositionMock.mockResolvedValue(0);
     const setDevPreviewScrollPosition = vi.fn();
     const { result } = renderHook(() =>
       useDevPreviewScrollCapture({

@@ -511,6 +511,14 @@ const CASE_INSENSITIVE_PROBE = buildProbe(
   "im"
 );
 
+const PATTERN_PROBES = PATTERNS.map((pattern) => ({
+  pattern,
+  probe: new RegExp(
+    pattern.probe ?? pattern.regex.source,
+    pattern.regex.flags.replace(/[gy]/g, "")
+  ),
+}));
+
 /**
  * Scrubs known secret sigils from free text. Idempotent — calling twice yields
  * the same result, because the `[REDACTED]` token contains no secret sigil.
@@ -534,8 +542,9 @@ export function scrubSecrets(value: string): string {
   }
 
   let out = value;
-  for (const { regex, replacement } of PATTERNS) {
-    out = out.replace(regex, replacement);
+  for (const { pattern, probe } of PATTERN_PROBES) {
+    if (!probe.test(out)) continue;
+    out = out.replace(pattern.regex, pattern.replacement);
   }
 
   return out;

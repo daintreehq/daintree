@@ -1,13 +1,47 @@
-import { exec, execFile } from "child_process";
+import { execFile, type ExecFileOptionsWithStringEncoding } from "child_process";
 import os from "node:os";
-import { promisify } from "util";
 import { logDebug } from "../utils/logger.js";
+import { WindowsProcessCensus } from "./WindowsProcessCensus.js";
 
-const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
+function execProbe(
+  file: string,
+  args: string[],
+  options: ExecFileOptionsWithStringEncoding
+): Promise<{ stdout: string; pid: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, args, options, (error, stdout) => {
+      // Native callbacks are asynchronous, but deferring also keeps this safe
+      // under unit-test doubles that invoke the callback synchronously before
+      // `execFile` has returned its ChildProcess.
+      queueMicrotask(() => {
+        if (error) reject(error);
+        else resolve({ stdout, pid: child?.pid ?? null });
+      });
+    });
+  });
+}
 
 const BACKOFF_MULTIPLIER = 1.5;
 const BACKOFF_CEILING_MS = 15_000;
+/**
+ * Backoff ceiling while a lineage ledger is tracking roots. The ledger can only
+ * record a descendant it actually sees, so the gap between sweeps is the window
+ * in which a process can spawn, detach, and become unreachable forever (#12203).
+ * The idle ceiling above is far too coarse for that; this keeps the window
+ * bounded without pinning the census at its base interval all night.
+ */
+const LINEAGE_BACKOFF_CEILING_MS = 5_000;
+
+/**
+ * How long the census must go undemanded before the Windows helper is retired.
+ *
+ * The idle backoff ceiling, so a poll that is merely slow can never race it: at
+ * maximum backoff the census still runs every 15s, and this timer is armed only
+ * on the no-demand early return, cleared the moment a refresh actually runs, and
+ * re-checks demand when it fires. A plain "15s since the last response" would
+ * retire and respawn PowerShell on every poll of a healthy backed-off census.
+ */
+const CENSUS_IDLE_RETIRE_MS = BACKOFF_CEILING_MS;
 
 export interface ProcessInfo {
   pid: number;
@@ -16,6 +50,29 @@ export interface ProcessInfo {
   command: string;
   cpuPercent: number; // CPU usage percentage (0-100)
   rssKb: number; // Resident Set Size in KB
+  /**
+   * OS-reported process start time, when the platform census carries one.
+   * Populated on Windows (`CreationDate` is already fetched for CPU deltas);
+   * absent on Unix, where `ps -eo` would need a fixed-width `lstart` column and
+   * the lineage ledger probes the handful of PIDs it cares about instead.
+   */
+  startTime?: string;
+  /**
+   * Full on-disk image path, when the platform census carries one. Populated on
+   * Windows from `Win32_Process.ExecutablePath`, which rides along in the census
+   * the cache already runs; absent on Unix, where `ps` has no equivalent column
+   * and `ImagePathProbe` resolves it per PID instead.
+   */
+  executablePath?: string;
+}
+
+/**
+ * Lineage tracking hook. Declared structurally so the cache never imports the
+ * ledger — they are wired together in pty-host.ts.
+ */
+export interface LineageLedgerHook {
+  hasRoots(): boolean;
+  reconcile(census: ProcessTreeCache): void;
 }
 
 type RefreshCallback = () => void;
@@ -33,10 +90,14 @@ export class ProcessTreeCache {
   private refreshCallbacks: Set<RefreshCallback> = new Set();
   private lastError: Error | null = null;
   private loggedZeroSubscriberSkip: boolean = false;
+  private lineageLedger: LineageLedgerHook | null = null;
   private cpuSnapshots = new Map<
     string,
     { kernelTicks: bigint; userTicks: bigint; wallMs: number }
   >();
+  private censusHelper: WindowsProcessCensus | null = null;
+  private censusIdleRetireTimer: NodeJS.Timeout | null = null;
+  private censusHelperRssKb: number | null = null;
 
   constructor(private pollIntervalMs: number = 2500) {
     this.currentIntervalMs = pollIntervalMs;
@@ -62,6 +123,14 @@ export class ProcessTreeCache {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
+    this.clearCensusIdleRetire();
+    // The helper is a child process, so it has to go down with the cache rather
+    // than wait for the pty-host to exit — the parent force-kills the host one
+    // second after asking it to stop, which is not a budget to leave a
+    // subprocess teardown inside.
+    this.censusHelper?.dispose();
+    this.censusHelper = null;
+    this.censusHelperRssKb = null;
     this.currentIntervalMs = this.pollIntervalMs;
     console.log("[ProcessTreeCache] Stopped");
   }
@@ -88,15 +157,69 @@ export class ProcessTreeCache {
     }, delayMs);
   }
 
+  /**
+   * Arm idle retirement of the Windows census helper.
+   *
+   * Armed only from the no-demand early return, and only once — re-arming on
+   * every skipped poll would push the deadline forward forever. The timer is a
+   * hint; the demand check when it fires is the authority, because a terminal
+   * can attach between arming and firing.
+   */
+  private armCensusIdleRetire(): void {
+    if (this.censusIdleRetireTimer !== null) return;
+    if (!this.censusHelper?.isRunning) return;
+
+    this.censusIdleRetireTimer = setTimeout(() => {
+      this.censusIdleRetireTimer = null;
+      if (this.refreshCallbacks.size > 0 || this.hasLineageRoots()) return;
+      if (this.censusHelper?.retireIfIdle()) {
+        this.censusHelperRssKb = null;
+        logDebug("[ProcessTreeCache] Retired the idle Windows census helper");
+      }
+    }, CENSUS_IDLE_RETIRE_MS);
+  }
+
+  private clearCensusIdleRetire(): void {
+    if (this.censusIdleRetireTimer === null) return;
+    clearTimeout(this.censusIdleRetireTimer);
+    this.censusIdleRetireTimer = null;
+  }
+
   private resetBackoff(): void {
     this.currentIntervalMs = this.pollIntervalMs;
   }
 
   private advanceBackoff(): void {
+    // Never below the configured base interval — a ceiling caps how far we
+    // drift, it must not make the census poll FASTER than asked. Both ceilings
+    // need the floor, not just the lineage one: a cache configured slower than
+    // 15s would otherwise be pulled down to 15s by the first unchanged sweep,
+    // which is the opposite of backing off.
+    const ceiling = this.hasLineageRoots()
+      ? Math.max(LINEAGE_BACKOFF_CEILING_MS, this.pollIntervalMs)
+      : Math.max(BACKOFF_CEILING_MS, this.pollIntervalMs);
     this.currentIntervalMs = Math.min(
       Math.ceil(this.currentIntervalMs * BACKOFF_MULTIPLIER),
-      BACKOFF_CEILING_MS
+      ceiling
     );
+  }
+
+  /**
+   * Attach the lineage ledger. While it holds roots the census keeps sweeping
+   * even with no subscribers, and backs off to a tighter ceiling — the ledger
+   * can only record descendants it observes, and an unobserved descendant that
+   * detaches is unreachable forever.
+   */
+  attachLineageLedger(ledger: LineageLedgerHook | null): void {
+    this.lineageLedger = ledger;
+  }
+
+  private hasLineageRoots(): boolean {
+    try {
+      return this.lineageLedger?.hasRoots() ?? false;
+    } catch {
+      return false;
+    }
   }
 
   getCurrentIntervalMs(): number {
@@ -118,8 +241,11 @@ export class ProcessTreeCache {
   }
 
   async refresh(): Promise<void> {
-    // Skip refresh if nobody is listening - saves CPU especially on Windows
-    if (this.refreshCallbacks.size === 0) {
+    // Skip refresh if nobody is listening - saves CPU especially on Windows.
+    // A lineage ledger with live roots counts as a listener: it is the only
+    // record of descendants that have detached, and it can only be built from
+    // sweeps that actually ran (#12203).
+    if (this.refreshCallbacks.size === 0 && !this.hasLineageRoots()) {
       // Log once per lifecycle when we skip due to no subscribers. If
       // ProcessDetector instances aren't registering, detection goes silent —
       // this surfaces the cause instead of failing silently (#5813). Verbose-gated
@@ -131,12 +257,14 @@ export class ProcessTreeCache {
           "[ProcessTreeCache] refresh skipped — no subscribers (ProcessDetector not attached?)"
         );
       }
+      this.armCensusIdleRetire();
       if (!this.disposed) {
         this.schedulePoll(this.currentIntervalMs);
       }
       return;
     }
     this.loggedZeroSubscriberSkip = false;
+    this.clearCensusIdleRetire();
 
     if (this.isRefreshing) {
       return;
@@ -170,6 +298,24 @@ export class ProcessTreeCache {
     } finally {
       this.isRefreshing = false;
 
+      // Fold the fresh census into the lineage ledger before subscribers run,
+      // so anything reading the ledger during a callback sees this sweep.
+      //
+      // Skipped when the sweep failed: `this.cache` still holds the previous
+      // snapshot, and presenting that as current would let the ledger count a
+      // just-registered root as missing — closing a healthy terminal's lineage
+      // on evidence that predates it.
+      //
+      // Isolated from the census itself: a ledger fault must not blind
+      // detection, which is what every other subscriber depends on.
+      if (this.lineageLedger && outcome !== "error") {
+        try {
+          this.lineageLedger.reconcile(this);
+        } catch (err) {
+          console.error("[ProcessTreeCache] Lineage reconcile error:", err);
+        }
+      }
+
       // Invoke callbacks after isRefreshing is reset
       for (const callback of this.refreshCallbacks) {
         try {
@@ -195,11 +341,16 @@ export class ProcessTreeCache {
     // Include %cpu for activity detection. execFile avoids the shell fork that
     // exec() introduces — ps takes no shell features, so the intermediate
     // /bin/sh -c is pure overhead on every poll.
-    const { stdout } = await execFileAsync("ps", ["-eo", "pid,ppid,%cpu,rss,comm,command"], {
-      timeout: 5000,
-      maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" },
-    });
+    const { stdout, pid: probePid } = await execProbe(
+      "ps",
+      ["-eo", "pid,ppid,%cpu,rss,comm,command"],
+      {
+        timeout: 5000,
+        maxBuffer: 10 * 1024 * 1024,
+        encoding: "utf-8",
+        env: { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" },
+      }
+    );
 
     const newCache = new Map<number, ProcessInfo>();
     const newChildrenMap = new Map<number, number[]>();
@@ -211,7 +362,10 @@ export class ProcessTreeCache {
       if (!line) continue;
 
       const parsed = this.parseUnixLine(line);
-      if (parsed) {
+      // The probe appears in the census it produces. Retaining that short-lived
+      // PID makes every otherwise-identical snapshot look changed and prevents
+      // the idle backoff from ever advancing.
+      if (parsed && parsed.pid !== probePid) {
         newCache.set(parsed.pid, parsed);
 
         const children = newChildrenMap.get(parsed.ppid) || [];
@@ -220,7 +374,7 @@ export class ProcessTreeCache {
       }
     }
 
-    const changed = this.hasPidSetChanged(this.cache, newCache);
+    const changed = this.hasOwnedTreeChanged(this.childrenMap, newChildrenMap);
 
     this.cache = newCache;
     this.childrenMap = newChildrenMap;
@@ -264,26 +418,23 @@ export class ProcessTreeCache {
   }
 
   private async refreshWindows(): Promise<boolean> {
-    // Use PowerShell's Get-CimInstance with calculated properties to fetch CPU timing fields.
-    // KernelModeTime/UserModeTime are cast to [string] to preserve UInt64 precision in JSON.
-    // CreationDate uses .ToString('o') for consistent ISO 8601 across PS 5.1 and PS 7.
-    // NOTE: Use regular string concatenation — template literals would interpolate $_ as JS variables.
-    const psCommand =
-      'powershell -NoProfile -NonInteractive -NoLogo -Command "' +
-      "$ErrorActionPreference = 'SilentlyContinue'; " +
-      "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); " +
-      "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); " +
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
-      "@{N='KernelModeTime';E={[string]$_.KernelModeTime}}," +
-      "@{N='UserModeTime';E={[string]$_.UserModeTime}}," +
-      "@{N='WorkingSetSize';E={[string]$_.WorkingSetSize}}," +
-      "@{N='CreationDate';E={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { $null }}} | " +
-      'ConvertTo-Json -Compress"';
+    // One persistent PowerShell serves every census instead of a fresh process
+    // per poll (#12243). The query itself is unchanged and lives in
+    // CENSUS_PIPELINE, so lineage, CreationDate for PID reuse, the kernel/user
+    // tick counters and the working set all keep the meaning they had.
+    if (this.disposed) {
+      // A refresh already in flight when stop() lands is fine — it settles into
+      // a disposed helper and errors. Starting a NEW helper from a stopped
+      // cache is not: nothing would ever tear it down.
+      throw new Error("ProcessTreeCache is stopped");
+    }
 
-    const { stdout } = await execAsync(psCommand, {
-      timeout: 10000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    this.censusHelper ??= new WindowsProcessCensus();
+    const helper = this.censusHelper;
+    const stdout = await helper.request();
+    // Read AFTER the response: this is the PID that produced this snapshot, and
+    // a helper replaced mid-request would otherwise be excluded by the wrong one.
+    const helperPid = helper.pid;
 
     const trimmed = stdout.replace(/^\uFEFF/, "").trim();
     if (!trimmed || trimmed === "null") {
@@ -320,6 +471,16 @@ export class ProcessTreeCache {
         continue;
       }
 
+      if (pid === helperPid) {
+        // Census overhead, not terminal workload: leaving it in would let the
+        // resource rollups bill it to a project's subtree, let ProcessDetector
+        // badge it as an agent, and make the helper's own retirement and
+        // respawn read as an owned-tree change. Its footprint is still reported,
+        // just separately — `getCensusHelperRssKb()`.
+        this.censusHelperRssKb = Math.floor(Number(p?.WorkingSetSize ?? "0") / 1024);
+        continue;
+      }
+
       const name = (p?.Name || "").replace(/\.exe$/i, "");
       if (!name) {
         continue;
@@ -329,6 +490,11 @@ export class ProcessTreeCache {
         typeof p?.CommandLine === "string" && p.CommandLine.trim().length > 0
           ? p.CommandLine.trim()
           : name;
+
+      const executablePath =
+        typeof p?.ExecutablePath === "string" && p.ExecutablePath.trim().length > 0
+          ? p.ExecutablePath.trim()
+          : undefined;
 
       // Compute delta-based CPU% from KernelModeTime/UserModeTime (100ns tick values)
       const snapshotKey = p.CreationDate ? `${pid}:${p.CreationDate}` : String(pid);
@@ -363,6 +529,15 @@ export class ProcessTreeCache {
         command,
         cpuPercent,
         rssKb,
+        // Already fetched for the CPU-delta snapshot key above, so the lineage
+        // ledger gets its pid-reuse anchor on Windows for free.
+        ...(typeof p?.CreationDate === "string" && p.CreationDate
+          ? { startTime: p.CreationDate }
+          : {}),
+        // Fetched in the same census row that named the PID, so it cannot
+        // outlive the process the way a separately cached per-PID probe result
+        // can (#8794) — a recycled PID arrives with its own path or with none.
+        ...(executablePath ? { executablePath } : {}),
       });
 
       const children = newChildrenMap.get(ppid) || [];
@@ -377,7 +552,7 @@ export class ProcessTreeCache {
       }
     }
 
-    const changed = this.hasPidSetChanged(this.cache, newCache);
+    const changed = this.hasOwnedTreeChanged(this.childrenMap, newChildrenMap);
 
     this.cache = newCache;
     this.childrenMap = newChildrenMap;
@@ -390,13 +565,29 @@ export class ProcessTreeCache {
     return changed;
   }
 
-  private hasPidSetChanged(
-    oldCache: Map<number, ProcessInfo>,
-    newCache: Map<number, ProcessInfo>
+  private hasOwnedTreeChanged(
+    oldChildrenMap: Map<number, number[]>,
+    newChildrenMap: Map<number, number[]>
   ): boolean {
-    if (oldCache.size !== newCache.size) return true;
-    for (const pid of newCache.keys()) {
-      if (!oldCache.has(pid)) return true;
+    const collectDescendants = (childrenMap: Map<number, number[]>): Set<number> => {
+      const descendants = new Set<number>();
+      const pending = [...(childrenMap.get(process.pid) ?? [])];
+
+      while (pending.length > 0) {
+        const pid = pending.pop()!;
+        if (descendants.has(pid)) continue;
+        descendants.add(pid);
+        pending.push(...(childrenMap.get(pid) ?? []));
+      }
+
+      return descendants;
+    };
+
+    const oldPids = collectDescendants(oldChildrenMap);
+    const newPids = collectDescendants(newChildrenMap);
+    if (oldPids.size !== newPids.size) return true;
+    for (const pid of newPids) {
+      if (!oldPids.has(pid)) return true;
     }
     return false;
   }
@@ -652,5 +843,25 @@ export class ProcessTreeCache {
 
   getCacheSize(): number {
     return this.cache.size;
+  }
+
+  /**
+   * PID of the persistent Windows census helper, or null when none is running
+   * (every non-Windows platform, and Windows before the first demanded census
+   * or after idle retirement).
+   */
+  getCensusHelperPid(): number | null {
+    return this.censusHelper?.pid ?? null;
+  }
+
+  /**
+   * Resident set of the census helper as of the last snapshot that saw it.
+   *
+   * Read out of the helper's own row on the way past, so it costs nothing extra
+   * to collect, and reported here rather than folded into the subtree rollups
+   * because it is the census's overhead and not any terminal's.
+   */
+  getCensusHelperRssKb(): number | null {
+    return this.censusHelperRssKb;
   }
 }

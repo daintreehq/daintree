@@ -18,6 +18,7 @@ import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
+import { ConfirmationStagedError } from "./actions/confirmationStaged";
 import {
   WORKBENCH_TIER_TOOLS,
   ACTION_TIER_ADDONS,
@@ -26,7 +27,9 @@ import {
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 import {
   RECIPE_DISPATCH_DANGER_RATIONALE,
+  dispatchCarriesRecipeId,
   resolveEffectiveActionDanger,
+  terminalLaunchDangerRationale,
 } from "./actions/effectiveDanger";
 
 /**
@@ -379,7 +382,7 @@ export class ActionService {
     const definition = this.registry.get(id);
     if (!definition) return null;
     const danger = dispatch
-      ? resolveEffectiveActionDanger(definition.danger, dispatch.source, dispatch.args)
+      ? resolveEffectiveActionDanger(id, definition.danger, dispatch.source, dispatch.args)
       : definition.danger;
     const elevated = danger !== definition.danger;
     return {
@@ -390,11 +393,18 @@ export class ActionService {
       // "why this is gated" reasoning the model does (#11342). Omitted when
       // absent so callers/tests observe exactly the populated fields. An
       // elevated dispatch falls back to the elevation's own rationale, since a
-      // statically-safe action has no reason to carry one.
+      // statically-safe action has no reason to carry one — matching
+      // `resolveEffectiveActionDanger`'s own precedence when a dispatch trips
+      // both clauses.
       ...(definition.dangerRationale
         ? { dangerRationale: definition.dangerRationale }
-        : elevated
-          ? { dangerRationale: RECIPE_DISPATCH_DANGER_RATIONALE }
+        : elevated && dispatch
+          ? {
+              dangerRationale: dispatchCarriesRecipeId(dispatch.args)
+                ? RECIPE_DISPATCH_DANGER_RATIONALE
+                : (terminalLaunchDangerRationale(dispatch.args) ??
+                  RECIPE_DISPATCH_DANGER_RATIONALE),
+            }
           : {}),
     };
   }
@@ -548,7 +558,12 @@ export class ActionService {
     // elevation (an agent dispatch carrying a recipeId) is rejected before the
     // composite has created a worktree or fetched an issue — not prompted for
     // after the effects have already landed (#11860).
-    const effectiveDanger = resolveEffectiveActionDanger(definition.danger, source, validatedArgs);
+    const effectiveDanger = resolveEffectiveActionDanger(
+      actionId,
+      definition.danger,
+      source,
+      validatedArgs
+    );
     if (
       effectiveDanger === "confirm" &&
       (source === "plugin" || (source === "agent" && !options?.confirmed))
@@ -585,6 +600,24 @@ export class ActionService {
         // is, and a definition must not be able to read a stale one left on a
         // shared context object.
         copyTreeRunSource: options?.copyTreeRunSource,
+        // Stamped for the same reason, and this one is load-bearing: it is the
+        // ONLY way `run()` can see the attestation the gate above already
+        // required. Without it a confirm-gated action could only consult the
+        // client-settable `confirmed` on its own args, so it re-asked after the
+        // host modal was approved — staging a second dialog and changing
+        // nothing (#12120). Unconditional, so a `contextOverride` cannot claim
+        // an approval the host never made.
+        hostConfirmed: options?.confirmed,
+        // Stamped for the same reason and on the same terms: the per-target
+        // half of the same attestation. An action whose confirmation offered
+        // deselection needs to know WHICH targets survived it, and the only
+        // trustworthy source is the host that raised the dialog (#12123).
+        hostApprovedTargets: options?.hostApprovedTargets,
+        // And the recipe half of it (#12263). Same unconditional stamp for the
+        // same reason: this is what tells a recipe run that a human read the
+        // terminals a dialog listed, so an injected `contextOverride` must not
+        // be able to claim an approval that raises the agent terminal cap.
+        hostApprovedRecipeRun: options?.hostApprovedRecipeRun,
       };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown
@@ -664,7 +697,20 @@ export class ActionService {
         // sound here because the throw and this catch are the same realm; an
         // upstream forge/git rejection reaching this line is an ordinary
         // `EXECUTION_ERROR` however its message happens to read.
-        code: err instanceof PartialSuccessError ? "PARTIAL_SUCCESS" : "EXECUTION_ERROR",
+        // `ConfirmationStagedError` is the other class-authenticated throw: an
+        // action that parked a confirmation instead of acting. It reuses the
+        // existing `CONFIRMATION_REQUIRED` rather than widening the union
+        // (`panelLimitError`'s rule — the union is the plugin-facing contract),
+        // and that code already means what happened: the dispatch did not
+        // proceed because it needs an approval it does not have. What it must
+        // NOT be is `ok` — an agent read a staged kill as a completed one
+        // (#12120).
+        code:
+          err instanceof ConfirmationStagedError
+            ? "CONFIRMATION_REQUIRED"
+            : err instanceof PartialSuccessError
+              ? "PARTIAL_SUCCESS"
+              : "EXECUTION_ERROR",
         message,
         details: err,
       };
@@ -681,17 +727,19 @@ export class ActionService {
   list(ctx?: ActionContext, options?: { includeSchemas?: boolean }): ActionManifestEntry[] {
     const context = ctx ?? this.getActionContext();
     const includeSchemas = options?.includeSchemas !== false;
-    return Array.from(this.registry.values())
-      .filter((def) => def.danger !== "restricted")
-      .filter((def) => {
+    const entries: ActionManifestEntry[] = [];
+    for (const definition of this.registry.values()) {
+      if (definition.danger === "restricted") continue;
+      if (definition.isVisible) {
         try {
-          return def.isVisible?.(context) ?? true;
+          if (!(definition.isVisible(context) ?? true)) continue;
         } catch (err) {
-          logWarn("Action isVisible threw", { actionId: def.id, error: err });
-          return true;
+          logWarn("Action isVisible threw", { actionId: definition.id, error: err });
         }
-      })
-      .map((def) => this.toManifestEntry(def, context, includeSchemas));
+      }
+      entries.push(this.toManifestEntry(definition, context, includeSchemas));
+    }
+    return entries;
   }
 
   get(actionId: ActionId, ctx?: ActionContext): ActionManifestEntry | null {
@@ -788,7 +836,7 @@ export class ActionService {
     // spread only isolated the top level (issue #9569). structuredClone is safe
     // here: z.toJSONSchema finalizes through a JSON round-trip, so the cached
     // value has no cycles or non-cloneable shapes.
-    return {
+    const entry: ActionManifestEntry = {
       id: definition.id,
       name: definition.id,
       title: definition.title ?? "",
@@ -807,17 +855,18 @@ export class ActionService {
       disabledReason,
       requiresArgs,
       keywords: definition.keywords?.slice(),
-      ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
-      ...(definition.mcpVisibility ? { mcpVisibility: definition.mcpVisibility } : {}),
-      ...(definition.deprecated ? { deprecated: { ...definition.deprecated } } : {}),
-      ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
-      ...(definition.examples ? { examples: structuredClone(definition.examples) } : {}),
-      ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
-      ...(paletteHidden ? { paletteHidden } : {}),
-      ...(paletteRedirectTo ? { paletteRedirectTo } : {}),
-      ...(paletteDisabled ? { paletteDisabled } : {}),
-      ...(paletteDisabledReason ? { paletteDisabledReason } : {}),
     };
+    if (definition.mcpAnnotations) entry.mcpAnnotations = { ...definition.mcpAnnotations };
+    if (definition.mcpVisibility) entry.mcpVisibility = definition.mcpVisibility;
+    if (definition.deprecated) entry.deprecated = { ...definition.deprecated };
+    if (definition.pluginId) entry.pluginId = definition.pluginId;
+    if (definition.examples) entry.examples = structuredClone(definition.examples);
+    if (definition.dangerRationale) entry.dangerRationale = definition.dangerRationale;
+    if (paletteHidden) entry.paletteHidden = true;
+    if (paletteRedirectTo) entry.paletteRedirectTo = paletteRedirectTo;
+    if (paletteDisabled) entry.paletteDisabled = true;
+    if (paletteDisabledReason) entry.paletteDisabledReason = paletteDisabledReason;
+    return entry;
   }
 
   private getActionContext(): ActionContext {

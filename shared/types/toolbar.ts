@@ -14,8 +14,31 @@ import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "../config/agentIds.js";
  */
 export type PluginToolbarButtonId = `${string}.${string}`;
 
-/** Identifier for any toolbar button (built-in or plugin-contributed) */
-export type AnyToolbarButtonId = ToolbarButtonId | PluginToolbarButtonId;
+/**
+ * Identifier for a launcher row that has no toolbar button id of its own: a
+ * plugin or user-defined agent, a panel kind outside the fixed four, or a
+ * recipe (#12217).
+ *
+ * One prefix for all three categories rather than three sibling prefixes,
+ * because `sweepStalePluginPinnedButtons` has to be taught to leave these keys
+ * alone and one thing to teach it is one thing that can go stale. The category
+ * is the second segment, so a caller that needs it still gets it without a
+ * second guard.
+ *
+ * Deliberately NOT the launcher's own `DockLaunchItem.key`, which happens to
+ * carry the same `agent:`/`panel:`/`recipe:` shape. Those are presentation row
+ * keys — free to change with the launcher's rendering — while these are
+ * persisted user intent. Deriving one from the other would silently orphan
+ * every pin the first time a row key is re-spelled.
+ */
+export type LauncherItemToolbarButtonId =
+  | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}agent:${string}`
+  | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}panel:${string}`
+  | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}recipe:${string}`;
+
+/** Identifier for any toolbar button (built-in, plugin, or launcher item) */
+export type AnyToolbarButtonId =
+  ToolbarButtonId | PluginToolbarButtonId | LauncherItemToolbarButtonId;
 
 /**
  * Unique identifier for built-in toolbar buttons.
@@ -78,6 +101,13 @@ export type ToolbarButtonId =
  *   - `true`             → tray row + top-level button
  *   - `false`/`undefined` → tray row only
  *
+ * Launcher items (#12217 — plugin/user-defined agents, panel kinds outside the
+ * fixed four, recipes) read the same way and for the same reason: they reach
+ * the user through the launcher, so a top-level button is opt-in and only an
+ * explicit `true` grants one. Their key is only ever matched against the live
+ * launcher catalog, so an entry left behind by a deleted recipe or an
+ * uninstalled plugin renders nothing.
+ *
  * Agent-button IDs (entries in `BUILT_IN_AGENT_IDS`) live in
  * `agentSettingsStore`, not here. Only `launcher`, `plugin-tray`, the non-agent
  * built-ins, and plugin buttons are governed by this map.
@@ -132,9 +162,12 @@ export function isLauncherPanelButtonId(id: AnyToolbarButtonId): id is LauncherP
  * `isLauncherPanelButtonId(kindId)` therefore drops that one row silently, which
  * is exactly the bug this map exists to make impossible.
  *
- * Deliberately a lookup rather than a filter: a kind that is absent here is not
- * pinnable at all (review, file, diff and every plugin kind have no toolbar
- * button), so "no entry" and "not pinnable" are the same answer.
+ * Deliberately a lookup rather than a filter: a kind that is absent here owns
+ * none of these four fixed button ids. Since #12217 that no longer means the
+ * kind can't be pinned — review, file and every plugin kind pin through
+ * `launcherItemToolbarButtonId("panel", kindId)` instead — so "no entry" now
+ * means "not one of the four", and the caller falls through to that id rather
+ * than giving up.
  */
 export const LAUNCHER_PANEL_KIND_TO_BUTTON_ID: Readonly<Record<string, LauncherPanelButtonId>> = {
   terminal: "terminal",
@@ -148,6 +181,83 @@ export function getLauncherPanelButtonIdForKind(kindId: string): LauncherPanelBu
   return Object.prototype.hasOwnProperty.call(LAUNCHER_PANEL_KIND_TO_BUTTON_ID, kindId)
     ? LAUNCHER_PANEL_KIND_TO_BUTTON_ID[kindId]
     : undefined;
+}
+
+/**
+ * Namespace every launcher-item button id carries.
+ *
+ * Load-bearing in one specific place: `sweepStalePluginPinnedButtons` finds
+ * plugin keys with a bare `key.includes(".")`, and a launcher item's source id
+ * can itself contain a dot — a plugin-contributed recipe's id is `publisher.name`
+ * (see `TerminalRecipe.provenance`). The prefix is what lets that sweep skip
+ * these keys instead of mistaking one for a plugin button it no longer knows.
+ */
+export const LAUNCHER_ITEM_BUTTON_PREFIX = "launcher:" as const;
+
+/** Which launcher category a launcher-item button id came from. */
+export type LauncherItemCategory = "agent" | "panel" | "recipe";
+
+/**
+ * Build the persisted toolbar button id for a launcher row that has none of its
+ * own. `sourceId` is the agent id, panel kind id, or recipe id — taken verbatim,
+ * because it is only ever compared against a live catalog, never re-parsed into
+ * its parts.
+ */
+export function launcherItemToolbarButtonId(
+  category: LauncherItemCategory,
+  sourceId: string
+): LauncherItemToolbarButtonId {
+  return `${LAUNCHER_ITEM_BUTTON_PREFIX}${category}:${sourceId}` as LauncherItemToolbarButtonId;
+}
+
+/**
+ * Takes a bare `string`, not an `AnyToolbarButtonId`: the callers that most need
+ * it are iterating raw `pinnedButtons` keys, and narrowing the parameter would
+ * make each of them assert its way in — which the lint ratchet scores per rule.
+ * A `AnyToolbarButtonId` argument still narrows, since the predicate's type is a
+ * member of that union.
+ */
+export function isLauncherItemToolbarButtonId(id: string): id is LauncherItemToolbarButtonId {
+  return decodeLauncherItemToolbarButtonId(id) !== null;
+}
+
+/**
+ * The category and source id behind a launcher-item button id, or `null` when
+ * the string isn't one.
+ *
+ * Splits on the first two colons only and takes the rest as the source id, so a
+ * recipe id containing `:` or `.` round-trips unchanged. An empty source id is
+ * rejected: nothing in the launcher has one, and accepting it would mint a key
+ * that can never match a catalog entry.
+ */
+export function decodeLauncherItemToolbarButtonId(
+  id: string
+): { category: LauncherItemCategory; sourceId: string } | null {
+  if (!id.startsWith(LAUNCHER_ITEM_BUTTON_PREFIX)) return null;
+  const rest = id.slice(LAUNCHER_ITEM_BUTTON_PREFIX.length);
+  const separator = rest.indexOf(":");
+  if (separator <= 0) return null;
+  const category = rest.slice(0, separator);
+  const sourceId = rest.slice(separator + 1);
+  if (sourceId.length === 0) return null;
+  if (category !== "agent" && category !== "panel" && category !== "recipe") return null;
+  return { category, sourceId };
+}
+
+/**
+ * Whether a launcher item currently has its own top-level toolbar button.
+ *
+ * Only an explicit `true` counts, matching plugin contributions rather than the
+ * built-in panel buttons above: a launcher item has no default slot to fall
+ * through to, so array membership can only ever be the residue of a pin. The
+ * `false` an unpin writes and the absence a never-pinned row carries are the
+ * same answer, and nothing may seed either (#11667).
+ */
+export function isLauncherItemOnToolbar(
+  id: LauncherItemToolbarButtonId,
+  pinnedButtons: ToolbarPinnedState
+): boolean {
+  return pinnedButtons[id] === true;
 }
 
 /**

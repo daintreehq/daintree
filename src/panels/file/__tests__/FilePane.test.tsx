@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, act, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, act, cleanup, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
@@ -82,13 +82,25 @@ vi.mock("@/lib/viewCacheState", () => ({
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
 }));
+const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock } = vi.hoisted(
+  () => ({
+    setMarkdownFontSizeMock: vi.fn(),
+    setDiffWrapLinesMock: vi.fn(),
+    setMarkdownWrapLinesMock: vi.fn(),
+  })
+);
+// Mutable so a test can seed an explicit wrap override; `null` is auto (#12170).
+const preferences = { diffWrapLines: null as boolean | null };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
     selector({
       markdownWrapLines: false,
-      setMarkdownWrapLines: vi.fn(),
+      setMarkdownWrapLines: setMarkdownWrapLinesMock,
+      markdownFontSize: "lg",
+      setMarkdownFontSize: setMarkdownFontSizeMock,
       diffViewType: "unified",
-      diffWrapLines: false,
+      diffWrapLines: preferences.diffWrapLines,
+      setDiffWrapLines: setDiffWrapLinesMock,
       diffIgnoreWhitespace: false,
     }),
 }));
@@ -158,15 +170,28 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // a byte-identical daintree-file:// src and never refetches. Picked off the real
 // prop type rather than hand-written, so renaming either prop fails here instead
 // of silently capturing undefined forever.
-type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust">;
+type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust" | "fontSize">;
 const markdownViewerProps = vi.hoisted(() => ({
-  current: null as { onRendered?: () => void; cacheBust?: string } | null,
+  current: null as { onRendered?: () => void; cacheBust?: string; fontSize?: string } | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
   MarkdownViewer: (props: CapturedMarkdownProps) => {
     markdownViewerProps.current = props;
     return <div data-testid="markdown-viewer-mock" />;
   },
+}));
+// The real control is a Popover, whose open/close choreography jsdom does not
+// drive; what this suite owns is which modes it appears in and the value it is
+// handed. Its own behaviour is covered in MarkdownTextSizeControl.test.tsx.
+vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
+  MarkdownTextSizeControl: (props: { value: string; onValueChange: (next: string) => void }) => (
+    <button
+      type="button"
+      data-testid="markdown-text-size-mock"
+      data-value={props.value}
+      onClick={() => props.onValueChange("2xl")}
+    />
+  ),
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   // Surfaces `content` so a re-read's result is observable — the only way to
@@ -195,8 +220,13 @@ const { useDiffContentMock } = vi.hoisted(() => ({
 vi.mock("@/panels/diff/useDiffContent", () => ({ useDiffContent: useDiffContentMock }));
 // FilePane lazy-loads the viewer, so assertions on it must await the chunk.
 vi.mock("@/components/Worktree/DiffViewer", () => ({
-  DiffViewer: (props: { diff: string; rootPath?: string }) => (
-    <div data-testid="diff-viewer-mock" data-diff={props.diff} data-root={props.rootPath ?? ""} />
+  DiffViewer: (props: { diff: string; rootPath?: string; wrapLines?: boolean }) => (
+    <div
+      data-testid="diff-viewer-mock"
+      data-diff={props.diff}
+      data-root={props.rootPath ?? ""}
+      data-wrap-lines={String(props.wrapLines)}
+    />
   ),
 }));
 vi.mock("@/components/Html/HtmlViewer", () => ({
@@ -213,6 +243,7 @@ import { FilePane } from "../FilePane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { ClientAppError } from "@/utils/clientAppError";
 
 function lastContentPanelProps(): Record<string, unknown> {
   const props = contentPanelProps.at(-1);
@@ -260,6 +291,9 @@ afterEach(() => {
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
+  setDiffWrapLinesMock.mockReset();
+  setMarkdownWrapLinesMock.mockReset();
+  preferences.diffWrapLines = null;
   markdownViewerProps.current = null;
   lifecycleListeners.clear();
   dockState.activeDockTerminalId = null;
@@ -907,6 +941,12 @@ describe("FilePane show in file browser (#11483)", () => {
 // #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
 // HTML routes to the sandboxed-iframe HtmlViewer.
 describe("FilePane HTML Source/Rendered (#11191)", () => {
+  // Hoisted, so its call history would otherwise carry across tests and let a
+  // later assertion pass on an earlier test's click.
+  beforeEach(() => {
+    setMarkdownFontSizeMock.mockReset();
+  });
+
   function renderPane(filePath: string, fileViewMode?: "source" | "rendered") {
     panelsById["file-1"] = { id: "file-1", kind: "file", filePath, fileViewMode };
     return render(
@@ -982,6 +1022,45 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     renderPane("/repo/docs/spec.md", "rendered");
     expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
     expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+
+  // #12134: the reading control is the mirror of Wrap — each owns the toolbar
+  // slot in the mode it applies to, so neither surfaces where it does nothing.
+  it("offers the text-size control for rendered Markdown only, carrying the global size", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    const control = await screen.findByTestId("markdown-text-size-mock");
+    expect(control.getAttribute("data-value")).toBe("lg");
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+
+    await waitFor(() => expect(markdownViewerProps.current?.fontSize).toBe("lg"));
+
+    // And the control's choice reaches the preference rather than a local
+    // no-op: without this the host could hand it any type-correct callback.
+    await act(async () => {
+      control.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(setMarkdownFontSizeMock).toHaveBeenCalledWith("2xl");
+  });
+
+  it("hides it in Markdown Source, where the scale reaches nothing", async () => {
+    renderPane("/repo/docs/spec.md", "source");
+    await screen.findByTestId("markdown-viewer-mock");
+
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).not.toBeNull();
+    // The rung must not reach CodeMirror through the shared viewer either.
+    expect(markdownViewerProps.current?.fontSize).toBeUndefined();
+  });
+
+  it("hides it for rendered HTML and for a plain file, which have no prose to tune", async () => {
+    renderPane("/repo/docs/page.html", "rendered");
+    await screen.findByTestId("html-viewer-mock");
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+
+    cleanup();
+    renderPane("/repo/src/index.css", "source");
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
   });
 
   // #11587: images embedded in the document resolve to daintree-file:// URLs
@@ -1366,10 +1445,11 @@ describe("FilePane diff mode (#11274)", () => {
       const { container } = await renderPane({ filePath: "/repo/media/demo.mp4" });
 
       await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
-      // The bytes come from the protocol handler via fetch; the text-read IPC
-      // path (whose 500 KB cap produced the misleading error) must never run.
+      // The size probe goes to daintree-file://, the bytes stream from
+      // daintree-media://; the text-read IPC path (whose 500 KB cap produced
+      // the misleading error) must never run.
       expect(String(videoFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
-      expect(container.querySelector("video")?.getAttribute("src")).toMatch(/^blob:/);
+      expect(container.querySelector("video")?.getAttribute("src")).toMatch(/^daintree-media:\/\//);
       expect(readMock).not.toHaveBeenCalled();
     });
 
@@ -1415,7 +1495,7 @@ describe("FilePane diff mode (#11274)", () => {
       await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
       // The text-read IPC path is what produced "Binary file — cannot display".
       expect(String(audioFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
-      expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^blob:/);
+      expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^daintree-media:\/\//);
       expect(readMock).not.toHaveBeenCalled();
     });
 
@@ -1770,6 +1850,98 @@ describe("FilePane diff mode (#11274)", () => {
 
       expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
       expect(container.querySelector("img")).toBeNull();
+    });
+  });
+
+  // Diff mode had no wrap control at all before #12170: the only wrap button in
+  // this toolbar was gated to `isMarkdown && viewMode === "source"`, so a
+  // markdown file's diff — the case that needs wrapping most — had no reachable
+  // toggle.
+  describe("diff-mode wrap toggle (#12170)", () => {
+    function wrapButton(): HTMLElement {
+      return screen.getByRole("button", { name: "Wrap long lines" });
+    }
+
+    function viewerWrap(): string | null {
+      return screen.getByTestId("diff-viewer-mock").getAttribute("data-wrap-lines");
+    }
+
+    async function renderDiff(filePath: string) {
+      seedWorktree([{ path: filePath, status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      await renderPane({ filePath, fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+    }
+
+    it("wraps a markdown diff on first render with nothing stored", async () => {
+      await renderDiff("/repo/docs/spec.md");
+
+      expect(viewerWrap()).toBe("true");
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("offers the toggle for a non-markdown file too, unwrapped by default", async () => {
+      await renderDiff("/repo/src/index.ts");
+
+      expect(wrapButton()).toBeTruthy();
+      expect(viewerWrap()).toBe("false");
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("writes the opposite of the effective value, not of the stored one", async () => {
+      await renderDiff("/repo/docs/spec.md");
+
+      fireEvent.click(wrapButton());
+
+      expect(setDiffWrapLinesMock).toHaveBeenCalledWith(false);
+    });
+
+    it("honours an explicit override over the file type", async () => {
+      preferences.diffWrapLines = false;
+      await renderDiff("/repo/docs/spec.md");
+
+      expect(viewerWrap()).toBe("false");
+    });
+
+    it("stays out of the other view modes, which keep their own controls", async () => {
+      // Source view's wrap button is the markdown one, on a different
+      // preference; diff's must not appear beside it or double up on the slot.
+      seedWorktree([{ path: "/repo/docs/spec.md", status: "modified" }]);
+      await renderPane({ filePath: "/repo/docs/spec.md", fileViewMode: "source" });
+
+      fireEvent.click(wrapButton());
+      expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(true);
+      expect(setDiffWrapLinesMock).not.toHaveBeenCalled();
+      expect(screen.getAllByRole("button", { name: "Wrap long lines" }).length).toBe(1);
+    });
+
+    it("offers the toggle for an image diff, which renders as text like any other", async () => {
+      // The button is deliberately ungated by file type here, unlike the diff
+      // panel's: this pane's diff branch precedes every load-state branch, so a
+      // PNG shows a text diff rather than a preview. Gating it the way DiffPane
+      // does would silently strip the control from those diffs.
+      seedWorktree([{ path: "/repo/assets/logo.png", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({
+        content: "Binary files differ",
+        stale: false,
+        retry: vi.fn(),
+      });
+      await renderPane({ filePath: "/repo/assets/logo.png", fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
+      expect(viewerWrap()).toBe("false");
+
+      fireEvent.click(wrapButton());
+      expect(setDiffWrapLinesMock).toHaveBeenCalledWith(true);
+    });
+
+    it("honours an explicit `true` on a code file", async () => {
+      preferences.diffWrapLines = true;
+      await renderDiff("/repo/src/index.ts");
+
+      expect(viewerWrap()).toBe("true");
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
     });
   });
 
@@ -2814,7 +2986,10 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
         blob: () => Promise.resolve(new Blob(["x"])),
       });
       vi.stubGlobal("fetch", mediaFetchMock);
-      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      // Unique per call: a constant would let a remount pass as continuity, and
+      // hide a stale response arriving after a newer one.
+      let objectUrlSequence = 0;
+      URL.createObjectURL = vi.fn(() => `blob:app://daintree/media-${objectUrlSequence++}`);
       URL.revokeObjectURL = vi.fn();
     });
     afterEach(() => {
@@ -2846,6 +3021,107 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
       await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
     });
 
+    // jsdom neither decodes media nor tracks playback: `fireEvent.play` fires
+    // the event but leaves `paused` true, so the preview's own paused/ended
+    // read would see the opposite of what the test just said happened.
+    function setPlaybackState(
+      element: HTMLMediaElement,
+      state: { paused: boolean; ended?: boolean }
+    ): void {
+      Object.defineProperty(element, "paused", { configurable: true, value: state.paused });
+      Object.defineProperty(element, "ended", { configurable: true, value: state.ended ?? false });
+    }
+
+    it("leaves a playing video alone on reveal (#12165)", async () => {
+      // Coming back to a project is this pane catching up, not a request for
+      // fresh bytes — and a re-fetch mints a new object URL, which remounts the
+      // player and drops the viewer back to zero.
+      const { container } = await renderPane({ filePath: "/repo/media/demo.mp4" });
+      await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+      const video = container.querySelector("video")!;
+      setPlaybackState(video, { paused: false });
+      fireEvent.play(video);
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+      const srcBefore = video.getAttribute("src");
+
+      await emit("revealed");
+
+      expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+      // The same element on the same blob. Fetch count alone would stay green
+      // for a regression that remounted the player without re-requesting it.
+      expect(container.querySelector("video")).toBe(video);
+      expect(video.getAttribute("src")).toBe(srcBefore);
+    });
+
+    it("leaves playing audio alone on reveal, then re-fetches once it ends (#12165)", async () => {
+      // Its own nonce condition, separate from video's — and the second half
+      // proves the suppression is scoped to playback rather than permanent.
+      const { container } = await renderPane({ filePath: "/repo/media/track.mp3" });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const audio = container.querySelector("audio")!;
+      setPlaybackState(audio, { paused: false });
+      fireEvent.play(audio);
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+      const srcBefore = audio.getAttribute("src");
+
+      await emit("revealed");
+      expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+      expect(container.querySelector("audio")).toBe(audio);
+      expect(audio.getAttribute("src")).toBe(srcBefore);
+
+      // The spec leaves `paused` false at the end of a track, so `ended` is the
+      // only thing that says this one stopped.
+      setPlaybackState(audio, { paused: false, ended: true });
+      fireEvent.ended(audio);
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("still re-fetches playing media when Refresh is pressed (#12165)", async () => {
+      // A gesture outranks playback: someone pressing Refresh mid-track is
+      // asking for the rewritten bytes and accepts losing their place.
+      const { container } = await renderPane({ filePath: "/repo/media/track.mp3" });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const audio = container.querySelector("audio")!;
+      setPlaybackState(audio, { paused: false });
+      fireEvent.play(audio);
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      });
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("does not carry playing state to the next media file (#12165)", async () => {
+      // The stale-flag failure this would otherwise invite: a track left
+      // playing, then a different file opened, and every later reveal silently
+      // refusing to refresh a player that was never running.
+      const { container, rerender } = await renderPane({ filePath: "/repo/media/track.mp3" });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const audio = container.querySelector("audio")!;
+      setPlaybackState(audio, { paused: false });
+      fireEvent.play(audio);
+
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/media/other.mp3",
+        worktreeId: WORKTREE_ID,
+      };
+      await act(async () => {
+        rerender(paneElement());
+      });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
     it("re-navigates the PDF frame on reveal", async () => {
       const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
       await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
@@ -2867,5 +3143,235 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
 
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe(srcBefore);
     });
+  });
+});
+
+// #12136: one shared toolbar control puts the file's raw text on the clipboard.
+// What this suite owns is the data FilePane selects for it and where it sits;
+// the flash timing and cleanup belong to FileViewerToolbar's own suite.
+describe("FilePane copy file contents (#12136)", () => {
+  const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+  const copyButton = () => screen.queryByRole("button", { name: "Copy file contents" });
+
+  beforeEach(() => {
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  });
+
+  async function renderPane(filePath: string, fileViewMode?: string, worktreeId?: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath, fileViewMode, worktreeId };
+    const view = render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    // Can't wait on readMock — the media branches short-circuit before it.
+    await act(async () => {});
+    return view;
+  }
+
+  async function copy() {
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+  }
+
+  it("copies the text of a loaded file", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;\n" });
+    await renderPane("/repo/src/index.ts");
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("const a = 1;\n"));
+  });
+
+  it("copies markdown source while the rendered view is showing", async () => {
+    readMock.mockResolvedValue({ content: "# title\n\nbody\n" });
+    await renderPane("/repo/docs/spec.md", "rendered");
+    // Anchor the claim: a fall back to source would copy the same string and
+    // leave this green without ever exercising the rendered branch.
+    expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("# title\n\nbody\n"));
+  });
+
+  it("copies HTML source while the sandboxed preview is showing", async () => {
+    readMock.mockResolvedValue({
+      content: "<h1>hi</h1>\n",
+      htmlPreviewUrl: "daintree-html://tok/report.html",
+    });
+    await renderPane("/repo/dist/report.html", "rendered");
+    expect(await screen.findByTestId("html-viewer-mock")).toBeTruthy();
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("<h1>hi</h1>\n"));
+  });
+
+  it("offers the control for an empty file and copies the empty string", async () => {
+    readMock.mockResolvedValue({ content: "" });
+    await renderPane("/repo/src/empty.ts");
+
+    await copy();
+
+    // A `content || null` gate would hide the button here while the toolbar's
+    // own unit test stayed green.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(""));
+  });
+
+  it("copies the file, not the diff, while the diff view is showing", async () => {
+    // Deliberately different strings: the pane holds both at once, and a gate on
+    // the wrong one would still look right in every other mode.
+    readMock.mockResolvedValue({ content: "the whole file\n" });
+    useDiffContentMock.mockReturnValue({
+      content: "@@ -1 +1 @@\n-old\n+new\n",
+      stale: false,
+      retry: vi.fn(),
+    });
+    worktreeState.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    await renderPane("/repo/src/index.ts", "diff", "wt-1");
+    expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("the whole file\n"));
+  });
+
+  it("withholds the control until the read settles", async () => {
+    readMock.mockReturnValue(new Promise(() => {}));
+    await renderPane("/repo/src/index.ts");
+
+    expect(copyButton()).toBeNull();
+  });
+
+  it.each(["BINARY_FILE", "FILE_TOO_LARGE", "LFS_POINTER"] as const)(
+    "withholds the control when the read failed with %s",
+    async (code) => {
+      // A real ClientAppError, not `Object.assign(new Error(), { code })`:
+      // `isClientAppError` keys off `name === "AppError"`, so the plain Error
+      // lands in the INVALID_PATH branch and never exercises this code at all.
+      readMock.mockRejectedValue(new ClientAppError(code, code));
+      await renderPane("/repo/src/blob.bin");
+
+      // Prove the pane actually settled into the matching error, or the absence
+      // below could just be a frame that never rendered.
+      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      // The extension says nothing here; the read is what knows, and its failure
+      // is what has to keep the button away.
+      expect(copyButton()).toBeNull();
+    }
+  );
+
+  // Video and audio fetch their bytes into a blob URL; without the stub the
+  // element never mounts and the absence assertions below would pass for the
+  // wrong reason. Restored one global at a time rather than through
+  // `vi.unstubAllGlobals()`: vitest.setup.ts installs ResizeObserver and rAF
+  // once at module load, so a blanket unstub here would strip them from every
+  // test that runs after this block.
+  describe("non-text previews", () => {
+    const realFetch = globalThis.fetch;
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          blob: () => Promise.resolve(new Blob(["x"])),
+        })
+      );
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      URL.revokeObjectURL = vi.fn();
+    });
+
+    afterEach(() => {
+      vi.stubGlobal("fetch", realFetch);
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    it.each([
+      ["an image", "/repo/logo.png", "img"],
+      ["a video", "/repo/media/demo.webm", "video"],
+      ["audio", "/repo/media/track.mp3", "audio"],
+      ["a PDF", "/repo/docs/spec.pdf", "iframe"],
+    ])("withholds the control for %s", async (_case, filePath, selector) => {
+      const { container } = await renderPane(filePath);
+
+      // Anchored to the preview element: asserting absence on a pane that never
+      // reached its terminal state would pass for the wrong reason.
+      await waitFor(() => expect(container.querySelector(selector)).not.toBeNull());
+      expect(copyButton()).toBeNull();
+    });
+
+    it("withholds the control for an SVG, whose raw source the pane discards", async () => {
+      // Valid SVG on purpose: the shared default read is not, so the sanitizer
+      // would reject it and this would assert absence from the error state
+      // instead of from the svg state it is meant to cover.
+      readMock.mockResolvedValue({
+        content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+      });
+      const { container } = await renderPane("/repo/icon.svg");
+
+      // `[role="img"]` and not `"svg"`: every lucide icon in the toolbar is an
+      // <svg>, so the loose selector would match one of those and pass without
+      // the SVG branch ever rendering. FileImagePreview paints that role only
+      // when it has sanitized markup, which is exactly the state under test.
+      await waitFor(() => expect(container.querySelector('[role="img"]')).not.toBeNull());
+      expect(copyButton()).toBeNull();
+    });
+  });
+
+  it("retires the control when the file it was offered for turns into media", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    const { rerender } = await renderPane("/repo/src/index.ts");
+    await screen.findByRole("button", { name: "Copy file contents" });
+
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/logo.png" };
+    rerender(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="logo.png"
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+
+    expect(copyButton()).toBeNull();
+  });
+
+  it("sits ahead of Reveal and Open in editor", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    await renderPane("/repo/src/index.ts");
+    await screen.findByRole("button", { name: "Copy file contents" });
+
+    const buttons = Array.from(screen.getByRole("toolbar").querySelectorAll("button")).map((b) =>
+      b.getAttribute("aria-label")
+    );
+    // The exact tail, not index arithmetic: a difference of 2 also holds with an
+    // unrelated control wedged between them. The reveal label is platform-worded,
+    // so take it from the same helper the component uses. FileBrowserViewer's
+    // suite asserts the identical suffix — that parity is what #12136 asked for.
+    expect(buttons.slice(-3)).toEqual(["Copy file contents", revealCopy().label, "Open in editor"]);
   });
 });

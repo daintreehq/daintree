@@ -34,6 +34,7 @@ import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { loadWebviewUrl } from "./loadWebviewUrl";
+import { isOnOrigin } from "./urlSync";
 import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
 import { blockedNavReducer } from "./BlockedNavBanner";
@@ -241,16 +242,23 @@ export function DevPreviewPane({
   // effect does not fire a redundant loadURL on first ready (#9940). The
   // hard-restart path resets this to "" explicitly when unconfigured.
   const lastSetUrlRef = useRef<string>(history.present);
-  // Seed value for the webview `src` attribute, captured once at mount. Never
-  // re-bound to navigation state — Electron's SrcAttribute observer would turn
-  // each guest navigation into a redundant full reload (#9940).
-  const [webviewSeedUrl, setWebviewSeedUrl] = useState(history.present);
+  // Seed value for the webview `src` attribute, fixed for the lifetime of each guest.
+  // Never re-bound to navigation state while a guest is mounted — Electron's
+  // SrcAttribute observer would turn each guest navigation into a redundant full
+  // reload (#9940). A ref rather than state because a *replacement* guest has to be
+  // re-seeded synchronously, before the JSX below reads it: an effect lands after the
+  // fresh guest has already begun loading the stale value, which is how the intended
+  // route was lost across an origin migration (#12297). See the re-seed just above the
+  // webview JSX, and BrowserPane's `initialUrlRef` for the same pattern (#10185).
+  const webviewSeedUrlRef = useRef(history.present);
+  // Bumped to force a fresh guest when in-place reload cannot reach the current
+  // one — a renderer that died before it was ever attached has no WebContents to
+  // reload, and recovery must not silently do nothing (#12296).
+  const [webviewInstanceKey, setWebviewInstanceKey] = useState(0);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
   const [guestWebContentsId, setGuestWebContentsId] = useState<number | undefined>(undefined);
-  // Store the original guest UA so we can restore it when clearing a preset
-  const originalUaRef = useRef<string | null>(null);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
 
   const isMountedRef = useRef(true);
@@ -261,7 +269,6 @@ export function DevPreviewPane({
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
-  const effectiveWebviewSeedUrl = webviewSeedUrl || currentUrl;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const isUnconfigured =
@@ -300,13 +307,7 @@ export function DevPreviewPane({
   const isProxyUrlPending =
     status === "running" &&
     (proxyOrigin === undefined ||
-      (typeof proxyOrigin === "string" && !!currentUrl && !currentUrl.startsWith(proxyOrigin)));
-
-  useEffect(() => {
-    if (!webviewSeedUrl && currentUrl) {
-      setWebviewSeedUrl(currentUrl);
-    }
-  }, [currentUrl, webviewSeedUrl]);
+      (typeof proxyOrigin === "string" && !!currentUrl && !isOnOrigin(currentUrl, proxyOrigin)));
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
@@ -339,6 +340,11 @@ export function DevPreviewPane({
       }
     };
 
+    // dom-ready as well as did-finish-load, matching the finish boundary the load
+    // overlay and its watchdog share: did-finish-load waits on the window load
+    // event, so a single hanging subresource left this spinner covering a usable
+    // document with nothing to time it out (#12296).
+    webview.addEventListener("dom-ready", handleRecoveryFinishLoad);
     webview.addEventListener("did-finish-load", handleRecoveryFinishLoad);
 
     try {
@@ -350,6 +356,7 @@ export function DevPreviewPane({
     }
 
     return () => {
+      webview.removeEventListener("dom-ready", handleRecoveryFinishLoad);
       webview.removeEventListener("did-finish-load", handleRecoveryFinishLoad);
     };
   }, [isRecoveringFromEviction, webviewElement]);
@@ -420,7 +427,6 @@ export function DevPreviewPane({
     zoomFactor,
     evictingRef,
     lastSetUrlRef,
-    originalUaRef,
     setHistory,
     setBlockedNav: dispatchBlockedNav,
     onRenderProcessGone: handleRenderProcessGone,
@@ -430,7 +436,7 @@ export function DevPreviewPane({
     if (!isUnconfigured) return;
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
-    setWebviewSeedUrl("");
+    webviewSeedUrlRef.current = "";
     lastSetUrlRef.current = "";
     setWebviewLoadError(null);
     clearRetryState();
@@ -451,12 +457,12 @@ export function DevPreviewPane({
         // Match the `src` seed so the isWebviewReady navigation effect does not
         // re-load the same URL on first ready (#9940). The isUnconfigured effect
         // resets this to "" afterward when there is no dev command.
-        lastSetUrlRef.current = effectiveWebviewSeedUrl;
+        lastSetUrlRef.current = webviewSeedUrlRef.current;
         clearRetryState();
       }
       setWebviewElement(node);
     },
-    [captureScrollViaCdp, clearRetryState, effectiveWebviewSeedUrl]
+    [captureScrollViaCdp, clearRetryState]
   );
 
   useEffect(() => {
@@ -470,23 +476,62 @@ export function DevPreviewPane({
     setConsoleTerminalId(terminalId);
   }, [terminalId]);
 
-  const performReload = useCallback(() => {
-    const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return;
-    setWebviewLoadError(null);
-    try {
-      const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
-      safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
-        context: "Reloading dev preview ignoring cache",
-      });
-    } catch {
-      webview.reload();
-    }
-  }, [isWebviewReady, id, setWebviewLoadError]);
+  // Recreate the guest from scratch. `src` is seed-only (#9940), so re-seed it to
+  // the URL we actually want before the remount rather than letting the new element
+  // rewind to the mount-time URL.
+  const remountWebview = useCallback(() => {
+    // Imperative, not the render-time re-seed below: a key bump keeps `showEmptyState`
+    // false, so that mount-edge guard never fires and the replacement guest would boot
+    // from the mount-time seed (#12297).
+    webviewSeedUrlRef.current = currentUrl;
+    setIsWebviewReady(false);
+    setWebviewInstanceKey((key) => key + 1);
+  }, [currentUrl, setIsWebviewReady]);
 
+  // Returns whether a reload was actually initiated. Deliberately not gated on
+  // `isWebviewReady`: that is exactly the state of a renderer that crashed before
+  // its first dom-ready, and gating there made both auto-recovery and the manual
+  // Reload action silent no-ops (#12296). Falls back through the in-place reload
+  // paths to a full remount so the only "nothing happened" outcome is having no
+  // guest mounted at all.
+  const performReload = useCallback((): boolean => {
+    const webview = webviewRef.current;
+    if (!webview) return false;
+    setWebviewLoadError(null);
+    clearRetryState();
+    // The cache-ignoring reload runs in the main process against a *registered*
+    // panel, and registration is itself gated on the guest reaching dom-ready
+    // (useWebviewDialog). For a guest that never got there the IPC resolves
+    // without reloading anything — so `isWebviewReady` routes between the two
+    // paths here rather than gating recovery altogether, which is what made
+    // crash-before-ready unrecoverable (#12296).
+    if (isWebviewReady) {
+      try {
+        const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+        safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
+          context: "Reloading dev preview ignoring cache",
+        });
+        return true;
+      } catch {
+        // No WebContents id — the guest is detached or already gone.
+      }
+    }
+    try {
+      webview.reload();
+      return true;
+    } catch {
+      // In-place reload is unavailable on a guest that never attached.
+    }
+    remountWebview();
+    return true;
+  }, [isWebviewReady, id, setWebviewLoadError, clearRetryState, remountWebview]);
+
+  // Clear the crash banner only once recovery is under way — clearing first meant a
+  // reload that returned early left the user with no crash state and no reload.
   const handleHardReload = useCallback(() => {
-    resetCrashHistory();
-    performReload();
+    if (performReload()) {
+      resetCrashHistory();
+    }
   }, [resetCrashHistory, performReload]);
 
   // Keep crashReloadRef in sync so onRenderProcessGone can call performReload
@@ -496,6 +541,7 @@ export function DevPreviewPane({
   }, [performReload]);
 
   const {
+    validateUrl,
     handleNavigate,
     handleBack,
     handleForward,
@@ -532,6 +578,7 @@ export function DevPreviewPane({
     setIsLoading,
     setWebviewLoadError,
     clearLoadTimers,
+    clearRetryState,
     isConsoleOpen,
     setDevPreviewConsoleOpen,
     onHardReload: handleHardReload,
@@ -547,7 +594,7 @@ export function DevPreviewPane({
     clearLoadTimers();
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
-    setWebviewSeedUrl("");
+    webviewSeedUrlRef.current = "";
     lastSetUrlRef.current = "";
     setIsLoading(false);
     setIsWebviewReady(false);
@@ -650,7 +697,6 @@ export function DevPreviewPane({
     viewportFit,
     isWebviewReady,
     webviewElement,
-    originalUaRef,
     setViewportPreset,
     setViewportRotated,
     setViewportDpr,
@@ -812,6 +858,21 @@ export function DevPreviewPane({
     !hasBeenVisible ||
     isEvicted;
 
+  // Track the destination a *replacement* guest should start from, at render time so the
+  // JSX below reads it in the same pass that mounts the guest. Every branch of
+  // `showEmptyState` unmounts the webview, so a fresh guest would otherwise start from the
+  // URL captured when the panel first mounted — typically the proxy root — and its
+  // did-navigate would overwrite the route we actually intended (#12297).
+  //
+  // Gated on `webviewElement` rather than on `showEmptyState`: the ref callback only runs
+  // on commit, so this reflects whether a guest is *actually* live. That keeps the write
+  // impossible while one is mounted (re-binding `src` would trigger Electron's
+  // SrcAttribute observer into a redundant reload, #9940) and immune to a render that
+  // React starts and throws away, which a previous/next flag comparison is not.
+  if (!webviewElement && currentUrl) {
+    webviewSeedUrlRef.current = currentUrl;
+  }
+
   return (
     <ContentPanel
       id={id}
@@ -853,6 +914,7 @@ export function DevPreviewPane({
           viewportDpr={viewportDpr}
           viewportFit={viewportFit}
           onNavigate={handleNavigate}
+          validateUrl={validateUrl}
           onBack={handleBack}
           onForward={handleForward}
           onReload={handleReload}
@@ -962,7 +1024,11 @@ export function DevPreviewPane({
                 className={cn(
                   "relative",
                   viewportPreset
-                    ? "rounded-lg border border-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
+                    ? // Outline, not border: this element carries the preset's
+                      // exact width/height and box-sizing is border-box, so a
+                      // 1px border would shave 2px off the content box the
+                      // guest is emulated at (#12298).
+                      "rounded-lg outline outline-1 -outline-offset-1 outline-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
                     : "h-full"
                 )}
                 style={
@@ -1030,9 +1096,10 @@ export function DevPreviewPane({
                     }
                   >
                     <webview
+                      key={webviewInstanceKey}
                       ref={setWebviewNode}
                       // Seed-only: never re-bind to navigation state (#9940).
-                      src={effectiveWebviewSeedUrl}
+                      src={webviewSeedUrlRef.current}
                       partition={webviewPartition}
                       // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                       allowpopups=""

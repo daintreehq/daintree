@@ -118,7 +118,7 @@ archiveHash = SHA-256(archive bytes)
 This hash is persisted in the plugin's provenance record (`LoadedPluginInfo.archiveHash`) and used for:
 
 - **Update detection**: re-fetching the same URL and comparing hashes tells the user whether a new version is available.
-- **Deferred signing** (post-1.15): a signature over the hash is a signature over the archive.
+- **Deferred signing** (post-1.0): a signature over the hash is a signature over the archive.
 - **Audit trail**: the provenance record ties the installed plugin to a specific byte sequence.
 
 The hash covers the raw ZIP bytes as received — same-OS determinism guarantees the hash is stable for a given source tree and tool version. Cross-platform byte identity is not yet guaranteed (the ZIP "made by" header varies per OS); the hash reflects the bytes as produced by the current platform.
@@ -193,7 +193,7 @@ The user pastes a URL pointing to a `.dntr` file. Daintree:
 
 **Security considerations:**
 
-- Daintree does not validate signatures on URL-installed plugins. Trust is on the user.
+- Daintree does not validate signatures on URL-installed plugins, at any install path. Trust is on the user. The one automated backstop is the [remote kill-switch](./architecture.md#signing-and-kill-switch): a plugin matching a Daintree-hosted blocklist entry by name and version refuses to load. It is reactive — it helps only against a compromise someone has already reported, and it fails open on any fetch or parse error.
 - No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but warned (the `pendingHttpUrl` plaintext-HTTP confirm in `usePluginManager.ts`).
 - Redirects are followed **manually**, up to 5 hops (`MAX_REDIRECT_HOPS`), and every hop is independently re-validated: each `Location` must stay `https:` (an `https→http` downgrade is rejected) and its host must clear both the literal SSRF guard and a DNS-resolution check (a public URL that 30x-redirects to a private/loopback/link-local address is rejected before the body is fetched). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
 - Private, loopback, and link-local hosts are rejected before the fetch runs (SSRF guard).
@@ -239,7 +239,7 @@ For authors who want to share plugins publicly:
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
 - **Semver your releases.** Daintree uses `semver` only for the `engines.daintree` host-compatibility gate — not for update detection. "Check for update" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string.
-- **Set `engines.daintree` honestly.** Lock to the current minor you've tested against (e.g. `^0.15.0` against the app version you built on). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
+- **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret rejects the plugin on the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.
 

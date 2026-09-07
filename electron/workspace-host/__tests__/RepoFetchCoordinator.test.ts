@@ -70,6 +70,265 @@ describe("RepoFetchCoordinator", () => {
     expect(args).toEqual(["fetch", "origin", "--no-auto-gc", "--prune", "--no-write-fetch-head"]);
   });
 
+  it("omits --prune when the caller explicitly asks not to prune", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo", prune: false });
+
+    // `--no-prune` explicitly, not merely omitted: `fetch.prune=true` in the
+    // user's git config would otherwise prune anyway and the row would be a lie.
+    expect(mockGit.raw.mock.calls[0][0]).toEqual([
+      "fetch",
+      "origin",
+      "--no-auto-gc",
+      "--no-prune",
+      "--no-write-fetch-head",
+    ]);
+  });
+
+  it("prunes on an explicit prune request, matching the omitted default", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo", prune: true });
+
+    expect(mockGit.raw.mock.calls[0][0]).toContain("--prune");
+  });
+
+  it("re-runs git for a prune request the recent success did not prune for", async () => {
+    // "Fetch" then "Fetch and prune" seconds later: reusing the non-pruned
+    // success inside the recency window would drop the prune the user asked
+    // for, and nothing on the card would say so.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+    expect(mockGit.raw).toHaveBeenCalledTimes(1);
+
+    const second = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: true,
+    });
+
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
+    expect(mockGit.raw.mock.calls[1][0]).toContain("--prune");
+    expect(second.status).toBe("success");
+  });
+
+  it("reuses a recent pruned success for a later plain fetch", async () => {
+    // The reverse direction is a genuine superset: a pruned fetch already did
+    // everything a plain one would, so re-spawning git buys nothing.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: true,
+    });
+    const second = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+
+    expect(mockGit.raw).toHaveBeenCalledTimes(1);
+    expect(second.status).toBe("success");
+  });
+
+  it("serializes a prune request behind an in-flight sibling fetch on the same repo", async () => {
+    // Linked worktrees share packed-refs; two concurrent fetches race its lock.
+    // The assertion that matters is the one taken WHILE the first fetch is
+    // still unresolved: releasing it first would let a coordinator with no
+    // chain at all still show maxConcurrent === 1, because the second call has
+    // two awaits to cross before it reaches `git.raw`.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const resolvers: Array<() => void> = [];
+    const mockGit = makeMockGit(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    const first = coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+    await vi.waitFor(() => expect(mockGit.raw).toHaveBeenCalledTimes(1));
+
+    const second = coord.fetchForWorktree({
+      worktreeId: "wt2",
+      worktreePath: "/repo-linked",
+      force: true,
+      prune: true,
+    });
+    // Flush every microtask the second call could make while the first is
+    // still in flight. With the per-commondir chain removed this reaches
+    // `git.raw` and the assertion below fails.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(mockGit.raw).toHaveBeenCalledTimes(1);
+
+    resolvers[0]!();
+    await first;
+    await vi.waitFor(() => expect(mockGit.raw).toHaveBeenCalledTimes(2));
+    resolvers[1]!();
+    await second;
+
+    expect(mockGit.raw.mock.calls[1][0]).toContain("--prune");
+  });
+
+  it("keeps the prune capability of a cached success across an auth-failure clear", async () => {
+    // `clearAuthFailures` drops the failure but not the success behind it, so
+    // the recency window must still refuse to serve a prune request off a
+    // non-pruned fetch.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+    coord.clearAuthFailures();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: true,
+    });
+
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
+    expect(mockGit.raw.mock.calls[1][0]).toContain("--prune");
+  });
+
+  it("discards the prune capability with the rest of the state on destroy()", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: true,
+    });
+    coord.destroy();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+
+    // A destroyed coordinator keeps no success to dedup against, so the second
+    // call spawns git rather than reusing the pre-destroy timestamp.
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
+  });
+
+  it("flags an auxiliary remote failure alongside a primary success", async () => {
+    // Fork layout: `upstream` carries the base ref, `origin` the branch's own
+    // upstream. A primary success on its own would read as "counts confirmed
+    // fresh" while half of them are stale.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(function (this: void) {
+        return Promise.resolve();
+      })
+    );
+    const coord = new RepoFetchCoordinator();
+    const git = {
+      raw: vi
+        .fn()
+        .mockImplementation((args: string[]) =>
+          args[1] === "origin"
+            ? Promise.reject(new Error("could not read from remote repository"))
+            : Promise.resolve()
+        ),
+    };
+    mockCreateBackgroundFetchGit.mockReturnValue(git);
+
+    const result = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      remotes: ["upstream", "origin"],
+      primaryRemote: "upstream",
+    });
+
+    expect(result.status).toBe("success");
+    expect(result.remote).toBe("upstream");
+    expect(result.auxiliaryFailed).toBe(true);
+  });
+
+  it("leaves auxiliaryFailed unset when every remote succeeded", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+
+    const coord = new RepoFetchCoordinator();
+    const result = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      remotes: ["upstream", "origin"],
+      primaryRemote: "upstream",
+    });
+
+    expect(result.status).toBe("success");
+    expect(result.auxiliaryFailed).toBeUndefined();
+  });
+
+  it("does not flag an auxiliary failure when the PRIMARY is the one that failed", async () => {
+    // The primary's own failure is already the whole result; double-reporting
+    // it as an auxiliary problem would misdescribe which remote is broken.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const git = {
+      raw: vi
+        .fn()
+        .mockImplementation((args: string[]) =>
+          args[1] === "upstream"
+            ? Promise.reject(new Error("could not read from remote repository"))
+            : Promise.resolve()
+        ),
+    };
+    mockCreateBackgroundFetchGit.mockReturnValue(git);
+
+    const coord = new RepoFetchCoordinator();
+    const result = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      remotes: ["upstream", "origin"],
+      primaryRemote: "upstream",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.auxiliaryFailed).toBeUndefined();
+  });
+
   it("suppresses the per-card auth stripe until an auth failure is confirmed", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     mockCreateBackgroundFetchGit.mockReturnValue(

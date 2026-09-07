@@ -37,13 +37,23 @@ const webContentsMock = vi.hoisted(() => {
   };
 });
 
+const registryMock = vi.hoisted(() => ({
+  getWebContentsForProject: vi.fn((_projectId: string): unknown[] => []),
+  isCachedViewWebContents: vi.fn((_id: number): boolean => false),
+}));
+
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, webContents: webContentsMock }));
 vi.mock("../../../window/windowRef.js", () => ({
   getWindowRegistry: windowRefMock.getWindowRegistry,
   getProjectViewManager: windowRefMock.getProjectViewManager,
 }));
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getWebContentsForProject: registryMock.getWebContentsForProject,
+  isCachedViewWebContents: registryMock.isCachedViewWebContents,
+}));
 
 import { PluginUIPromptDispatcher } from "../PluginUIPromptDispatcher.js";
+import { isAppError } from "../../../utils/errorTypes.js";
 import type { PluginUiPromptParams } from "../../../../shared/types/pluginUiPrompt.js";
 
 function makeWebContents(id: number) {
@@ -85,6 +95,17 @@ function setActiveWebContents(wc: ReturnType<typeof makeWebContents> | null) {
   windowRefMock.getProjectViewManager.mockReturnValue(null);
 }
 
+/** Point the app-global project→webContents map at a fixed set of views. */
+function setProjectViews(
+  views: Record<string, ReturnType<typeof makeWebContents>[]>,
+  cachedIds: number[] = []
+) {
+  registryMock.getWebContentsForProject.mockImplementation(
+    (projectId: string) => views[projectId] ?? []
+  );
+  registryMock.isCachedViewWebContents.mockImplementation((id: number) => cachedIds.includes(id));
+}
+
 const QUICK_PICK: PluginUiPromptParams = { kind: "quickPick", items: [], options: {} };
 const CONFIRM: PluginUiPromptParams = { kind: "confirm", options: { title: "Sure?" } };
 
@@ -104,6 +125,10 @@ describe("PluginUIPromptDispatcher", () => {
     windowRefMock.getProjectViewManager.mockReset();
     webContentsMock._reset();
     webContentsMock.fromId.mockClear();
+    registryMock.getWebContentsForProject.mockReset();
+    registryMock.isCachedViewWebContents.mockReset();
+    registryMock.getWebContentsForProject.mockReturnValue([]);
+    registryMock.isCachedViewWebContents.mockReturnValue(false);
   });
 
   it("sends the request to the active renderer and resolves with the response value", async () => {
@@ -192,10 +217,11 @@ describe("PluginUIPromptDispatcher", () => {
     d.cancelForPlugin("mine");
 
     await expect(mine).resolves.toBe(false);
-    expect(wc.send).toHaveBeenCalledWith(
-      CHANNELS.PLUGIN_UI_PROMPT_CANCEL,
-      expect.objectContaining({ pluginId: "mine" })
-    );
+    // Deliberately unscoped: the bulk drain dismisses every prompt for the
+    // plugin, so an accidental `promptId` here would narrow it to one.
+    expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+      pluginId: "mine",
+    });
 
     // The other plugin's prompt is untouched until it answers.
     const otherId = (
@@ -214,6 +240,95 @@ describe("PluginUIPromptDispatcher", () => {
       }
     );
     await expect(other).resolves.toEqual({ id: "k", label: "Kept" });
+  });
+
+  it("never opens a prompt whose signal is already aborted (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(d.requestPrompt("mine", CONFIRM, undefined, controller.signal)).resolves.toBe(
+      false
+    );
+
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+    ).toHaveLength(0);
+    // The one-prompt-per-plugin cap must not have been spent on a dialog that
+    // was never shown — the next request still gets through.
+    const next = d.requestPrompt("mine", CONFIRM);
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+    ).toHaveLength(1);
+    d.cancelForPlugin("mine");
+    await expect(next).resolves.toBe(false);
+  });
+
+  it("aborting a prompt dismisses that one request and settles it (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+
+    const promise = d.requestPrompt("mine", CONFIRM, undefined, controller.signal);
+    const promptId = lastPromptId(wc);
+
+    controller.abort();
+
+    await expect(promise).resolves.toBe(false);
+    // Scoped by promptId so the renderer drops exactly this dialog.
+    expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+      pluginId: "mine",
+      promptId,
+    });
+
+    // The abort must release the per-plugin cap, not just settle the promise —
+    // otherwise the successor generation's first prompt is answered for it.
+    const next = d.requestPrompt("mine", CONFIRM);
+    const nextId = lastPromptId(wc);
+    expect(nextId).not.toBe(promptId);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: nextId, result: true }
+    );
+    await expect(next).resolves.toBe(true);
+  });
+
+  it("a late abort cannot dismiss a replacement prompt (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+
+    const first = d.requestPrompt("mine", CONFIRM, undefined, controller.signal);
+    const firstId = lastPromptId(wc);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: firstId, result: true }
+    );
+    await expect(first).resolves.toBe(true);
+
+    // Same plugin asks again; the earlier caller only now gives up.
+    const second = d.requestPrompt("mine", CONFIRM);
+    const secondId = lastPromptId(wc);
+    expect(secondId).not.toBe(firstId);
+
+    controller.abort();
+
+    // The stale signal must not reach the successor's dialog.
+    expect(wc.send).not.toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, expect.anything());
+    // Answer affirmatively: `false` would also be the value a wrongly-delivered
+    // cancellation produces, so it could not tell the two apart.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: secondId, result: true }
+    );
+    await expect(second).resolves.toBe(true);
   });
 
   it("cancelForPlugin dismisses on the ORIGINAL window even after focus switches", async () => {
@@ -312,5 +427,87 @@ describe("PluginUIPromptDispatcher", () => {
     d.dispose();
     await expect(a).resolves.toBeUndefined();
     await expect(b).resolves.toBeUndefined();
+  });
+
+  it("prompts the bound project's renderer, never the focused project's", async () => {
+    const wcA = makeWebContents(11);
+    const wcB = makeWebContents(22);
+    setActiveWebContents(wcB);
+    setProjectViews({ A: [wcA], B: [wcB] });
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+    const promise = d.requestPrompt("p1", CONFIRM, "A");
+    expect(wcA.send).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_UI_PROMPT_REQUEST,
+      expect.objectContaining({ pluginId: "p1" })
+    );
+    expect(wcB.send).not.toHaveBeenCalled();
+
+    const promptId = lastPromptId(wcA);
+    // B's renderer must not be able to answer A's prompt.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 22 } },
+      {
+        promptId,
+        result: true,
+      }
+    );
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 11 } },
+      {
+        promptId,
+        result: true,
+      }
+    );
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it("rejects with PROJECT_VIEW_UNAVAILABLE when the bound project has no live view", async () => {
+    const wcB = makeWebContents(22);
+    setActiveWebContents(wcB);
+    setProjectViews({ B: [wcB] });
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+    const error: unknown = await d.requestPrompt("p1", CONFIRM, "A").then(
+      (value) => value,
+      (e: unknown) => e
+    );
+    expect(isAppError(error)).toBe(true);
+    expect(isAppError(error) && error.code).toBe("PROJECT_VIEW_UNAVAILABLE");
+    // Never delivered to the focused project instead.
+    expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  it("delivers a bound prompt to a cached (not currently visible) view", async () => {
+    const cached = makeWebContents(31);
+    setActiveWebContents(null);
+    setProjectViews({ A: [cached] }, [31]);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+    const promise = d.requestPrompt("p1", QUICK_PICK, "A");
+    expect(cached.send).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_UI_PROMPT_REQUEST,
+      expect.objectContaining({ pluginId: "p1" })
+    );
+    d.dispose();
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("leaves the unbound path on the focused view and never consults the project map", async () => {
+    const wcB = makeWebContents(22);
+    setActiveWebContents(wcB);
+    setProjectViews({ A: [makeWebContents(11)], B: [wcB] });
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+    const promise = d.requestPrompt("p1", QUICK_PICK);
+    expect(wcB.send).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_UI_PROMPT_REQUEST,
+      expect.objectContaining({ pluginId: "p1" })
+    );
+    expect(registryMock.getWebContentsForProject).not.toHaveBeenCalled();
+    d.dispose();
+    await expect(promise).resolves.toBeUndefined();
   });
 });

@@ -24,23 +24,30 @@ Main Process (electron/)     Renderer (src/)
    node-pty, git, fs                                    Zustand
 ```
 
+> **This two-box diagram is the on-ramp, not the reality.** Daintree actually runs five-plus process classes (main, one renderer per cached project, the PTY host, a workspace host per project, the watchdog, and a worker per activated plugin) across three IPC transports with different failure semantics — and "the renderer" is one of N independent V8 contexts, so a module-level singleton does **not** span project views. Read [architecture/process-and-window-model.md](./architecture/process-and-window-model.md) before touching anything that crosses a process boundary. [architecture/README](./README.md#architecture) indexes the rest.
+
 ### Main Process (`electron/`)
 
-| Path                | Purpose                      |
-| ------------------- | ---------------------------- |
-| `main.ts`           | Entry point, window creation |
-| `preload.cts`       | IPC bridge via contextBridge |
-| `ipc/channels.ts`   | Channel name constants       |
-| `ipc/handlers.ts`   | Handler registration         |
-| `ipc/handlers/*.ts` | Domain-specific handlers     |
-| `services/`         | Business logic (see below)   |
-| `schemas/`          | Zod validation for IPC       |
+| Path | Purpose |
+| --- | --- |
+| `main.ts` | Entry point, window creation |
+| `preload.cts` | IPC bridge via contextBridge |
+| `ipc/channels.ts` | Channel name constants |
+| `ipc/handlers.ts` | Handler registration |
+| `ipc/handlers/*.ts` | Domain-specific handlers |
+| `services/` | Business logic (see below) |
+| `schemas/` | Zod validation for IPC |
+| `pty-host.ts`, `pty-host/` | The PTY host UtilityProcess (node-pty, backpressure, resource governor) |
+| `workspace-host.ts`, `workspace-host/` | The per-project workspace host (git polling, watchers, PR integration) |
+| `window/` | Windows, per-project views, service wiring |
+| `lifecycle/` | Startup, shutdown chain, signal handling |
 
 **Key Services:**
 
 | Service | Responsibility |
 | --- | --- |
-| `PtyManager` | Terminal process pool, spawn/kill |
+| `PtyClient` | Main-side router to the PTY host — spawn/kill, correlation, port plumbing |
+| `PtyManager` | Terminal process pool inside the PTY host |
 | `pty/TerminalProcess` | Single PTY wrapper, data flow |
 | `pty/AgentStateService` | Idle/working/waiting detection |
 | `pty/terminalInput` | Input submission and timing |
@@ -53,16 +60,18 @@ Main Process (electron/)     Renderer (src/)
 
 ### Renderer (`src/`)
 
-| Path                   | Purpose                                            |
-| ---------------------- | -------------------------------------------------- |
-| `components/Terminal/` | Xterm.js rendering, grid layout                    |
-| `components/Worktree/` | Dashboard cards, status display                    |
-| `components/Layout/`   | App shell, toolbar, dock                           |
-| `components/Browser/`  | Browser panel (BrowserPane, toolbar)               |
-| `components/Portal/`   | Localhost portal, dev-server dashboard, log viewer |
-| `store/*.ts`           | Zustand stores                                     |
-| `hooks/`               | React hooks for IPC subscriptions                  |
-| `clients/`             | Typed wrappers for window.electron                 |
+| Path                            | Purpose                                                   |
+| ------------------------------- | --------------------------------------------------------- |
+| `components/Terminal/`          | Xterm.js rendering, grid layout                           |
+| `components/Worktree/`          | Dashboard cards, status display                           |
+| `components/Layout/`            | App shell, toolbar, dock                                  |
+| `components/Browser/`           | Browser panel (BrowserPane, toolbar)                      |
+| `components/Portal/`            | Localhost portal, dev-server dashboard, log viewer        |
+| `panels/<kind>/`                | Per-kind panel modules for the seven built-in panel kinds |
+| `services/actions/definitions/` | Action definitions — the dispatch and MCP tool surface    |
+| `store/*.ts`                    | Zustand stores                                            |
+| `hooks/`                        | React hooks for IPC subscriptions                         |
+| `clients/`                      | Typed wrappers for window.electron                        |
 
 **Key Stores:**
 
@@ -88,8 +97,11 @@ Adding new IPC:
 3. **Handler**: Create in `electron/ipc/handlers/<domain>.ts`, register in `handlers.ts`
 4. **Preload**: Expose in `electron/preload.cts` under appropriate namespace
 5. **Client**: Add typed wrapper in `src/clients/` if complex
+6. **Regenerate**: `npm run codegen:ipc && npm run codegen:ipc-renderer` — the maps and about half the bridge namespaces are generated; never hand-edit `shared/types/ipc/generated*.ts`
 
 IPC uses invoke/handle for requests, send/on for events. All handlers validate with Zod schemas.
+
+For the layering behind this recipe — the envelope, the sender-validation wrapper, error propagation, rate limiting, and the event bus — see [architecture/ipc-services.md](./architecture/ipc-services.md).
 
 ## Testing
 
@@ -208,8 +220,20 @@ Note that a **third**, separate compiler signal exists: CI ratchets `react-compi
 
 **Multi-project**: Services filter by `projectId`. Stores reset on project switch. Check `projectStore.currentProject` before operations.
 
-**Error handling**: Services throw typed errors. IPC handlers catch and return error objects. UI displays via `errorStore`.
+**Error handling**: Services throw typed errors. IPC handlers catch and return error objects. UI displays via `errorStore`. That is the _recoverable_ path; crashes, hung shutdown and the dirty-exit marker are a separate spine — see [architecture/fatal-error-spine.md](./architecture/fatal-error-spine.md).
+
+**Cross-store reads**: never dereference a partner store's binding at module-evaluation time — route through `src/store/storeAccessors.ts`. See [architecture/store-init-order.md](./architecture/store-init-order.md).
 
 ## Plugins
 
 Plugin authoring is documented separately in [`./plugins/README.md`](./plugins/README.md).
+
+## Going deeper
+
+This file is the practical on-ramp. When you need the real shape of a subsystem, [`./README.md`](./README.md) is the full index; the ones most features touch:
+
+- [architecture/process-and-window-model.md](./architecture/process-and-window-model.md) — processes, transports, per-view isolation.
+- [architecture/state-management.md](./architecture/state-management.md) — the store layer and its two flavors.
+- [architecture/action-system.md](./architecture/action-system.md) — the typed dispatch layer behind menus, keybindings and agents.
+- [architecture/ipc-services.md](./architecture/ipc-services.md) — services, handlers, clients, and the envelope.
+- [e2e-testing.md](./e2e-testing.md) — Playwright projects, buckets, and how to run one spec.

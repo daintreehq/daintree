@@ -18,6 +18,14 @@ export type { BuiltInPanelKind };
  *
  * Built-in kinds are listed in `BUILT_IN_PANEL_KINDS`.
  * Extensions can register additional kinds as strings.
+ *
+ * A plugin-contributed kind is `{manifestId}.{kindId}` for a globally installed
+ * plugin and `project:{projectId}/{manifestId}/{kindId}` for a project-local
+ * one. Layouts persist `PanelSnapshot.kind` verbatim, so the project-qualified
+ * form reaches disk as-is today. `toRuntimePanelKindId` /
+ * `toPersistedPanelKindRef` in `shared/config/panelKindRegistry.ts` are the
+ * conversion for a later layout schema that drops the project id, so that a
+ * re-clone at a different path stops orphaning saved panels.
  */
 export type PanelKind = BuiltInPanelKind | (string & {});
 
@@ -300,6 +308,13 @@ interface BasePanelData {
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
   /**
+   * Which version of the owning plugin's state schema {@link extensionState}
+   * holds (#12280). Host-owned: stamped from the kind's registered
+   * `stateVersion` at the write gate, carried forward untouched when the plugin
+   * is not there to re-stamp it. Never read from the plugin's own patch.
+   */
+  extensionStateVersion?: number;
+  /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin
    * when its registration is gone.
@@ -352,6 +367,24 @@ export interface PanelWorktreeMoveNotice {
    */
   deliveryFailed?: boolean;
 }
+
+/**
+ * Why a restored pane's prior agent session could not be resumed (#12182).
+ *
+ * Distinguished because the banner's copy and its "Find session" affordance
+ * both depend on which one fired — "a sibling pane already has it" is a
+ * fundamentally different message (and a different recovery) than "there was
+ * never anything to resume".
+ */
+export type SessionLostReason =
+  /** Had the exact session id and permission to use it, but no resume command could be built. */
+  | "no-resume-command"
+  /** A sibling pane already holds the exact conversation this pane carried. */
+  | "sibling-owns-session-id"
+  /** A sibling pane already claimed this agent+folder's resume-latest slot. */
+  | "sibling-owns-resume-latest-slot"
+  /** No session id was ever captured and no resume-latest fallback exists for this agent. */
+  | "no-resume-path";
 
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
@@ -566,17 +599,17 @@ export interface PtyPanelData extends BasePanelData {
   /** How many fallback hops have been consumed from the primary's chain (0-based index into fallbacks[]). */
   fallbackChainIndex?: number;
   /**
-   * Live-only restore signal. True on first mount when the saved agent session
+   * Live-only restore signal. Set on first mount when the saved agent session
    * could not be safely resumed — unreachable, or resume-latest suppressed
    * because a sibling pane owns the slot (#11461) — and a fresh session was
-   * launched instead. Drives the
+   * launched instead. The value names which cause it was (#12182). Drives the
    * "Session no longer reachable" restart banner. Cleared on restart, and when
    * the user dismisses the banner (#11589) — dismissal consumes this signal
    * rather than shadowing it with a second flag, so the acknowledgement
    * survives the unmount a worktree switch causes. Never serialized — see
    * `serializePtyPanel`.
    */
-  sessionLostOnRestore?: boolean;
+  sessionLostOnRestore?: SessionLostReason;
 }
 
 export interface BrowserPanelData extends BasePanelData {
@@ -760,51 +793,27 @@ export interface DiffPanelData extends BasePanelData {
   viewedKey?: string;
 }
 
-/** One directory entry in a persisted file-browser tree snapshot. */
-export interface FileBrowserSnapshotNode {
-  /** Entry basename. */
-  name: string;
-  /** Worktree-relative path. */
-  path: string;
-  isDirectory: boolean;
-}
-
-/** One directory's listing in a persisted file-browser tree snapshot. */
-export interface FileBrowserTreeSnapshotEntry {
-  /** Worktree-relative directory path; "" = the browse root's own listing. */
-  dirPath: string;
-  nodes: FileBrowserSnapshotNode[];
-}
-
 /**
- * Structure-only snapshot of a file browser's last-known tree (#11367): entry
- * names, paths and directory bits — never contents, sizes or timestamps.
- * Tagged with the identity it was captured under so a worktree switch or
- * re-root can't seed the wrong tree; a mismatch just cold-starts. Arrays
- * rather than a Map because it round-trips through JSON persistence.
+ * The file-browser tree snapshot and sort types live in their own narrow module
+ * and are re-exported here, so the persisted panel fields below and the tree
+ * model that produces them are one definition rather than two that can drift.
+ * The plugin SDK ships that model and imports the same module directly — it
+ * cannot import `panel.ts`, which would drag the whole renderer type graph into
+ * a dependency-free package.
  */
-export interface FileBrowserTreeSnapshot {
-  /** Absent when the browser is rooted at the workspace itself (#11482). */
-  worktreeId?: string;
-  /**
-   * Absolute root the listings were captured under. Identity only — never
-   * joined against, so it can't strand the panel the way a persisted absolute
-   * *root* would; a mismatch (a relocated project) just cold-starts, which is
-   * the same self-healing outcome as a worktree switch.
-   */
-  basePath?: string;
-  /** Browse root relative to the base at capture time; "" = the base itself. */
-  rootPath: string;
-  listings: FileBrowserTreeSnapshotEntry[];
-}
+export type {
+  FileBrowserSnapshotNode,
+  FileBrowserTreeSnapshotEntry,
+  FileBrowserTreeSnapshot,
+  FileBrowserSortKey,
+  FileBrowserSortDirection,
+} from "./fileBrowserTree.js";
 
-/**
- * What the file browser orders directory entries by (#11620). Lives here
- * rather than beside the comparator in the renderer because it is a persisted
- * panel field, and `shared/` cannot import from `src/`.
- */
-export type FileBrowserSortKey = "name" | "modified" | "size" | "type";
-export type FileBrowserSortDirection = "asc" | "desc";
+import type {
+  FileBrowserTreeSnapshot,
+  FileBrowserSortKey,
+  FileBrowserSortDirection,
+} from "./fileBrowserTree.js";
 
 /**
  * File browser panel — a lazily-expanded directory tree over one folder with a
@@ -1116,6 +1125,13 @@ export interface TerminalInstance {
   fallbackChainIndex?: number;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Which version of the owning plugin's state schema {@link extensionState}
+   * holds (#12280). Host-owned: stamped from the kind's registered
+   * `stateVersion` at the write gate, carried forward untouched when the plugin
+   * is not there to re-stamp it. Never read from the plugin's own patch.
+   */
+  extensionStateVersion?: number;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin

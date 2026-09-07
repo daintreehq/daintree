@@ -24,7 +24,13 @@ export type CdpRemoteArg = CdpRemoteArgPrimitive | CdpRemoteArgObject | CdpRemot
 export interface CdpStackFrame {
   functionName: string;
   url: string;
+  /**
+   * One-based, unlike the zero-based `Runtime.CallFrame` it is derived from.
+   * The main-process mapper converts once so display and clipboard cannot
+   * drift apart; consumers must not add another offset.
+   */
   lineNumber: number;
+  /** One-based — see {@link CdpStackFrame.lineNumber}. */
   columnNumber: number;
 }
 

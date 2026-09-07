@@ -14,9 +14,10 @@
  */
 
 import { BrowserWindow, type WebContentsView } from "electron";
+import { performance } from "node:perf_hooks";
 import { registerProjectView } from "./webContentsRegistry.js";
 import { isValidScratchStateId } from "../services/projectStorePaths.js";
-import { logWarn } from "../utils/logger.js";
+import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
@@ -25,11 +26,18 @@ import type { AgentState } from "../../shared/types/agent.js";
 import * as PaintGateController from "./ProjectViewPaintGateController.js";
 import { performSwitch } from "./ProjectViewSwitchController.js";
 import { cleanupEntry } from "./ProjectViewLifecycleController.js";
+import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
-import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
+import type {
+  ProjectFocusOnActivateIntent,
+  ProjectSwitchTrace,
+} from "../../shared/types/ipc/project.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { markPerformance } from "../utils/performance.js";
+import { collectGuestPids } from "./ProjectViewLifecycleController.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -117,6 +125,10 @@ export interface ViewInventoryEntry {
   lastUsed: number;
   /** Epoch ms of the project's most recent eviction, if it was ever evicted. */
   evictedAt?: number;
+  /** Renderer OS pid, or null if the view was destroyed mid-read or the pid is unknown. */
+  pid: number | null;
+  /** OS pids of the view's live <webview> guests (browser / dev-preview panels). */
+  guestPids: number[];
 }
 
 export interface ProjectViewManagerOptions {
@@ -185,12 +197,12 @@ export interface ProjectViewManagerOptions {
    * Absent — as in tests that don't exercise the assistant — every project reads
    * as having no backend, which is the pre-#11157 behavior.
    */
-  assistantBackendForProject?: (projectId: string) => {
+  assistantBackendsForProject?: (projectId: string) => Array<{
     terminalId: string;
     webContentsId: number;
-  } | null;
+  }>;
   /**
-   * Whether a PTY is still running. Paired with `assistantBackendForProject`:
+   * Whether a PTY is still running. Paired with `assistantBackendsForProject`:
    * the help-session binding outlives an assistant that exits on its own, so
    * eviction protection needs a liveness source that tracks exits.
    */
@@ -198,7 +210,7 @@ export interface ProjectViewManagerOptions {
   /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
-   * root for the same reason as `assistantBackendForProject`: electron/window/
+   * root for the same reason as `assistantBackendsForProject`: electron/window/
    * stays free of the service, and here it also keeps the MCP module graph off
    * eager boot, since it is deliberately behind a dynamic import.
    *
@@ -273,10 +285,10 @@ export class ProjectViewManager {
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
   onViewCrashed?: (webContents: Electron.WebContents) => void;
-  assistantBackendForProject?: (projectId: string) => {
+  assistantBackendsForProject?: (projectId: string) => Array<{
     terminalId: string;
     webContentsId: number;
-  } | null;
+  }>;
   isTerminalLive?: (terminalId: string) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
@@ -344,7 +356,7 @@ export class ProjectViewManager {
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
     this.onViewCrashed = opts.onViewCrashed;
-    this.assistantBackendForProject = opts.assistantBackendForProject;
+    this.assistantBackendsForProject = opts.assistantBackendsForProject;
     this.isTerminalLive = opts.isTerminalLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
@@ -480,6 +492,10 @@ export class ProjectViewManager {
     this.webContentsToProject.set(view.webContents.id, projectId);
     registerProjectView(projectId, view.webContents);
     this.activeProjectId = projectId;
+    // The startup view never goes through `performSwitch`, so it needs its own
+    // open signal — otherwise a relaunch straight into a trusted project would
+    // load none of its plugins until the user switched away and back.
+    notifyProjectPluginsOpened(projectId, projectPath);
   }
 
   /**
@@ -488,9 +504,10 @@ export class ProjectViewManager {
    */
   async switchTo(
     projectId: string,
-    projectPath: string
+    projectPath: string,
+    trace?: ProjectSwitchTrace
   ): Promise<{ view: WebContentsView; isNew: boolean }> {
-    const task = this.switchChain.then(() => performSwitch(this, projectId, projectPath));
+    const task = this.switchChain.then(() => performSwitch(this, projectId, projectPath, trace));
     this.switchChain = task.then(
       () => undefined,
       () => undefined
@@ -700,6 +717,42 @@ export class ProjectViewManager {
     entry.preloadEvalDurationMs = durationMs;
   }
 
+  /**
+   * The view's renderer reported `app:first-interactive`. For a view whose
+   * cold start this manager drove, that closes the cold-start timeline:
+   * emit the input-ready log (and the trace mark, when the switch carried one)
+   * and clear the timing fields so a later reload can't re-report them.
+   * No-op for warm views, the startup view, and unknown ids.
+   */
+  recordFirstInteractive(webContentsId: number): void {
+    const projectId = this.webContentsToProject.get(webContentsId);
+    if (projectId === undefined) return;
+    const entry = this.views.get(projectId);
+    if (!entry || entry.coldStartAt === undefined) return;
+    const now = performance.now();
+    const { coldStartAt, loadFinishedAt, visibleAt, switchTrace } = entry;
+    delete entry.coldStartAt;
+    delete entry.loadFinishedAt;
+    delete entry.visibleAt;
+    const interactiveMs = Math.round(now - coldStartAt);
+    logInfo("projectview.coldstart.interactive", {
+      projectId,
+      interactiveMs,
+      loadMs: loadFinishedAt !== undefined ? Math.round(loadFinishedAt - coldStartAt) : null,
+      visibleMs: visibleAt !== undefined ? Math.round(visibleAt - coldStartAt) : null,
+      // React boot after the document settled: the part of the cold start the
+      // load and paint gates cannot see.
+      hydrateMs: loadFinishedAt !== undefined ? Math.round(now - loadFinishedAt) : null,
+    });
+    if (switchTrace) {
+      markPerformance(PERF_MARKS.PROJECT_SWITCH_FIRST_INTERACTIVE, {
+        switchId: switchTrace.switchId,
+        projectId,
+        interactiveMs,
+      });
+    }
+  }
+
   getAllViews(): ViewEntry[] {
     return Array.from(this.views.values());
   }
@@ -723,6 +776,21 @@ export class ProjectViewManager {
       } catch {
         // View torn down mid-read — leave webContentsId as -1.
       }
+      let pid: number | null = null;
+      let guestPids: number[] = [];
+      try {
+        if (webContentsId !== -1) {
+          const wc = entry.view.webContents;
+          const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+          if (typeof getPid === "function") {
+            const raw = getPid.call(wc);
+            if (typeof raw === "number" && raw > 0) pid = raw;
+          }
+          guestPids = collectGuestPids(wc);
+        }
+      } catch {
+        // View torn down mid-read — report no pid rather than a stale one.
+      }
       const evictedAt = this.evictionTimestamps.get(entry.projectId);
       out.push({
         projectId: entry.projectId,
@@ -730,6 +798,8 @@ export class ProjectViewManager {
         webContentsId,
         state: entry.state,
         lastUsed: entry.lastUsed,
+        pid,
+        guestPids,
         ...(evictedAt !== undefined ? { evictedAt } : {}),
       });
     }

@@ -169,7 +169,9 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectB.id,
       expect.objectContaining({ draftInputs: {} }),
-      undefined
+      expect.objectContaining({
+        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      })
     );
   });
 
@@ -187,7 +189,10 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
 
     expect(projectClientMock.reopen).toHaveBeenCalledWith(
       projectB.id,
-      expect.objectContaining({ draftInputs: {} })
+      expect.objectContaining({ draftInputs: {} }),
+      expect.objectContaining({
+        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      })
     );
   });
 
@@ -205,7 +210,9 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectB.id,
       expect.objectContaining({ draftInputs: { "terminal-1": "hello world" } }),
-      undefined
+      expect.objectContaining({
+        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      })
     );
   });
 
@@ -228,7 +235,9 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectB.id,
       expect.objectContaining({ draftDelta: { changedIds: ["terminal-1"], removedIds: [] } }),
-      undefined
+      expect.objectContaining({
+        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      })
     );
   });
 
@@ -241,7 +250,13 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    expect(projectClientMock.switch).toHaveBeenCalledWith(projectB.id, undefined, undefined);
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      undefined,
+      expect.objectContaining({
+        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      })
+    );
   });
 });
 
@@ -270,7 +285,9 @@ describe("instant switch feedback: deferred snapshot + IPC", () => {
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectB.id,
       expect.any(Object),
-      undefined
+      expect.objectContaining({
+        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      })
     );
   });
 
@@ -291,7 +308,9 @@ describe("instant switch feedback: deferred snapshot + IPC", () => {
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectC.id,
       expect.any(Object),
-      undefined
+      expect.objectContaining({
+        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      })
     );
   });
 

@@ -32,7 +32,7 @@ if (!beforePath || !afterPath) {
 
 const before = JSON.parse(readFileSync(beforePath, "utf8")) as GrowthResult;
 const after = JSON.parse(readFileSync(afterPath, "utf8")) as GrowthResult;
-const normalizedConfig = (config: Record<string, unknown>) => ({
+const normalizedConfig = (config: Record<string, unknown>): Record<string, unknown> => ({
   ...config,
   churnEphemeralTerminals: config.churnEphemeralTerminals ?? true,
 });

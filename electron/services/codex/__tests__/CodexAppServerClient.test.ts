@@ -391,3 +391,128 @@ describe("runCodexAppServerSession", () => {
     }
   });
 });
+
+// issue #12182 — "Find session" asks on behalf of a specific pane, which may
+// have launched under a redirected CODEX_HOME. This client has no other way
+// to learn that, so the caller must be able to hand it over per session.
+describe("CODEX_HOME override (#12182)", () => {
+  const originalCodexHome = process.env.CODEX_HOME;
+
+  afterEach(() => {
+    if (originalCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  it("spawns with the caller-supplied codexHome, not main's own", async () => {
+    process.env.CODEX_HOME = "/main/.codex";
+
+    const promise = runCodexAppServerSession(async () => "done", {
+      command: "codex-test",
+      codexHome: "/pane/.codex",
+    });
+    await flush();
+    child.respondTo("initialize", { userAgent: "codex" });
+    await promise;
+
+    const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
+    expect(spawnEnv?.CODEX_HOME).toBe("/pane/.codex");
+  });
+
+  it("falls back to main's own CODEX_HOME when no override is given", async () => {
+    process.env.CODEX_HOME = "/main/.codex";
+
+    await startSession(async () => "done");
+
+    const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
+    expect(spawnEnv?.CODEX_HOME).toBe("/main/.codex");
+  });
+
+  it("omits CODEX_HOME entirely when neither the caller nor main's env has one", async () => {
+    delete process.env.CODEX_HOME;
+
+    await startSession(async () => "done");
+
+    const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
+    expect(spawnEnv?.CODEX_HOME).toBeUndefined();
+  });
+});
+
+describe("session slot queue", () => {
+  it("counts the wait for a slot against the caller's own budget", async () => {
+    // Two sessions hold the gate. A third must not sit here unbounded: at
+    // restore every Codex pane asks at once, which is exactly when a
+    // restore-time lookup with a short budget needs to give up on time.
+    vi.useFakeTimers();
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const children: FakeChild[] = [];
+    spawnMock.mockImplementation(() => {
+      const next = new FakeChild();
+      children.push(next);
+      return next;
+    });
+
+    let releaseFirst: (() => void) | undefined;
+    let releaseSecond: (() => void) | undefined;
+    const held = [
+      runCodexAppServerSession(() => new Promise<void>((resolve) => (releaseFirst = resolve)), {
+        command: "codex-test",
+        timeoutMs: 60_000,
+      }),
+      runCodexAppServerSession(() => new Promise<void>((resolve) => (releaseSecond = resolve)), {
+        command: "codex-test",
+        timeoutMs: 60_000,
+      }),
+    ];
+    await vi.advanceTimersByTimeAsync(0);
+    for (const occupant of children) occupant.respondTo("initialize", { userAgent: "codex" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+
+    const run = vi.fn(async () => "never");
+    const queued = runCodexAppServerSession(run, { command: "codex-test", timeoutMs: 2_000 });
+    const outcome = queued.then(
+      () => "resolved",
+      (error: unknown) => (error as CodexAppServerError).reason
+    );
+
+    await vi.advanceTimersByTimeAsync(2_001);
+
+    try {
+      expect(await outcome).toBe("timeout");
+      // Gave up in the queue: it never got a process, and never ran the caller.
+      expect(children).toHaveLength(2);
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      // Released even if an assertion above threw: `activeSessions` is module
+      // state, and leaving it pinned would time out every later session here.
+      releaseFirst?.();
+      releaseSecond?.();
+      await vi.advanceTimersByTimeAsync(0);
+      for (const occupant of children) occupant.emit("exit", 0, null);
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.allSettled(held);
+    }
+
+    // The abandoned waiter must not have kept the slot it gave up on. Counting
+    // spawns is the only way to see that: a leaked waiter resolves a promise
+    // that is already rejected, so it is invisible except as a slot that never
+    // comes back. Both fresh sessions must therefore start immediately.
+    const spawnedBefore = children.length;
+    const probes = [
+      runCodexAppServerSession(async () => "a", { command: "codex-test", timeoutMs: 60_000 }),
+      runCodexAppServerSession(async () => "b", { command: "codex-test", timeoutMs: 60_000 }),
+    ];
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children.length - spawnedBefore).toBe(2);
+
+    for (const probe of children.slice(spawnedBefore)) {
+      probe.respondTo("initialize", { userAgent: "codex" });
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.allSettled(probes);
+  });
+});

@@ -138,6 +138,13 @@ export class LaunchNotifications {
       notifyAssistantServicesUnavailable(kind);
     } else if (kind === "folder-unavailable") {
       notifyInstallCorrupted(agentId);
+    } else if (kind === "mixed-agent-lanes") {
+      // Same sentence as the inline banner and the command/MCP path — the
+      // refusal reads identically wherever the user meets it.
+      notifyLaunchFailed(
+        agentId,
+        "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent."
+      );
     } else if (kind === "skills-sync-failed") {
       notifyLaunchFailed(
         agentId,

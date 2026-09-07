@@ -65,6 +65,8 @@ import {
   LazyDiagnosticsReviewDialogHost,
   LazyGitPushConfirmDialog,
   LazyGitPullRebaseConfirmDialog,
+  LazyGitWorktreeOperationConfirmDialog,
+  LazyGitForcePushConfirmDialog,
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
@@ -138,6 +140,8 @@ interface ModalHostLayerProps {
   diagnosticsReviewResetKey: number;
   gitPushResetKey: number;
   gitPullRebaseResetKey: number;
+  gitWorktreeOperationResetKey: number;
+  gitForcePushResetKey: number;
   recipeConflictResetKey: number;
   gitInitDialogOpen: boolean;
   shouldMountGitInitDialog: boolean;
@@ -231,6 +235,8 @@ export function ModalHostLayer({
   diagnosticsReviewResetKey,
   gitPushResetKey,
   gitPullRebaseResetKey,
+  gitWorktreeOperationResetKey,
+  gitForcePushResetKey,
   recipeConflictResetKey,
   gitInitDialogOpen,
   shouldMountGitInitDialog,
@@ -893,6 +899,30 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyGitPullRebaseConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="GitWorktreeOperationConfirmDialog"
+          resetKeys={[gitWorktreeOperationResetKey]}
+        >
+          <Suspense fallback={null}>
+            <LazyGitWorktreeOperationConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="GitForcePushConfirmDialog"
+          resetKeys={[gitForcePushResetKey]}
+        >
+          <Suspense fallback={null}>
+            <LazyGitForcePushConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

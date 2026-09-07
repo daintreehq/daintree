@@ -213,6 +213,28 @@ describe("notifications IPC adversarial", () => {
     expect(soundServiceMock.play).not.toHaveBeenCalled();
   });
 
+  it("playUiEvent is gated on soundEnabled=false even when uiFeedbackSoundEnabled=true (#12185)", async () => {
+    storeMock.get.mockReturnValue({
+      ...defaultSettings,
+      soundEnabled: false,
+      uiFeedbackSoundEnabled: true,
+    });
+
+    await getHandler(CHANNELS.SOUND_PLAY_UI_EVENT)(fakeEvent(), "click");
+    expect(soundServiceMock.play).not.toHaveBeenCalled();
+  });
+
+  it("playUiEvent plays when both soundEnabled and uiFeedbackSoundEnabled are true", async () => {
+    storeMock.get.mockReturnValue({
+      ...defaultSettings,
+      soundEnabled: true,
+      uiFeedbackSoundEnabled: true,
+    });
+
+    await getHandler(CHANNELS.SOUND_PLAY_UI_EVENT)(fakeEvent(), "click");
+    expect(soundServiceMock.play).toHaveBeenCalledWith("click");
+  });
+
   it("syncWatched filters non-string entries from the id array", async () => {
     getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(
       fakeEvent(createSender(7)) as Electron.IpcMainEvent,

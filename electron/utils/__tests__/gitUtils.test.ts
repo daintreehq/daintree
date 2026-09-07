@@ -29,6 +29,44 @@ function mockGitFailure(message: string): void {
   );
 }
 
+/**
+ * git's verdict that the path is not a repository: a clean fatal exit, which is
+ * what `execFile` reports as a numeric `code`.
+ */
+function mockNotARepository(): void {
+  execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
+    const error = Object.assign(new Error("Command failed: git rev-parse"), { code: 128 });
+    cb(error, "", "fatal: not a git repository (or any of the parent directories): .git\n");
+  });
+}
+
+/** A clean exit-128 fatal that is NOT the "no repository here" diagnostic. */
+function mockGitFatal(stderr: string): void {
+  execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
+    const error = Object.assign(new Error("Command failed: git rev-parse"), { code: 128 });
+    cb(error, "", stderr);
+  });
+}
+
+/** git never ran: the spawn itself failed (AV lock, missing binary, EPERM). */
+function mockSpawnFailure(code: string): void {
+  execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
+    const error = Object.assign(new Error(`spawn git ${code}`), { code });
+    cb(error, "", "");
+  });
+}
+
+/** execFile's `timeout` fired and killed the child before it answered. */
+function mockGitTimeout(): void {
+  execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
+    const error = Object.assign(new Error("Command failed: git rev-parse"), {
+      killed: true,
+      signal: "SIGTERM",
+    });
+    cb(error, "", "");
+  });
+}
+
 beforeEach(() => {
   clearGitDirCache();
   clearGitCommonDirCache();
@@ -229,5 +267,200 @@ describe("filesystem fast path (no subprocess)", () => {
     const gitDir = makeGitDir(root);
     await expect(getGitCommonDir(root)).resolves.toBe(gitDir);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("negative-result caching is classified by failure kind (#12042)", () => {
+  // A null gitDir is load-bearing far beyond this module: GitFileWatcher.start()
+  // bails on it (leaving WatcherController in mode "none", whose poll cadence is
+  // the adaptive profile interval) and GitStatusPass skips its stat pre-check
+  // without one. Caching "we failed to look" as long as "this is not a repo" is
+  // what turns one transient Windows fs blip into minutes of forced polling.
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Elapsed time at which a transient failure should have expired but a
+   *  definitive one should not — the whole point is that they differ. */
+  const BETWEEN_TTLS_MS = 60_000;
+
+  it("re-probes a spawn failure but keeps a not-a-repository verdict cached", async () => {
+    mockSpawnFailure("EPERM");
+    await expect(getGitDir("/flaky")).resolves.toBeNull();
+
+    mockNotARepository();
+    await expect(getGitDir("/plain-folder")).resolves.toBeNull();
+    const spawnsAfterDefinitive = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(BETWEEN_TTLS_MS);
+
+    await expect(getGitDir("/plain-folder")).resolves.toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(spawnsAfterDefinitive);
+
+    mockSpawnFailure("EPERM");
+    await expect(getGitDir("/flaky")).resolves.toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(spawnsAfterDefinitive + 1);
+  });
+
+  it("treats a timed-out probe as transient", async () => {
+    mockGitTimeout();
+    await expect(getGitDir("/slow")).resolves.toBeNull();
+    const spawns = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(BETWEEN_TTLS_MS);
+    await expect(getGitDir("/slow")).resolves.toBeNull();
+
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(spawns);
+  });
+
+  // 128 is git's generic die() status, so every one of these is a fatal that
+  // says nothing durable about whether the path is a repository. Caching any of
+  // them as a verdict is what re-creates the ten-minute blackout.
+  it.each([
+    [
+      "dubious ownership (fixable with safe.directory, app still open)",
+      "fatal: detected dubious ownership in repository at '/repo'\n",
+    ],
+    ["a broken gitdir pointer", "fatal: invalid gitfile format: /repo/.git\n"],
+    ["unreadable repository metadata", "error: cannot stat '/repo/.git/HEAD': Permission denied\n"],
+    ["malformed config", "fatal: bad config line 3 in file /repo/.git/config\n"],
+    ["an unsupported flag on an old git", "error: unknown option `git-common-dir'\n"],
+    ["a fatal with no diagnostic at all", ""],
+  ])("treats exit 128 from %s as transient", async (_label, stderr) => {
+    mockGitFatal(stderr);
+    await expect(getGitDir("/ambiguous")).resolves.toBeNull();
+    const spawns = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(BETWEEN_TTLS_MS);
+    await expect(getGitDir("/ambiguous")).resolves.toBeNull();
+
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(spawns);
+  });
+
+  it("upgrades a transient failure to the permanent TTL once it succeeds", async () => {
+    mockSpawnFailure("EBUSY");
+    await expect(getGitDir("/recovering")).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(BETWEEN_TTLS_MS);
+    mockGitOutput("/recovering/.git\n");
+    await expect(getGitDir("/recovering")).resolves.toBe("/recovering/.git");
+    const spawnsAfterRecovery = execFileMock.mock.calls.length;
+
+    // The entry was stamped transient on the way in; the success must re-stamp
+    // it permanent rather than leaving the short window in place.
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
+    await expect(getGitDir("/recovering")).resolves.toBe("/recovering/.git");
+    expect(execFileMock.mock.calls.length).toBe(spawnsAfterRecovery);
+  });
+
+  it("widens the retry window as transient failures repeat", async () => {
+    // Without a backoff, an unreachable path (disconnected network drive, git
+    // gone from PATH) would re-spawn `git rev-parse` on a fixed short cycle for
+    // the life of the app — trading one spawn storm for another.
+    // Long enough to expire the first window, short enough that it must not
+    // expire the second — the widening is the whole assertion.
+    const ONE_WINDOW_MS = 20_000;
+
+    mockSpawnFailure("EPERM");
+    await expect(getGitDir("/unreachable")).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(ONE_WINDOW_MS);
+    await expect(getGitDir("/unreachable")).resolves.toBeNull();
+    const spawnsAfterSecondFailure = execFileMock.mock.calls.length;
+
+    // The same wait no longer expires the (now wider) window.
+    await vi.advanceTimersByTimeAsync(ONE_WINDOW_MS);
+    await expect(getGitDir("/unreachable")).resolves.toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(spawnsAfterSecondFailure);
+  });
+
+  it("keeps the backoff separate for git-dir and common-dir", async () => {
+    // Two distinct probes. Sharing a streak would let a common-dir failure
+    // widen getGitDir's window — delaying exactly the resolution the watcher
+    // is waiting on — and let a success on one wipe the other's history.
+    const ONE_WINDOW_MS = 20_000;
+
+    mockSpawnFailure("EPERM");
+    await expect(getGitCommonDir("/shared")).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(ONE_WINDOW_MS);
+    await expect(getGitCommonDir("/shared")).resolves.toBeNull();
+
+    // getGitDir has failed zero times, so it must still be on the base window.
+    await expect(getGitDir("/shared")).resolves.toBeNull();
+    const spawns = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(ONE_WINDOW_MS);
+    await expect(getGitDir("/shared")).resolves.toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(spawns + 1);
+  });
+
+  it("restarts the backoff after an explicit invalidation", async () => {
+    mockSpawnFailure("EPERM");
+    await expect(getGitDir("/unreachable")).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(BETWEEN_TTLS_MS);
+    await expect(getGitDir("/unreachable")).resolves.toBeNull();
+
+    // A worktree the user re-added, or a topology change, must not inherit the
+    // widened window from the path's previous life.
+    clearGitDirCache("/unreachable");
+    await expect(getGitDir("/unreachable")).resolves.toBeNull();
+    const spawns = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(BETWEEN_TTLS_MS);
+    await expect(getGitDir("/unreachable")).resolves.toBeNull();
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(spawns);
+  });
+
+  it("does not re-probe a success, however long the app runs", async () => {
+    mockGitOutput("/repo/.git\n");
+    await expect(getGitDir("/repo")).resolves.toBe("/repo/.git");
+    const spawns = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
+    await expect(getGitDir("/repo")).resolves.toBe("/repo/.git");
+
+    expect(execFileMock.mock.calls.length).toBe(spawns);
+  });
+
+  it("still honours cacheErrors: false for a transient failure", async () => {
+    mockSpawnFailure("EBUSY");
+    await expect(getGitDir("/flaky", { cacheErrors: false })).resolves.toBeNull();
+    await expect(getGitDir("/flaky", { cacheErrors: false })).resolves.toBeNull();
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies common-dir failures the same way", async () => {
+    mockSpawnFailure("EACCES");
+    await expect(getGitCommonDir("/flaky")).resolves.toBeNull();
+    const spawns = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(BETWEEN_TTLS_MS);
+    await expect(getGitCommonDir("/flaky")).resolves.toBeNull();
+
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(spawns);
+  });
+});
+
+describe("subprocess options", () => {
+  it("hides the console window so the probe can't flash one on Windows", async () => {
+    mockGitOutput(".git\n");
+    await getGitDir("/repo");
+    expect(execFileMock.mock.calls[0][2]).toMatchObject({ windowsHide: true });
+  });
+
+  it("pins the diagnostic locale the failure classification reads", async () => {
+    // classifyGitFailure tells "not a repository" from every other fatal by
+    // reading stderr, so a translated message would silently reclassify it.
+    mockGitOutput(".git\n");
+    await getGitDir("/repo");
+    const opts = execFileMock.mock.calls[0][2] as { env?: Record<string, string> };
+    expect(opts.env?.LC_ALL).toBe("C");
+    // PATH must survive the override, or git isn't found at all.
+    expect(opts.env?.PATH).toBe(process.env.PATH);
   });
 });

@@ -55,6 +55,6 @@ Action tier exposes several spawn/send tools that look similar. Pick by what you
 - **Inject project context into a terminal** → `terminal.inject({ terminalId })` — dumps the project's prepared CopyTree context into the named terminal. Pass an explicit `terminalId` (panel UUID from `terminal.list`); agent/MCP dispatch **requires** it and errors without it, so a focus shift can't route the dump into the wrong terminal. Use only when the user explicitly asks to inject context — not a general-purpose prompt sender.
 - **Inject context into a specific terminal** → `copyTree.injectToTerminal({ terminalId })`. Same as above, targeted.
 
-These are worked examples, not the whole tier — plenty of same-tier tools aren't listed here. If the operation you need isn't above, look for it with `actions.search` before concluding you can't do it (see **Finding the Right Tool** below); if it's absent from `ListTools` entirely, report it as unavailable rather than assuming a higher tier would provide it.
+These are worked examples, not the whole tier — plenty of same-tier tools aren't listed here. If the operation you need isn't above, look for it with `actions.search` before concluding you can't do it (see **Finding the Right Tool** below). Absence from `ListTools` is not absence from Daintree: check the search result's `unavailable` array before saying the app has no such feature.
 
 For sustained monitoring loops over many agents (stuck-state detection, `ScheduleWakeup` pacing across rounds), see the **Watching Agent Terminals** section below.

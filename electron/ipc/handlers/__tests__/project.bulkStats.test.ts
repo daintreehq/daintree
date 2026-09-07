@@ -134,6 +134,10 @@ vi.mock("../../../window/portDistribution.js", () => ({
 // Same default as the push-path suite: on screen unless a test hides it.
 const helpSessionMock = vi.hoisted(() => ({
   isPanelVisible: vi.fn<(id: string) => boolean>(() => true),
+  // #12108: the counts path resolves each help terminal's lane so concurrent
+  // assistants can be ranked by who needs the user. These fixtures run one
+  // assistant, which is lane 0.
+  getSlotForTerminal: vi.fn<(terminalId: string) => number | null>(() => 0),
 }));
 vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: helpSessionMock,

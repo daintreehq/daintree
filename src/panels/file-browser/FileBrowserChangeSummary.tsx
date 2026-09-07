@@ -70,7 +70,7 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                     : undefined
                 }
                 className={cn(
-                  "flex w-full items-center gap-2 rounded px-2 py-1 text-left font-mono text-xs",
+                  "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs",
                   "transition-colors duration-150 ease-out",
                   isReadable
                     ? "cursor-pointer text-daintree-text/80 hover:bg-tint/5 hover:text-text-primary"

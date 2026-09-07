@@ -11,6 +11,7 @@ const {
   mockGetProjectState,
   mockGetScratchState,
   mockLogError,
+  mockRemovePanel,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
   mockGetContext: vi.fn(() => ({})),
@@ -21,6 +22,7 @@ const {
   mockGetProjectState: vi.fn(),
   mockGetScratchState: vi.fn(),
   mockLogError: vi.fn(),
+  mockRemovePanel: vi.fn(),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -47,6 +49,13 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => mockGetProjectState() },
 }));
 
+// The launch path tears its own PTY down when the lane it was minted for is
+// closed mid-flight (#12108); the real panel store is far too heavy for this
+// node-environment suite, and only `removePanel` is reached.
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: () => ({ removePanel: mockRemovePanel }) },
+}));
+
 // Leaf-path mock, mirroring the projectStore one — the action reads the scratch
 // pointer as its workspace fallback (#11068).
 vi.mock("@/store/scratchStore", () => ({
@@ -62,6 +71,7 @@ vi.mock("@/lib/sidebarToggle", () => ({
 }));
 
 import { registerHelpActions } from "../helpActions";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { AnyActionDefinition } from "../../actionTypes";
@@ -185,7 +195,7 @@ describe("help.launchAgent", () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
-    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability(),
       isInitialized: true,
@@ -195,7 +205,35 @@ describe("help.launchAgent", () => {
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "gemini", cwd: "/mock/help", location: "overlay" }),
+      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
+      { source: "user" }
+    );
+  });
+
+  it("skips a preferred default the assistant gate would refuse (#12262)", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    // Gemini is installed and launchable from the toolbar, but its supports
+    // block sits at `tier: "deprecated"`, so `provisionSession` refuses it.
+    // The implicit default has to skip it rather than resolve into that
+    // refusal — this suite mocks provisioning, so nothing else would notice.
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "gemini" }),
+      { source: "user" }
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -204,9 +242,9 @@ describe("help.launchAgent", () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
-    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
     mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability({ gemini: "missing" }),
+      availability: allAvailability({ codex: "missing" }),
       isInitialized: true,
     });
 
@@ -345,6 +383,9 @@ describe("help.launchAgent", () => {
       projectPath: "/repo",
       agentId: "claude",
       context: {},
+      // #12108: the action names its lane explicitly rather than letting main
+      // default it, so the session it mints is the one it binds into.
+      slot: 0,
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -565,5 +606,49 @@ describe("help.launchAgent", () => {
     await action.run(undefined, stubCtx);
 
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-fail");
+  });
+
+  it("revokes and removes the terminal when the lane is closed mid-launch (#12108)", async () => {
+    // The lane is read before the provision await and used to bind after the
+    // dispatch. `setTerminal` refuses a lane that is gone, so without an
+    // explicit teardown the spawned PTY would keep a live bearer while
+    // belonging to no lane — and no longer be filtered out of the dock.
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({
+      currentProject: { id: "proj-1", path: "/repo" },
+      isBootstrapped: true,
+    });
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-orphan",
+      sessionPath: "/sessions/sess-orphan",
+      token: "tok-orphan",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 1,
+    });
+
+    const lane = useHelpPanelStore.getState().openSlot();
+    expect(lane).toBe(1);
+    // The user hits the tab's close button while provision/dispatch is still
+    // outstanding.
+    mockDispatch.mockImplementation(async () => {
+      useHelpPanelStore.getState().closeSlot(1);
+      return { ok: true, result: { terminalId: "term-orphan" } };
+    });
+
+    try {
+      await action.run(undefined, stubCtx);
+    } finally {
+      mockDispatch.mockReset();
+      useHelpPanelStore.setState({ sessions: { 0: useHelpPanelStore.getState().sessions[0]! } });
+      useHelpPanelStore.getState().setActiveSlot(0);
+    }
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-orphan");
+    expect(mockRemovePanel).toHaveBeenCalledWith("term-orphan");
+    expect(window.electron.help.markTerminal).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().sessions[1]).toBeUndefined();
   });
 });

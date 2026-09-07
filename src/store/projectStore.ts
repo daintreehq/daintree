@@ -16,6 +16,7 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { useHelpPanelStore } from "./helpPanelStore";
+import { ASSISTANT_SLOTS, assistantSlotKey } from "../../shared/config/assistantSlots";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
@@ -37,7 +38,13 @@ import {
   getWorktreeSelectionSnapshot,
   getWorktreeIdSet,
 } from "./storeAccessors";
-import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+import type {
+  ProjectSwitchEntryPoint,
+  ProjectSwitchOutgoingState,
+} from "@shared/types/ipc/project";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { flushPendingPerfMarks } from "@/utils/performance";
+import { beginSwitchTrace, consumeSwitchTrace, markSwitch } from "@/utils/switchTrace";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -245,7 +252,11 @@ interface ProjectState {
   createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
   switchProject: (
     projectId: string,
-    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
+    options?: {
+      focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent;
+      /** Perf-trace entry point when no gesture site minted a trace first. */
+      entryPoint?: ProjectSwitchEntryPoint;
+    }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
   clearSwitching: () => void;
@@ -271,7 +282,10 @@ interface ProjectState {
    * this one is showing.
    */
   dropToNoProject: () => void;
-  reopenProject: (projectId: string) => Promise<void>;
+  reopenProject: (
+    projectId: string,
+    options?: { entryPoint?: ProjectSwitchEntryPoint }
+  ) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
   openGitInitDialog: (
@@ -353,11 +367,16 @@ function cancelProjectReadRequests(): void {
 function migrateHibernateSession(fromProjectId: string, toProjectId: string, newCwd: string): void {
   try {
     const helpPanel = useHelpPanelStore.getState();
-    const orphaned = helpPanel.hibernateSessions?.[fromProjectId];
-    if (orphaned) {
-      helpPanel.setHibernateSession(toProjectId, { ...orphaned, cwd: newCwd });
+    // Every lane (#12108) — the project may have hibernated more than one
+    // conversation, and leaving a sibling keyed to the old project id strands
+    // it under an id nothing will ever look up again.
+    for (const slot of ASSISTANT_SLOTS) {
+      const orphaned = helpPanel.hibernateSessions?.[assistantSlotKey(fromProjectId, slot)];
+      if (orphaned) {
+        helpPanel.setHibernateSession(toProjectId, slot, { ...orphaned, cwd: newCwd });
+      }
+      helpPanel.clearHibernateSession(fromProjectId, slot);
     }
-    helpPanel.clearHibernateSession(fromProjectId);
   } catch (error) {
     logErrorWithContext(error, {
       operation: "migrate_hibernate_session",
@@ -378,11 +397,15 @@ function migrateHibernateSession(fromProjectId: string, toProjectId: string, new
 function rebaseHibernateSessionCwd(projectId: string, oldPath: string, newPath: string): void {
   try {
     const helpPanel = useHelpPanelStore.getState();
-    const session = helpPanel.hibernateSessions?.[projectId];
-    if (!session) return;
-    const nextCwd = rebaseAbsolutePath(session.cwd, oldPath, newPath);
-    if (nextCwd === session.cwd) return;
-    helpPanel.setHibernateSession(projectId, { ...session, cwd: nextCwd });
+    // Each lane captured its own cwd under the old root, so each needs its own
+    // rebase (#12108).
+    for (const slot of ASSISTANT_SLOTS) {
+      const session = helpPanel.hibernateSessions?.[assistantSlotKey(projectId, slot)];
+      if (!session) continue;
+      const nextCwd = rebaseAbsolutePath(session.cwd, oldPath, newPath);
+      if (nextCwd === session.cwd) continue;
+      helpPanel.setHibernateSession(projectId, slot, { ...session, cwd: nextCwd });
+    }
   } catch (error) {
     logErrorWithContext(error, {
       operation: "rebase_hibernate_session_cwd",
@@ -799,6 +822,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchProject: async (projectId, options) => {
     if (get().currentProject?.id === projectId) return;
     const requestId = ++projectTransitionRequestId;
+    // Adopt the trace the gesture site minted (keydown/click instant), else
+    // start one here so every switch is traceable, API-driven ones included.
+    const trace = consumeSwitchTrace() ?? beginSwitchTrace(options?.entryPoint ?? "api");
+    const traceMeta: Record<string, unknown> = { ...trace };
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_INTENT, { ...traceMeta, targetProjectId: projectId });
 
     // Drop fleet arming selections synchronously — the outgoing view's armed
     // set is project-scoped and must not leak if the view is later restored
@@ -824,6 +852,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     });
 
     await yieldToPaint();
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_BUSY_PAINTED, traceMeta);
     // A newer transition started while we yielded — let it own the switch so a
     // stale snapshot/IPC can't clobber it.
     if (requestId !== projectTransitionRequestId) return;
@@ -836,6 +865,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (currentProjectId) {
       panelPersistence.flush();
       await panelPersistence.whenIdle().catch(() => {});
+      markSwitch(PERF_MARKS.PROJECT_SWITCH_PERSIST_IDLE, traceMeta);
       if (requestId !== projectTransitionRequestId) return;
     }
 
@@ -843,11 +873,21 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // view is not detached until the main process handles the IPC, so the panel
     // store still reflects the outgoing project here.
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_SNAPSHOT_BUILT, {
+      ...traceMeta,
+      terminalCount: outgoingState?.terminals?.length ?? 0,
+      tabGroupCount: outgoingState?.tabGroups?.length ?? 0,
+    });
 
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
-    projectClient.switch(projectId, outgoingState, options).catch((error) => {
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
+    // Drain now: this view is about to be detached and its steady-state flush
+    // may never tick again before it is cached or evicted.
+    flushPendingPerfMarks();
+    const { entryPoint: _entryPoint, ...switchOptions } = options ?? {};
+    projectClient.switch(projectId, outgoingState, { ...switchOptions, trace }).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
       }
@@ -976,7 +1016,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         set({ currentProject: null });
       }
       useUrlHistoryStore.getState().removeProjectHistory(id);
-      useHelpPanelStore.getState().clearHibernateSession(id);
+      for (const slot of ASSISTANT_SLOTS) {
+        useHelpPanelStore.getState().clearHibernateSession(id, slot);
+      }
       set({ isLoading: false });
     } catch (error) {
       logErrorWithContext(error, {
@@ -1121,9 +1163,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
   },
 
-  reopenProject: async (projectId) => {
+  reopenProject: async (projectId, options) => {
     const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
+    const trace = consumeSwitchTrace() ?? beginSwitchTrace(options?.entryPoint ?? "api");
+    const traceMeta: Record<string, unknown> = { ...trace };
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_INTENT, { ...traceMeta, targetProjectId: projectId });
 
     // Flip the busy/switch flags first, then yield so the click stays responsive
     // before the heavy outgoing-state snapshot + IPC (see switchProject for the why).
@@ -1136,6 +1181,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     });
 
     await yieldToPaint();
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_BUSY_PAINTED, traceMeta);
     if (requestId !== projectTransitionRequestId) return;
 
     // Settle pending/in-flight layout autosave so the outgoing delta is
@@ -1143,11 +1189,19 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (currentProjectId) {
       panelPersistence.flush();
       await panelPersistence.whenIdle().catch(() => {});
+      markSwitch(PERF_MARKS.PROJECT_SWITCH_PERSIST_IDLE, traceMeta);
       if (requestId !== projectTransitionRequestId) return;
     }
 
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
-    projectClient.reopen(projectId, outgoingState).catch((error) => {
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_SNAPSHOT_BUILT, {
+      ...traceMeta,
+      terminalCount: outgoingState?.terminals?.length ?? 0,
+      tabGroupCount: outgoingState?.tabGroups?.length ?? 0,
+    });
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
+    flushPendingPerfMarks();
+    projectClient.reopen(projectId, outgoingState, { trace }).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
       }

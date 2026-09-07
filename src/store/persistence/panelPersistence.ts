@@ -2,7 +2,11 @@ import type { TerminalInstance, PanelSnapshot, TabGroup } from "@/types";
 import { projectClient } from "@/clients";
 import { debounce } from "@/utils/debounce";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
-import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import {
+  getPanelKindConfig,
+  isProjectQualifiedPanelKindId,
+} from "@shared/config/panelKindRegistry";
+import { persistedKindKey, toPersistedKindFields } from "@shared/utils/panelKindPersistence";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import {
   computeIdArrayDelta,
@@ -30,12 +34,14 @@ export interface PanelPersistenceOptions {
 const BASE_PANEL_FIELDS = [
   "id",
   "kind",
+  "kindRef",
   "title",
   "titleMode",
   "worktreeId",
   "worktreeGitDir",
   "location",
   "extensionState",
+  "extensionStateVersion",
   "pluginId",
   "createdAt",
   "lastActiveAt",
@@ -70,27 +76,74 @@ export function panelToSnapshot(
   const worktreeGitDir =
     liveGitDir ??
     (previousSnapshot?.worktreeId === t.worktreeId ? previousSnapshot?.worktreeGitDir : undefined);
+
+  const config = getPanelKindConfig(t.kind ?? "terminal");
+
+  // A project-local plugin's runtime kind embeds THIS machine's project id, so
+  // storing it verbatim pins the layout to the identity that wrote it (#12280).
+  // Ownership is asked of the registry first and of the panel's own creation-time
+  // stamp second, because the registry entry is gone the moment the plugin is
+  // disabled — and a disabled plugin's panel is exactly the one whose kind must
+  // still round-trip correctly. The qualified id itself is the last resort, for
+  // a panel that predates the `pluginId` stamp entirely.
+  const pluginOwned =
+    config?.extensionId !== undefined ||
+    t.pluginId !== undefined ||
+    isProjectQualifiedPanelKindId(t.kind ?? "");
+  const { kind, kindRef } = toPersistedKindFields(
+    t.kind ?? "",
+    pluginOwned,
+    config?.pluginManifestId ?? config?.extensionId ?? t.pluginId
+  );
+  const persistedPluginId = kindRef?.pluginId ?? t.pluginId;
+
   const base: PanelSnapshot = {
     id: t.id,
-    kind: t.kind,
+    // Preserve `kind: undefined` for a panel that never had one rather than
+    // writing the empty string `toPersistedKindFields` was handed.
+    kind: t.kind === undefined ? undefined : kind,
+    ...(kindRef !== undefined && { kindRef }),
     title: t.title,
     ...(t.titleMode !== undefined && { titleMode: t.titleMode }),
     worktreeId: t.worktreeId,
     ...(worktreeGitDir !== undefined && { worktreeGitDir }),
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
-    ...(t.pluginId !== undefined && { pluginId: t.pluginId }),
+    // Written only alongside a bag, and only ever the version the record
+    // already carries. Re-deriving it from the registry here would re-stamp a
+    // bag the plugin never rewrote — the exact silent corruption the version
+    // exists to prevent — so the number moves only at the write gate
+    // (`setPanelExtensionState`) or at creation (#12280).
+    ...(t.extensionState !== undefined &&
+      t.extensionStateVersion !== undefined && {
+        extensionStateVersion: t.extensionStateVersion,
+      }),
+    // The MANIFEST id, never the runtime one. A project plugin registers under
+    // an instance key (`project__{projectId}__{manifestId}`), so persisting
+    // `t.pluginId` verbatim writes this machine's project id into the layout
+    // just as surely as the qualified kind did — fixing only `kind` would leave
+    // the same bug in the field beside it (#12280). The ref already carries the
+    // manifest id, split off the runtime kind by the registry's own parser.
+    ...(persistedPluginId !== undefined && { pluginId: persistedPluginId }),
     ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
     ...(t.lastActiveAt !== undefined && { lastActiveAt: t.lastActiveAt }),
   };
-
-  const config = getPanelKindConfig(t.kind ?? "terminal");
 
   if (!config?.serialize) {
     // Unregistered kind (extension disabled mid-session, plugin not yet loaded,
     // or renamed in code). Preserve previously-persisted kind-specific fields
     // so a save cycle doesn't silently erase extension state.
-    if (previousSnapshot && previousSnapshot.id === t.id && previousSnapshot.kind === t.kind) {
+    // Compared on the PERSISTED identity of the kind, not the raw string: the
+    // live runtime id no longer equals the persisted one for a project plugin
+    // kind, and the first save after upgrading meets a previous snapshot still
+    // holding the old qualified form. A raw comparison fails both, and failing
+    // it silently drops the very extension state this branch exists to preserve
+    // (#12280, #5342).
+    if (
+      previousSnapshot &&
+      previousSnapshot.id === t.id &&
+      persistedKindKey(previousSnapshot) === persistedKindKey(base)
+    ) {
       const preserved: Record<string, unknown> = {};
       const prev = previousSnapshot as unknown as Record<string, unknown>;
       for (const key of Object.keys(prev)) {

@@ -91,12 +91,22 @@ export function createTerminalSessionSnapshotter(
   return new SessionSnapshotter(snapshotterHost);
 }
 
+type CaptureTrigger = "periodic" | "event";
+
 export class SessionSnapshotter {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
+  // One in-flight flag for both triggers: a capture already running covers the
+  // buffer either of them would serialize, so the second trigger records a
+  // follow-up instead of starting a duplicate serialize + write.
   private inFlight = false;
   private lastEventDrivenFlushAt = -Infinity;
-  private eventDrivenInFlight = false;
+  private pendingEventFlush = false;
+  // Shared "already persisted" identity, stamped by whichever trigger wrote
+  // last. contentEpoch covers geometry as well as output — resize reflow,
+  // geometry resync and preserved-snapshot capture all bump it — so an
+  // unchanged epoch means the bytes on disk are the bytes we would write, and
+  // no separate cols/rows key is needed.
   private lastFlushedEpoch = -1;
   private disposed = false;
 
@@ -110,74 +120,81 @@ export class SessionSnapshotter {
     if (this.disposed) return;
 
     this.dirty = true;
+    // Anchored, not refreshed: an armed timer keeps its original deadline so
+    // sustained output cannot push the durability write out indefinitely.
     if (this.timer) return;
 
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.persistAsync();
+      void this.captureAsync("periodic");
     }, SESSION_SNAPSHOT_DEBOUNCE_MS);
   }
 
-  private async persistAsync(): Promise<void> {
-    if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
-    if (isSessionPersistSuppressed()) return;
-    if (this.host.launchAgentId) return;
-    if (this.host.wasKilled) return;
-    if (this.disposed) return;
-    if (!this.dirty) return;
-    if (this.inFlight) return;
-
-    this.inFlight = true;
-    try {
-      this.dirty = false;
-      const state = await (this.host.hasBannerMarkers()
-        ? this.host.serializeForPersistence()
-        : this.host.getSerializedStateAsync());
-      // Re-check lifecycle after the await — a kill or dispose during async
-      // serialize would otherwise stomp the sync snapshot written from kill().
-      if (this.disposed || this.host.wasKilled) return;
-      if (!state) return;
-      await persistSessionSnapshotAsync(this.host.id, state);
-    } catch (error) {
-      console.warn(`[TerminalProcess] Failed to persist session for ${this.host.id}:`, error);
-    } finally {
-      this.inFlight = false;
-      if (!this.disposed && this.dirty) {
-        this.schedule();
-      }
-    }
-  }
-
   flushEventDriven(): void {
-    void this.flushEventDrivenAsync();
+    void this.captureAsync("event");
   }
 
-  // Async event-driven flush fired on agent state settles (waiting/completed/
-  // exited). Mirrors persistAsync()'s banner-branch + post-await lifecycle
-  // re-check so serializing up to 10k lines no longer blocks the pty-host event
-  // loop on every transition. Two short-circuits keep it cheap: an unchanged
-  // contentEpoch skips serialization entirely, and a 2s throttle caps churn from
-  // rapid changed-content transitions.
-  private async flushEventDrivenAsync(): Promise<void> {
+  // The one capture path behind both triggers. What stays per-trigger is the
+  // eligibility gate and the timing — periodic is debounced 5s and skips agent
+  // terminals, event-driven is throttled 2s and includes them. What is shared
+  // is the in-flight flag, the persisted-epoch identity, and the serialize +
+  // write itself.
+  //
+  // These were two independent routines with no common state until #12237, so
+  // the end of every agent turn paid for the same buffer twice: the last output
+  // chunk armed the debounce, the FSM settle fired the event flush and
+  // serialized immediately, and the timer then fired and serialized identical
+  // content because it had never looked at the epoch.
+  //
+  // Serializing up to 10k lines must not block the pty-host event loop, so the
+  // work is async and every await is followed by a lifecycle re-check.
+  private async captureAsync(trigger: CaptureTrigger): Promise<void> {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
     if (isSessionPersistSuppressed()) return;
+    // Agent terminals are event-driven only: their scrollback is captured on a
+    // state settle, never on the debounce.
+    if (trigger === "periodic" && this.host.launchAgentId) return;
     if (this.host.wasKilled) return;
     if (this.disposed) return;
+    if (trigger === "periodic" && !this.dirty) return;
 
     // Buffer unchanged since the last persisted snapshot — nothing to write.
     // Checked before the throttle so an unchanged flush never consumes the
     // throttle window a later changed-content flush needs.
+    //
+    // Only a PERIODIC trigger discharges `dirty` here: it is that deadline's own
+    // pending work, and finding it already on disk is what makes the debounce a
+    // no-op. An event call finding coverage says nothing about the debounce, and
+    // clearing it would let an unchanged settle swallow a later geometry-only
+    // change — resize bumps contentEpoch without calling schedule(), so the
+    // timer would bail at `!dirty` before ever comparing the newer epoch.
     const epoch = this.host.contentEpoch;
-    if (epoch === this.lastFlushedEpoch) return;
+    if (epoch === this.lastFlushedEpoch) {
+      if (trigger === "periodic") this.dirty = false;
+      return;
+    }
 
     const now = performance.now();
-    if (now - this.lastEventDrivenFlushAt < EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS) return;
+    if (
+      trigger === "event" &&
+      now - this.lastEventDrivenFlushAt < EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS
+    ) {
+      return;
+    }
 
-    // Drop overlapping flushes: the in-flight one already covers this settle.
-    if (this.eventDrivenInFlight) return;
-    this.eventDrivenInFlight = true;
-    this.lastEventDrivenFlushAt = now;
+    if (this.inFlight) {
+      // A capture is already running. Record the request rather than starting a
+      // second serialize of the same buffer; the finally block hands it back to
+      // this path once the current write lands. Periodic work needs no flag —
+      // `dirty` is still set and finally re-arms the debounce for it.
+      if (trigger === "event") this.pendingEventFlush = true;
+      return;
+    }
+
+    this.inFlight = true;
+    if (trigger === "event") this.lastEventDrivenFlushAt = now;
     try {
+      if (trigger === "periodic") this.dirty = false;
       const state = await (this.host.hasBannerMarkers()
         ? this.host.serializeForPersistence()
         : this.host.getSerializedStateAsync());
@@ -188,12 +205,34 @@ export class SessionSnapshotter {
       await persistSessionSnapshotAsync(this.host.id, state);
       // Mark coverage only after a successful persist. Uses the entry epoch, so
       // content that changed mid-serialize (epoch > entry) still triggers a
-      // later flush.
+      // later flush. contentEpoch counts chunk RECEIPT, not parse completion,
+      // so coverage means "the buffer as it serialized" — a chunk still queued
+      // in HeadlessMirrorScheduler lands in the next capture. flushSyncOnKill
+      // is the unconditional backstop on shutdown.
+      //
+      // `dirty` is deliberately NOT cleared here. Resize reflow and mirror
+      // geometry repair bump contentEpoch without calling schedule(), so a
+      // capture that cleared `dirty` would make the pending timer bail at its
+      // `!dirty` guard before ever looking at the newer epoch — and take
+      // flushSyncOnDispose's teardown write with it. The epoch check below is
+      // what makes the pending debounce a no-op when it is genuinely covered.
       this.lastFlushedEpoch = epoch;
     } catch (error) {
-      console.warn(`[TerminalProcess] Event-driven snapshot failed for ${this.host.id}:`, error);
+      console.warn(
+        trigger === "periodic"
+          ? `[TerminalProcess] Failed to persist session for ${this.host.id}:`
+          : `[TerminalProcess] Event-driven snapshot failed for ${this.host.id}:`,
+        error
+      );
     } finally {
-      this.eventDrivenInFlight = false;
+      this.inFlight = false;
+      if (!this.disposed) {
+        if (this.pendingEventFlush) {
+          this.pendingEventFlush = false;
+          void this.captureAsync("event");
+        }
+        if (this.dirty) this.schedule();
+      }
     }
   }
 
@@ -267,5 +306,6 @@ export class SessionSnapshotter {
       this.timer = null;
     }
     this.dirty = false;
+    this.pendingEventFlush = false;
   }
 }

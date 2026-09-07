@@ -4,12 +4,20 @@ import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
+const GLOBAL_IDENTITY = {
+  instanceId: "acme.demo",
+  manifestId: "acme.demo",
+  origin: "global" as const,
+  projectId: null,
+  projectRoot: null,
+};
+
 function makeProxy() {
   const sent: any[] = [];
   const post = vi.fn((msg: any) => {
     sent.push(msg);
   });
-  const proxy = new PluginDevWorkerHostProxy("acme.demo", post);
+  const proxy = new PluginDevWorkerHostProxy("acme.demo", post, GLOBAL_IDENTITY);
   return { proxy, post, sent };
 }
 
@@ -144,6 +152,46 @@ function resolveCall(proxy: any, sent: any[], method: string, result: unknown): 
   const call = [...sent].reverse().find((m) => m.type === "host-call" && m.method === method);
   proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result });
 }
+
+describe("PluginDevWorkerHostProxy getWorktreesResult (#12174)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays the call and resolves with the union unchanged", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.getWorktreesResult();
+    expect(
+      sent.find((m) => m.type === "host-call" && m.method === "getWorktreesResult")
+    ).toBeDefined();
+    const envelope = { status: "ok", projectId: "project-1", worktrees: [] };
+    resolveCall(proxy, sent, "getWorktreesResult", envelope);
+    await expect(promise).resolves.toEqual(envelope);
+  });
+
+  it("resolves to plugin-unloaded for a call made after disposal", async () => {
+    // The other callWithGrace branch: nothing is in flight, so the grace value
+    // is returned without anything crossing the port.
+    const { proxy, sent } = makeProxy();
+    proxy.dispose();
+    await expect(proxy.host.getWorktreesResult()).resolves.toEqual({
+      status: "unavailable",
+      reason: "plugin-unloaded",
+    });
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("resolves an in-flight call to plugin-unloaded when the proxy is disposed", async () => {
+    // The real host degrades rather than throwing once the plugin unloads, so a
+    // dev-hosted plugin must observe the same contract.
+    const { proxy } = makeProxy();
+    const promise = proxy.host.getWorktreesResult();
+    proxy.dispose();
+    await expect(promise).resolves.toEqual({
+      status: "unavailable",
+      reason: "plugin-unloaded",
+    });
+  });
+});
 
 describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -453,6 +501,61 @@ describe("PluginDevWorkerHostProxy panel lifecycle (#11301)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy system wake (#12175)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens a system-wake subscription and routes events to the callback", async () => {
+    const { proxy, sent } = makeProxy();
+    const onEvent = vi.fn();
+    const dispose = await proxy.host.onDidWake(onEvent);
+
+    // The kind is the routing key on main — a wrong or missing one would fall
+    // through the bridge's chain and be wired to an unrelated host event.
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "system-wake");
+    expect(sub).toBeDefined();
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { sleepDuration: 42_000, timestamp: 1234 },
+    } as any);
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ sleepDuration: 42_000, timestamp: 1234 })
+    );
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("freezes the delivered event even though the port hop strips main's freeze", async () => {
+    const { proxy, sent } = makeProxy();
+    const received: any[] = [];
+    await proxy.host.onDidWake((e) => received.push(e));
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "system-wake");
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { sleepDuration: 0, timestamp: 7 },
+    } as any);
+
+    // Length first: `Object.isFrozen(undefined)` is `true`, so a callback that
+    // never fired would pass the freeze assertion on its own.
+    expect(received).toHaveLength(1);
+    expect(Object.isFrozen(received[0])).toBe(true);
+  });
+
+  it("rejects a subscription opened after the activation window closes", async () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.onDidWake(vi.fn())).toThrow(/onDidWake/);
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
@@ -508,10 +611,61 @@ describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
     const post = vi.fn(() => {
       throw new Error("DataCloneError: value could not be cloned");
     });
-    const proxy = new PluginDevWorkerHostProxy("acme.demo", post);
+    const proxy = new PluginDevWorkerHostProxy("acme.demo", post, GLOBAL_IDENTITY);
     await expect(proxy.host.getWorktrees()).rejects.toThrow(/could not be cloned/);
     // The proxy isn't wedged — the failed call posted exactly once and rejected.
     expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("PluginDevWorkerHostProxy prompt cancellation (#12279)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("resolves the dismiss value and posts host-cancel when the signal aborts", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+
+    const promise = proxy.host.showConfirm({ title: "Sure?" }, { signal: controller.signal });
+    const call = sent.find((m) => m.type === "host-call");
+    expect(call.method).toBe("showConfirm");
+
+    controller.abort();
+
+    // A cancelled prompt is a dismissal, not a failure.
+    await expect(promise).resolves.toBe(false);
+    expect(sent).toContainEqual({ type: "host-cancel", requestId: call.requestId });
+  });
+
+  it("never sends an already-aborted prompt", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      proxy.host.showQuickPick([{ id: "a", label: "A" }], {}, { signal: controller.signal })
+    ).resolves.toBeUndefined();
+    expect(sent.filter((m) => m.type === "host-call")).toHaveLength(0);
+  });
+
+  it("still throws a genuine error when the signal aborts after it (#12279)", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+
+    const promise = proxy.host.showConfirm({ title: "Sure?" }, { signal: controller.signal });
+    const call = sent.find((m) => m.type === "host-call");
+
+    // The host rejects for a real reason, and only then does the caller give up.
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "options.title must be a string",
+    } as any);
+    controller.abort();
+
+    // Settling the grace value on signal state alone would rewrite this real
+    // validation failure into a silent dismissal.
+    await expect(promise).rejects.toThrow(/options.title must be a string/);
   });
 });
 
@@ -661,5 +815,170 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
 
     const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
     expect(notify.params.descriptor.requires).toBeUndefined();
+  });
+});
+
+describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {
+  let cmdDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    cmdDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-cmd-proxy-"));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    const fs = await import("node:fs/promises");
+    await fs.rm(cmdDir, { recursive: true, force: true });
+  });
+
+  /** Write a handler module and return its absolute path. */
+  async function writeHandler(name: string, source: string): Promise<string> {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    await fs.writeFile(path.join(cmdDir, `${name}.mjs`), source);
+    return path.join(cmdDir, `${name}.mjs`);
+  }
+
+  function dispatch(
+    proxy: PluginDevWorkerHostProxy,
+    requestId: string,
+    resolvedPath: string,
+    args: unknown
+  ): void {
+    proxy.handleMessage({
+      type: "invoke",
+      requestId,
+      kind: "command",
+      namespacedId: "acme.demo.run",
+      resolvedPath,
+      args,
+    } as any);
+  }
+
+  /**
+   * `handleInvoke` is fired-and-forgotten, and this path awaits a REAL
+   * filesystem ESM import — far more turns than the microtask flush the
+   * in-memory tests use. Resolve off `post` rather than polling, so the wait is
+   * bounded by vitest's own test timeout instead of a hand-picked deadline that
+   * could expire before the production 5s import budget does.
+   */
+  function makeCommandProxy() {
+    const sent: any[] = [];
+    const waiters = new Map<string, (msg: any) => void>();
+    const post = vi.fn((msg: any) => {
+      sent.push(msg);
+      if (msg.type === "invoke-result") waiters.get(msg.requestId)?.(msg);
+    });
+    const proxy = new PluginDevWorkerHostProxy("acme.demo", post, GLOBAL_IDENTITY);
+    const resultOf = (requestId: string): Promise<any> => {
+      const already = sent.find((m) => m.type === "invoke-result" && m.requestId === requestId);
+      if (already) return Promise.resolve(already);
+      return new Promise((resolve) => waiters.set(requestId, resolve));
+    };
+    return { proxy, post, sent, resultOf };
+  }
+
+  it("imports the module main resolved and calls its default export", async () => {
+    const { proxy, resultOf } = makeCommandProxy();
+    const file = await writeHandler("ok", `export default async (args) => ({ echoed: args })`);
+
+    dispatch(proxy, "c1", file, { n: 1 });
+
+    expect(await resultOf("c1")).toMatchObject({
+      type: "invoke-result",
+      ok: true,
+      result: { echoed: { n: 1 } },
+    });
+  });
+
+  it("replies with an error when the module has no callable default export", async () => {
+    const { proxy, resultOf } = makeCommandProxy();
+    const file = await writeHandler("nodef", `export const named = 1`);
+
+    dispatch(proxy, "c1", file, {});
+
+    const result = await resultOf("c1");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no callable default export/);
+  });
+
+  it("replies with an error when the module cannot be imported", async () => {
+    const { proxy, resultOf } = makeCommandProxy();
+    const path = await import("node:path");
+
+    dispatch(proxy, "c1", path.join(cmdDir, "does-not-exist.mjs"), {});
+
+    expect(await resultOf("c1")).toMatchObject({ ok: false });
+  });
+
+  it("does not cache a failed import, so a later dispatch can succeed", async () => {
+    // Only a timeout is genuinely transient, but caching the rejection would
+    // turn one slow first import into a permanently dead command.
+    const { proxy, resultOf } = makeCommandProxy();
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const file = path.join(cmdDir, "late.mjs");
+
+    dispatch(proxy, "c1", file, {});
+    expect(await resultOf("c1")).toMatchObject({ ok: false });
+
+    await fs.writeFile(file, `export default () => "arrived"`);
+    dispatch(proxy, "c2", file, {});
+    expect(await resultOf("c2")).toMatchObject({ ok: true, result: "arrived" });
+  });
+
+  it("keeps concurrent dispatches of one command independent", async () => {
+    // Native ESM already coalesces module EVALUATION, so this does not prove the
+    // single-flight map; what it does prove is that two dispatches sharing one
+    // import each get their own call and their own result, correlated correctly.
+    const { proxy, resultOf } = makeCommandProxy();
+    const file = await writeHandler("concurrent", `export default async (args) => args.id`);
+
+    dispatch(proxy, "c1", file, { id: "first" });
+    dispatch(proxy, "c2", file, { id: "second" });
+
+    expect(await resultOf("c1")).toMatchObject({ ok: true, result: "first" });
+    expect(await resultOf("c2")).toMatchObject({ ok: true, result: "second" });
+  });
+
+  it("does not run the handler when the plugin was disposed mid-import", async () => {
+    const { proxy, resultOf } = makeCommandProxy();
+    // The module records its own invocation, so "did not run" is asserted, not
+    // merely implied by the error text.
+    const file = await writeHandler(
+      "disposed",
+      `export const calls = []; export default () => { calls.push(1); return "should not run"; };`
+    );
+
+    dispatch(proxy, "c1", file, {});
+    // `await` yields even on an already-settled promise, so a synchronous
+    // dispose here always lands before the handler would be called — the
+    // ordering does not depend on how slow the import is.
+    proxy.dispose();
+
+    const result = await resultOf("c1");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/disposed before command/);
+    const { pathToFileURL } = await import("node:url");
+    const mod = (await import(pathToFileURL(file).href)) as { calls: number[] };
+    expect(mod.calls).toHaveLength(0);
+  });
+
+  it("appends the arity hint against the plugin's own handler (#12214)", async () => {
+    // Main only ever sees the synthetic RPC thunk, so the hint has to be
+    // applied here, where the author's real closure is.
+    const { proxy, resultOf } = makeCommandProxy();
+    const file = await writeHandler("arity", `export default (ctx, args) => args.value`);
+
+    dispatch(proxy, "c1", file, { value: 1 });
+
+    const result = await resultOf("c1");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/Daintree hint:/);
+    expect(result.error).toMatch(/only parameter/);
   });
 });

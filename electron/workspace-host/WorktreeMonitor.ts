@@ -6,12 +6,15 @@ import type {
   Worktree,
   WorktreeMood,
   WorktreeLifecycleStatus,
+  WorktreeSetupStatus,
   WorktreeLifecyclePhaseResult,
   WslGitEligibility,
 } from "../../shared/types/worktree.js";
+import { WORKTREE_SETUP_ERROR_MAX_LENGTH } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
-import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
+import type { WorktreeSnapshot, WorkspaceFetchResult } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
+import { clearGitDirCache } from "../utils/gitUtils.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { deriveIssueTitleFromBranch } from "../services/issueExtractor.js";
 import { FetchScheduler, type FetchSchedulerHost } from "./FetchScheduler.js";
@@ -91,13 +94,15 @@ export interface WorktreeMonitorCallbacks {
    * Schedule a background `git fetch` for this worktree's repo. Routed through
    * `WorkspaceService` so per-repo serialization and failure-cache state are
    * shared across sibling monitors. Resolves regardless of fetch outcome.
-   * `force` bypasses the per-repo failure cache (manual user-triggered refresh).
+   * `force` bypasses the per-repo failure cache (manual user-triggered refresh);
+   * `prune` is left undefined on scheduled paths, which prunes (#12091).
    */
   onScheduleFetch?: (
     worktreeId: string,
     isCurrent: boolean,
-    force: boolean
-  ) => Promise<void> | void;
+    force: boolean,
+    prune?: boolean
+  ) => Promise<WorkspaceFetchResult | void> | WorkspaceFetchResult | void;
 }
 
 export class WorktreeMonitor {
@@ -179,6 +184,11 @@ export class WorktreeMonitor {
   // snapshot dedup and carried through the store's side map like the
   // git-status-checked timestamp.
   private _workingTreeChangedAt: number = 0;
+  /**
+   * Directories the burst behind `_workingTreeChangedAt` touched, or `null`
+   * when it could not be described. `undefined` until the first flush.
+   */
+  private _workingTreeChangedDirs: readonly string[] | null | undefined = undefined;
   // Stamped by the watcher's onTriggerUpdate hook before a forced refresh
   // fires. The stat pre-check compares against `lastStatBaselineAt` to know
   // whether an event arrived since the baseline was captured — if so, the
@@ -192,6 +202,7 @@ export class WorktreeMonitor {
   // Extra state
   private _createdAt: number | undefined;
   private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
+  private _setupStatus: WorktreeSetupStatus | undefined;
   // Accumulated per-phase teardown results. Lifecycle owned by
   // WorktreeLifecycleService.runLifecycleTeardown (cleared at run start, upserted
   // per phase) so a later phase no longer overwrites an earlier phase's outcome.
@@ -342,10 +353,10 @@ export class WorktreeMonitor {
       get hasFetchCallback() {
         return Boolean(monitor.callbacks.onScheduleFetch);
       },
-      onExecuteFetch: (force: boolean) => {
+      onExecuteFetch: (force: boolean, prune?: boolean) => {
         const cb = monitor.callbacks.onScheduleFetch;
         if (!cb) return;
-        return cb(monitor.id, monitor._isCurrent, force);
+        return cb(monitor.id, monitor._isCurrent, force, prune);
       },
       onUpdate: () => monitor.emitUpdate(),
     };
@@ -418,7 +429,7 @@ export class WorktreeMonitor {
         monitor.callbacks.onEmfileLimitReached?.(worktreeId),
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
       onGitConfigChanged: () => monitor.callbacks.onGitConfigChanged?.(monitor.id),
-      onWorktreeFilesChanged: () => monitor.handleWorktreeFilesChanged(),
+      onWorktreeFilesChanged: (affectedDirs) => monitor.handleWorktreeFilesChanged(affectedDirs),
     };
     this.watcherController = new WatcherController(watcherHost);
 
@@ -507,6 +518,9 @@ export class WorktreeMonitor {
       get lifecycleStatus() {
         return monitor._lifecycleStatus;
       },
+      get setupStatus() {
+        return monitor._setupStatus;
+      },
       get lifecyclePhaseResults() {
         return monitor._lifecyclePhaseResults;
       },
@@ -578,6 +592,9 @@ export class WorktreeMonitor {
       },
       get workingTreeChangedAt() {
         return monitor._workingTreeChangedAt;
+      },
+      get workingTreeChangedDirs() {
+        return monitor._workingTreeChangedDirs;
       },
       get fetchAuthFailed() {
         return monitor._fetchAuthFailed;
@@ -1094,6 +1111,10 @@ export class WorktreeMonitor {
     return this._lifecycleStatus;
   }
 
+  get setupStatus(): WorktreeSetupStatus | undefined {
+    return this._setupStatus;
+  }
+
   get hasWatcher(): boolean {
     return this.watcherController.hasWatcher;
   }
@@ -1188,6 +1209,18 @@ export class WorktreeMonitor {
 
   setLifecycleStatus(status: WorktreeLifecycleStatus | undefined): void {
     this._lifecycleStatus = status;
+  }
+
+  /**
+   * Record how far post-create initialization has got. `error` is truncated
+   * here rather than at the call sites: this value rides every snapshot and
+   * reaches model context, so the bound has to hold no matter who writes it.
+   */
+  setSetupStatus(status: WorktreeSetupStatus | undefined): void {
+    this._setupStatus =
+      status && status.error !== undefined
+        ? { ...status, error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+        : status;
   }
 
   get lifecyclePhaseResults(): readonly WorktreeLifecyclePhaseResult[] {
@@ -1475,9 +1508,14 @@ export class WorktreeMonitor {
    * Trigger an immediate background fetch, bypassing the per-repo failure
    * cache. Used by wake handlers and explicit user refresh paths. The
    * coordinator still serializes against any in-flight fetch on the same repo.
+   *
+   * `prune` is undefined for every automatic caller, which prunes as it always
+   * has; the "Fetch" menu row passes `false` to leave remote-tracking refs
+   * alone (#12091). Resolves with the primary remote's result so a
+   * user-triggered fetch can report what actually happened.
    */
-  triggerFetchNow(): Promise<void> {
-    return this.fetchScheduler.triggerNow();
+  triggerFetchNow(prune?: boolean): Promise<WorkspaceFetchResult | void> {
+    return this.fetchScheduler.triggerNow(prune);
   }
 
   /**
@@ -1523,6 +1561,10 @@ export class WorktreeMonitor {
     if (this.isElevated && this.gitWatchEnabled) {
       const budgetReset = this.watcherController.resetRetryBudget();
       if (budgetReset) {
+        // A manual refresh is the recovery escape hatch for a dark watcher.
+        // Drop a transient negative resolution before re-arming, otherwise the
+        // retry simply replays the cached failure against a repo that has healed.
+        clearGitDirCache(this.path);
         this.watcherController.update();
       }
     }
@@ -1882,11 +1924,21 @@ export class WorktreeMonitor {
    * clock adjustment) still strictly increase, so each registers downstream.
    * Before the first status resolves there is no snapshot to emit — the stamp
    * is retained and the first normal snapshot carries it.
+   *
+   * `affectedDirs` rides the same stamp so a subscriber can scope its re-read
+   * to the directories that actually changed (#12244). A retained stamp cannot
+   * carry them: a second flush before the first status would overwrite the
+   * first burst's directories with the second's, and nothing would ever re-read
+   * the difference — so the retained case reports `null` (refresh everything)
+   * rather than a set it cannot prove is complete.
    */
-  private handleWorktreeFilesChanged(): void {
+  private handleWorktreeFilesChanged(affectedDirs: readonly string[] | null): void {
     this._workingTreeChangedAt = Math.max(Date.now(), this._workingTreeChangedAt + 1);
     if (this._hasInitialStatus) {
+      this._workingTreeChangedDirs = affectedDirs;
       this.emitUpdate();
+    } else {
+      this._workingTreeChangedDirs = null;
     }
   }
 

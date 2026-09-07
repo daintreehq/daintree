@@ -106,14 +106,12 @@ const MODE_LABEL: Record<PerfMode, string> = {
   soak: "Soak",
 };
 
+// No error tint on an outside-reference row. The perf suite reports numbers and
+// gates nothing, so a measurement past a reference value is information, not a
+// fault — styling it as an error is a claim the harness no longer makes.
 function BudgetRow({ row }: { row: PerfSummaryRow }) {
   return (
-    <tr
-      className={cn(
-        "border-b border-daintree-border/30",
-        row.failedBudget && "bg-status-error/[0.04]"
-      )}
-    >
+    <tr className="border-b border-daintree-border/30">
       <td className="px-3 py-1.5 text-xs font-mono text-text-primary truncate">{row.name}</td>
       <td className="px-3 py-1.5 text-3xs text-text-secondary font-mono uppercase tracking-wide">
         {MODE_LABEL[row.mode] ?? row.mode}
@@ -122,18 +120,18 @@ function BudgetRow({ row }: { row: PerfSummaryRow }) {
         {row.p95Ms.toFixed(1)}
       </td>
       <td className="px-3 py-1.5 text-xs">
-        {row.failedBudget ? (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-status-error/30 bg-status-error/15 text-status-error">
-            Over budget
+        {row.outsideReference ? (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-border-strong bg-overlay-subtle text-text-primary">
+            Outside reference
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-border-default bg-overlay-subtle text-text-secondary">
-            Within budget
+            Within reference
           </span>
         )}
       </td>
       <td className="px-3 py-1.5 text-2xs text-text-secondary truncate">
-        {row.budgetReason ?? ""}
+        {row.referenceNotes ?? ""}
       </td>
     </tr>
   );
@@ -224,7 +222,7 @@ export function PerfContent({ className }: PerfContentProps) {
   const sortedRows = useMemo(() => {
     const copy = summaryRows.slice();
     copy.sort((a, b) => {
-      if (a.failedBudget !== b.failedBudget) return a.failedBudget ? -1 : 1;
+      if (a.outsideReference !== b.outsideReference) return a.outsideReference ? -1 : 1;
       if (a.mode !== b.mode) return a.mode.localeCompare(b.mode);
       return a.name.localeCompare(b.name);
     });

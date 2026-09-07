@@ -56,6 +56,10 @@ declare global {
     };
     __DAINTREE_E2E_MODE__?: boolean;
     __DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__?: boolean;
+    /** Preload bridge for the launch-time `DAINTREE_PERF_CAPTURE=1` flag, which cannot reach the sandboxed renderer via env. */
+    __DAINTREE_PERF_CAPTURE__?: boolean;
+    /** E2E-only: append a renderer perf mark (routes through `markRendererPerformance`). */
+    __daintreeMarkPerf?: (mark: string, meta?: Record<string, unknown>) => void;
     /** Persisted color scheme id seeded by preload for first-paint theming (#9169). */
     __DAINTREE_INITIAL_THEME__?: { colorSchemeId: string };
     /** Destination project id seeded by preload, replacing the `?projectId=` query string (#9162). */

@@ -142,6 +142,121 @@ export interface ActionContext {
    * Purely descriptive — it grants nothing and gates nothing.
    */
   copyTreeRunSource?: CopyTreeRunSource;
+  /**
+   * Whether the host already attested this dispatch as approved. Set by
+   * `ActionService.dispatch` from {@link ActionDispatchOptions.confirmed}
+   * unconditionally, so — like `dispatchSource` — a caller cannot spoof it by
+   * planting a value on `contextOverride`, and a definition cannot read a stale
+   * one left on a shared context object.
+   *
+   * This is the trusted half of a deliberate pair. An action's own `argsSchema`
+   * may also carry a `confirmed` field; that one is client-settable and only
+   * skips the action's inner gate. This one carries the approval the host
+   * actually obtained — the native ConfirmDialog the MCP bridge raised, or a
+   * host-issued grant — which is why `run()` can trust it to mean the user has
+   * already answered. Without it a `danger:"confirm"` action re-asked after the
+   * host modal was approved, staged a second dialog and changed nothing (#12120).
+   *
+   * Deliberately absent for user-source dispatch, where `options.confirmed` is
+   * unset: the in-app dialog is that surface's own confirmation, and its call
+   * sites re-dispatch with `confirmed: true` in args once the user approves.
+   *
+   * Narrow by design — it attests to THIS dispatch's approval and nothing else.
+   * It is not a capability grant: an action still decides for itself what an
+   * approval permits.
+   */
+  hostConfirmed?: boolean;
+  /**
+   * The per-target approvals a selectable host confirmation came back with, for
+   * an action whose dialog let the approver deselect individual targets before
+   * approving (#12123). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostApprovedTargets}, so — like
+   * {@link hostConfirmed} — a caller cannot plant one on `contextOverride`, and
+   * it never appears on the MCP tool surface where a model could name its own
+   * approvals.
+   *
+   * Deliberately here and not in any action's `argsSchema`, for the same reason
+   * {@link copyTreeRunSource} is: publishing it as an argument would let an
+   * agent claim a human unchecked rows they never saw.
+   *
+   * Three states, all distinct. Absent means no selectable confirmation ran, so
+   * an action that needs one must refuse rather than assume every target was
+   * approved. A populated array names exactly the targets kept, and only those.
+   * An empty array means an approval that kept nothing — which the MCP confirm
+   * dialog deliberately does not offer, since unchecking every row is Cancel
+   * with an extra click, so it reaches an action only from a host that chose to
+   * send one. Handled rather than rejected: the honest result is that every
+   * target was excluded, and an action must not read "approved" plus an empty
+   * list as permission to act on the full request.
+   */
+  hostApprovedTargets?: readonly HostApprovedTarget[];
+  /**
+   * The recipe run a human approved in the host confirm dialog, for a dispatch
+   * that spawns a recipe's terminals (#12263). Set by `ActionService.dispatch`
+   * from {@link ActionDispatchOptions.hostApprovedRecipeRun} on the same terms
+   * as {@link hostApprovedTargets}: host-only, never on any `argsSchema`, and
+   * stamped over whatever a `contextOverride` claimed.
+   *
+   * Absent is the default and the fail-safe. It means no dialog listed this
+   * recipe's terminals — an unconfirmed call, or one pre-authorized by a
+   * standing automation grant, which names a tool in Settings and shows nobody
+   * a preview. Those keep the smaller unapproved ceiling
+   * (`MAX_AGENT_RECIPE_TERMINALS`). Present means a human read the terminals
+   * the dialog listed and approved starting them, so the run may start that
+   * many rather than the first three.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
+}
+
+/**
+ * The recipe run one human approval in the host confirm dialog covers (#12263).
+ *
+ * Names WHAT was offered, not merely that something was, in three parts that
+ * together pin the offer to one recipe, one size and one set of commands.
+ *
+ * `recipeId` is the RESOLVED winner: `getRecipeById` follows shadowing, so the
+ * id a caller asked for and the recipe that actually runs can differ (#8725).
+ * `terminalCount` is the blast radius the approver read, so a recipe that grew
+ * between the preview and the run cannot start terminals nobody was offered.
+ * `terminalsDigest` covers the contents, because the first two are satisfied by
+ * a recipe whose commands were rewritten under the same id while the dialog
+ * waited — which is a live window, not a theoretical one, since the composites
+ * await a worktree creation before their recipe runs.
+ *
+ * An approval that fails ANY of the three authorizes nothing at all — not the
+ * unapproved ceiling. The two cases are genuinely different: an absent approval
+ * means nobody was shown anything and the conservative default applies, while a
+ * failed one is positive evidence that what will run is not what was approved.
+ * Falling back there would start terminals off the back of an approval for
+ * something else, so the run reports every index as a failure and the caller
+ * asks again (#8331).
+ */
+export interface HostApprovedRecipeRun {
+  /** The recipe the dialog previewed, after shadow resolution (#8725). */
+  recipeId: string;
+  /** How many terminals the dialog said would start. */
+  terminalCount: number;
+  /** Fingerprint of the terminals it listed — see `recipeApprovalDigest`. */
+  terminalsDigest: string;
+}
+
+/**
+ * One target a human kept selected in a host confirmation that offered
+ * per-target deselection (#12123).
+ *
+ * Carries the state the row was SHOWING when the list froze, not the state at
+ * the moment Approve was clicked. That is the whole point: an approval covers
+ * the consequence the approver was actually shown, so the action re-reads live
+ * state immediately before it commits and skips any target that has since
+ * escalated past what the row said. Without the frozen bit the action could
+ * only skip everything currently running an agent — including the rows whose
+ * "agent running" badge the human read and approved anyway.
+ */
+export interface HostApprovedTarget {
+  /** The target's id, exactly as the confirmation listed it. */
+  id: string;
+  /** Whether the frozen confirmation row showed an agent as running. */
+  observedAgentRunning: boolean;
 }
 
 export type InferActionArgs<S extends z.ZodTypeAny | undefined> = [S] extends [z.ZodTypeAny]
@@ -440,6 +555,19 @@ export interface ActionDispatchOptions {
   contextOverride?: ActionContext;
   /** See {@link ActionContext.copyTreeRunSource}. */
   copyTreeRunSource?: CopyTreeRunSource;
+  /**
+   * Trusted per-target approvals from a selectable host confirmation — NOT a
+   * client-supplied value. See {@link ActionContext.hostApprovedTargets}. Set
+   * only by the MCP renderer bridge, from the rows the approver left checked.
+   */
+  hostApprovedTargets?: readonly HostApprovedTarget[];
+  /**
+   * Trusted record of the recipe a host confirmation offered and a human
+   * approved — NOT a client-supplied value. See
+   * {@link ActionContext.hostApprovedRecipeRun}. Set only by the MCP renderer
+   * bridge, from the preview the approver actually read.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
 }
 
 export interface ActionDispatchPayload {

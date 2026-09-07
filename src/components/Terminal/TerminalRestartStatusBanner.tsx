@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { XCircle, Loader2, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { InlineStatusBanner } from "./InlineStatusBanner";
@@ -16,6 +16,12 @@ export interface TerminalRestartStatusBannerProps {
    * undefined keeps the banner at exactly one control.
    */
   onDismissAll?: () => void;
+  /**
+   * "Find session" (issue #12182), pre-built by the caller — which already
+   * knows whether this pane's agent has one to offer — or `undefined` when it
+   * doesn't. Only meaningful for the `session-resume-unavailable` variant.
+   */
+  findSessionSlot?: ReactNode;
 }
 
 function SpinnerIcon({ className, style }: { className?: string; style?: CSSProperties }) {
@@ -33,6 +39,7 @@ export function TerminalRestartStatusBanner({
   onRestart,
   onDismiss,
   onDismissAll,
+  findSessionSlot,
 }: TerminalRestartStatusBannerProps) {
   switch (variant.type) {
     case "none":
@@ -64,7 +71,7 @@ export function TerminalRestartStatusBanner({
         />
       );
 
-    case "session-resume-unavailable":
+    case "session-resume-unavailable": {
       // Toned down per issue #10823: the terminal already relaunched into a
       // fresh, usable session, so this is a dismissable acknowledgement, not an
       // assertive error. Warning severity + polite status role + a dismiss
@@ -72,39 +79,46 @@ export function TerminalRestartStatusBanner({
       // session). The banner still surfaces the lost session so it isn't
       // dropped silently (issue #9802).
       //
+      // Copy is reason-specific (issue #12182): a sibling pane already holding
+      // the conversation reads very differently from there being nothing to
+      // resume, and the banner should say which one happened.
+      const copy = RESTART_BANNER_COPY["session-resume-unavailable"]({ reason: variant.reason });
       // A restart can strand this banner on a dozen panes at once, so when more
       // than one is flagged the caller supplies `onDismissAll` and we offer a
       // second, neutral control (issue #11589). Warning severity is not bound by
       // the single-action rule, so `actions` is legal here — and with a
       // description present `InlineStatusBanner` keeps the close X in the title
       // row and drops actions into their own controls row, which reads as the
-      // per-pane vs. project-wide split it is.
+      // per-pane vs. project-wide split it is. "Find session" (#12182) rides
+      // `trailingSlot` instead of `actions`, exactly what that prop documents
+      // itself for — a Popover trigger, not a plain button.
       return (
         <InlineStatusBanner
           icon={AlertTriangle}
-          title={RESTART_BANNER_COPY["session-resume-unavailable"].title}
-          description={RESTART_BANNER_COPY["session-resume-unavailable"].description}
+          title={copy.title}
+          description={copy.description}
           severity="warning"
           animated={false}
           role="status"
           ariaLive="polite"
           onClose={onDismiss}
+          trailingSlot={findSessionSlot}
           actions={
             onDismissAll
               ? [
                   {
                     id: "dismiss-all-session-lost",
-                    label: RESTART_BANNER_COPY["session-resume-unavailable"].dismissAllLabel,
+                    label: copy.dismissAllLabel,
                     variant: "dismiss",
                     onClick: onDismissAll,
-                    ariaLabel:
-                      RESTART_BANNER_COPY["session-resume-unavailable"].dismissAllAriaLabel,
+                    ariaLabel: copy.dismissAllAriaLabel,
                   },
                 ]
               : undefined
           }
         />
       );
+    }
 
     case "exit-error":
       return (

@@ -1,7 +1,7 @@
 /**
  * Core: List Mount Perf Budget
  *
- * Mounts ReviewHub with 1000 unstaged files and asserts two count-based ceilings:
+ * Mounts ReviewHub's virtualized list with 1000 unstaged files and asserts two count-based ceilings:
  * - DOM node count delta (before → after mount) ≤ MAX_DOM_DELTA
  * - Long-animation-frame occurrence count ≤ MAX_LONG_TASKS
  *
@@ -33,13 +33,8 @@ const MAX_DOM_DELTA = 25_000;
 // by platform so runner scheduling noise does not fail otherwise healthy builds.
 const MAX_LONG_TASKS = process.platform === "darwin" ? 25 : process.platform === "win32" ? 20 : 10;
 
-// The 1000-row ReviewHub list mounts non-virtualized by design (this test
-// measures its DOM-node and long-animation-frame budgets, not its render
-// speed). On a release runner executing every E2E bucket at once, painting the
-// full span can take well past T_LONG before the last row attaches — that slow
-// paint timed out at T_LONG and masqueraded as a failure on both macOS and
-// Linux. Give the full-list mount a generous ceiling (still well under the
-// per-test coreTimeout) so only a genuinely stuck mount fails here.
+// Allow cold-runner setup and virtualized row reveals without making elapsed
+// time a performance assertion; the gates below remain count-based.
 const T_LIST_MOUNT = T_LONG * 3;
 
 const clickReviewHubSetupButton = async (locator: Locator) => {
@@ -78,6 +73,7 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
   test("ReviewHub working-tree mode stays within node count and longtask budgets", async () => {
     const { window } = ctx;
 
+    const firstFileName = "bulk-unstaged/file-0001.txt";
     const lastFileName = `bulk-unstaged/file-${FILE_COUNT}.txt`;
     const midFileName = `bulk-unstaged/file-0500.txt`;
 
@@ -96,10 +92,8 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
       await expect(hub).toBeVisible({ timeout: T_LONG });
       await expect(hub.locator(SEL.reviewHub.cleanState)).not.toBeVisible({ timeout: T_SHORT });
 
-      // Expanded on open, so setup inherits an already-mounted list and only
-      // has to unstage. Both waits get T_LIST_MOUNT, not T_LONG/T_MEDIUM: the
-      // toggle does not paint until React has committed the open-time mount of
-      // FILE_COUNT non-virtualized rows, so the FIRST wait is the slow one.
+      // Opening the hub auto-stages the fixture; unstage before measuring the
+      // collapsed-to-expanded mount of its changes section.
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
       await expect(fileListToggle).toBeVisible({ timeout: T_LIST_MOUNT });
       await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", {
@@ -108,10 +102,6 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
 
       const unstageAllButton = hub.locator(SEL.reviewHub.unstageAllButton);
       await expect(unstageAllButton).toBeVisible({ timeout: T_LIST_MOUNT });
-      // Same reason the toggles go through clickReviewHubSetupButton: the list
-      // is expanded to 1000 non-virtualized rows here, so a real Playwright
-      // click spends its whole budget in scrollIntoViewIfNeeded waiting for a
-      // still-painting list to hold still, and never lands.
       await clickReviewHubSetupButton(unstageAllButton);
       await expect(hub.locator(SEL.reviewHub.noStagedFiles)).toBeVisible({
         timeout: T_LIST_MOUNT,
@@ -160,18 +150,17 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
       });
     });
 
-    await test.step("Expand file list and verify list span renders end-to-end", async () => {
+    await test.step("Expand file list and verify the initial viewport mounts", async () => {
       const hub = window.locator(SEL.reviewHub.container);
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
 
       await clickReviewHubSetupButton(fileListToggle);
       await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", { timeout: T_MEDIUM });
 
-      // Wait for both last and mid-range rows — confirms full list span
-      const lastStageBtn = hub.locator(SEL.reviewHub.stageButton(lastFileName));
-      const midStageBtn = hub.locator(SEL.reviewHub.stageButton(midFileName));
-      await expect(lastStageBtn).toBeVisible({ timeout: T_LIST_MOUNT });
-      await expect(midStageBtn).toBeVisible({ timeout: T_MEDIUM });
+      await expect(hub.locator(SEL.reviewHub.stageButton(firstFileName))).toBeVisible({
+        timeout: T_LIST_MOUNT,
+      });
+      await expect.poll(() => hub.getByRole("option").count()).toBeLessThan(FILE_COUNT);
 
       // Allow a brief settle for final paints and observer callbacks
       await window.waitForTimeout(T_SETTLE);
@@ -211,6 +200,40 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
         // Fail rather than skip — a release gate must not silently drop coverage
         throw new Error("long-animation-frame API must be supported for the perf budget gate");
       }
+    });
+
+    await test.step("Scroll to the middle and end of the virtualized list", async () => {
+      const hub = window.locator(SEL.reviewHub.container);
+      const scroller = hub.getByTestId("review-hub-scroll-container");
+
+      // Offscreen rows intentionally have no DOM nodes. Reveal them through
+      // the shared scroll container after collecting the mount-only metrics.
+      await expect
+        .poll(
+          async () => {
+            await scroller.evaluate((element) => {
+              element.scrollTop = (element.scrollHeight - element.clientHeight) / 2;
+            });
+            return hub.locator(SEL.reviewHub.stageButton(midFileName)).isVisible();
+          },
+          { timeout: T_LIST_MOUNT }
+        )
+        .toBe(true);
+
+      // Revealing new rows updates Virtuoso's estimated height. Keep following
+      // the live extent until the actual last file mounts, not the old bottom.
+      await expect
+        .poll(
+          async () => {
+            await scroller.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return hub.locator(SEL.reviewHub.stageButton(lastFileName)).isVisible();
+          },
+          { timeout: T_LIST_MOUNT }
+        )
+        .toBe(true);
+      await expect.poll(() => hub.getByRole("option").count()).toBeLessThan(FILE_COUNT);
     });
   });
 });

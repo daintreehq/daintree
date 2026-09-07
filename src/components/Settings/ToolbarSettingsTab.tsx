@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -25,12 +25,13 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, LayoutGrid, Rocket, RotateCcw } from "lucide-react";
-import { LayoutPanelTop, Plus } from "@/components/icons";
+import { LayoutPanelTop, Plus, Workflow } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type {
   AnyToolbarButtonId,
+  LauncherItemToolbarButtonId,
   LauncherPanelButtonId,
   PluginToolbarButtonId,
 } from "@/../../shared/types/toolbar";
@@ -38,9 +39,22 @@ import type {
 // is erased at compile time and never has to resolve at runtime.
 import {
   LAUNCHER_PANEL_BUTTON_IDS,
+  isLauncherItemOnToolbar,
+  isLauncherItemToolbarButtonId,
   isPanelButtonOnToolbar,
   isLauncherPanelButtonId,
 } from "@shared/types/toolbar";
+import {
+  subscribeToPanelKindRegistry,
+  getPanelKindRegistrySnapshot,
+} from "@shared/config/panelKindRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
+import { useRecipeStore } from "@/store/recipeStore";
+import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
+import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbarCatalog";
 import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentButtonOnToolbar } from "../../../shared/utils/agentPinned";
 import {
@@ -258,7 +272,15 @@ function ToolbarSideColumn({
   // a cross-side drop (a `SortableContext` registers no droppable of its own
   // when it holds zero items).
   const { setNodeRef, isOver } = useDroppable({ id: side });
-  const visibleCount = buttonIds.filter(isVisible).length;
+  // Count what actually renders. `SortableButtonItem` draws nothing for an id
+  // with no live metadata — an uninstalled plugin's button the user had dragged
+  // here, or a launcher item belonging to another project (#12217) — and a
+  // tally that counted those would report more cards than the column shows.
+  // The ids stay in `buttonIds` regardless: the drag handlers write the whole
+  // array back, so filtering the list itself would drop them on the next
+  // reorder.
+  const renderableIds = buttonIds.filter((id) => allMetadata[id] !== undefined);
+  const visibleCount = renderableIds.filter(isVisible).length;
 
   return (
     <div className="flex-1 min-w-0">
@@ -267,7 +289,7 @@ function ToolbarSideColumn({
           {label}
         </span>
         <span className="text-xs text-text-secondary tabular-nums">
-          {visibleCount}/{buttonIds.length}
+          {visibleCount}/{renderableIds.length}
         </span>
       </div>
       <SortableContext items={buttonIds} strategy={rectSortingStrategy}>
@@ -278,7 +300,7 @@ function ToolbarSideColumn({
             isOver && "ring-1 ring-inset ring-border-default"
           )}
         >
-          {buttonIds.length === 0 ? (
+          {renderableIds.length === 0 ? (
             <div className="flex w-full items-center justify-center py-3 text-xs text-text-placeholder">
               Drop a button here
             </div>
@@ -313,6 +335,7 @@ export function ToolbarSettingsTab() {
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
   const setPanelButtonOnToolbar = useToolbarPreferencesStore((s) => s.setPanelButtonOnToolbar);
+  const setLauncherItemOnToolbar = useToolbarPreferencesStore((s) => s.setLauncherItemOnToolbar);
   const positionAgentButton = useToolbarPreferencesStore((s) => s.positionAgentButton);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
@@ -339,6 +362,70 @@ export function ToolbarSettingsTab() {
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
 
+  // The launcher stays the one place anything gets pinned (#12217); this page's
+  // job for those rows is to show what the user pinned so they can find it,
+  // reorder it and unpin it — the same job it does for a promoted plugin
+  // button. So it enumerates the pin map, not a second copy of the launcher's
+  // inventory, which would also drag the panel definition registry and the
+  // action service into a settings tab.
+  //
+  // An id whose source is not currently here — an uninstalled plugin, a deleted
+  // recipe, a recipe belonging to another project — resolves to no metadata and
+  // renders nothing, matching the toolbar's own registry gate. Its pin is left
+  // alone rather than swept: "not live in this project" is not "gone".
+  const recipes = useRecipeStore((s) => s.recipes);
+  const currentProjectId = useRecipeStore((s) => s.currentProjectId);
+  // `resolveLauncherItemMetadata` reads both registries, so the rows have to
+  // re-derive when either mutates. Without these the tab keeps a stale label,
+  // icon and row for a plugin panel or agent that unloaded while Settings was
+  // open, while the toolbar — which does subscribe — has already dropped it.
+  const panelKindRegistry = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const pluginAgentRegistry = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot,
+    getPluginAgentRegistrySnapshot
+  );
+  // The plugin snapshot is only one of the three tiers `getAgentConfig` merges;
+  // a user-defined agent lives here, so without this its row keeps a stale name
+  // and icon after an edit.
+  const userAgentRegistry = useUserAgentRegistryStore((s) => s.registry);
+  const launcherItemRows = useMemo(() => {
+    // Referenced, not merely listed as dependencies. `resolveLauncherItemMetadata`
+    // reads both registries itself, so these snapshots exist only to invalidate
+    // this memo when one mutates — and a value the body never mentions is one
+    // the React Compiler is free to drop, which would restore the stale row
+    // they are here to prevent.
+    void panelKindRegistry;
+    void pluginAgentRegistry;
+    void userAgentRegistry;
+    const rows: Array<{ id: LauncherItemToolbarButtonId; metadata: ToolbarButtonMetadata }> = [];
+    // `Object.entries` plus the guard rather than a filter over `Object.keys`:
+    // both hand back a bare `string`, but only the guard narrows it, and the
+    // filtering form would need an assertion per access — which the lint
+    // ratchet scores per rule.
+    for (const [id, isPinned] of Object.entries(layout.pinnedButtons)) {
+      if (isPinned !== true) continue;
+      if (!isLauncherItemToolbarButtonId(id)) continue;
+      const metadata = resolveLauncherItemMetadata(id, recipes, currentProjectId);
+      if (!metadata) continue;
+      rows.push({ id, metadata });
+    }
+    // Alphabetical, because the pin map's key order is insertion order and the
+    // user has no way to see or reason about that.
+    return rows.sort((a, b) => a.metadata.label.localeCompare(b.metadata.label));
+  }, [
+    layout.pinnedButtons,
+    recipes,
+    currentProjectId,
+    panelKindRegistry,
+    pluginAgentRegistry,
+    userAgentRegistry,
+  ]);
+
   const resolveGroup = useCallback(
     (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
     [pluginConfigs]
@@ -360,8 +447,9 @@ export function ToolbarSettingsTab() {
       ({
         ...TOOLBAR_BUTTON_METADATA,
         ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
+        ...Object.fromEntries(launcherItemRows.map((row) => [row.id, row.metadata])),
       }) as AllMetadata,
-    [pluginButtonIds, pluginConfigs]
+    [pluginButtonIds, pluginConfigs, launcherItemRows]
   );
 
   const getToolbarButtonLabel = useCallback(
@@ -402,6 +490,15 @@ export function ToolbarSettingsTab() {
   // a toolbar slot now that agent ids left `DEFAULT_LEFT_BUTTONS`. The launcher
   // reads through this same resolver, so the two surfaces can't disagree about
   // which agents are on the toolbar.
+  // Launcher items read only the explicit `true` (#12217) — they have no
+  // default slot, so array membership can only be the residue of a pin and
+  // `isToolbarButtonVisible`'s built-in "absent means visible" default would
+  // report every one of them as on.
+  const isLauncherItemOn = useCallback(
+    (id: LauncherItemToolbarButtonId) => isLauncherItemOnToolbar(id, layout.pinnedButtons),
+    [layout.pinnedButtons]
+  );
+
   const isAgentOnToolbar = useCallback(
     (id: AnyToolbarButtonId) =>
       isAgentButtonOnToolbar(
@@ -570,6 +667,14 @@ export function ToolbarSettingsTab() {
       setPluginButtonPromoted(buttonId, !isVisible(buttonId));
       return;
     }
+    // Before the plugin check would have been wrong and after the panel check
+    // would be unreachable: a launcher item's id can carry a dot (a
+    // plugin-contributed recipe is `publisher.name`), and only the registry
+    // membership test above keeps that from reading as a plugin button here.
+    if (isLauncherItemToolbarButtonId(buttonId)) {
+      setLauncherItemOnToolbar(buttonId, !isLauncherItemOn(buttonId));
+      return;
+    }
     // Launcher panel buttons need the same treatment for a different reason
     // (#11667). `browser` and `dev-server` are not defaults, so the generic
     // toggle's "delete the key to show" leaves nothing recording that the user
@@ -702,6 +807,35 @@ export function ToolbarSettingsTab() {
           ))}
         </div>
       </SettingsSection>
+
+      {/*
+        One section for all three launcher-item classes rather than splicing
+        each into the agent/panel lists above (#12217). Those two enumerate a
+        fixed, known set and answer "which of these do you want"; this one
+        enumerates what the user already chose, from an inventory that is
+        unbounded and project-scoped. Hidden when empty rather than rendering an
+        empty shell — the rule the plugin section follows, and a profile with
+        nothing pinned this way is the common case.
+      */}
+      {launcherItemRows.length > 0 && (
+        <SettingsSection
+          icon={Workflow}
+          title="Pinned from the launcher"
+          description={`Recipes, plugin agents and panels you pinned in the launcher. ${launcherItemRows.length} pinned.`}
+        >
+          <div className="space-y-2">
+            {launcherItemRows.map((row) => (
+              <TrayButtonRow
+                key={row.id}
+                buttonId={row.id}
+                isVisible={isLauncherItemOn(row.id)}
+                onToggle={(id) => handleToggle(id, "left")}
+                metadata={row.metadata}
+              />
+            ))}
+          </div>
+        </SettingsSection>
+      )}
 
       {pluginButtonIds.length > 0 && (
         <SettingsSection

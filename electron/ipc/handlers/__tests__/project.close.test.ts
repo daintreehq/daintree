@@ -47,11 +47,44 @@ vi.mock("../../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
 }));
 
+// Unmocked this resolves through the real fire-and-forget dynamic import, which
+// pulls in the whole of `PluginService` and proves nothing about the call. It is
+// the canonical close edge that `project:sleep` and the idle sweep copy, so it
+// needs a baseline of its own (#12231).
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
+
+const fileSearchCacheInvalidatorMock = vi.hoisted(() => ({
+  handleWorktreeUpdate: vi.fn(),
+  handleWorktreeRemoved: vi.fn(),
+  handleProjectClosed: vi.fn(),
+  reset: vi.fn(),
+}));
+vi.mock("../../../services/workspace-client/fileSearchCacheInvalidation.js", () => ({
+  fileSearchCacheInvalidator: fileSearchCacheInvalidatorMock,
+}));
+
 const teardownMock = vi.hoisted(() => ({
   gracefulTeardownAndJournalProject:
     vi.fn<(...args: unknown[]) => Promise<{ confirmed: boolean; terminalsKilled: number }>>(),
 }));
 vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
+
+// `isPanelVisible`/`getSlotForTerminal` are here because ProjectStatsService —
+// started by the full CRUD registrar below — value-imports this same singleton
+// and projects through both. A revoke-only mock leaves them undefined, and any
+// tick that reaches assistant projection then dies inside the service's own
+// catch: no test failure, just a silently degraded poller.
+const helpSessionServiceMock = vi.hoisted(() => ({
+  revokeByProjectId: vi.fn<(projectId: string) => Promise<void>>(async () => {}),
+  isPanelVisible: vi.fn<(projectId: string) => boolean>(() => false),
+  getSlotForTerminal: vi.fn<(terminalId: string) => number | null>(() => null),
+}));
+vi.mock("../../../services/HelpSessionService.js", () => ({
+  helpSessionService: helpSessionServiceMock,
+}));
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
@@ -70,6 +103,9 @@ describe("project:close handler", () => {
       confirmed: true,
       terminalsKilled: 0,
     });
+    // `clearAllMocks` clears calls but not a queued `...Once`, so a rejection a
+    // test sets up but never reaches would leak into the next one.
+    helpSessionServiceMock.revokeByProjectId.mockReset().mockResolvedValue(undefined);
   });
 
   it("allows killing terminals for the active project and clears it", async () => {
@@ -128,6 +164,13 @@ describe("project:close handler", () => {
       ptyClient,
       undefined
     );
+    // The assistant's session is captured first: the teardown above kills its
+    // PTY too, and the resume id can only be read off a live one (#12181).
+    expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
+    expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("project-active");
+    expect(helpSessionServiceMock.revokeByProjectId.mock.invocationCallOrder[0]!).toBeLessThan(
+      teardownMock.gracefulTeardownAndJournalProject.mock.invocationCallOrder[0]!
+    );
     expect(projectStoreMock.clearProjectState).toHaveBeenCalledWith("project-active");
     expect(projectStoreMock.clearCurrentProject).toHaveBeenCalled();
     expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-active", "closed");
@@ -140,6 +183,14 @@ describe("project:close handler", () => {
     expect(refreshProjectMenuStateMock.mock.invocationCallOrder[0]).toBeGreaterThan(
       projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]
     );
+
+    // Every plugin the project owns unloads with it, after the "closed" write —
+    // that write is the commit point for the close.
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("project-active");
+    expect(
+      pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+    ).toBeGreaterThan(projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]!);
   });
 
   it("rejects closing the active project when not killing terminals", async () => {
@@ -389,6 +440,12 @@ describe("project:close handler", () => {
         ptyClient,
         undefined
       );
+      // The capture is keyed on the requested project, not the pointer — the
+      // one arrangement where reading the wrong one is visible.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith(
+        "project-second-window"
+      );
       // The DB pointer names a different project, so it must NOT be cleared —
       // that bookkeeping tracks the pointer, not visibility.
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
@@ -419,9 +476,82 @@ describe("project:close handler", () => {
 
       await expect(handler(EVENT, "project-active", { killTerminals: true })).rejects.toThrow();
 
+      // The capture runs ahead of the confirmation gate, so it still happened —
+      // the project keeps its state, and a reopened assistant panel resumes.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("project-active");
       expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      // The project is still open with live agents behind it.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+    });
+
+    it("waits for the capture to settle before tearing the project down", async () => {
+      // Invocation order can't tell an awaited capture from a fire-and-forget
+      // one, and fire-and-forget IS the bug: the teardown would kill the
+      // assistant's PTY out from under an unresolved `gracefulKill`.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-active",
+        name: "Active Project",
+        status: "active",
+        path: "/test/project-active",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+      projectStoreMock.clearProjectState.mockResolvedValue(undefined);
+
+      let releaseCapture!: () => void;
+      helpSessionServiceMock.revokeByProjectId.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseCapture = resolve;
+        })
+      );
+
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient: makePtyClient(),
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+      const pending = handler(EVENT, "project-active", { killTerminals: true });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+
+      releaseCapture();
+      await pending;
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalled();
+    });
+
+    it("still closes when the assistant capture fails", async () => {
+      // A lost resume entry costs the assistant its conversation, nothing more.
+      // Left uncaught it would be relabelled INTERNAL and abort the close.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-active",
+        name: "Active Project",
+        status: "active",
+        path: "/test/project-active",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+      projectStoreMock.clearProjectState.mockResolvedValue(undefined);
+      helpSessionServiceMock.revokeByProjectId.mockRejectedValueOnce(new Error("no pty host"));
+
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient: makePtyClient(),
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+
+      await expect(
+        handler(EVENT, "project-active", { killTerminals: true })
+      ).resolves.toMatchObject({ terminalsKilled: 0 });
+
+      // Without this the test passes under a full revert: the queued rejection
+      // is simply never consumed and the close succeeds for the wrong reason.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("project-active");
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalled();
+      expect(projectStoreMock.clearProjectState).toHaveBeenCalledWith("project-active");
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-active", "closed");
     });
 
     it("fails closed when the teardown throws unexpectedly: keeps state and rejects", async () => {
@@ -450,6 +580,96 @@ describe("project:close handler", () => {
       expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("file-search cache disposal (#12240)", () => {
+    function makeCloseHandler(deps: HandlerDependencies) {
+      registerProjectCrudHandlers(deps);
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const closeCall = calls.find((c) => c[0] === CHANNELS.PROJECT_CLOSE);
+      return closeCall?.[1] as unknown as (
+        event: unknown,
+        projectId: string,
+        options?: { killTerminals?: boolean }
+      ) => Promise<{ terminalsKilled: number; processesKilled: number }>;
+    }
+
+    it("drops the project's file indexes on a close", async () => {
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-active",
+        name: "Active Project",
+        status: "active",
+        path: "/test/project-active",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+      projectStoreMock.clearProjectState.mockResolvedValue(undefined);
+      teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+        confirmed: true,
+        terminalsKilled: 0,
+      });
+
+      const handler = makeCloseHandler({
+        mainWindow: {} as unknown,
+        ptyClient: {
+          getProjectStats: vi.fn(async () => ({
+            terminalCount: 0,
+            processIds: [],
+            terminalTypes: {},
+          })),
+          onProjectSwitch: vi.fn(),
+          setActiveProject: vi.fn(),
+        },
+      } as unknown as HandlerDependencies);
+
+      await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-active", {
+        killTerminals: true,
+      });
+
+      expect(fileSearchCacheInvalidatorMock.handleProjectClosed).toHaveBeenCalledWith(
+        "/test/project-active"
+      );
+    });
+
+    it("drops them when the project is only backgrounded", async () => {
+      // Backgrounding pauses the workspace host, so the watcher stops reporting
+      // for this project: a retained index could only go stale while holding
+      // memory, which is worse than no index at all.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-bg",
+        name: "Background Project",
+        status: "active",
+        path: "/test/project-bg",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+
+      const handler = makeCloseHandler({
+        mainWindow: {} as unknown,
+        ptyClient: {
+          getProjectStats: vi.fn(async () => ({
+            terminalCount: 1,
+            processIds: [333],
+            terminalTypes: { terminal: 1 },
+          })),
+          onProjectSwitch: vi.fn(),
+          setActiveProject: vi.fn(),
+        },
+        worktreeService: {
+          pauseProject: vi.fn(),
+          resumeProject: vi.fn(),
+          loadProject: vi.fn(),
+          attachDirectPort: vi.fn(),
+        },
+      } as unknown as HandlerDependencies);
+
+      await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-bg", {
+        killTerminals: false,
+      });
+
+      expect(fileSearchCacheInvalidatorMock.handleProjectClosed).toHaveBeenCalledWith(
+        "/test/project-bg"
+      );
     });
   });
 
@@ -504,6 +724,11 @@ describe("project:close handler", () => {
     expect(result.terminalsKilled).toBe(0);
     expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-bg", "background");
     expect(worktreeService.pauseProject).toHaveBeenCalledWith("/test/project-bg");
+    // Backgrounding leaves every terminal running, the assistant's included —
+    // revoking here would kill the live session it is meant to preserve. The
+    // project is still open, so its plugins stay loaded for the same reason.
+    expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
   });
 
   it("does NOT call pauseProject when killing terminals", async () => {

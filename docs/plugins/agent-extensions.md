@@ -15,7 +15,7 @@ Daintree supervises any MCP server a plugin ships. It spawns the process lazily,
 
 ### Manifest
 
-The manifest key is `mcpServers`. It was `experimental_mcpServers` before the 1.0 freeze; the old key is still accepted as a deprecated alias (it parses and runs identically but logs a one-time deprecation warning).
+The manifest key is `mcpServers`. It was `experimental_mcpServers` until #10466; the old key is still accepted as a deprecated alias (it parses and runs identically but logs a one-time deprecation warning).
 
 ```json
 {

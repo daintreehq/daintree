@@ -37,6 +37,7 @@ import { createHash } from "node:crypto";
 import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
+import type { SessionServerDeps } from "../sessionServer.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
 
 type BearerTestHandle = {
@@ -698,6 +699,42 @@ describe("HttpLifecycle", () => {
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
     });
 
+    it("rejects a fan-out tool a use count cannot bound (#12121)", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      for (const toolId of ["terminal.killAll", "terminal.closeAll"]) {
+        // Both are real, tier-reachable tools — so it is the fan-out policy
+        // refusing them here, not the unknown-tool check above.
+        expect(minimumPermittingTier(toolId)).not.toBe(null);
+        // Names the offender AND the reason: `/cannot cover/` alone would also
+        // pass if the tool had merely fallen out of every tier allowlist.
+        expect(() => lc.issueNativeGrant("help-1", { allowedTools: [toolId] }, 42)).toThrow(
+          new RegExp(`cannot cover ${toolId.replaceAll(".", "\\.")}\\b.*every target it finds`)
+        );
+      }
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("rejects a mixed scope rather than silently narrowing it (#12121)", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      // The minted scope must be exactly the scope the user approved: dropping
+      // the offenders would hand back a grant card that reads as approved-in-full.
+      // Two of them, so this also pins the plural branch of the message — with
+      // one offender the singular wording passes either way.
+      const attempt = () =>
+        lc.issueNativeGrant(
+          "help-1",
+          { allowedTools: ["git.commit", "terminal.killAll", "terminal.closeAll"] },
+          42
+        );
+      expect(attempt).toThrow(/cannot cover terminal\.killAll, terminal\.closeAll\b/);
+      expect(attempt).toThrow(/Remove them\b/);
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
     it("rejects an out-of-range maxUses", () => {
       const deps = fakeDeps();
       resolverOf(deps).mockReturnValue("transport-1");
@@ -809,10 +846,11 @@ describe("HttpLifecycle", () => {
   });
 
   describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {
-    type TurnDeps = {
-      getCurrentTurnId?: () => string | null;
-      appendAuditRecord: (input: Record<string, unknown>) => void;
-    };
+    // Picked from the real dep contract rather than a `Record<string, unknown>`
+    // carrier: this block is the only coverage of the closure's
+    // `{ capturedTurnId, ...recordInput }` hop, and a structural stand-in would
+    // let a field the real callers must pass go missing here unnoticed.
+    type TurnDeps = Pick<SessionServerDeps, "getCurrentTurnId" | "appendAuditRecord">;
     const buildDeps = (lc: HttpLifecycle, sessionId: string): TurnDeps =>
       (
         lc as unknown as { buildSessionServerDeps: (id: string) => TurnDeps }
@@ -849,6 +887,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId: "turn-uuid-abc",
       });
@@ -866,6 +905,33 @@ describe("HttpLifecycle", () => {
       expect(persisted.capturedTurnId).toBeUndefined();
     });
 
+    it("passes startedAt through the closure untouched (#12122)", () => {
+      // This hop has no explicit handling for `startedAt` — it survives only on
+      // the `...recordInput` rest spread, which peels off `capturedTurnId` and
+      // keeps everything else. So this asserts a property the closure has
+      // always had rather than one #12122 added; it earns its place as the
+      // guard against a future destructure widening to drop the field, which
+      // would otherwise fail nowhere until a consumer noticed missing starts.
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-1");
+      const startedAt = 1_767_225_600_123;
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        startedAt,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: null,
+      });
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ startedAt })
+      );
+    });
+
     it("omits turnId when the captured snapshot is null", () => {
       const deps = fakeDeps();
       deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
@@ -877,6 +943,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId: null,
       });
@@ -899,6 +966,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId: null,
       });
@@ -932,6 +1000,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId,
       });
@@ -1447,6 +1516,64 @@ describe("HttpLifecycle", () => {
   });
 
   describe("auth gate", () => {
+    it.each(["/mcp", "/messages?sessionId=victim-session"])(
+      "cannot revoke a session claimed by an unauthenticated request to %s",
+      async (url) => {
+        const deps = fakeDeps();
+        vi.mocked(deps.abusePolicy.recordDenial).mockReturnValue({ tripped: true });
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const req = {
+          method: "POST",
+          url,
+          headers: { host: "127.0.0.1:45454", "mcp-session-id": "victim-session" },
+        } as unknown as http.IncomingMessage;
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(req, res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(401, expect.anything());
+        expect(deps.auditService.recordAuth401).toHaveBeenCalledOnce();
+        expect(deps.abusePolicy.recordDenial).not.toHaveBeenCalled();
+        expect(deps.sessionStore.revokeSession).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["Authorization", "Host", "Origin", "Mcp-Session-Id"])(
+      "refuses ambiguous duplicate %s headers before resolving a session",
+      async (header) => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const req = {
+          method: "GET",
+          url: "/unknown",
+          headers: {
+            host: "127.0.0.1:45454",
+            authorization: "Bearer test-api-key",
+          },
+          rawHeaders: [header, "first", header.toLowerCase(), "second"],
+        } as unknown as http.IncomingMessage;
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(req, res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(400, expect.anything());
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+        expect(deps.sessionStore.revokeSession).not.toHaveBeenCalled();
+      }
+    );
+
     it("returns 401 with WWW-Authenticate: Bearer realm header", async () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);

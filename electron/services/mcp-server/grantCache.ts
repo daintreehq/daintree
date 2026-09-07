@@ -5,6 +5,7 @@ import type {
   McpGrantRecordType,
   McpGrantRevokedReason,
 } from "../../../shared/types/ipc/mcpServer.js";
+import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import {
   MCP_DENIAL_SILENCE_THRESHOLD,
   MCP_GRANT_MAX_LIFETIME_MS,
@@ -446,8 +447,15 @@ export class GrantCache {
    * tool. Expired / ceiling-past grants are lazily evicted (emitting the same
    * `grant.expired`/`grant.revoked` signals as the per-tool path) before being
    * skipped — eviction is hygiene, not use-consumption, so it is safe here.
+   *
+   * A tool whose cost is per-resolved-target (#12121) is refused outright,
+   * before any grant is examined: no grant can cover it, so walking the map
+   * could only evict entries on a call that was never going to be authorized.
+   * Issuance already rejects these tools, so reaching here means a grant was
+   * minted through the cache directly — defence in depth, not the main gate.
    */
   peekNativeGrant(sessionId: string, toolId: string): NativeGrantCheckResult {
+    if (!isGenericNativeGrantEligible(toolId)) return { granted: false };
     const now = this.now();
     for (const entry of this.nativeGrants.values()) {
       if (entry.sessionId !== sessionId) continue;
@@ -483,6 +491,12 @@ export class GrantCache {
    * natural terminal state, distinct from a forced revoke). Returns false and
    * fails closed when the grant is gone or has aged past its TTL/ceiling since
    * the peek — the caller must reject the dispatch in that case.
+   *
+   * Also fails closed for a per-resolved-target tool (#12121), after the
+   * TTL/ceiling checks so a caller holding a stale id still learns the grant
+   * aged out. A policy refusal leaves `remainingUses` untouched and emits no
+   * usage record — nothing was authorized, so nothing was spent — and does not
+   * delete the grant, which may still cover eligible siblings.
    */
   consumeNativeGrantUse(grantId: string, toolId: string): boolean {
     const entry = this.nativeGrants.get(grantId);
@@ -500,6 +514,7 @@ export class GrantCache {
       );
       return false;
     }
+    if (!isGenericNativeGrantEligible(toolId)) return false;
     if (entry.remainingUses <= 0) {
       this.nativeGrants.delete(grantId);
       return false;

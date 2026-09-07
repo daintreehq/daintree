@@ -34,7 +34,9 @@ const projectStoreMock = vi.hoisted(() => ({
   getAllProjects: vi.fn(() => []),
   getProjectState: vi.fn(),
   saveProjectState: vi.fn(),
-  enqueueProjectStateUpdate: vi.fn(async () => undefined),
+  enqueueProjectStateUpdate: vi.fn<
+    (id: string, updater: (state: unknown) => unknown) => Promise<void>
+  >(async () => undefined),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({
@@ -67,6 +69,7 @@ vi.mock("../../utils/quitWarning.js", () => quitWarningMock);
 
 const agentStoreMock = vi.hoisted(() => ({
   getAgentsByAvailability: vi.fn(() => []),
+  isHelpTerminal: vi.fn(() => false),
 }));
 
 vi.mock("../../services/AgentAvailabilityStore.js", () => ({
@@ -178,7 +181,10 @@ vi.mock("../../services/NotificationService.js", () => ({
   notificationService: notificationServiceMock,
 }));
 
-const pluginServiceMock = vi.hoisted(() => ({ setWorkspaceClient: vi.fn() }));
+const pluginServiceMock = vi.hoisted(() => ({
+  setWorkspaceClient: vi.fn(),
+  shutdownManagedProcesses: vi.fn(async () => {}),
+}));
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: pluginServiceMock,
 }));
@@ -274,6 +280,7 @@ vi.mock("../../utils/performanceTrace.js", () => performanceTraceMock);
 import type { ShutdownDeps } from "../shutdown.js";
 import {
   CLEANUP_TIMEOUT_MS,
+  PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
 } from "../shutdownConfig.js";
@@ -339,16 +346,19 @@ describe("registerShutdownHandler", () => {
   it("runs cleanup without dialog when no window and no signal", async () => {
     const { beforeQuitCb } = await setup();
     const event = makeEvent();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
     await beforeQuitCb(event);
 
     // Should still preventDefault and run cleanup
     expect(event.preventDefault).toHaveBeenCalled();
     expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
 
-    // Wait for cleanup promise chain to settle
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
+    // Shutdown loads cleanup services asynchronously; await its completion
+    // instead of racing vi.waitFor's one-second polling deadline under load.
+    await exited;
+    expect(appMock.exit).toHaveBeenCalledWith(0);
     expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
   });
 
@@ -363,14 +373,16 @@ describe("registerShutdownHandler", () => {
       } as unknown as ShutdownDeps["windowRegistry"],
     });
     const event = makeEvent();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
     await beforeQuitCb(event);
 
     expect(event.preventDefault).toHaveBeenCalled();
     expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
+    await exited;
+    expect(appMock.exit).toHaveBeenCalledWith(0);
     expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
   });
 
@@ -914,6 +926,52 @@ describe("registerShutdownHandler", () => {
       expect(pluginServiceMock.setWorkspaceClient).toHaveBeenCalledWith(null);
     });
 
+    it("waits for the plugin-spawned children to be killed before exiting (#12216)", async () => {
+      // Held open so the assertion proves ORDERING, not just that the call
+      // happened: an immediately-resolved mock would pass either way.
+      let releaseSweep: (() => void) | undefined;
+      pluginServiceMock.shutdownManagedProcesses.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSweep = resolve;
+          })
+      );
+
+      const { beforeQuitCb } = await setup({});
+      const quitting = beforeQuitCb(makeEvent());
+
+      // Electron signals nothing to a `child_process.spawn` tree on quit, so
+      // without this sweep a plugin's dev server simply outlives the app.
+      await vi.waitFor(() => {
+        expect(pluginServiceMock.shutdownManagedProcesses).toHaveBeenCalled();
+      });
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      releaseSweep?.();
+      await quitting;
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+    });
+
+    it("still exits cleanly when the plugin process sweep rejects (#12216)", async () => {
+      pluginServiceMock.shutdownManagedProcesses.mockRejectedValueOnce(new Error("sweep boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+      expect(pluginServiceMock.shutdownManagedProcesses).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] Plugin managed-process shutdown failed:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
+    });
+
     it("still exits cleanly when a moved disposal throws", async () => {
       hibernationMock.stop.mockImplementationOnce(() => {
         throw new Error("hibernation boom");
@@ -1149,6 +1207,7 @@ describe("registerShutdownHandler", () => {
     function makePtyClient(overrides?: Record<string, unknown>) {
       return {
         gracefulKillByProject: vi.fn(async () => []),
+        getPartialGracefulKillResults: vi.fn(() => []),
         getAllTerminalsAsync: vi.fn(async () => []),
         dispose: vi.fn(),
         ...overrides,
@@ -1193,6 +1252,46 @@ describe("registerShutdownHandler", () => {
       expect(record.agentId).toBe("claude");
       expect(record.cwd).toBe("/repo");
       expect(record.branch).toBe("feature/x");
+    });
+
+    it("skips the assistant's overlay terminal but journals the pane beside it", async () => {
+      // #12183: a quit journaled the assistant as an ordinary AgentSessionRecord,
+      // so it could surface in the resume picker and reopen the assistant's
+      // conversation as a grid pane running the underlying CLI.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [
+          agentTerminal,
+          { ...agentTerminal, id: "assistant", isAssistantTerminal: true },
+        ]),
+        gracefulKillByProject: vi.fn(async () => [
+          { id: "t1", agentSessionId: "sess-1" },
+          { id: "assistant", agentSessionId: "sess-assistant" },
+        ]),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      const record = persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(record.sessionId).toBe("sess-1");
+
+      // The session-id writeback skips it too, matching the mirrored block in
+      // `gracefulTeardownAndJournalProject`.
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [
+          { id: "t1", agentSessionId: undefined },
+          { id: "assistant", agentSessionId: undefined },
+        ],
+      };
+      updater(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", agentSessionId: "sess-1" },
+        { id: "assistant", agentSessionId: undefined },
+      ]);
     });
 
     it("still captures and journals when the rate-limit drain import fails", async () => {
@@ -1347,6 +1446,59 @@ describe("registerShutdownHandler", () => {
       expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(
         "sess-2"
       );
+    });
+
+    it("keeps a project's streamed captures when its graceful kill outruns the deadline", async () => {
+      // #12180. One pane running its full budget used to push the project's
+      // whole kill past the 4s race, which resolved to `[]` — so the ids that
+      // HAD been captured were dropped from both the snapshot writeback and the
+      // journal, and those panes came back unreachable on the next launch.
+      vi.useFakeTimers();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const getPartialGracefulKillResults = vi.fn(() => [{ id: "t1", agentSessionId: "sess-1" }]);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        // Never settles: the slow pane is still going when the deadline fires.
+        gracefulKillByProject: vi.fn(() => new Promise(() => {})),
+        getPartialGracefulKillResults,
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      const quit = beforeQuitCb(makeEvent());
+      await vi.advanceTimersByTimeAsync(PROJECT_GRACEFUL_KILL_TIMEOUT_MS);
+      await vi.runAllTimersAsync();
+      await quit;
+
+      expect(getPartialGracefulKillResults).toHaveBeenCalledWith("proj-1");
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+        "proj-1",
+        expect.any(Function)
+      );
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(
+        "sess-1"
+      );
+      vi.useRealTimers();
+    });
+
+    it("writes nothing for a project that outran the deadline with no streamed captures", async () => {
+      vi.useFakeTimers();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        gracefulKillByProject: vi.fn(() => new Promise(() => {})),
+        getPartialGracefulKillResults: vi.fn(() => []),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      const quit = beforeQuitCb(makeEvent());
+      await vi.advanceTimersByTimeAsync(PROJECT_GRACEFUL_KILL_TIMEOUT_MS);
+      await vi.runAllTimersAsync();
+      await quit;
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(persistAgentSessionMock).not.toHaveBeenCalled();
+      vi.useRealTimers();
     });
 
     it("still journals when persisting a project's captures rejects", async () => {

@@ -1,3 +1,4 @@
+import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
 import { cn } from "@/lib/utils";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridTabGroup } from "./GridTabGroup";
@@ -35,6 +36,7 @@ export function ContentGridMaximizedGroup({
       )}
     >
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+      <ProjectPluginTrustBanner />
       <div className="relative min-h-0 flex-1">
         <GridTabGroup
           group={group}

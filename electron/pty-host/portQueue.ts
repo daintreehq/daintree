@@ -13,6 +13,14 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { PtyPauseCoordinator, PauseToken } from "./PtyPauseCoordinator.js";
 
+interface PausedTerminalState {
+  coordinator: PtyPauseCoordinator;
+  pauseStartTime: number;
+  safetyTimeout: ReturnType<typeof setTimeout>;
+}
+
+const PORT_QUEUE_LOW_WATERMARK_BYTES = (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100;
+
 export interface PortQueueDeps {
   getTerminal: (
     id: string
@@ -24,7 +32,9 @@ export interface PortQueueDeps {
     id: string,
     status: TerminalFlowStatus,
     bufferUtilization?: number,
-    pauseDuration?: number
+    pauseDuration?: number,
+    reason?: string,
+    timestamp?: number
   ) => void;
   emitReliabilityMetric: (payload: TerminalReliabilityMetricPayload) => void;
   pauseToken?: PauseToken;
@@ -40,8 +50,7 @@ export interface PortQueueDeps {
 
 export class PortQueueManager {
   private readonly queuedBytes = new Map<string, number>();
-  private readonly pausedTerminals = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pauseStartTimes = new Map<string, number>();
+  private readonly pausedTerminals = new Map<string, PausedTerminalState>();
   private readonly pauseToken: PauseToken;
   private totalQueuedBytes = 0;
 
@@ -104,13 +113,40 @@ export class PortQueueManager {
     // which coordinator.resume() fires first. Every other paused terminal is
     // still swept, so no producer is starved (#7030).
     const focusedId = this.deps.getFocusedTerminalId?.() ?? null;
-    if (focusedId !== null && this.pausedTerminals.has(focusedId)) {
-      this.tryResume(focusedId);
+    const resumeTimestamp = Date.now();
+    const focusedState = focusedId === null ? undefined : this.pausedTerminals.get(focusedId);
+    if (focusedId !== null && focusedState !== undefined) {
+      this.tryResumeState(focusedId, focusedState, resumeTimestamp);
     }
-    for (const pausedId of [...this.pausedTerminals.keys()]) {
+    for (const [pausedId, state] of this.pausedTerminals) {
       if (pausedId === focusedId) continue;
-      this.tryResume(pausedId);
+      this.tryResumeState(pausedId, state, resumeTimestamp);
     }
+  }
+
+  private tryResumeState(id: string, state: PausedTerminalState, resumeTimestamp?: number): void {
+    const currentBytes = this.queuedBytes.get(id) ?? 0;
+    if (currentBytes >= PORT_QUEUE_LOW_WATERMARK_BYTES) return;
+    if (this.totalQueuedBytes >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES) return;
+
+    const timestamp = resumeTimestamp ?? Date.now();
+    const pauseDuration = timestamp - state.pauseStartTime;
+    const utilization = (currentBytes / IPC_MAX_QUEUE_BYTES) * 100;
+    const resumed = state.coordinator.resume(this.pauseToken);
+    console.log("[PtyHost] Port queue cleared to %d%%. Resumed PTY %s", utilization, id);
+    if (resumed) {
+      this.deps.emitTerminalStatus(id, "running", utilization, pauseDuration, undefined, timestamp);
+    }
+    this.deps.emitReliabilityMetric({
+      terminalId: id,
+      metricType: "pause-end",
+      timestamp,
+      durationMs: pauseDuration,
+      bufferUtilization: utilization,
+    });
+
+    clearTimeout(state.safetyTimeout);
+    this.pausedTerminals.delete(id);
   }
 
   getQueuedBytes(id: string): number {
@@ -197,7 +233,6 @@ export class PortQueueManager {
       );
 
       const pauseStartTime = Date.now();
-      this.pauseStartTimes.set(id, pauseStartTime);
 
       this.deps.emitTerminalStatus(id, "paused-backpressure", utilization);
       this.deps.emitReliabilityMetric({
@@ -214,7 +249,6 @@ export class PortQueueManager {
         const pauseDuration = Date.now() - pauseStartTime;
 
         this.pausedTerminals.delete(id);
-        this.pauseStartTimes.delete(id);
         // Drop stale byte accounting alongside the pause maps. Without this,
         // the next addBytes call immediately re-triggers applyBackpressure
         // and the pause loop wedges across the entire renderer reload (#6244).
@@ -223,23 +257,20 @@ export class PortQueueManager {
         const previousTotal = this.totalQueuedBytes;
         this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - droppedBytes);
 
-        const coordinator = this.deps.getPauseCoordinator(id);
-        if (coordinator) {
-          coordinator.resume(this.pauseToken);
-          console.warn(
-            `[PtyHost] Force resumed port PTY ${id} after ${pauseDuration}ms (queue at ${currentUtilization.toFixed(1)}%). Consumer may be stalled.`
-          );
-          if (!coordinator.isPaused) {
-            this.deps.emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
-          }
-          this.deps.emitReliabilityMetric({
-            terminalId: id,
-            metricType: "pause-end",
-            timestamp: Date.now(),
-            durationMs: pauseDuration,
-            bufferUtilization: currentUtilization,
-          });
+        const resumed = coordinator.resume(this.pauseToken);
+        console.warn(
+          `[PtyHost] Force resumed port PTY ${id} after ${pauseDuration}ms (queue at ${currentUtilization.toFixed(1)}%). Consumer may be stalled.`
+        );
+        if (resumed) {
+          this.deps.emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
         }
+        this.deps.emitReliabilityMetric({
+          terminalId: id,
+          metricType: "pause-end",
+          timestamp: Date.now(),
+          durationMs: pauseDuration,
+          bufferUtilization: currentUtilization,
+        });
 
         // The force-resume dropped this terminal's byte accounting — if that
         // took the aggregate below its low watermark, siblings paused by the
@@ -249,7 +280,7 @@ export class PortQueueManager {
         this.sweepAggregateResume(previousTotal);
       }, IPC_MAX_PAUSE_MS);
 
-      this.pausedTerminals.set(id, safetyTimeout);
+      this.pausedTerminals.set(id, { coordinator, pauseStartTime, safetyTimeout });
       committed = true;
       return true;
     } catch (error) {
@@ -261,71 +292,29 @@ export class PortQueueManager {
       // permanently held with no recovery path. See #7641.
       if (!committed) {
         if (safetyTimeout !== undefined) clearTimeout(safetyTimeout);
-        this.pauseStartTimes.delete(id);
         coordinator.resume(this.pauseToken);
       }
     }
   }
 
   tryResume(id: string): void {
-    if (!this.pausedTerminals.has(id)) return;
-
-    const lowWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100;
-    const currentBytes = this.queuedBytes.get(id) ?? 0;
-    if (currentBytes >= lowWatermarkBytes) return;
-    // Hold the pause while the window-level aggregate is still over its low
-    // watermark — resuming a producer into a swamped window just re-grows the
-    // backlog. The removeBytes sweep re-runs this check when the aggregate
-    // drains; the IPC_MAX_PAUSE_MS safety timeout bounds the worst case.
-    if (this.totalQueuedBytes >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES) return;
-
-    const pauseStart = this.pauseStartTimes.get(id);
-    const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-    const utilization = this.getUtilization(id);
-
-    const coordinator = this.deps.getPauseCoordinator(id);
-    if (coordinator) {
-      coordinator.resume(this.pauseToken);
-      console.log(`[PtyHost] Port queue cleared to ${utilization.toFixed(1)}%. Resumed PTY ${id}`);
-      if (!coordinator.isPaused) {
-        this.deps.emitTerminalStatus(id, "running", utilization, pauseDuration);
-      }
-      this.deps.emitReliabilityMetric({
-        terminalId: id,
-        metricType: "pause-end",
-        timestamp: Date.now(),
-        durationMs: pauseDuration,
-        bufferUtilization: utilization,
-      });
-    }
-
-    const safetyTimeout = this.pausedTerminals.get(id);
-    if (safetyTimeout) {
-      clearTimeout(safetyTimeout);
-    }
-    this.pausedTerminals.delete(id);
-    this.pauseStartTimes.delete(id);
+    const state = this.pausedTerminals.get(id);
+    if (state !== undefined) this.tryResumeState(id, state);
   }
 
   clearQueue(id: string): void {
-    const wasPaused = this.pausedTerminals.has(id);
-    const safetyTimeout = this.pausedTerminals.get(id);
-    if (safetyTimeout) {
-      clearTimeout(safetyTimeout);
-    }
+    const state = this.pausedTerminals.get(id);
+    if (state !== undefined) clearTimeout(state.safetyTimeout);
     // Release the coordinator hold before clearing internal maps so any
     // re-entrant applyBackpressure sees a clean state. resume() is a no-op
     // when the token isn't held, so guarding on wasPaused is purely an
     // optimization to avoid a useless coordinator lookup. See #7008.
-    if (wasPaused) {
-      this.deps.getPauseCoordinator(id)?.resume(this.pauseToken);
-    }
+    state?.coordinator.resume(this.pauseToken);
     const removed = this.queuedBytes.get(id) ?? 0;
     this.queuedBytes.delete(id);
     const previousTotal = this.totalQueuedBytes;
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
     this.pausedTerminals.delete(id);
-    this.pauseStartTimes.delete(id);
     // A cleared terminal (exit, force-resume) can be the terminal holding most
     // of the window aggregate — sweep so aggregate-paused siblings don't wait
     // out their safety timeouts for bytes that will never be acked.
@@ -333,11 +322,9 @@ export class PortQueueManager {
   }
 
   resumeAll(): void {
-    for (const [id, safetyTimeout] of this.pausedTerminals) {
-      clearTimeout(safetyTimeout);
-      const coordinator = this.deps.getPauseCoordinator(id);
-      if (!coordinator) continue;
-      coordinator.resume(this.pauseToken);
+    for (const [id, state] of this.pausedTerminals) {
+      clearTimeout(state.safetyTimeout);
+      state.coordinator.resume(this.pauseToken);
       // Surface the release. resumeAll runs when this manager's window goes
       // away (disconnect/replace/dispose) — without an emission here the
       // shared status map keeps "paused-backpressure" and any other window
@@ -351,9 +338,8 @@ export class PortQueueManager {
       // can race a dying parent channel, and a throw here must not abort the
       // remaining releases or leave the pause maps stale.
       try {
-        const pauseStart = this.pauseStartTimes.get(id);
-        const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-        if (!coordinator.isPaused) {
+        const pauseDuration = Date.now() - state.pauseStartTime;
+        if (!state.coordinator.isPaused) {
           this.deps.emitTerminalStatus(id, "running", this.getUtilization(id), pauseDuration);
         }
         this.deps.emitReliabilityMetric({
@@ -368,7 +354,6 @@ export class PortQueueManager {
       }
     }
     this.pausedTerminals.clear();
-    this.pauseStartTimes.clear();
   }
 
   dispose(): void {

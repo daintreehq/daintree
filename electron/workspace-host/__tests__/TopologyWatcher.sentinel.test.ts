@@ -28,19 +28,17 @@ vi.mock("fs", async () => {
 
 const parcelSubscriptions: Array<{ dir: string; unsubscribed: boolean }> = [];
 
-vi.mock("@parcel/watcher", () => ({
-  default: {
-    subscribe: vi.fn((dir: string) => {
-      const entry = { dir, unsubscribed: false };
-      parcelSubscriptions.push(entry);
-      return Promise.resolve({
-        unsubscribe: () => {
-          entry.unsubscribed = true;
-          return Promise.resolve();
-        },
-      });
-    }),
-  },
+vi.mock("../../utils/parcelWatcherBackend.js", () => ({
+  subscribeParcelWatcher: vi.fn((dir: string) => {
+    const entry = { dir, unsubscribed: false };
+    parcelSubscriptions.push(entry);
+    return Promise.resolve({
+      unsubscribe: () => {
+        entry.unsubscribed = true;
+        return Promise.resolve();
+      },
+    });
+  }),
 }));
 
 // getGitCommonDir points the metadata-dir resolution at the temp repo.

@@ -17,6 +17,7 @@ import {
   Activity,
   ArrowDown,
   ArrowUp,
+  ArrowUpFromLine,
   CheckSquare,
   Clock,
   Code,
@@ -26,6 +27,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitCompare,
+  GitMerge,
   GitPullRequest,
   Globe,
   History,
@@ -43,6 +45,7 @@ import {
   Plug,
   RefreshCw,
   Save,
+  Scissors,
   Server,
   Square,
   SquareTerminal,
@@ -66,8 +69,12 @@ import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { fileManagerRevealLabel } from "@/lib/platform";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
+import type { ActionId } from "@shared/types/actions";
+import { OPERATION_LABEL, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 import { resourceLifecycleVisibility } from "./utils/resourceLifecycle";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -155,6 +162,21 @@ export interface WorktreeMenuItemsProps {
   /** Omitted when the worktree has no changes, so the item is absent then. */
   onOpenChanges?: () => void;
   onOpenReviewHub?: () => void;
+  /**
+   * Git rows take the resolved surface source for the same reason
+   * `onOpenPanelPalette` does: the callback lives in the card body, outside any
+   * menu Root, so it cannot tell `menu` from `context-menu` itself (#8322).
+   */
+  onGitPullRebase?: (source: MenuActionSourceValue) => void;
+  onGitPush?: (source: MenuActionSourceValue) => void;
+  onGitForcePush?: (source: MenuActionSourceValue) => void;
+  /**
+   * True only while a lease captured from a real push rejection is held for
+   * this worktree. The force-push row is absent otherwise — a lease cannot be
+   * derived from branch divergence, so a permanently disabled row would imply
+   * a capability that does not exist.
+   */
+  canForcePush?: boolean;
   onOpenFileBrowser?: () => void;
   onCompareDiff?: () => void;
   onRunRecipe: (recipeId: string) => void;
@@ -253,6 +275,10 @@ export function WorktreeMenuItems({
   onViewPlan,
   onOpenChanges,
   onOpenReviewHub,
+  onGitPullRebase,
+  onGitPush,
+  onGitForcePush,
+  canForcePush,
   onOpenFileBrowser,
   onCompareDiff,
   onRunRecipe,
@@ -289,6 +315,10 @@ export function WorktreeMenuItems({
   pluginItems,
 }: WorktreeMenuItemsProps) {
   const source = useMenuActionSource();
+  // Group labels in the Extensions submenu name a plugin to the user, and a
+  // contribution's `pluginId` is the instance key — raw, that prints a
+  // machine-local project id (#12211). Fallback is the manifest id, never the key.
+  const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
 
   /** A count is part of what the row does, so it belongs in the accessible
    *  name too — the muted trailing slot is `aria-hidden` decoration. */
@@ -411,6 +441,199 @@ export function WorktreeMenuItems({
         Review
       </C.SubTrigger>
       <C.SubContent>{reviewRows}</C.SubContent>
+    </C.Sub>
+  );
+
+  // ------------------------------------------------------------------- Git
+  // Shared submenu: #12090 adds pull/push rows and #12092 adds base-branch and
+  // recovery rows to this same `gitRows` array. Kept as an array rather than
+  // inlined children so those land as additional entries instead of a conflict
+  // over one JSX block.
+
+  // Branch-bearing rows only. `copyableBranchName` pairs `branch` with
+  // `isDetached` because the status pass leaves a stale branch name behind when
+  // a worktree detaches — a pull/push row would name a branch that is not
+  // checked out. Fetch has no such problem: it only moves remote-tracking refs.
+  const gitBranch = copyableBranchName(worktree);
+  // `tracking` is the explicit upstream field, and it only exists once the
+  // status pass has run. Reading `aheadCount === undefined` instead would
+  // conflate "no upstream" with "not measured yet" and make a freshly created
+  // worktree claim it has no upstream before anything had looked — a state
+  // this menu has no business asserting. `undefined` here means exactly that:
+  // unknown.
+  const hasUpstream =
+    worktree.worktreeChanges == null ? undefined : Boolean(worktree.worktreeChanges.tracking);
+  // Stays live even at `behindCount === 0`: the snapshot is a cached read, and
+  // pulling is how you find out it was stale. It also stays live while the
+  // upstream is unknown — the action's own error is a better answer than a row
+  // that guesses. Push is the asymmetric one below because a push with nothing
+  // ahead genuinely does nothing.
+  const canPullRebase = Boolean(onGitPullRebase) && hasUpstream !== false;
+  // Measured against the UPSTREAM, while a triangular setup can push somewhere
+  // else entirely (`branch.pushRemote`/`remote.pushDefault`), so zero-ahead can
+  // in principle still have commits to publish. Accepted: the row stays live
+  // whenever the count is unknown, and the push dialog resolves the real
+  // destination, so the worst case is a disabled row on a config where
+  // ReviewHub and the palette still push.
+  const nothingToPush = worktree.aheadCount === 0;
+  const showForcePush = gitBranch !== null && Boolean(onGitForcePush) && Boolean(canForcePush);
+
+  // Acting on the base branch the card already measures itself against
+  // (#12092). Rows dispatch through ActionService rather than taking callback
+  // props: the confirm, the halt routing and the refresh all live in the action
+  // and are the same wherever it is dispatched from, so threading four more
+  // callbacks through both menu surfaces would only add places to forget one.
+  //
+  // Recovery REPLACES the start rows while an operation is in flight, rather
+  // than sitting beside them disabled. A worktree mid-rebase has exactly one
+  // useful next move and it is not "start another rebase" — and the main-process
+  // handler refuses that anyway, so a disabled row would only restate a
+  // prohibition the menu is already able to express by omission.
+  const baseBranchName = worktree.baseBranchName ?? null;
+  const baseOperation = toRepoOperationState(worktree.repoState);
+  // `worktreeChanges`, NOT `repoState`: the snapshot only publishes `repoState`
+  // while an operation is in progress (`GitStatusPass` skips the CLEAN/DIRTY
+  // publication entirely), so reading dirtiness from it would call every clean
+  // worktree dirty and every dirty one clean.
+  const hasUncommittedChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
+  const isStatusUnknown = worktree.worktreeChanges == null;
+  const baseBehind = worktree.baseBehindCount ?? null;
+
+  // Ordered by which the user can act on first, and every one of them is a
+  // reason the operation would fail rather than a guess at intent — a row
+  // disabled for a reason the user cannot see reads as arbitrary.
+  const baseBlockedReason = !baseBranchName
+    ? "No base branch"
+    : worktree.isDetached
+      ? "No branch checked out"
+      : isStatusUnknown
+        ? "Checking status…"
+        : hasUncommittedChanges
+          ? "Commit or stash first"
+          : baseBehind === 0
+            ? "Up to date"
+            : null;
+
+  // Fire-and-forget on purpose. `ActionService.dispatch` CATCHES an action's
+  // error and resolves `{ok: false}`, so a result read here would be one of
+  // several places each having to build its own error copy — the git actions
+  // raise the toast themselves, from the classified `gitReason`, for every
+  // dispatch source rather than just this one.
+  const dispatchGit = (actionId: ActionId, args: Record<string, unknown>) =>
+    void actionService.dispatch(actionId, { worktreeId: worktree.id, ...args }, { source });
+
+  const gitRows = [
+    gitBranch !== null && onGitPullRebase && (
+      <C.Item
+        key="pull-rebase"
+        onSelect={() => onGitPullRebase(source)}
+        disabled={!canPullRebase}
+        aria-label={canPullRebase ? "Pull and rebase" : "Pull and rebase, no upstream"}
+      >
+        <ArrowDown className={ICON} />
+        Pull and rebase
+        {!canPullRebase && <C.Meta>No upstream</C.Meta>}
+      </C.Item>
+    ),
+    gitBranch !== null && onGitPush && (
+      <C.Item
+        key="push"
+        onSelect={() => onGitPush(source)}
+        disabled={nothingToPush}
+        aria-label={nothingToPush ? "Push, nothing to push" : "Push"}
+      >
+        <ArrowUp className={ICON} />
+        Push
+        {nothingToPush && <C.Meta>Nothing to push</C.Meta>}
+      </C.Item>
+    ),
+    <C.Item
+      key="fetch"
+      onSelect={() =>
+        void actionService.dispatch("git.fetch", { worktreeId: worktree.id }, { source })
+      }
+    >
+      <RefreshCw className={ICON} />
+      Fetch
+    </C.Item>,
+    <C.Item
+      key="fetch-prune"
+      onSelect={() =>
+        void actionService.dispatch(
+          "git.fetch",
+          { worktreeId: worktree.id, prune: true },
+          { source }
+        )
+      }
+    >
+      <Scissors className={ICON} />
+      Fetch and prune
+    </C.Item>,
+    ...(baseOperation
+      ? [
+          <C.Item
+            key="git-continue"
+            onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
+          >
+            <Play className={ICON} />
+            Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
+          </C.Item>,
+          <C.Item
+            key="git-abort"
+            onSelect={() =>
+              dispatchGit("git.abortRepositoryOperation", { operation: baseOperation })
+            }
+            destructive
+          >
+            <OctagonX className={ICON} />
+            Abort {OPERATION_LABEL[baseOperation].toLowerCase()}…
+          </C.Item>,
+        ]
+      : [
+          <C.Item
+            key="git-rebase-onto-base"
+            onSelect={() => dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })}
+            disabled={baseBlockedReason !== null}
+          >
+            <GitBranch className={ICON} />
+            {baseBranchName ? `Rebase onto ${baseBranchName}…` : "Rebase onto base branch…"}
+            {baseBlockedReason ? (
+              <C.Meta>{baseBlockedReason}</C.Meta>
+            ) : (
+              baseBehind != null && baseBehind > 0 && <C.Meta>{baseBehind}</C.Meta>
+            )}
+          </C.Item>,
+          <C.Item
+            key="git-merge-base"
+            onSelect={() =>
+              dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
+            }
+            disabled={baseBlockedReason !== null}
+          >
+            <GitMerge className={ICON} />
+            {baseBranchName ? `Merge ${baseBranchName} in…` : "Merge base branch in…"}
+            {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
+          </C.Item>,
+        ]),
+    // Rules off the one row here that discards published commits. The
+    // separator rides with the row so it can never strand when the lease is
+    // absent, which is the common case.
+    showForcePush && <C.Separator key="force-push-rule" />,
+    showForcePush && (
+      <C.Item key="force-push" onSelect={() => onGitForcePush?.(source)} destructive>
+        <ArrowUpFromLine className={ICON} />
+        Force push with lease…
+      </C.Item>
+    ),
+  ].filter(Boolean);
+
+  const gitSub = gitRows.length > 0 && (
+    <C.Sub key="git">
+      <C.SubTrigger>
+        <GitBranch className={ICON} />
+        Git
+      </C.SubTrigger>
+      <C.SubContent>{gitRows}</C.SubContent>
     </C.Sub>
   );
 
@@ -855,7 +1078,12 @@ export function WorktreeMenuItems({
         {pluginGroups.map(([pluginId, entries], groupIndex) => (
           <Fragment key={pluginId}>
             {pluginGroups.length > 1 && groupIndex > 0 && <C.Separator />}
-            {pluginGroups.length > 1 && <C.Label>{pluginId}</C.Label>}
+            {pluginGroups.length > 1 && (
+              <C.Label>
+                {pluginMetaById.get(pluginId)?.displayName ??
+                  pluginManifestIdFromInstanceKey(pluginId)}
+              </C.Label>
+            )}
             {entries.map((entry) => (
               <C.Item
                 key={`${entry.pluginId}:${entry.item.actionId}`}
@@ -886,7 +1114,7 @@ export function WorktreeMenuItems({
 
   const rows = joinGroups(
     [
-      compact(launchSub, openSub, reviewSub),
+      compact(launchSub, openSub, reviewSub, gitSub),
       compact(sessionsSub, recipesSub, runtimeSub),
       compact(linkedWorkSub, copySub, organizeSub, extensionsSub),
       compact(deleteItem),

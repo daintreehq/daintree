@@ -92,15 +92,44 @@ function bucketKey(worktreeId: string | undefined | null): string {
   return worktreeId ?? NO_WORKTREE;
 }
 
+/**
+ * Add a panel to its worktree bucket. Appends by default; with `afterPanelIds`
+ * it splices directly after whichever of those anchors comes first in THIS
+ * bucket, so a positional add (`insertAfterId` in `AddPanelOptions`) leaves the
+ * bucket adjacent the same way the accompanying flat `panelIds` splice does.
+ * `gridTerminals` iterates the bucket while the dock reads `panelIds`, so an
+ * append here would order the two surfaces differently.
+ *
+ * The anchor set is resolved per structure rather than shared: bucket order is
+ * not guaranteed to be flat order projected by worktree, because
+ * `transferBetweenWorktreeIndex` appends to the destination bucket without
+ * moving the flat id. Passing several ids (an explicit tab group's members)
+ * lets each structure anchor on the member it renders the group at.
+ *
+ * Positional adds stay in this targeted helper rather than going through
+ * `buildWorktreeIndex`: a full rebuild replaces every worktree's bucket array,
+ * breaking the reference-stability invariant above for worktrees that never
+ * changed. When no anchor is in this bucket — a dock-global source is visible
+ * in a concrete worktree's dock but lives in the `__none__` bucket — the panel
+ * appends, which is the only adjacency this bucket can express.
+ */
 export function addToWorktreeIndex(
   index: PanelIdsByWorktreeId,
   worktreeId: string | undefined | null,
-  panelId: string
+  panelId: string,
+  afterPanelIds?: readonly string[]
 ): PanelIdsByWorktreeId {
   const key = bucketKey(worktreeId);
   const existing = index[key];
   if (existing && existing.includes(panelId)) return index;
-  const next = existing ? [...existing, panelId] : [panelId];
+  if (!existing) return { ...index, [key]: [panelId] };
+  let anchor = -1;
+  for (const candidate of afterPanelIds ?? []) {
+    const at = existing.indexOf(candidate);
+    if (at !== -1 && (anchor === -1 || at < anchor)) anchor = at;
+  }
+  const next = [...existing];
+  next.splice(anchor === -1 ? next.length : anchor + 1, 0, panelId);
   return { ...index, [key]: next };
 }
 

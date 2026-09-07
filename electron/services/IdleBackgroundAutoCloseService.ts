@@ -14,6 +14,7 @@ import { getHibernationService } from "./HibernationService.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import { notifyProjectPluginsClosed } from "../window/projectPluginLifecycle.js";
 import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -116,9 +117,12 @@ export class IdleBackgroundAutoCloseService {
    * be unconditional; it lifts as soon as the PTY exits.
    */
   private hasLiveAssistantBackend(projectId: string): boolean {
-    const backend = helpSessionService.getAssistantBackend(projectId);
-    if (!backend) return false;
-    return this.ptyClient?.hasTerminal(backend.terminalId) === true;
+    // ANY live lane floors the whole project (#12108). Reclaim closes the
+    // project, not one lane, and it finishes by revoking every session the
+    // project owns — so a lane whose PTY has exited must never be read as
+    // "clear" while a sibling is still running.
+    const backends = helpSessionService.getAssistantBackends(projectId);
+    return backends.some((backend) => this.ptyClient?.hasTerminal(backend.terminalId) === true);
   }
 
   /**
@@ -531,6 +535,15 @@ export class IdleBackgroundAutoCloseService {
     projectStore.updateProjectStatus(projectId, "closed", {
       autoParkedAt: now,
     });
+
+    // Reclaiming the project's memory has to include its plugins: without this
+    // the sweep leaves the workers, startup timers, spawned children and the
+    // native watcher resident, which is the opposite of what an auto-close is
+    // for. Fire-and-forget and self-logging, so a plugin's teardown cannot fail
+    // the sweep. The controller's next-switch sweep stays as defence in depth —
+    // a duplicate close is a no-op.
+    notifyProjectPluginsClosed(projectId);
+
     const updated = projectStore.getProjectById(projectId);
     if (updated) {
       try {

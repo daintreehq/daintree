@@ -1,3 +1,5 @@
+import type { SubmoduleInitPolicy } from "./submodule.js";
+
 /** Git file status */
 export type GitStatus =
   "modified" | "added" | "deleted" | "untracked" | "ignored" | "renamed" | "copied" | "conflicted";
@@ -244,6 +246,66 @@ export interface GitRebaseCommitPreview {
   behind: number;
 }
 
+/**
+ * Which direction a base-branch integration runs (#12092).
+ *
+ * A rebase REPLAYS the branch's own commits on top of the base; a merge brings
+ * the BASE's commits into the branch. The two describe opposite ranges, so the
+ * kind travels with the preview rather than being inferred from it — an empty
+ * commit list means something different for each.
+ */
+export type GitBaseIntegrationKind = "rebase-onto-base" | "merge-base";
+
+/**
+ * What a rebase-onto-base or merge-base would actually act on.
+ *
+ * Separate from {@link GitRebaseCommitPreview}, which is measured against the
+ * branch's OWN upstream and can therefore always name a `GitPushDestination`.
+ * A base target may be a purely local branch in a repo with no remote at all,
+ * which that shape cannot describe truthfully — so this one carries the short
+ * ref as a string and names the remote only when there is one.
+ */
+export interface GitBaseIntegrationCommitPreview {
+  kind: GitBaseIntegrationKind;
+  /** The branch the operation would act on, as git resolved it. */
+  branch: string;
+  /** The base branch the worktree measures itself against. */
+  baseBranch: string;
+  /** Short ref the operation targets — `upstream/develop`, or a bare `develop`. */
+  compareRef: string;
+  /** Remote `compareRef` lives on, or `null` on the local-branch fallback. */
+  remote: string | null;
+  /**
+   * The two commits this preview describes: the branch tip and the base tip.
+   *
+   * Carried so the confirm can hand them back to the write, which refuses if
+   * either has moved. Daintree runs many agents in parallel across worktrees,
+   * so a commit landing while the dialog is open is ordinary rather than a
+   * race to shrug at — without these the user could approve one replay set and
+   * get another. `null` when the ref did not resolve, which the caller treats
+   * as "nothing to pin" rather than as a match.
+   */
+  headOid: string | null;
+  baseOid: string | null;
+  /**
+   * For `rebase-onto-base`, the commits that would be REPLAYED (the branch's
+   * own, measured `--cherry-pick --right-only` so commits the base already
+   * holds as equivalent patches are excluded). For `merge-base`, the commits
+   * that would be BROUGHT IN from the base.
+   */
+  commits: GitRemoteCommit[];
+  /** Commits in the whole set, which may exceed the returned `commits`. */
+  total: number;
+  /**
+   * Commits the base has that the branch does not.
+   *
+   * Carried for the same reason {@link GitRebaseCommitPreview.behind} is: an
+   * empty replay set alone cannot tell "level with the base" from "purely
+   * behind it". Both replay nothing; only the second one moves the branch.
+   */
+  behind: number;
+}
+
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];
@@ -326,7 +388,46 @@ export interface CreateWorktreeOptions {
    * or a body-parse of `Closes/Fixes/Resolves #N`. Undefined when the PR closes no issue.
    */
   sourcePrLinkedIssueNumber?: number;
+  /**
+   * How to populate submodules in the new worktree. Defaults to `inherit`.
+   *
+   * `git worktree add` never populates submodules — not even with
+   * `submodule.recurse=true`, which has no effect on that path — so without
+   * this a worktree of a submodule repository is born unbuildable and the
+   * agent launched into it debugs a phantom missing dependency.
+   *
+   * A setting rather than a prompt: recipes, fleet creation and MCP-driven
+   * creation have nobody to ask.
+   */
+  submoduleInit?: SubmoduleInitPolicy;
+  /**
+   * What to do when `newBranch` is already a local branch. Defaults to
+   * `suffix`, the long-standing behaviour.
+   *
+   * `suffix` — recover the way the host always has: reuse the branch when it is
+   * not checked out anywhere, otherwise create `name-2`, `name-3`, ... The
+   * branch actually used is reported back, so the caller is never left
+   * guessing.
+   *
+   * `error` — fail the create instead of quietly producing a different branch
+   * than the one asked for. This is the mode a caller wants when the branch
+   * name is load-bearing (an agent creating a worktree for a specific
+   * pre-existing branch, a campaign keyed on exact names).
+   *
+   * Honoured in the host and nowhere else: collision detection rides the `git
+   * worktree add` failure, which is atomic. A renderer-side pre-flight cannot
+   * implement either policy, because checking a name reserves nothing.
+   *
+   * Ignored when `useExistingBranch` is set — reuse is not a collision.
+   */
+  collisionPolicy?: WorktreeBranchCollisionPolicy;
 }
+
+/**
+ * How {@link CreateWorktreeOptions.collisionPolicy} resolves a branch-name
+ * collision. See that field for the semantics.
+ */
+export type WorktreeBranchCollisionPolicy = "suffix" | "error";
 
 /** Git commit author */
 export interface GitCommitAuthor {

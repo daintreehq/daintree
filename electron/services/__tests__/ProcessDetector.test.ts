@@ -34,7 +34,7 @@ function agentCommitLogs(): string[] {
     .filter((message) => message.includes("agent identity committed"));
 }
 
-type ProcessNode = { pid: number; comm: string; command: string };
+type ProcessNode = { pid: number; comm: string; command: string; executablePath?: string };
 
 function createCacheMock() {
   const listeners = new Set<() => void>();
@@ -2311,6 +2311,101 @@ describe("ProcessDetector", () => {
         expect.any(Number)
       );
       expect(imagePathProbe.readBasename).toHaveBeenCalledWith(200);
+    });
+
+    it("takes image evidence from the census row, without probing, when it carries one", () => {
+      // The Windows shape after #12243: `ExecutablePath` rides along in the
+      // `Win32_Process` census, so the per-PID `powershell.exe` the probe used
+      // to start for the same field is not needed. Same rescue as above, zero
+      // subprocesses.
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        {
+          pid: 200,
+          comm: "app-runner",
+          command: "app-runner",
+          executablePath: "C:\\Program Files\\Claude\\claude.exe",
+        },
+      ]);
+      const imagePathProbe = createImagePathProbeMock({ 200: null });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-image-census",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ detected: true, detectionState: "agent", agentType: "claude" }),
+        expect.any(Number)
+      );
+      expect(imagePathProbe.readBasename).not.toHaveBeenCalled();
+    });
+
+    it("works from the census row with no probe wired at all", () => {
+      // Windows constructs `ImagePathProbe` but it reports the platform
+      // unsupported, so detection cannot depend on one being present.
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        {
+          pid: 200,
+          comm: "app-runner",
+          command: "app-runner",
+          executablePath: "C:\\Program Files\\Claude\\claude.exe",
+        },
+      ]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-image-census-noprobe",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ detected: true, agentType: "claude" }),
+        expect.any(Number)
+      );
+    });
+
+    it("falls back to the probe for a row the census could not resolve", () => {
+      // CIM returns null `ExecutablePath` for processes it cannot open. On
+      // macOS/Linux there is no census path at all, so the probe stays the only
+      // source and must still be reached.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "app-runner", command: "app-runner" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-image-census-fallback",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(imagePathProbe.readBasename).toHaveBeenCalledWith(200);
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ detected: true, agentType: "claude" }),
+        expect.any(Number)
+      );
     });
 
     it("ignores image-path basename when it returns null", () => {

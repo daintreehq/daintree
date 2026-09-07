@@ -203,7 +203,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
       onDragStart={handleDragStart}
       onClick={handleClick}
       className={cn(
-        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded px-2 font-mono text-xs",
+        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded px-2 text-xs",
         // Neutral hover, no selected state: clicking a row always replaces what
         // this listing is showing, so no row is ever the standing selection —
         // a highlight would only ever paint for the frame before it unmounts.
@@ -224,7 +224,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
       <span className="w-20 shrink-0 text-right tabular-nums text-text-secondary">
         {formatSize(row)}
       </span>
-      <span className="w-24 shrink-0 truncate text-right text-text-secondary">
+      <span className="w-24 shrink-0 truncate text-right tabular-nums text-text-secondary">
         {row.mtimeMs == null ? UNKNOWN : formatRelativeTime(row.mtimeMs)}
       </span>
     </div>

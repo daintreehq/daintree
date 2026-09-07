@@ -68,6 +68,123 @@ const NODE_BUILTIN_EXTERNALS: readonly string[] = [
   ...builtinModules.map((m) => `node:${m}`),
 ];
 
+/**
+ * Vite plugin names that mean the build is running Tailwind itself, and CSS
+ * at-rules that mean a stylesheet is.
+ *
+ * Daintree compiles a plugin's Tailwind classes at runtime, against the running
+ * host's Tailwind and the running host's theme. A plugin that ALSO compiles
+ * Tailwind ships a second, independently-versioned copy of the same utilities:
+ * duplicate rules across two sheets, where document order replaces Tailwind's
+ * own utility ordering (`p-4` is meant to sort before `px-3`, and which sheet
+ * each came from would decide it instead). Preflight from a plugin sheet would
+ * restyle the host outright.
+ *
+ * Failing the build is the only place this is catchable. At runtime it looks
+ * like a plugin that is mostly styled, which is precisely the failure mode the
+ * runtime contract exists to remove.
+ */
+function isTailwindPluginName(name: string): boolean {
+  // `@tailwindcss/vite` does not register a plugin under its own package name —
+  // it contributes `@tailwindcss/vite:scan`, `@tailwindcss/vite:generate:serve`
+  // and `@tailwindcss/vite:generate:build`. An equality check against the
+  // package name matches none of them and silently never fires.
+  return name === "tailwindcss" || name.startsWith("@tailwindcss/vite");
+}
+
+/** Tailwind's `@tailwind` layer names, in v4 and v3 spelling. */
+const TAILWIND_LAYERS = new Set(["base", "components", "utilities", "screens", "variants"]);
+
+/** Stylesheet languages whose `//` runs to end of line. Plain CSS has no such form. */
+const LINE_COMMENT_EXTENSIONS = /\.(?:scss|sass|less|styl|stylus)(?:\?|$)/;
+
+/**
+ * The Tailwind entry directive this stylesheet compiles, or `null`.
+ *
+ * A real scanner rather than regexes over blanked text, because blanking is not
+ * lexical and fails in BOTH directions — each of these is a case a regex pass
+ * got wrong:
+ *
+ *   - `.a{content:"/*"} @tailwind utilities; .b{content:"*\/"}` — the quoted
+ *     fragments are not a comment, but a comment regex reads them as one and
+ *     erases the real directive between them. Tailwind compiles that file.
+ *   - `.a::after { content: '@import "tailwindcss"' }` — an at-rule inside a
+ *     string is text, and refusing the build over it is an accusation the
+ *     author cannot act on.
+ *   - `// Remove @tailwind utilities;` in a `.scss` file — a line comment, which
+ *     a CSS-only comment regex does not recognise at all.
+ *
+ * Walking the source keeps strings and comments out of consideration by
+ * construction, so only an at-rule the compiler would actually see is reported.
+ */
+function findTailwindEntry(code: string, id: string): string | null {
+  const lineComments = LINE_COMMENT_EXTENSIONS.test(id);
+  let index = 0;
+
+  while (index < code.length) {
+    const char = code[index];
+
+    if (char === "/" && code[index + 1] === "*") {
+      const end = code.indexOf("*/", index + 2);
+      index = end === -1 ? code.length : end + 2;
+      continue;
+    }
+    if (lineComments && char === "/" && code[index + 1] === "/") {
+      const end = code.indexOf("\n", index + 2);
+      index = end === -1 ? code.length : end + 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index = skipCssString(code, index);
+      continue;
+    }
+    if (char === "@") {
+      const rule = /^@([a-zA-Z-]+)([^;{]*)/.exec(code.slice(index));
+      if (rule) {
+        const [matched, name, params] = rule as unknown as [string, string, string];
+        if (name === "import" && /^\s*["']tailwindcss["'/]/.test(params)) {
+          return '@import "tailwindcss"';
+        }
+        // No trailing `;` required: Tailwind accepts `@tailwind utilities` at
+        // end of file, so demanding the semicolon left a bypass open.
+        const layer = /^\s+([a-zA-Z-]+)\s*$/.exec(params)?.[1];
+        if (name === "tailwind" && layer && TAILWIND_LAYERS.has(layer)) {
+          return `@tailwind ${layer}`;
+        }
+        index += matched.length;
+        continue;
+      }
+    }
+    index++;
+  }
+  return null;
+}
+
+/** Index just past the closing quote of the CSS string opening at `openIndex`. */
+function skipCssString(code: string, openIndex: number): number {
+  const quote = code[openIndex];
+  let index = openIndex + 1;
+  while (index < code.length) {
+    const char = code[index];
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === quote) return index + 1;
+    // A CSS string cannot span a raw newline; stopping here keeps an
+    // unterminated quote from swallowing the rest of the file.
+    if (char === "\n") return index;
+    index++;
+  }
+  return index;
+}
+
+const CONTRACT_POINTER =
+  "Daintree compiles the Tailwind classes your view uses at runtime, against the host's own " +
+  "theme, so a plugin must not build its own Tailwind CSS — see docs/plugins/views.md. Use " +
+  "utility classes in your markup; ship any plain CSS you still need as root-scoped rules in " +
+  "`@layer components`. `@apply` is not part of the plugin contract.";
+
 /** Build target for a plugin entry. `"browser"` (default) is the renderer/panel
  * preset; `"node"` is for stdio MCP servers and other Node entries. */
 export type DaintreeBuildTarget = "browser" | "node";
@@ -156,6 +273,42 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
         },
       },
     }),
+    // `configResolved` rather than `config`: the plugin array is only complete
+    // once Vite has merged every source of configuration, so this is the first
+    // point at which "is Tailwind wired into this build" has a true answer.
+    configResolved(resolved) {
+      const offender = resolved.plugins.find((plugin) => isTailwindPluginName(plugin.name));
+      if (offender) {
+        throw new Error(
+          `[daintree-plugin-vite] this build wires the "${offender.name}" Vite plugin. ` +
+            CONTRACT_POINTER
+        );
+      }
+    },
+    // Catches the other half: a stylesheet pulling Tailwind in directly, which
+    // no plugin entry in the config would reveal — `@tailwindcss/postcss`, say,
+    // which runs inside Vite's CSS compilation and never appears in the plugin
+    // list at all.
+    //
+    // `order: "pre"` is required, not tidiness. Tailwind's own plugins declare
+    // `enforce: "pre"`, and Vite's core `vite:css` runs ahead of normal user
+    // plugins, so a plain transform would be handed CSS with the directive
+    // already compiled away and would wave the build through.
+    transform: {
+      order: "pre",
+      handler(code, id) {
+        if (!/\.(?:css|pcss|postcss|scss|sass|less|styl|stylus)(?:\?|$)/.test(id)) return null;
+        const directive = findTailwindEntry(code, id);
+        if (directive) {
+          throw new Error(
+            `[daintree-plugin-vite] ${id} compiles Tailwind itself ` +
+              `(found \`${directive}\`). ` +
+              CONTRACT_POINTER
+          );
+        }
+        return null;
+      },
+    },
     // Fail the build on any React subpath that is externalized (matched by the
     // regexes above) but is NOT served by the host import map. Without this the
     // bundle builds clean and only fails at load with an unresolved bare

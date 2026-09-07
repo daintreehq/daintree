@@ -1,7 +1,7 @@
 {
   "name": "daintree",
   "productName": "Daintree",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "description": "Daintree IDE - An Electron-based development environment",
   "license": "Apache-2.0",
   "sideEffects": [
@@ -29,7 +29,7 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.23.2"
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"
@@ -72,9 +72,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck:projects",
-    "typecheck:projects": "tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json && tsc --noEmit -p packages/daintree-plugin/tsconfig.json && tsc --noEmit -p packages/create-daintree-plugin/tsconfig.json && tsc --noEmit -p packages/plugin-sdk/tsconfig.json && tsc --noEmit -p packages/plugin-testing/tsconfig.json && tsc --noEmit -p packages/plugin-vite/tsconfig.json && tsc --noEmit -p tsconfig.plugins.json",
+    "typecheck:projects": "tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json && tsc --noEmit -p packages/daintree-plugin/tsconfig.json && tsc --noEmit -p packages/create-daintree-plugin/tsconfig.json && tsc --noEmit -p packages/plugin-sdk/tsconfig.json && tsc --noEmit -p packages/plugin-testing/tsconfig.json && tsc --noEmit -p packages/plugin-vite/tsconfig.json && tsc --noEmit -p tsconfig.plugins.json && tsc --noEmit -p tsconfig.plugin-views.json && tsc --noEmit -p tsconfig.perf.json",
     "packages:build": "npm run build --workspace=packages/plugin-sdk --workspace=packages/plugin-testing --workspace=packages/plugin-vite --workspace=packages/daintree-plugin --workspace=packages/create-daintree-plugin",
     "build:sample-rich-view": "npm run build --workspace=packages/plugin-vite && vite build plugins/sample/rich-daintree --config plugins/sample/rich-daintree/vite.config.ts",
+    "build:sample-file-tree": "npm run build --workspace=packages/plugin-sdk && npm run build --workspace=packages/plugin-vite && vite build plugins/sample/file-tree --config plugins/sample/file-tree/vite.config.ts",
     "check:channels": "node scripts/ci/check-channel-drift.mjs",
     "check:preload-backdoors": "node scripts/ci/check-preload-backdoors.mjs",
     "check:crash-loop-constants": "node scripts/ci/check-crash-loop-constants.mjs",
@@ -89,6 +90,10 @@
     "check:help": "node scripts/build-help-prompts.mjs --check",
     "check:confirm-wiring": "node scripts/codegen/confirm-wiring.mjs",
     "check:plugin-manifests": "tsx scripts/validate-plugin-manifests.ts",
+    "check:sample-views": "node scripts/ci/check-sample-views.mjs --check",
+    "check:design-contract": "node scripts/ci/check-design-contract.mjs",
+    "codegen:plugin-style-vocabulary": "node scripts/codegen/plugin-style-vocabulary.mjs",
+    "check:plugin-style-vocabulary": "node scripts/codegen/plugin-style-vocabulary.mjs --check",
     "check:process-tools": "tsx scripts/ci/check-process-tool-registry.ts",
     "api-surface:update": "npm run build --workspace=packages/plugin-sdk && node scripts/ci/check-api-surface.mjs",
     "check:api-surface": "npm run build --workspace=packages/plugin-sdk && node scripts/ci/check-api-surface.mjs --check",
@@ -109,7 +114,7 @@
     "test-ratio:check": "node scripts/check-test-ratio.mjs",
     "test-ratio:update": "node scripts/check-test-ratio.mjs --update",
     "test-ratio:pr": "node scripts/check-pr-test-ratio.mjs",
-    "check": "npm run typecheck && npm run check:channels && npm run check:crash-loop-constants && npm run check:node-version && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:help && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:process-tools && npm run check:api-surface && npm run lint:ratchet && npm run format:check",
+    "check": "npm run typecheck && npm run check:channels && npm run check:crash-loop-constants && npm run check:node-version && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:help && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:plugin-schema && npm run check:sample-views && npm run check:design-contract && npm run check:plugin-style-vocabulary && npm run check:process-tools && npm run check:api-surface && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",
     "test:freeze-harness": "node scripts/run-freeze-harness.mjs",
@@ -132,6 +137,7 @@
     "test:e2e:nightly": "npx playwright test --project=nightly --workers=1",
     "test:e2e:screenshots": "npx playwright test --project=screenshots",
     "test:e2e:demo": "npx playwright test --project=demo --workers=1",
+    "test:e2e:mechanism": "npx playwright test --config=playwright.mechanism.config.ts",
     "screenshots:dev": "cross-env DAINTREE_SCREENSHOT_SCALE=2 npx playwright test --project=screenshots",
     "perf": "tsx scripts/perf/index.ts",
     "pattern-discovery:run": "tsx scripts/pattern-discovery/runner.ts",
@@ -144,6 +150,10 @@
     "eval:turn-outcome": "tsx scripts/eval/turnOutcome.ts",
     "prepare": "husky",
     "codegen:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts",
+    "codegen:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts",
+    "codegen:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts",
+    "check:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts --check",
+    "check:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts --check",
     "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check"
   },
   "dependencies": {
@@ -164,8 +174,10 @@
     "posix-pty-reaper": "file:electron/native/posix-pty-reaper",
     "proper-lockfile": "^4.1.2",
     "react-colorful": "^5.6.1",
+    "remark-parse": "^11.0.0",
     "safe-stable-stringify": "^2.5.0",
     "smol-toml": "^1.6.1",
+    "unified": "^11.0.5",
     "win-job-object": "file:electron/native/win-job-object",
     "yauzl": "^3.4.0"
   },
@@ -230,12 +242,14 @@
     "@rolldown/plugin-babel": "^0.2.2",
     "@sentry/electron": "^7.10.0",
     "@tailwindcss/typography": "^0.5.19",
-    "@tailwindcss/vite": "^4.1.17",
+    "@tailwindcss/vite": "4.3.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/culori": "^4.0.1",
+    "@types/hast": "^3.0.5",
     "@types/jsdom": "^28.0.0",
+    "@types/mdast": "^4.0.4",
     "@types/node": "^22.19.15",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -310,7 +324,7 @@
     "stopword": "^3.1.5",
     "stubborn-fs": "^2.0.0",
     "tailwind-merge": "^3.4.0",
-    "tailwindcss": "^4.0.0",
+    "tailwindcss": "4.3.3",
     "ts-morph": "^28.0.0",
     "tsx": "^4.21.0",
     "tw-animate-css": "1.4.0",

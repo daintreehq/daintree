@@ -4,7 +4,9 @@
 
 This document defines the terminal identity model. It deliberately avoids a separate "agent panel" runtime path. A terminal can run `npm`, then `claude`, then return to the shell, then run `codex`; chrome and agent capability follow the live process each time.
 
-See also: [terminal-lifecycle.md](./terminal-lifecycle.md) for process runtime status, and [agent-activity-monitoring.md](./agent-activity-monitoring.md) for activity state detection.
+See also: [terminal-lifecycle.md](./terminal-lifecycle.md) for process runtime status, [agent-activity-monitoring.md](./agent-activity-monitoring.md) for activity state detection, and [agent-state-tracking-strategy.md](./agent-state-tracking-strategy.md) for why detection is passive.
+
+A note on the helper names below: `deriveTerminalChrome`, `deriveTerminalRuntimeIdentity`, `getRuntimeAgentId` and `isAgentTerminal` are the exported API. `deriveChromeAgentIdentity`, `hasExplicitAgentExit` and `isDemotedExAgent` are module-internal steps — named here because the rules hang off them, not because you can call them.
 
 ## The Rule
 

@@ -1003,7 +1003,10 @@ describe("handleDirectoryOpen window targeting", () => {
     const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
     await handleDirectoryOpen(PROJECT.path, targetWindow);
 
-    expect(targetManager.switchTo).toHaveBeenCalledWith(PROJECT.id, PROJECT.path);
+    expect(targetManager.switchTo).toHaveBeenCalledWith(PROJECT.id, PROJECT.path, {
+      switchId: expect.any(String),
+      entryPoint: "menu",
+    });
     expect(newestManager.switchTo).not.toHaveBeenCalled();
   });
 });

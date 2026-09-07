@@ -21,6 +21,8 @@ import { FolderOpen, FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { isProseFilePath } from "@/components/FileViewer/isProseFile";
+import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
@@ -136,7 +138,9 @@ type LoadState =
 // otherwise use to reset playback. `revealed` is returning to this project:
 // silent like ambient, because nobody asked for a skeleton, but forcing the
 // reload key like explicit, because everything that happened while the view sat
-// cached is precisely what this pane cannot otherwise see.
+// cached is precisely what this pane cannot otherwise see — with one exception,
+// a player already running, whose position outranks bytes nobody asked for
+// (#12165).
 type FileLoadIntent = "explicit" | "ambient" | "revealed";
 
 // Which surface a toolbar action aims the current file at. `reveal` is always
@@ -266,15 +270,25 @@ export function FilePane({
   const setFilePanelPath = usePanelStore((state) => state.setFilePanelPath);
   const markdownWrapLines = usePreferencesStore((state) => state.markdownWrapLines);
   const setMarkdownWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
+  // Global, like wrap: a reading size that reset per panel or per file would
+  // make paging through documents feel unstable (#12134).
+  const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);
+  const setMarkdownFontSize = usePreferencesStore((state) => state.setMarkdownFontSize);
   // Shared with the diff panel so a user's split/unified and wrap choices carry
   // across every surface that shows a diff.
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
   const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
+  const setDiffWrapLines = usePreferencesStore((state) => state.setDiffWrapLines);
 
   const heightHold = useHeightHold();
 
   const filePath = panel?.filePath;
   const isMarkdown = filePath !== undefined && isMarkdownFilePath(filePath);
+  // `null` means auto — prose wraps, code doesn't. Resolved during render so a
+  // `.md` diff is already wrapped on first paint, and separate from
+  // `markdownWrapLines`, which owns Source view only (#12170).
+  const effectiveDiffWrapLines =
+    diffWrapLines ?? (filePath !== undefined && isProseFilePath(filePath));
   const isHtml = filePath !== undefined && isHtmlFilePath(filePath);
   // Markdown and HTML get a Rendered mode; every other file is source-only.
   const isRenderable = isMarkdown || isHtml;
@@ -495,6 +509,15 @@ export function FilePane({
   // every successful load, not just entry-file changes, so relative assets stay
   // fresh too. Never a `loadFile` dependency — that would re-trigger the load.
   const [reloadNonce, setReloadNonce] = useState(0);
+  // Whether the media preview on screen is mid-playback. A ref, not state: the
+  // only reader is `loadFile`, which runs as an event and would rather not be
+  // re-created (and re-run its effects) every time someone presses play. The
+  // preview takes its own `true` back on unmount or a source change, so a set
+  // flag always names the player currently on screen (#12165).
+  const mediaPlayingRef = useRef(false);
+  const handleMediaPlayingChange = useCallback((playing: boolean) => {
+    mediaPlayingRef.current = playing;
+  }, []);
   // Which surface a toolbar Refresh press is currently spinning for (or null).
   // The mode is captured at click so a mode switch mid-refresh doesn't settle
   // the spin against the wrong signal. Drives the shared SpinningIcon.
@@ -544,6 +567,12 @@ export function FilePane({
       // moves the reload key that a background tick deliberately leaves alone.
       const silent = intent !== "explicit";
       const forceSurfaceReload = intent !== "ambient";
+      // Reveal is the one intent that can arrive while someone is listening: it
+      // is not a request for fresh bytes, it is this pane catching up on a
+      // project it was away from. A track mid-play is worth more than a
+      // re-fetch, so it keeps its key and the next Refresh pulls the rewrite
+      // instead (#12165). Explicit gestures still outrank playback.
+      const keepMediaPlaying = intent === "revealed" && mediaPlayingRef.current;
       if (!filePath) {
         requestRef.current++;
         setContent(null);
@@ -581,8 +610,9 @@ export function FilePane({
         setSanitizedSvg(null);
         // Only a foreground load (open, toolbar Refresh, returning to this
         // project) re-requests the media — an ambient background pass must not
-        // remount the player and reset playback while someone is watching.
-        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
+        // remount the player and reset playback while someone is watching, and
+        // neither may a reveal that finds the player already running.
+        if (forceSurfaceReload && !keepMediaPlaying) setReloadNonce((nonce) => nonce + 1);
         setLoadState("video");
         setErrorCode(null);
         setErrorMessage(null);
@@ -596,8 +626,9 @@ export function FilePane({
         setSanitizedSvg(null);
         // Only a foreground load (open, toolbar Refresh, returning to this
         // project) re-requests the media — an ambient background pass must not
-        // remount the player and reset playback while someone is listening.
-        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
+        // remount the player and reset playback while someone is listening, and
+        // neither may a reveal that finds the player already running.
+        if (forceSurfaceReload && !keepMediaPlaying) setReloadNonce((nonce) => nonce + 1);
         setLoadState("audio");
         setErrorCode(null);
         setErrorMessage(null);
@@ -1021,11 +1052,34 @@ export function FilePane({
         )}
         <FileViewerToolbar.Path path={displayPath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
+          {/* The mirror of Wrap below it: each owns the slot in the mode it
+              applies to, so rendered and source both carry exactly one
+              markdown-specific control rather than a row that grows. */}
+          {isMarkdown && viewMode === "rendered" && (
+            <MarkdownTextSizeControl
+              value={markdownFontSize}
+              onValueChange={setMarkdownFontSize}
+              data-testid="file-pane-text-size"
+            />
+          )}
           {isMarkdown && viewMode === "source" && (
             <FileViewerToolbar.IconButton
               label="Wrap long lines"
               pressed={markdownWrapLines}
               onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
+            >
+              <WrapText className={TOOLBAR_ICON_CLASS} />
+            </FileViewerToolbar.IconButton>
+          )}
+          {/* Diff mode's own wrap, on the shared `diffWrapLines` the diff panel
+              writes — not the markdown one above it, which only ever applied to
+              Source view. Ungated by file type: the diff below renders as text
+              for every file, images and binaries included. */}
+          {viewMode === "diff" && (
+            <FileViewerToolbar.IconButton
+              label="Wrap long lines"
+              pressed={effectiveDiffWrapLines}
+              onClick={() => setDiffWrapLines(!effectiveDiffWrapLines)}
             >
               <WrapText className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
@@ -1039,6 +1093,18 @@ export function FilePane({
               className={TOOLBAR_ICON_CLASS}
             />
           </FileViewerToolbar.IconButton>
+          {/* The raw file text, whichever view mode is showing: rendered
+              markdown and the diff view both copy the source, never what they
+              drew from it. `content` only ever holds a settled read, so the
+              button is absent while one is in flight and for every state that
+              has no text — image, SVG, media, PDF, and reads that failed as
+              binary, oversized or an LFS pointer. Keyed on the path so the
+              confirmation resets when a file is swapped for one whose contents
+              happen to be identical. */}
+          <FileViewerToolbar.CopyContentsButton
+            key={filePath}
+            contents={loadState === "loaded" ? content : null}
+          />
           {/* Reveal is always offered, even for a file the viewer can't render
               (oversized, unsupported video) — the OS file manager is then the
               only way forward. */}
@@ -1151,7 +1217,7 @@ export function FilePane({
                 // so open-in-editor has to join against the same root the
                 // relative paths were derived from.
                 rootPath={diffWorktreePath}
-                wrapLines={diffWrapLines}
+                wrapLines={effectiveDiffWrapLines}
                 onRetry={retryDiff}
               />
             )}
@@ -1260,6 +1326,7 @@ export function FilePane({
             rootPath={effectiveRootPath}
             label={fileName ?? filePath}
             reloadKey={reloadNonce}
+            onPlayingChange={handleMediaPlayingChange}
             onError={(error) => {
               // An allowlisted container can still hold a codec Chromium lacks;
               // name that instead of implying the file is missing.
@@ -1277,6 +1344,7 @@ export function FilePane({
             rootPath={effectiveRootPath}
             label={fileName ?? filePath}
             reloadKey={reloadNonce}
+            onPlayingChange={handleMediaPlayingChange}
             onError={(error) => {
               // An allowlisted extension can still hold a codec Chromium lacks;
               // name that instead of implying the file is missing.
@@ -1308,6 +1376,7 @@ export function FilePane({
               rootPath={effectiveRootPath}
               viewMode="rendered"
               wrapLines={markdownWrapLines}
+              fontSize={markdownFontSize}
               cacheBust={String(reloadNonce)}
               onRendered={heightHold.handleRendered}
             />

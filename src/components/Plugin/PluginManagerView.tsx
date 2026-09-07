@@ -21,6 +21,7 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { logError } from "@/utils/logger";
@@ -32,6 +33,7 @@ import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDeta
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
+import { ProjectPluginSection, ProjectPluginDetailPane } from "./ProjectPluginSection";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
@@ -279,6 +281,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       ? null
       : (pm.plugins.find((p) => p.manifest.name === selectedPluginId) ?? null);
 
+  // Project plugins keep their own selection slot. They arrive from a different
+  // source (`plugin:project-plugins-changed`, not `plugin:list`) and their
+  // manifest ids may legitimately collide with an installed plugin's, so one
+  // shared id would make the detail pane ambiguous exactly where the collision
+  // most needs explaining. Selecting on either side clears the other.
+  const [selectedProjectPluginId, setSelectedProjectPluginId] = useState<string | null>(null);
+  const projectPlugins = useProjectPluginStore((s) => s.plugins);
+  const selectedProjectPlugin =
+    selectedProjectPluginId === null
+      ? null
+      : (projectPlugins.find((p) => p.id === selectedProjectPluginId) ?? null);
+
   // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
   // scroll its target into view.
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -302,6 +316,22 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // Category buckets for the section headers and the catalog pane. Disabled
   // plugins stay in their category (dimmed in place) — see PluginRow.
   const groupedPlugins = useMemo(() => groupPluginsByCategory(pm.plugins), [pm.plugins]);
+
+  // Project rows answer to free text only. The provenance operators describe
+  // installed-plugin sources (`@builtin` / `@installed`), and a project plugin is
+  // neither — matching one against them would be a wrong answer, not a narrow one.
+  const filteredProjectPlugins = useMemo(() => {
+    const parsed = parsePluginQuery(deferredQuery);
+    if (parsed.operators.length > 0) return [];
+    const text = parsed.freeText.trim().toLowerCase();
+    if (text.length === 0) return projectPlugins;
+    return projectPlugins.filter(
+      (p) =>
+        p.displayName.toLowerCase().includes(text) ||
+        p.id.toLowerCase().includes(text) ||
+        (p.description ?? "").toLowerCase().includes(text)
+    );
+  }, [projectPlugins, deferredQuery]);
 
   // Lowercased whitespace-split tokens of the live query, for chip active
   // state. Derived from `query` (not the deferred value) so the chip highlight
@@ -411,6 +441,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   }, [highlightedPluginId]);
 
   const hasPlugins = pm.plugins.length > 0;
+  // The list, the empty state and the detail placeholder all key off "is there
+  // anything to show" — a project that ships plugins with none installed globally
+  // must not fall through to "No plugins installed".
+  const hasAnyPlugins = hasPlugins || projectPlugins.length > 0;
   // Any enabled/disabled toggle this session that hasn't taken effect yet leaves
   // its plugin flagged `pendingRestart`. Surface a single header bar while at
   // least one is outstanding — the changes only load or unload on relaunch.
@@ -549,10 +583,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         <div className="w-80 shrink-0 border-r border-border-default flex flex-col overflow-hidden">
           <div className="p-4 border-b border-border-default shrink-0 space-y-3">
             <div>
-              <h3 className="text-sm font-medium text-text-primary">Installed plugins</h3>
+              <h3 className="text-sm font-medium text-text-primary">All plugins</h3>
               <p className="text-xs text-text-secondary mt-1 select-text">
                 Extend Daintree with panels, commands, and integrations. Turn one off to keep its
-                settings without loading it.
+                settings without loading it. Plugins this project ships are listed first.
               </p>
             </div>
             <div className="flex flex-col gap-2">
@@ -635,7 +669,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 <RowSkeleton />
               </div>
             ) : null
-          ) : !hasPlugins && !pm.error ? (
+          ) : !hasAnyPlugins && !pm.error ? (
             // banner above owns that case so we don't invite a redundant install.
             <EmptyState
               variant="zero-data"
@@ -644,7 +678,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               title="No plugins installed"
               description="Install one from a file or URL to add panels, commands, and integrations."
             />
-          ) : !hasPlugins ? null : isSearchActive && filteredPlugins.length === 0 ? (
+          ) : !hasAnyPlugins ? null : isSearchActive &&
+            filteredPlugins.length === 0 &&
+            filteredProjectPlugins.length === 0 ? (
             // Filtered to nothing — offer a one-tap escape back to the full list.
             <div className="flex-1 min-h-0 flex items-center justify-center">
               <EmptyState
@@ -667,8 +703,20 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               className="flex-1 min-h-0"
               scrollClassName="p-2 space-y-4"
               role="listbox"
-              aria-label="Installed plugins"
+              aria-label="All plugins"
             >
+              {/* The project's own plugins lead the list: a folder inside the
+                  repository the user just opened is the least expected thing
+                  here, and burying it under a category would make its
+                  provenance the hardest fact to find. */}
+              <ProjectPluginSection
+                plugins={filteredProjectPlugins}
+                selectedId={selectedProjectPluginId}
+                onSelect={(id) => {
+                  setSelectedPluginId(null);
+                  setSelectedProjectPluginId(id);
+                }}
+              />
               {isSearchActive
                 ? // Flat filtered list — grouping is meaningless across filters
                   // like @installed, and a flat list keeps the listbox free of
@@ -679,11 +727,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                       plugin={plugin}
                       selected={plugin.manifest.name === selectedPluginId}
                       toggling={pm.pending.has(plugin.manifest.name)}
-                      onSelect={() =>
+                      onSelect={() => {
+                        setSelectedProjectPluginId(null);
                         setSelectedPluginId((prev) =>
                           prev === plugin.manifest.name ? null : plugin.manifest.name
-                        )
-                      }
+                        );
+                      }}
                       onToggle={() => void pm.handleToggle(plugin)}
                       highlighted={highlightedPluginId === plugin.manifest.name}
                       innerRef={(el) => {
@@ -720,11 +769,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                             plugin={plugin}
                             selected={plugin.manifest.name === selectedPluginId}
                             toggling={pm.pending.has(plugin.manifest.name)}
-                            onSelect={() =>
+                            onSelect={() => {
+                              setSelectedProjectPluginId(null);
                               setSelectedPluginId((prev) =>
                                 prev === plugin.manifest.name ? null : plugin.manifest.name
-                              )
-                            }
+                              );
+                            }}
                             onToggle={() => void pm.handleToggle(plugin)}
                             highlighted={highlightedPluginId === plugin.manifest.name}
                             innerRef={(el) => {
@@ -756,15 +806,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             re-initializing PluginSettingsForm drafts from the new plugin's
             stored values, and resetting the detail subtab to Overview. */}
         <ScrollShadow
-          key={selectedPlugin?.manifest.name ?? "catalog"}
+          key={
+            selectedPlugin?.manifest.name ??
+            (selectedProjectPlugin ? `project:${selectedProjectPlugin.id}` : "catalog")
+          }
           className="flex-1 min-h-0"
           // The readable-width caps are left-pinned, which is right for the
           // detail content and the catalog grid but would push the centered
           // no-plugins placeholder off-center in the wide pane — so that case
           // drops the cap. The catalog gets the wider cap; cards auto-fill it.
-          scrollClassName={cn("p-6", selectedPlugin ? "max-w-3xl" : hasPlugins && "max-w-4xl")}
+          scrollClassName={cn(
+            "p-6",
+            selectedPlugin || selectedProjectPlugin ? "max-w-3xl" : hasAnyPlugins && "max-w-4xl"
+          )}
         >
-          {selectedPlugin ? (
+          {selectedProjectPlugin ? (
+            <ProjectPluginDetailPane plugin={selectedProjectPlugin} />
+          ) : selectedPlugin ? (
             <PluginDetailPane
               plugin={selectedPlugin}
               checkingUpdate={pm.checkingUpdate.has(selectedPlugin.manifest.name)}

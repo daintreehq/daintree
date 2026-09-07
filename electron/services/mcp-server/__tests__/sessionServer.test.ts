@@ -899,9 +899,11 @@ describe("CallTool idempotency dedup", () => {
           resolveDispatch = resolve as (envelope: unknown) => void;
         })
     );
+    const appendAuditRecord = vi.fn();
     const deps = fakeDeps({
       sessionStore: fakeSessionStore("system"),
       dispatchAction,
+      appendAuditRecord,
     });
     const server = createSessionServer("dedup-1", deps);
 
@@ -929,6 +931,21 @@ describe("CallTool idempotency dedup", () => {
     expect(dispatchAction).toHaveBeenCalledTimes(1);
     expect(resultA).toEqual(resultB);
     expect((resultA as { content: Array<{ text: string }> }).content[0].text).toContain("t-1");
+
+    // The in-flight dedup row is the case `startedAt` exists for (#12122):
+    // audit-write order and arrival order genuinely disagree here. B's `dedup`
+    // row is written while A is still suspended on the held dispatch, so it
+    // lands FIRST even though A arrived first — a reader ordering by write
+    // time would invert the two. Their starts restore the truth.
+    const calls = appendAuditRecord.mock.calls.map(
+      (call) => call[0] as { outcome: { kind: string }; startedAt: number }
+    );
+    expect(calls.map((c) => c.outcome.kind)).toEqual(["dedup", "result"]);
+    const [dedupCall, dispatchCall] = calls;
+    expect(typeof dedupCall!.startedAt).toBe("number");
+    expect(typeof dispatchCall!.startedAt).toBe("number");
+    // A entered the handler no later than B, despite settling after it.
+    expect(dispatchCall!.startedAt).toBeLessThanOrEqual(dedupCall!.startedAt);
   });
 
   it("returns the cached result for a post-completion duplicate within TTL", async () => {
@@ -1174,11 +1191,27 @@ describe("CallTool idempotency dedup", () => {
     await callTool(server, { name: "terminal.new", arguments: args });
     await callTool(server, { name: "terminal.new", arguments: args });
 
-    const outcomes = appendAuditRecord.mock.calls.map(
-      (call) => (call[0] as { outcome: { kind: string } }).outcome.kind
+    const calls = appendAuditRecord.mock.calls.map(
+      (call) => call[0] as { outcome: { kind: string }; startedAt: number }
     );
-    expect(outcomes).toContain("dedup");
-    expect(outcomes.filter((k) => k === "dedup")).toHaveLength(1);
+    const outcomes = calls.map((c) => c.outcome.kind);
+    // The original's settlement row is written in the dispatch `finally`,
+    // which runs before the first awaited callTool returns — so the order is
+    // fixed, not merely "contains a dedup".
+    expect(outcomes).toEqual(["result", "dedup"]);
+
+    // The suppressed duplicate is still a call the backend issued, so its row
+    // carries its own start — that is what makes back-to-back vs. overlapping
+    // dispatch distinguishable downstream (#12122).
+    for (const call of calls) {
+      expect(typeof call.startedAt).toBe("number");
+    }
+    const [dispatchCall, dedupCall] = calls;
+    // Two separate CallTool handlers, each taking its own snapshot. They can
+    // legitimately land in the same millisecond, so this asserts ordering, not
+    // distinctness — the guarantee is that the dedup row never reaches back
+    // for a start earlier than the call it duplicated.
+    expect(dedupCall!.startedAt).toBeGreaterThanOrEqual(dispatchCall!.startedAt);
   });
 
   it("treats requestKey:'' as absent (falls through to auto-hash)", async () => {
@@ -1591,16 +1624,17 @@ describe("sessionServer tier-mismatch notifier", () => {
     );
   }
 
-  it("invokes notifyTierMismatch with targetTier when a workbench session calls a system-tier tool", async () => {
+  it("invokes notifyTierMismatch with targetTier when a workbench session calls a tool above its tier", async () => {
     const notify = vi.fn();
     const dispatchAction = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify, dispatchAction });
     const server = createSessionServer("session-A", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.delete is in SYSTEM_TIER_ADDONS — denied at workbench tier.
+    // git.commit is in SYSTEM_TIER_ADDONS — denied at workbench tier, and the
+    // banner's recovery target is the tier that would permit it.
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "git.commit",
       arguments: {},
     })) as { isError?: boolean; content: Array<{ text: string }> };
 
@@ -1610,10 +1644,31 @@ describe("sessionServer tier-mismatch notifier", () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith({
       sessionId: "session-A",
-      toolId: "worktree.delete",
+      toolId: "git.commit",
       tier: "workbench",
       targetTier: "system",
     });
+  });
+
+  it("points a workbench session at `action`, not `system`, for worktree cleanup (#12116)", async () => {
+    // The banner offers the NARROWEST tier that would permit the call, so the
+    // promotion has to reach the recovery prompt too — telling a user to select
+    // `system` for a delete that `action` now covers would over-escalate the
+    // surface they end up granting.
+    const notify = vi.fn();
+    const deps = fakeDeps({ notifyTierMismatch: notify });
+    const server = createSessionServer("session-A2", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "worktree.delete",
+        tier: "workbench",
+        targetTier: "action",
+      })
+    );
   });
 
   it("does not invoke notifyTierMismatch when the call is permitted", async () => {
@@ -1750,6 +1805,14 @@ describe("CallTool live activity notifications (#9759)", () => {
     expect(appendAuditRecord).toHaveBeenCalledWith(
       expect.objectContaining({ capturedTurnId: "turn-xyz" })
     );
+
+    // Same single-snapshot discipline for the dispatch start (#12122): the
+    // audit record must carry the exact value the live started event carries,
+    // not a second Date.now() read that would put the persisted row and the
+    // strip on slightly different starts.
+    const startedAt = (started.mock.calls[0]?.[0] as { startedAt: number }).startedAt;
+    expect(typeof startedAt).toBe("number");
+    expect(appendAuditRecord).toHaveBeenCalledWith(expect.objectContaining({ startedAt }));
   });
 
   it("snapshots the turn id at start so started/settled agree across an FSM clear (#10067)", async () => {
@@ -1784,11 +1847,39 @@ describe("CallTool live activity notifications (#9759)", () => {
     const server = createSessionServer("session-B", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.delete is system-tier — denied at the default workbench tier.
+    // worktree.delete is action-tier (#12116) — still denied at the default
+    // workbench tier, which is all this test needs.
     await callTool(server, { name: "worktree.delete", arguments: {} });
 
     expect(started).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("stamps startedAt on a tier-rejected record that has no live started event (#12122)", async () => {
+    const started = vi.fn();
+    const appendAuditRecord = vi.fn();
+    const deps = fakeDeps({ notifyToolCallStarted: started, appendAuditRecord });
+    const server = createSessionServer("session-U", deps);
+    await server.connect(makeMockTransport());
+
+    const before = Date.now();
+    // worktree.delete is action-tier (#12116) — still denied at the default
+    // workbench tier, which is all this test needs.
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    const after = Date.now();
+
+    // The gate refuses before anything announces, so the audit row is the only
+    // record of this attempt existing. Without its own start it could never be
+    // ordered against the calls around it.
+    expect(started).not.toHaveBeenCalled();
+    expect(appendAuditRecord).toHaveBeenCalledTimes(1);
+    const input = appendAuditRecord.mock.calls[0]?.[0] as {
+      outcome: { kind: string };
+      startedAt: number;
+    };
+    expect(input.outcome.kind).toBe("unauthorized");
+    expect(input.startedAt).toBeGreaterThanOrEqual(before);
+    expect(input.startedAt).toBeLessThanOrEqual(after);
   });
 
   it('flags danger:"confirm" tools on the started event', async () => {
@@ -2358,11 +2449,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("native grant pre-authorizes a tier-permitted confirm tool and consumes a use (#11878)", async () => {
-    // worktree.delete is `danger: "confirm"` but IS on the system-tier
-    // allowlist, so the floor admits it and the tier-denied leg never runs.
-    // Before #11878 that made the grant unreachable and the modal fired on
-    // every call despite an explicit Settings pre-authorization.
-    const sessionStore = fakeSessionStore("system");
+    // worktree.delete is `danger: "confirm"` but IS on the action-tier
+    // allowlist (#12116), so the floor admits it and the tier-denied leg never
+    // runs. Before #11878 that made the grant unreachable and the modal fired
+    // on every call despite an explicit Settings pre-authorization. Pinned at
+    // `action` rather than a wider tier so it fails if that floor moves back.
+    const sessionStore = fakeSessionStore("action");
     // Unref'd for the reason `seedLiveSession` documents: a referenced
     // 1,000,000 ms timer holds the Vitest worker open past the suite.
     const idleTimer = setTimeout(() => {}, 1_000_000);
@@ -2414,7 +2506,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // once its single use is gone the call must still run — just with the
     // modal back. The tier-denied equivalent fails closed instead, because
     // there the grant was the authorization itself.
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("action");
     sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2476,9 +2568,9 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
   it("a tier-permitted call falls back to the modal when the grant dies between peek and consume (#11878)", async () => {
     // The tier still admits the call, so losing the grant costs only the
-    // bypass. Refusing here would report "not permitted for the 'system'
+    // bypass. Refusing here would report "not permitted for the 'action'
     // tier" for an action that tier plainly permits.
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("action");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2600,6 +2692,77 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     expect(checkSpy).not.toHaveBeenCalled();
     expect(dispatchAction).toHaveBeenCalledWith("worktree.list", expect.any(Object), true);
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("terminal.killAll cannot ride a native grant past the confirm modal (#12121)", async () => {
+    // Issuance refuses a scope naming a fan-out tool, so this grant is minted
+    // through the cache directly — the stale/hand-rolled state the peek and
+    // consume guards exist to catch. The floor already admits terminal.killAll
+    // at the system tier, so the call must still run; what it must NOT do is
+    // arrive pre-confirmed or spend a use, because `maxUses` cannot express
+    // "every terminal in the project".
+    const sessionStore = fakeSessionStore("system");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["terminal.killAll"],
+      maxUses: 3,
+    });
+    const consumeSpy = vi.spyOn(sessionStore.grantCache, "consumeNativeGrantUse");
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "terminal.killAll",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    // Dispatched, but unconfirmed — the renderer's modal decides, exactly as it
+    // would with no grant at all.
+    expect(dispatchAction).toHaveBeenCalledWith("terminal.killAll", expect.any(Object), false);
+    expect(consumeSpy).not.toHaveBeenCalled();
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(3);
+    // An untouched budget alone would not prove the grant was left alone: the
+    // post-dispatch refresh slides `expiresAt`, so a refused tool must not
+    // extend the window its eligible siblings are still running on.
+    expect(refreshSpy).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a native grant cannot admit terminal.killAll below the tier floor (#12121)", async () => {
+    // The other leg: at workbench tier nothing else admits the call, so a grant
+    // that covered it would be the authorization itself. It must fail closed
+    // rather than fall through to an unauthorized dispatch.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["terminal.killAll"],
+      maxUses: 3,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "terminal.killAll",
+      arguments: {},
+    })) as { isError?: boolean; content: Array<{ type: string; text: string }> };
+
+    expect(result.isError).toBe(true);
+    // The specific code matters: this must read as an authorization denial the
+    // caller can act on, not a generic dispatch failure.
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({ code: TIER_NOT_PERMITTED_CODE });
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(3);
     sessionStore.grantCache.dispose();
   });
 
@@ -2967,7 +3130,9 @@ describe("worktree resource lifecycle dedup (#10683)", () => {
     expect(minimumPermittingTier("worktree.resource.provision")).toBe("action");
     expect(minimumPermittingTier("worktree.resource.pause")).toBe("action");
     expect(minimumPermittingTier("worktree.resource.resume")).toBe("action");
-    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("system");
+    // Teardown joined its lifecycle siblings on the default floor in #12116; it
+    // stays `danger: "confirm"`, which is what bounds it.
+    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("action");
     expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBe("workbench");
     expect(minimumPermittingTier("cliAvailability.get")).toBe("workbench");
     expect(minimumPermittingTier("hibernation.getConfig")).toBe("workbench");
@@ -3912,6 +4077,165 @@ describe("sessionServer introspection tier filtering", () => {
     expect(body.totalMatches).toBe(1);
   });
 
+  // #12117. The bug this reproduces: an assistant at `action` tier could not
+  // see a higher-tier action at any discovery surface, so it told the user
+  // Daintree has no such feature. It now learns the name exists and needs
+  // `system` — without the name becoming callable anywhere. The exemplar is
+  // `terminal.arm`: the action the bug was filed about, `worktree.delete`, has
+  // since been promoted to the action tier (#12116) and no longer sits above
+  // this session.
+  describe("first-party existence catalog (#12117)", () => {
+    function firstPartyDeps(
+      result: unknown,
+      overrides?: Partial<SessionServerDeps>
+    ): SessionServerDeps {
+      const deps = introspectionDeps("action", result, overrides);
+      deps.sessionStore.sessionOriginMap.set("s1", "help");
+      return deps;
+    }
+
+    it("reports a higher-tier action to a renderer-owned session", async () => {
+      const deps = firstPartyDeps({
+        totalMatches: 2,
+        results: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "arm terminal" },
+      });
+
+      const body = payload<{
+        results: ActionManifestEntry[];
+        unavailable: Array<{ id: string; minimumTier: string; callable: boolean }>;
+      }>(res);
+      expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
+      expect(body.unavailable).toEqual([
+        expect.objectContaining({
+          id: "terminal.arm",
+          minimumTier: "system",
+          callable: false,
+        }),
+      ]);
+    });
+
+    // `actions.list` reaches the filter through its own paged-collection path
+    // (`collectListPages`), not the plain dispatch `actions.search` takes, so
+    // the catalog has to be proven on both. A snapshot dropped from only the
+    // paged path would leave search working and listing silently bare.
+    it("reports them through the paged actions.list path too", async () => {
+      const deps = firstPartyDeps({
+        actions: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, { name: "actions.list" });
+
+      const body = payload<{
+        actions: ActionManifestEntry[];
+        total: number;
+        unavailable: Array<{ id: string; minimumTier: string }>;
+        unavailableTotal: number;
+      }>(res);
+      expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
+      expect(body.total).toBe(1);
+      expect(body.unavailable.map((s) => s.id)).toEqual(["terminal.arm"]);
+      expect(body.unavailableTotal).toBe(1);
+    });
+
+    // The catalog and the callable surface are one boundary read twice: the
+    // moment a grant admits the id, it must leave the catalog and appear in
+    // `actions`. Anything else advertises the same tool in two states at once.
+    it("moves a granted id out of the catalog and into the callable list", async () => {
+      const deps = firstPartyDeps({ actions: [entry("terminal.arm")] });
+      const server = createSessionServer("s1", deps);
+
+      const before = payload<{ actions: ActionManifestEntry[]; unavailableTotal: number }>(
+        await callTool(server, { name: "actions.list" })
+      );
+      expect(before.actions).toEqual([]);
+      expect(before.unavailableTotal).toBe(1);
+
+      deps.sessionStore.grantCache.issueGrant("s1", "terminal.arm");
+
+      const after = payload<{
+        actions: ActionManifestEntry[];
+        unavailable: unknown[];
+        unavailableTotal: number;
+      }>(await callTool(server, { name: "actions.list" }));
+      expect(after.actions.map((a) => a.id)).toEqual(["terminal.arm"]);
+      expect(after.unavailable).toEqual([]);
+      expect(after.unavailableTotal).toBe(0);
+    });
+
+    // Existence is not dispatchability. The whole #11585 invariant rests on
+    // `tools/list` and the callable set being one boundary, and a name in the
+    // catalog must not appear on either side of it.
+    it("leaves the name out of tools/list and refuses the call", async () => {
+      const deps = firstPartyDeps(
+        { actions: [entry("terminal.arm")] },
+        {
+          requestManifest: vi
+            .fn()
+            .mockResolvedValue([
+              makeManifestEntry("terminal.list"),
+              makeManifestEntry("terminal.arm"),
+            ]),
+        }
+      );
+      const server = createSessionServer("s1", deps);
+
+      const listed = await listTools(server);
+      expect(listed.tools.map((t) => t.name)).not.toContain("terminal.arm");
+
+      const denied = await callTool(server, { name: "terminal.arm", arguments: {} });
+      expect(denied.isError).toBe(true);
+      expect(toolErrorPayload(denied).code).toBe(TIER_NOT_PERMITTED_CODE);
+    });
+
+    it("gives an external-origin session the payload it got before", async () => {
+      // Same tier, same manifest — only the origin differs, which is the one
+      // fact the catalog gates on.
+      const deps = introspectionDeps("action", {
+        totalMatches: 2,
+        results: [entry("terminal.list"), entry("terminal.arm")],
+      });
+      deps.sessionStore.sessionOriginMap.set("s1", "external");
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "arm terminal" },
+      });
+
+      const body = payload<Record<string, unknown>>(res);
+      expect(Object.keys(body).sort()).toEqual(["results", "totalMatches"]);
+    });
+
+    it("names the tier on a getSchema read instead of an unknown-id denial", async () => {
+      const deps = firstPartyDeps({
+        ok: true,
+        entry: entry("terminal.arm", { category: "terminal" }),
+        policy: null,
+        error: null,
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.getSchema",
+        arguments: { actionId: "terminal.arm" },
+      });
+
+      const body = payload<{
+        ok: boolean;
+        entry: unknown;
+        unavailable: { minimumTier: string } | undefined;
+        error: { code: string } | null;
+      }>(res);
+      expect(body.ok).toBe(false);
+      expect(body.entry).toBeNull();
+      expect(body.error?.code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(body.unavailable?.minimumTier).toBe("system");
+    });
+  });
+
   describe("actions.getSchema policy record (#11910)", () => {
     interface GetSchemaBody {
       ok: boolean;
@@ -4341,6 +4665,32 @@ describe("sessionServer introspection tier filtering", () => {
       expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
         "git.push",
         "git.commit",
+      ]);
+
+      deps.sessionStore.grantCache.dispose();
+    });
+
+    it("does not surface a per-resolved-target tool a native grant cannot admit (#12121)", async () => {
+      // The mirror of the test above. `peekNativeGrant` refuses terminal.killAll,
+      // so listing it here would produce the discoverable-but-uncallable state
+      // #11585 rejects: the agent finds the tool, calls it, and is told
+      // TIER_NOT_PERMITTED. The eligible sibling proves the grant is otherwise
+      // live, so the omission is the policy and not a dead grant.
+      const deps = introspectionDeps("workbench", {
+        actions: [entry("git.push"), entry("terminal.killAll"), entry("terminal.closeAll")],
+      });
+      const server = createSessionServer("s1", deps);
+      deps.sessionStore.grantCache.issueNativeGrant({
+        sessionId: "s1",
+        actorId: "test-actor",
+        actorType: "help-session",
+        allowedTools: ["git.push", "terminal.killAll", "terminal.closeAll"],
+        maxUses: 5,
+      });
+
+      const res = await callTool(server, { name: "actions.list" });
+      expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
+        "git.push",
       ]);
 
       deps.sessionStore.grantCache.dispose();
@@ -5055,6 +5405,53 @@ describe("workspace-bound external sessions (#11789)", () => {
         name: "worktree.createWithRecipe",
         arguments: { branchName: "feat/x" },
       });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalled();
+    });
+
+    it("refuses a terminal.new whose launch arguments elevate it (#12216)", async () => {
+      // Same shape as the recipe case and the same reason: `terminal.new` is on
+      // the external allowlist, declares `danger: "safe"` and carries no
+      // `recipeId`, so it escapes both existing arms — and a call naming a
+      // `command` or a `cwd` is elevated host-side into a dialog raised in a
+      // background workspace nobody is watching.
+      for (const args of [{ command: "rm -rf /tmp/x" }, { cwd: "/repo/feature" }]) {
+        const deps = boundDeps({
+          requestManifest: vi
+            .fn()
+            .mockResolvedValue([
+              makeManifestEntry("terminal.list"),
+              makeManifestEntry("terminal.new"),
+            ]),
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name: "terminal.new", arguments: args });
+
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      }
+    });
+
+    it("still opens a plain terminal in a bound session", async () => {
+      // Per-dispatch, so a `terminal.new` naming no launch target keeps working
+      // — refusing the action id would take "open a terminal" off the bound
+      // surface entirely.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("terminal.new"),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "terminal.new", arguments: {} });
 
       expect(result.isError).toBeFalsy();
       expect(deps.dispatchAction).toHaveBeenCalled();

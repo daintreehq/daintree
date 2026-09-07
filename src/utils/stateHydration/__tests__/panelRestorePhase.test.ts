@@ -23,100 +23,152 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 const reconnectWithTimeoutMock = vi.hoisted(() => vi.fn());
 
+// Restore asks Codex which session `--last` would open before it builds the
+// respawn command (#12178). Defaults to "no answer", which is the fallback every
+// pre-existing case here already expects.
+const resolveResumeLatestSessionMock = vi.hoisted(() =>
+  vi.fn(async (_payload: { cwd: string }): Promise<string | null> => null)
+);
+
+vi.mock("@/clients/codexClient", () => ({
+  codexClient: {
+    resolveResumeLatestSession: (payload: { cwd: string }) =>
+      resolveResumeLatestSessionMock(payload),
+  },
+}));
+
 vi.mock("../reconnectManager", () => ({
   reconnectWithTimeout: (...args: unknown[]) => reconnectWithTimeoutMock(...args),
 }));
 
-vi.mock("../statePatcher", () => ({
-  inferKind: (s: TerminalState) => s.kind ?? "terminal",
-  // Mirrors the real two-arg resolver (primary, then fallback, both by
-  // truthiness) — dropping the fallback here would quietly make every
-  // live-record-first identity lookup resolve to nothing.
-  resolveAgentId: (id: string | undefined, fallback?: string) => id || fallback || undefined,
-  inferAgentIdFromTitle: (
-    _title: string | undefined,
-    kind: string | undefined,
-    existing: string | undefined
-  ) => {
-    if (existing) return existing;
-    return kind === "agent" ? "claude" : undefined;
-  },
-  buildArgsForBackendTerminal: (b: BackendTerminalInfo, s: TerminalState) => ({
-    cwd: b.cwd,
-    kind: b.kind ?? "terminal",
-    launchAgentId: b.launchAgentId,
-    location: s.location === "dock" ? "dock" : "grid",
-    worktreeId: s.worktreeId,
-    existingId: b.id,
-    title: b.title,
-  }),
-  buildArgsForReconnectedFallback: (
-    rt: { id?: string; cwd?: string; title?: string },
-    s: TerminalState
-  ) => ({
-    cwd: rt.cwd ?? "/cwd",
-    kind: s.kind ?? "terminal",
-    location: s.location === "dock" ? "dock" : "grid",
-    worktreeId: s.worktreeId,
-    existingId: rt.id,
-  }),
-  buildArgsForRespawn: (
-    s: TerminalState,
-    kind: string,
-    _projectRoot?: string,
-    _agentSettings?: unknown,
-    reconnectTimedOut?: boolean,
-    _clipboardDirectory?: string,
-    _projectPresetsByAgent?: unknown,
-    options?: { allowResumeLatest?: boolean; allowSessionIdResume?: boolean }
-  ) => ({
-    cwd: s.cwd ?? "/cwd",
-    kind,
-    location: s.location === "dock" ? "dock" : "grid",
-    worktreeId: s.worktreeId,
-    // Mirror the real buildArgsForRespawn: a timed-out reconnect drops the
-    // requested id so the store generates a fresh one (#10440).
-    requestedId: reconnectTimedOut ? undefined : s.id,
-    launchAgentId: s.launchAgentId,
-    // Not real AddTerminalArgs fields — surfaced on the mock's output so the
-    // resume election (#11461) is assertable through addPanel's args.
-    allowResumeLatest: options?.allowResumeLatest ?? true,
-    allowSessionIdResume: options?.allowSessionIdResume ?? true,
-  }),
-  // Mirrors the real resolver's title recovery (same agent order) so the
-  // election's identity resolution can't silently diverge from production.
-  resolveRespawnAgentId: (s: TerminalState, kind: string | undefined) => {
-    if (s.launchAgentId) return s.launchAgentId;
-    if (kind !== "agent") return undefined;
-    const title = (s.title ?? "").toLowerCase();
-    return ["claude", "antigravity", "gemini", "codex", "opencode"].find((id) =>
-      title.includes(id)
-    );
-  },
-  buildArgsForNonPtyRecreation: (s: TerminalState, kind: string) => ({
-    cwd: s.cwd ?? "/cwd",
-    kind,
-    location: s.location === "dock" ? "dock" : "grid",
-    worktreeId: s.worktreeId,
-    requestedId: s.id,
-  }),
-  buildArgsForOrphanedTerminal: (t: BackendTerminalInfo) => ({
-    cwd: t.cwd,
-    kind: t.kind ?? "terminal",
-    existingId: t.id,
-    location: "grid" as const,
-    title: t.title,
-  }),
-  inferWorktreeIdFromCwd: () => undefined,
-}));
+vi.mock("../statePatcher", async () => {
+  // Delegates to the real re-qualifier rather than restating it: the point of
+  // the #12280 cases below is that the phase hands `ctx.projectId` down, and a
+  // lookalike here could pass while the wiring stayed broken.
+  const { requalifyPersistedKind } = await vi.importActual<
+    typeof import("@shared/utils/panelKindPersistence")
+  >("@shared/utils/panelKindPersistence");
+  return {
+    inferKind: (s: TerminalState, projectId?: string | null) =>
+      requalifyPersistedKind(s, projectId) ?? "terminal",
+    // Mirrors the real two-arg resolver (primary, then fallback, both by
+    // truthiness) — dropping the fallback here would quietly make every
+    // live-record-first identity lookup resolve to nothing.
+    resolveAgentId: (id: string | undefined, fallback?: string) => id || fallback || undefined,
+    inferAgentIdFromTitle: (
+      _title: string | undefined,
+      kind: string | undefined,
+      existing: string | undefined
+    ) => {
+      if (existing) return existing;
+      return kind === "agent" ? "claude" : undefined;
+    },
+    buildArgsForBackendTerminal: (b: BackendTerminalInfo, s: TerminalState) => ({
+      cwd: b.cwd,
+      kind: b.kind ?? "terminal",
+      launchAgentId: b.launchAgentId,
+      location: s.location === "dock" ? "dock" : "grid",
+      worktreeId: s.worktreeId,
+      existingId: b.id,
+      title: b.title,
+    }),
+    buildArgsForReconnectedFallback: (
+      rt: { id?: string; cwd?: string; title?: string },
+      s: TerminalState
+    ) => ({
+      cwd: rt.cwd ?? "/cwd",
+      kind: s.kind ?? "terminal",
+      location: s.location === "dock" ? "dock" : "grid",
+      worktreeId: s.worktreeId,
+      existingId: rt.id,
+    }),
+    buildArgsForRespawn: (
+      s: TerminalState,
+      kind: string,
+      _projectRoot?: string,
+      _agentSettings?: unknown,
+      reconnectTimedOut?: boolean,
+      _clipboardDirectory?: string,
+      _projectPresetsByAgent?: unknown,
+      options?: {
+        allowResumeLatest?: boolean;
+        allowSessionIdResume?: boolean;
+        resolvedResumeLatestSessionId?: string;
+      }
+    ) => ({
+      cwd: s.cwd ?? "/cwd",
+      kind,
+      location: s.location === "dock" ? "dock" : "grid",
+      worktreeId: s.worktreeId,
+      // Mirror the real buildArgsForRespawn: a timed-out reconnect drops the
+      // requested id so the store generates a fresh one (#10440).
+      requestedId: reconnectTimedOut ? undefined : s.id,
+      launchAgentId: s.launchAgentId,
+      // Not real AddTerminalArgs fields — surfaced on the mock's output so the
+      // resume election (#11461) is assertable through addPanel's args.
+      allowResumeLatest: options?.allowResumeLatest ?? true,
+      allowSessionIdResume: options?.allowSessionIdResume ?? true,
+      resolvedResumeLatestSessionId: options?.resolvedResumeLatestSessionId,
+    }),
+    // Mirrors the real resolver's title recovery (same agent order) so the
+    // election's identity resolution can't silently diverge from production.
+    resolveRespawnAgentId: (s: TerminalState, kind: string | undefined) => {
+      if (s.launchAgentId) return s.launchAgentId;
+      if (kind !== "agent") return undefined;
+      const title = (s.title ?? "").toLowerCase();
+      return ["claude", "antigravity", "gemini", "codex", "opencode"].find((id) =>
+        title.includes(id)
+      );
+    },
+    buildArgsForNonPtyRecreation: (
+      s: TerminalState & {
+        extensionState?: Record<string, unknown>;
+        extensionStateVersion?: number;
+        pluginId?: string;
+      },
+      kind: string
+    ) => ({
+      cwd: s.cwd ?? "/cwd",
+      kind,
+      location: s.location === "dock" ? "dock" : "grid",
+      worktreeId: s.worktreeId,
+      requestedId: s.id,
+      // Forwarded like the real builder does: the bag and the version that
+      // describes it must arrive together, or a restored panel reads state at a
+      // version it was never written at (#12280).
+      extensionState: s.extensionState,
+      extensionStateVersion: s.extensionStateVersion,
+      pluginId: s.pluginId,
+    }),
+    buildArgsForOrphanedTerminal: (t: BackendTerminalInfo) => ({
+      cwd: t.cwd,
+      kind: t.kind ?? "terminal",
+      existingId: t.id,
+      location: "grid" as const,
+      title: t.title,
+    }),
+    inferWorktreeIdFromCwd: () => undefined,
+  };
+});
 
-vi.mock("@shared/config/panelKindRegistry", () => ({
-  panelKindHasPty: (k: string) => k === "terminal" || k === "agent",
-  getPanelKindConfig: (k: string) =>
-    k === "terminal" || k === "agent" || k === "browser" || k === "dev-preview"
-      ? { kind: k }
-      : undefined,
-}));
+vi.mock("@shared/config/panelKindRegistry", async () => {
+  // The kind-shape helpers are taken REAL, not stubbed: #12280's re-qualification
+  // is the behaviour under test here, and a hand-written stand-in for it would
+  // be asserting against itself.
+  const actual = await vi.importActual<typeof import("@shared/config/panelKindRegistry")>(
+    "@shared/config/panelKindRegistry"
+  );
+  return {
+    panelKindHasPty: (k: string) => k === "terminal" || k === "agent",
+    getPanelKindConfig: (k: string) =>
+      k === "terminal" || k === "agent" || k === "browser" || k === "dev-preview"
+        ? { kind: k }
+        : undefined,
+    toPersistedPanelKindRef: actual.toPersistedPanelKindRef,
+    toRuntimePanelKindId: actual.toRuntimePanelKindId,
+    isProjectQualifiedPanelKindId: actual.isProjectQualifiedPanelKindId,
+  };
+});
 
 vi.mock("@shared/utils/smokeTestTerminals", () => ({
   isSmokeTestTerminalId: (id: string) => id.startsWith("smoke-"),
@@ -172,6 +224,7 @@ function makeContext(overrides: Partial<RawContext> = {}): MockedContext {
     // worktree-less workspace cases override it.
     workspaceHasWorktreesPromise: Promise.resolve(true),
     projectRoot: "/proj",
+    projectId: "proj-a",
     agentSettings: undefined,
     clipboardDirectory: undefined,
     projectPresetsByAgent: {},
@@ -226,6 +279,8 @@ beforeEach(() => {
   initializeBackendTierMock.mockReset();
   setTargetSizeMock.mockReset();
   reconnectWithTimeoutMock.mockReset();
+  resolveResumeLatestSessionMock.mockReset();
+  resolveResumeLatestSessionMock.mockResolvedValue(null);
   getRestoreBatchParamsMock.mockClear();
   getRestoreBatchParamsMock.mockReturnValue({ batchSize: 2, delayMs: 0 });
 });
@@ -2072,5 +2127,256 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
 
     expect(allowanceById(ctx).get("t1")).toBe(true);
     expect(allowanceById(ctx).get("t2")).toBe(true);
+  });
+});
+
+describe("restorePanelsPhase — naming the resume-latest session (#12178)", () => {
+  const codexPanel = (id: string, overrides: Partial<TerminalState> = {}): TerminalState =>
+    panel(id, { kind: "agent", launchAgentId: "codex", ...overrides });
+
+  /** id → the resolved session id the respawn builder was handed. */
+  function resolvedIdById(ctx: MockedContext): Map<string, string | undefined> {
+    const byId = new Map<string, string | undefined>();
+    for (const [args] of ctx.addPanel.mock.calls as [
+      { requestedId?: string; resolvedResumeLatestSessionId?: string },
+    ][]) {
+      if (args.requestedId !== undefined) {
+        byId.set(args.requestedId, args.resolvedResumeLatestSessionId);
+      }
+    }
+    return byId;
+  }
+
+  beforeEach(() => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+  });
+
+  it("asks Codex for the pane's folder and hands the answer to the respawn builder", async () => {
+    resolveResumeLatestSessionMock.mockResolvedValue("sess-9");
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledWith({ cwd: "/repo" });
+    expect(resolvedIdById(ctx).get("a")).toBe("sess-9");
+  });
+
+  it("falls back to the project root when the snapshot recorded no cwd", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: undefined })], ctx);
+
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledWith({ cwd: "/proj" });
+  });
+
+  it("does not ask for a pane that already carries an exact session id", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { agentSessionId: "saved-1" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("asks only for the pane that won the scope, never for a suppressed sibling", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("a", { cwd: "/repo", lastActiveAt: 100 }),
+        codexPanel("b", { cwd: "/repo", lastActiveAt: 300 }),
+      ],
+      ctx
+    );
+
+    // The loser is denied the fallback, so naming the winner's conversation for
+    // it would put a second writer on the very transcript the election protects.
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves other agents' rolling-history fallbacks alone", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([panel("a", { kind: "agent", launchAgentId: "claude" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not ask for a pane whose PTY survived — it is already attached", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({
+      status: "found",
+      terminal: { id: "a", cwd: "/repo", title: "a" },
+    });
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("still restores the pane when the lookup finds nothing", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(resolvedIdById(ctx).get("a")).toBeUndefined();
+  });
+
+  it("still restores the pane when the lookup rejects", async () => {
+    resolveResumeLatestSessionMock.mockRejectedValue(new Error("main is gone"));
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(resolvedIdById(ctx).get("a")).toBeUndefined();
+  });
+
+  it("resolves before the pane is added, so the id is never a later patch", async () => {
+    let released: (value: string) => void = () => {};
+    let markAsked: () => void = () => {};
+    // Waiting on the lookup actually being reached, rather than ticking the
+    // microtask queue: `addPanel` is several awaits past the reconnect probe, so
+    // a bare tick would assert nothing and pass with the feature deleted.
+    const asked = new Promise<void>((resolve) => {
+      markAsked = resolve;
+    });
+    resolveResumeLatestSessionMock.mockImplementation(() => {
+      markAsked();
+      return new Promise<string>((resolve) => {
+        released = resolve;
+      });
+    });
+    const ctx = makeContext();
+
+    const phase = restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+    await asked;
+    expect(ctx.addPanel).not.toHaveBeenCalled();
+
+    released("sess-9");
+    await phase;
+
+    expect(resolvedIdById(ctx).get("a")).toBe("sess-9");
+  });
+
+  it("asks once per directory, so panes in separate worktrees each get their own", async () => {
+    resolveResumeLatestSessionMock.mockImplementation(async ({ cwd }: { cwd: string }) =>
+      cwd === "/repo-a" ? "sess-a" : "sess-b"
+    );
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [codexPanel("a", { cwd: "/repo-a" }), codexPanel("b", { cwd: "/repo-b" })],
+      ctx
+    );
+
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledTimes(2);
+    expect(resolvedIdById(ctx).get("a")).toBe("sess-a");
+    expect(resolvedIdById(ctx).get("b")).toBe("sess-b");
+  });
+
+  it("does not ask for a pane that carries its own CODEX_HOME", async () => {
+    // The app-server answers from main's profile while the pane spawns against
+    // its own, so an id from here is one the pane cannot open — and it would be
+    // recorded and replayed, where `--last` just falls through.
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("solo", { env: { CODEX_HOME: "/custom/home" } })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("restorePanelsPhase — portable plugin kinds (#12280)", () => {
+  const projectRef = { origin: "project", pluginId: "acme.dashboard", kindId: "overview" } as const;
+
+  /**
+   * The persisted-only fields a plugin panel snapshot carries. Kept off
+   * `TerminalState` because that type describes the live IPC shape, not what a
+   * layout stores — the restore phase reads both off the same object.
+   */
+  interface PluginSnapshotExtras {
+    kindRef?: { origin: "global" | "project"; pluginId: string; kindId: string };
+    extensionState?: Record<string, unknown>;
+    extensionStateVersion?: number;
+  }
+
+  function pluginPanel(
+    extras: PluginSnapshotExtras = {},
+    overrides: Partial<TerminalState> = {}
+  ): TerminalState {
+    return {
+      ...panel("plug-1", {
+        kind: "acme.dashboard.overview",
+        pluginId: "project-plugin:proj-a::acme.dashboard",
+        ...overrides,
+      }),
+      ...extras,
+    };
+  }
+
+  it("qualifies a project plugin panel against whichever project opens the layout", async () => {
+    // The whole point of the fix: a layout saved under proj-a and opened under
+    // proj-b resolves to proj-b's copy of the contribution instead of orphaning.
+    const ctx = makeContext({ projectId: "proj-b" });
+
+    await restorePanelsPhase([pluginPanel({ kindRef: projectRef })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      kind: "project:proj-b/acme.dashboard/overview",
+    });
+  });
+
+  it("migrates a legacy snapshot still carrying the writing project's id", async () => {
+    const ctx = makeContext({ projectId: "proj-b" });
+
+    await restorePanelsPhase(
+      [pluginPanel({}, { kind: "project:proj-a/acme.dashboard/overview" })],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      kind: "project:proj-b/acme.dashboard/overview",
+    });
+  });
+
+  it("keeps the panel, unresolved, when there is no project to qualify against", async () => {
+    // Must still reach the missing-plugin placeholder rather than be dropped —
+    // the record and its extension state are the user's (#5580, #5629) — and
+    // must not resolve to an installed global plugin of the same name on the
+    // way there.
+    const ctx = makeContext({ projectId: null });
+
+    await restorePanelsPhase([pluginPanel({ kindRef: projectRef })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    // Still project-shaped (so no global registration can answer for it) and
+    // still naming the right contribution.
+    expect(ctx.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: expect.stringMatching(/^project:.*\/acme\.dashboard\/overview$/),
+      })
+    );
+  });
+
+  it("carries the persisted state version through to the restored panel", async () => {
+    const ctx = makeContext({ projectId: "proj-b" });
+
+    await restorePanelsPhase(
+      [
+        pluginPanel({
+          kindRef: projectRef,
+          extensionState: { activeTab: "overview" },
+          extensionStateVersion: 2,
+        }),
+      ],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      extensionState: { activeTab: "overview" },
+      extensionStateVersion: 2,
+    });
   });
 });

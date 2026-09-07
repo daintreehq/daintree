@@ -27,7 +27,7 @@ vi.mock("node:net", () => {
     const srv = {
       unref: vi.fn(() => srv),
       once: vi.fn((_event: string, _cb: Cb) => srv),
-      listen: vi.fn((_port: number, _host: string, cb: Cb) => {
+      listen: vi.fn((_options: { port: number; host: string; ipv6Only?: boolean }, cb: Cb) => {
         cb();
         return srv;
       }),

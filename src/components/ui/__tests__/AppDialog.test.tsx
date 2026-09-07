@@ -12,6 +12,7 @@ import {
   _resetForTests as _resetDockPopoverForTests,
 } from "@/lib/dockPopoverLayer";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
+import { publishScrollbarGutter } from "@/lib/scrollbarGutter";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
@@ -43,6 +44,12 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
     mockPrevOpen = isOpen;
     return { isVisible: isOpen, shouldRender: isOpen };
   },
+}));
+
+vi.mock("@/lib/scrollbarGutter", () => ({
+  SCROLLBAR_GUTTER_VAR: "--app-scrollbar-gutter",
+  measureScrollbarGutter: vi.fn(() => 0),
+  publishScrollbarGutter: vi.fn(() => 0),
 }));
 
 vi.stubGlobal(
@@ -1561,5 +1568,75 @@ describe("AppDialog.Footer primary variant resolution", () => {
 
   it("resolves destructive from dialog context when the action states no intent", () => {
     expectVariant(renderFooter({ dialogVariant: "destructive" }), "destructive");
+  });
+});
+
+describe("AppDialog scrollbar gutter", () => {
+  // What a dialog's body subtracts from its padding is whatever the platform
+  // actually reserves for a scrollbar, published as a custom property. The
+  // bootstrap seed alone would look fine in every test and still go stale the
+  // moment a user flips macOS "Show scroll bars: Always" under a running app,
+  // so the re-measure on open is the part worth pinning (#12101).
+  function renderGated(isOpen: boolean) {
+    return render(
+      <AppDialog isOpen={isOpen} onClose={vi.fn()}>
+        <AppDialog.Body>body</AppDialog.Body>
+      </AppDialog>
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(publishScrollbarGutter).mockClear();
+  });
+
+  it("does not measure while the dialog is closed", () => {
+    renderGated(false);
+
+    expect(publishScrollbarGutter).not.toHaveBeenCalled();
+  });
+
+  it("measures as the dialog opens", () => {
+    const { rerender } = renderGated(false);
+    expect(publishScrollbarGutter).not.toHaveBeenCalled();
+
+    rerender(
+      <AppDialog isOpen onClose={vi.fn()}>
+        <AppDialog.Body>body</AppDialog.Body>
+      </AppDialog>
+    );
+
+    expect(publishScrollbarGutter).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-measure on a render while it stays open", () => {
+    const { rerender } = renderGated(true);
+    expect(publishScrollbarGutter).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <AppDialog isOpen onClose={vi.fn()}>
+        <AppDialog.Body>changed</AppDialog.Body>
+      </AppDialog>
+    );
+
+    expect(publishScrollbarGutter).toHaveBeenCalledTimes(1);
+  });
+
+  it("measures again on reopen, so a mid-session change is picked up", () => {
+    const { rerender } = renderGated(true);
+    expect(publishScrollbarGutter).toHaveBeenCalledTimes(1);
+
+    const closed = (
+      <AppDialog isOpen={false} onClose={vi.fn()}>
+        <AppDialog.Body>body</AppDialog.Body>
+      </AppDialog>
+    );
+    rerender(closed);
+    rerender(
+      <AppDialog isOpen onClose={vi.fn()}>
+        <AppDialog.Body>body</AppDialog.Body>
+      </AppDialog>
+    );
+
+    expect(publishScrollbarGutter).toHaveBeenCalledTimes(2);
   });
 });

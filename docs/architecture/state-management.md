@@ -1,6 +1,6 @@
 # Renderer state management & the store layer
 
-The renderer's state lives in `src/store/` — ~100 top-level store modules plus ~40 supporting files (slices, listeners, persistence). Almost all of it is Zustand. This doc explains the two store flavors, why the distinction is load-bearing for multi-window correctness, the panel-listener and persistence subsystems, and how to add a new store. It does **not** re-derive the cross-store ESM init ordering — that lives in [store-init-order.md](./store-init-order.md).
+The renderer's state lives in `src/store/` — ~130 top-level store modules plus ~45 supporting files (slices, listeners, persistence). Almost all of it is Zustand. This doc explains the two store flavors, why the distinction is load-bearing for multi-window correctness, the panel-listener and persistence subsystems, and how to add a new store. It does **not** re-derive the cross-store ESM init ordering — that lives in [store-init-order.md](./store-init-order.md).
 
 `src/store/index.ts` is the barrel and the canonical inventory of what the rest of the app consumes. When this doc and `index.ts` disagree, `index.ts` wins.
 
@@ -10,7 +10,7 @@ Daintree has exactly two ways to make a store, and choosing wrong is a correctne
 
 | Flavor | Constructor | Scope | Accessed via | Count |
 | --- | --- | --- | --- | --- |
-| **App-global React store** | `create()` (`zustand`) | One singleton per V8 context | `useFooStore` hook / `useFooStore.getState()` | ~90 |
+| **App-global React store** | `create()` (`zustand`) | One singleton per V8 context | `useFooStore` hook / `useFooStore.getState()` | ~113 |
 | **Per-view vanilla store** | `createStore()` (`zustand/vanilla`) | One instance per `WebContentsView` | React Context + a module-level accessor | 2 |
 
 ### App-global stores — `create()`
@@ -39,7 +39,7 @@ Use `…OrNull()` from anything that can run during initial render or the action
 
 ## Store inventory (categorized)
 
-`src/store/index.ts` is the source of truth; this is a map of the major clusters, not an exhaustive list. ~110 files end in `Store.ts`.
+`src/store/index.ts` is the source of truth; this is a map of the major clusters, not an exhaustive list. ~113 files end in `Store.ts`.
 
 | Cluster | Representative stores | Notes |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ Use `…OrNull()` from anything that can run during initial render or the action
 
 `panelStore.ts` is built by composing slice creators inside a single `create()` call, wrapped in `subscribeWithSelector` middleware. The slices live in `src/store/slices/` and are barrelled through `slices/index.ts`:
 
-- `createPanelRegistrySlice` — `panelsById`, `panelIds`, `tabGroups`, grid/dock/background/trash lifecycle. This is itself a ~17-file subsystem under `slices/panelRegistry/` (`core`, `addPanel`, `layout`, `ordering`, `tabGroups`, `trash`, `worktreeIndex`, `persistence`, `selectors`, …). `panelRegistrySlice.ts` is a thin re-export shim for backward compatibility.
+- `createPanelRegistrySlice` — `panelsById`, `panelIds`, `tabGroups`, grid/dock/background/trash lifecycle. This is itself a ~23-file subsystem under `slices/panelRegistry/` (`core`, `addPanel`, `layout`, `ordering`, `tabGroups`, `trash`, `worktreeIndex`, `persistence`, `selectors`, …). `panelRegistrySlice.ts` is a thin re-export shim for backward compatibility.
 - `createTerminalFocusSlice` — focus + directional navigation.
 - `createTerminalMruSlice` — global terminal MRU list (`mruList`, `recordMru`).
 - `createTerminalCommandQueueSlice` — per-terminal queued commands + `isAgentReady`.
@@ -89,6 +89,8 @@ Live IPC → store reducers for panel/terminal state run through `panelStoreList
 | `watchdogHealth.ts` | watchdog disabled | `panelStore.setWatchdogDisabled` |
 | `fdLeakWarning.ts` | FD-leak warning | **Tier 0 — `console.warn` only** (5-min cooldown). Demoted from a toast in `c41d0ab50`; do not re-promote. |
 
+Two more modules in that directory are helpers rather than reducers: `identityReducer.ts` (the pure identity-field reduction `identity.ts` applies) and `identityDiagnostics.ts` (the bounded diagnostics ring behind identity transitions).
+
 ### `panelStatusBuffer.ts` — the RAF coalescer
 
 High-frequency panel-status writes (activity + flow-status) do **not** call `usePanelStore.setState` per event. They enqueue into module-level `Map`s in `panelStatusBuffer.ts`, which schedules a single `requestAnimationFrame` flush. The flush collapses N enqueued patches into **one** `setState`, because Zustand 5 runs its subscriber-notify loop synchronously per `setState` — coalescing is the dominant per-frame perf win (#8589).
@@ -115,7 +117,7 @@ Settings-style stores opt in by wrapping their `create()` in the `persist` middl
 - **Corrupt blobs recover from a sibling `${key}.__bak` backup** before resetting to defaults; the backup only advances when the primary write actually reached durable storage (so a quota failure can't desync the two).
 - `createDebouncedSafeJSONStorage(delayMs)` is the variant used by hot-writing stores (e.g. notification history); reads stay synchronous so hydration is unaffected.
 
-A persisted store declares `name` (the storage key), `version`, and optional `migrate`/`merge` in its persist options — `preferencesStore` is the canonical worked example (version 9, full `migrate` chain, `merge`-time sanitization).
+A persisted store declares `name` (the storage key), `version`, and optional `migrate`/`merge` in its persist options — `preferencesStore` is the canonical worked example — the longest `migrate` chain in the repo plus `merge`-time sanitization; read its `version` rather than quoting one.
 
 **Hydration ordering:** localStorage reads are synchronous, so a persisted store hydrates at module-evaluation time. Cross-store reads _during hydration_ run at eval time, so they must not assume another store has finished — this is exactly the TDZ/stale-state hazard documented in [store-init-order.md](./store-init-order.md). Route any eval-time cross-store read through `storeAccessors.ts`. (A direct top-level import is only safe when every read sits inside a later-running function body, as in the sanctioned `panelStore` ↔ `worktreeStore` pair — see [store-init-order.md](./store-init-order.md); hydration is not that case.)
 
@@ -137,7 +139,7 @@ This module owns everything that wires _independent_ stores together. `initStore
 
 3. **Lifecycle / teardown** — `destroyStoreOrchestrator()` disposes all subscriptions, cancels the MRU persist debounce, and calls `resetStoreAccessorsForTesting()` so accessor slots return `null` (the documented unset-fallback) rather than stale closures.
 
-`storeAccessors.ts` itself is a dependency-free leaf module: it holds seven mutable getter/callback slots and imports no other store module, which is what breaks the ESM cycle. **Do not** add a store import to it. The full rationale (TDZ crash vs silent stale-state, why registration is deferred to a single init point) is in [store-init-order.md](./store-init-order.md) — read it before touching cross-store reads.
+`storeAccessors.ts` itself is a dependency-free leaf module: it holds eleven mutable getter/callback slots and imports no other store module, which is what breaks the ESM cycle. **Do not** add a store import to it. The full rationale (TDZ crash vs silent stale-state, why registration is deferred to a single init point) is in [store-init-order.md](./store-init-order.md) — read it before touching cross-store reads.
 
 ## How to add a new store
 

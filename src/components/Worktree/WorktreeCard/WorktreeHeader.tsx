@@ -22,7 +22,7 @@ import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 import { scheduleFlip } from "@/utils/flipScheduler";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
+import { computeAlarmTier, formatAlarmDetail } from "@/lib/worktreeAlarmTier";
 
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
@@ -241,17 +241,45 @@ export function WorktreeHeader({
 
   const prState = worktree.linked?.pr?.state;
   const isPrLive = prState !== undefined && prState !== "closed" && prState !== "declined";
-  const ciState = isPrLive ? worktree.linked?.pr?.ciStatus?.state : undefined;
-  const collapsedAlarm = useMemo(
-    () =>
-      computeAlarmTier({
-        ciState,
-        authFailed: hasAuthFailedSignIn,
+  const ciStatus = isPrLive ? worktree.linked?.pr?.ciStatus : undefined;
+  const ciState = ciStatus?.state;
+  // Tier and detail in one memo: they describe the same alarm, so deriving
+  // them from two different snapshots of the counts would let the pill say
+  // "Behind" over a line that names no drift.
+  const { collapsedAlarm, collapsedAlarmDetail } = useMemo(() => {
+    const alarm = computeAlarmTier({
+      ciState,
+      authFailed: hasAuthFailedSignIn,
+      behindCount: worktree.behindCount,
+      baseBehindCount: worktree.baseBehindCount,
+    });
+    return {
+      collapsedAlarm: alarm,
+      collapsedAlarmDetail: formatAlarmDetail(alarm.kind, {
+        aheadCount: worktree.aheadCount,
         behindCount: worktree.behindCount,
+        baseAheadCount: worktree.baseAheadCount,
         baseBehindCount: worktree.baseBehindCount,
+        baseBranchName: worktree.baseBranchName,
+        baseCompareRef: worktree.baseCompareRef,
+        baseMatchesUpstream: worktree.baseMatchesUpstream,
+        ciFailed: ciStatus?.failed,
+        ciTotal: ciStatus?.total,
       }),
-    [ciState, hasAuthFailedSignIn, worktree.behindCount, worktree.baseBehindCount]
-  );
+    };
+  }, [
+    ciState,
+    ciStatus?.failed,
+    ciStatus?.total,
+    hasAuthFailedSignIn,
+    worktree.aheadCount,
+    worktree.behindCount,
+    worktree.baseAheadCount,
+    worktree.baseBehindCount,
+    worktree.baseBranchName,
+    worktree.baseCompareRef,
+    worktree.baseMatchesUpstream,
+  ]);
 
   const { visibleStates, sessionAriaLabel } = useMemo(() => {
     if (!sessionStates || !sessionTotal || sessionTotal === 0) {
@@ -341,7 +369,9 @@ export function WorktreeHeader({
               {gitStateIndicator.label}
             </span>
           )}
-          {isCollapsed && <CollapsedAlarmPill alarm={collapsedAlarm} />}
+          {isCollapsed && (
+            <CollapsedAlarmPill alarm={collapsedAlarm} detail={collapsedAlarmDetail} />
+          )}
         </div>
 
         {((isPinned && !isMainWorktree) ||

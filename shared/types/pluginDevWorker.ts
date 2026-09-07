@@ -18,6 +18,7 @@
 // class instances. Requests that expect a reply carry a `requestId`.
 
 import type {
+  PluginIdentity,
   PluginIpcContext,
   PluginSettingsScope,
   PluginStorageScope,
@@ -37,6 +38,7 @@ import type {
 export type PluginHostCallMethod =
   | "getActiveWorktree"
   | "getWorktrees"
+  | "getWorktreesResult"
   | "getWorktreeStatus"
   | "getAgentState"
   | "sendToActiveAgent"
@@ -50,6 +52,7 @@ export type PluginHostCallMethod =
   | "storage.set"
   | "storage.delete"
   | "fs.readFile"
+  | "fs.readFileBytes"
   | "fs.writeFile"
   | "fs.readdir"
   | "fs.stat"
@@ -95,7 +98,8 @@ export type PluginHostNotifyMethod =
  * process's lifecycle and output callbacks back to the worker, keyed by the
  * handle id carried in `processId`. `panel-lifecycle` streams this plugin's
  * own panel transitions (#11301) — the host replays each live panel's current
- * phase at subscribe time.
+ * phase at subscribe time. `system-wake` streams machine resume pulses
+ * (#12175); nothing is replayed for it, since a pulse has no resting state.
  */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
@@ -104,6 +108,7 @@ export type PluginWorkerSubscriptionKind =
   | "storage"
   | "agent-state"
   | "panel-lifecycle"
+  | "system-wake"
   | "process-exit"
   | "process-crash"
   | "process-data";
@@ -112,16 +117,36 @@ export type PluginWorkerSubscriptionKind =
  * Callback kinds main invokes back in the worker. `file-decoration-method`
  * round-trips a registered `FileDecorationProviderImpl` method (just
  * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
+ * `command` is the odd one out: nothing is registered ahead of it. The handler
+ * module for a manifest-declared command is imported by the worker on first
+ * dispatch, from the absolute path main resolved (#12274), so there is no
+ * worker-side registry to look the target up in.
  * Forge providers are deliberately absent: `ForgeProviderImpl` has required
  * SYNCHRONOUS methods (`parseRemote`, the URL builders, `classifyPushError`)
  * the host calls and consumes synchronously, which can't cross this async port.
  */
-export type PluginWorkerInvokeKind = "action" | "handler" | "file-decoration-method";
+export type PluginWorkerInvokeKind = "action" | "command" | "handler" | "file-decoration-method";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
-  /** Kick off: import the plugin bundle at `bundleUrl` and call `activate(proxy)`. */
-  | { type: "start"; bundleUrl: string; pluginId: string }
+  /**
+   * Kick off: import the plugin bundle at `bundleUrl` and call `activate(proxy)`.
+   * `bundleUrl` is absent for a commands-only plugin — one with no `main`, whose
+   * only executable code is its manifest commands' handler modules (#12274).
+   * That worker boots the harness and reports `activated` without importing
+   * anything; the handler modules are imported on first dispatch instead.
+   */
+  | {
+      type: "start";
+      bundleUrl?: string;
+      pluginId: string;
+      /**
+       * The plugin's identity as the main-process host knows it. Sent rather
+       * than re-derived worker-side because `projectRoot` lives on the host's
+       * binding and cannot be recovered from the instance key alone.
+       */
+      identity: PluginIdentity;
+    }
   /** Graceful shutdown request — worker runs the plugin's cleanup then exits. */
   | { type: "dispose" }
   /** Reply to a worker `host-call`. */
@@ -136,6 +161,21 @@ export type PluginHostToWorkerMessage =
       requestId: string;
       kind: "action";
       namespacedId: string;
+      args: unknown;
+    }
+  /**
+   * Import (once, lazily) a manifest-declared command's handler module and call
+   * its default export (#12274). `resolvedPath` is the absolute path main
+   * already probed and containment-checked in `resolveCommandHandlerPath` — the
+   * worker never derives it, so the two sides can't disagree about which file a
+   * command maps to.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "command";
+      namespacedId: string;
+      resolvedPath: string;
       args: unknown;
     }
   | {
@@ -401,9 +441,15 @@ export interface ShowConfirmParams {
   options: PluginConfirmOptions;
 }
 
-/** Params for `fs.readFile` / `fs.readdir` / `fs.stat` (`host-call`). */
+/** Params for `fs.readFile` / `fs.readFileBytes` / `fs.readdir` / `fs.stat` (`host-call`). */
 export interface FsPathParams {
   path: string;
+  /**
+   * `fs.readdir` only — request the host's full listing (size, mtime, symlink
+   * classification, collated order) rather than a bare `readdir`. Absent means
+   * the cheap read, so an existing worker build keeps its current behaviour.
+   */
+  detail?: boolean;
 }
 
 /** Params for `fs.writeFile` (`host-call`). */

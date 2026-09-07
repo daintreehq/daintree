@@ -71,7 +71,9 @@ const mockBroadcast = vi.hoisted(() => vi.fn());
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: mockBroadcast }));
 
 const mockAssistant = vi.hoisted(() => ({
-  getAssistantBackend: vi.fn(() => null as { terminalId: string; webContentsId: number } | null),
+  getAssistantBackends: vi.fn(
+    () => [] as Array<{ terminalId: string; webContentsId: number; slot: number }>
+  ),
 }));
 vi.mock("../HelpSessionService.js", () => ({ helpSessionService: mockAssistant }));
 
@@ -165,7 +167,7 @@ beforeEach(() => {
   mockProjectStore.relocateProject.mockResolvedValue(makeProject({ path: NEW_ROOT }));
   mockProjectStore.countRebasedPanels.mockResolvedValue(0);
   mockListWorktrees.mockResolvedValue([]);
-  mockAssistant.getAssistantBackend.mockReturnValue(null);
+  mockAssistant.getAssistantBackends.mockReturnValue([]);
 });
 
 describe("ProjectRelocationCoordinator — managed move of an open project", () => {
@@ -337,7 +339,9 @@ describe("ProjectRelocationCoordinator — rollback vs forward-fail boundary", (
 
 describe("ProjectRelocationCoordinator — guards", () => {
   it("refuses to relocate while the Daintree Assistant is active", async () => {
-    mockAssistant.getAssistantBackend.mockReturnValue({ terminalId: "help-1", webContentsId: 5 });
+    mockAssistant.getAssistantBackends.mockReturnValue([
+      { terminalId: "help-1", webContentsId: 5, slot: 0 },
+    ]);
     const pvm = makePvm(PROJECT_ID);
     const deps = makeDeps(pvm);
     const coordinator = new ProjectRelocationCoordinator();
@@ -352,7 +356,7 @@ describe("ProjectRelocationCoordinator — guards", () => {
   });
 
   it("fails CLOSED when the Assistant check itself throws", async () => {
-    mockAssistant.getAssistantBackend.mockImplementation(() => {
+    mockAssistant.getAssistantBackends.mockImplementation(() => {
       throw new Error("help service unavailable");
     });
     const pvm = makePvm(PROJECT_ID);
@@ -607,7 +611,9 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
   });
 
   it("surfaces an active Assistant as a blocker", async () => {
-    mockAssistant.getAssistantBackend.mockReturnValue({ terminalId: "t9", webContentsId: 2 });
+    mockAssistant.getAssistantBackends.mockReturnValue([
+      { terminalId: "t9", webContentsId: 2, slot: 0 },
+    ]);
     const coordinator = new ProjectRelocationCoordinator();
     configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
 
@@ -645,7 +651,9 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
     fsState.existing.add(NEW_ROOT);
     // A stale Assistant record survives a natural PTY exit; a closed reattach's
     // apply path never checks it, so the preview must not block on it (fix B).
-    mockAssistant.getAssistantBackend.mockReturnValue({ terminalId: "t9", webContentsId: 2 });
+    mockAssistant.getAssistantBackends.mockReturnValue([
+      { terminalId: "t9", webContentsId: 2, slot: 0 },
+    ]);
     const deps = makeDeps(makePvm(null)); // project not open anywhere
     deps.ptyClient.getProjectStats.mockResolvedValue({ terminalCount: 5 });
     const coordinator = new ProjectRelocationCoordinator();

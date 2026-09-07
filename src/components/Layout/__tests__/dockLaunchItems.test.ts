@@ -71,7 +71,9 @@ vi.mock("@/utils/logger", () => ({
 
 import {
   buildDockLaunchModel,
+  activateDockLaunchCue,
   activateDockLaunchItem,
+  DOCK_LAUNCH_CUE_LABELS,
   buildPresetChoices,
   buildPresetRows,
   getDockLaunchRowItem,
@@ -84,6 +86,7 @@ import {
   type DockLaunchRow,
 } from "../dockLaunchItems";
 import type { TerminalRecipe } from "@shared/types";
+import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLimitError";
 
 const AGENTS: DockLaunchAgent[] = [
@@ -117,6 +120,7 @@ const PANEL_LIMIT_MESSAGE = `Can't open another panel: ${PANEL_LIMIT_ERROR_SUFFI
 const PLUGIN_DOCKABLE = "test-plugin-dockable";
 const PLUGIN_GRID_ONLY = "test-plugin-grid-only";
 const PLUGIN_HIDDEN = "test-plugin-hidden";
+const PLUGIN_PROJECT_LOCAL = "project:proj-1/test-plugin/local";
 
 beforeEach(() => {
   addPanelMock.mockReset().mockResolvedValue("panel-1");
@@ -129,7 +133,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const id of [PLUGIN_DOCKABLE, PLUGIN_GRID_ONLY, PLUGIN_HIDDEN]) {
+  for (const id of [PLUGIN_DOCKABLE, PLUGIN_GRID_ONLY, PLUGIN_HIDDEN, PLUGIN_PROJECT_LOCAL]) {
     unregisterPanelKind(id);
   }
 });
@@ -202,6 +206,42 @@ describe("buildDockLaunchModel — panel offering", () => {
 
     expect(model.dockPanels.map((p) => p.kindId)).toContain(PLUGIN_DOCKABLE);
     expect(model.gridPanels.map((p) => p.kindId)).toContain(PLUGIN_GRID_ONLY);
+  });
+
+  it("carries each kind's origin tier onto its row", () => {
+    // The whole gap this closes: the registry knows all three tiers and the row
+    // model used to flatten them into one.
+    registerPluginKind(PLUGIN_DOCKABLE);
+    registerPluginKind(PLUGIN_PROJECT_LOCAL, { projectId: "proj-1", dockable: false });
+    const model = build();
+    const byKind = new Map(
+      [...model.dockPanels, ...model.gridPanels].map((p) => [p.kindId, p.origin])
+    );
+
+    expect(byKind.get("file")).toBe("builtin");
+    expect(byKind.get(PLUGIN_DOCKABLE)).toBe("plugin");
+    expect(byKind.get(PLUGIN_PROJECT_LOCAL)).toBe("project-plugin");
+  });
+
+  it("keeps origin on the rows search actually ranks", () => {
+    // browseRows and searchItems are built separately; a marker present in one
+    // and missing in the other is the drift this asserts against.
+    registerPluginKind(PLUGIN_PROJECT_LOCAL, { projectId: "proj-1", dockable: false });
+    const model = build();
+
+    const searched = model.searchItems.find(
+      (item) => item.category === "panel" && item.kindId === PLUGIN_PROJECT_LOCAL
+    );
+    expect(searched).toBeDefined();
+    expect(searched).toMatchObject({ origin: "project-plugin" });
+
+    const browsed = model.browseRows.find(
+      (row) =>
+        row.kind === "item" &&
+        row.item.category === "panel" &&
+        row.item.kindId === PLUGIN_PROJECT_LOCAL
+    );
+    expect(browsed).toBeDefined();
   });
 
   it("honours a plugin kind's showInPalette opt-out", () => {
@@ -421,6 +461,87 @@ describe("buildDockLaunchModel — browse rows", () => {
     // With recipes present the cue is gone, so it can't be navigated to.
     const withSome = build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] });
     expect(createRecipeRows(withSome)).toEqual([]);
+  });
+
+  it("footers the More band with Manage agents and then Customize toolbar", () => {
+    const actionRows = (model: ReturnType<typeof build>) =>
+      model.browseRows.filter((row) => row.band === "actions");
+    const cuesOf = (model: ReturnType<typeof build>) =>
+      actionRows(model).map((row) => (row.kind === "cue" ? row.cue : row.kind));
+    const FOOTER = ["manage-agents", "customize-toolbar"];
+
+    // Order is the assertion — Manage agents has held this footer alone, and
+    // moving it would relocate a row out from under the cursor.
+    expect(cuesOf(build())).toEqual(FOOTER);
+    expect(new Set(actionRows(build()).map((row) => row.rowKey)).size).toBe(2);
+
+    // Unconditional, unlike the recipe and setup cues, which the inventory
+    // withdraws once it can offer the real thing. Both of these rows reach
+    // global settings pages, so nothing about what a project holds may hide
+    // the route to them — asserted against the shapes that DO move the other
+    // cues, since a gate copied from one of them would pass the default build.
+    expect(cuesOf(build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] }))).toEqual(FOOTER);
+    expect(cuesOf(build({ agents: [], agentInventoryState: "loading" }))).toEqual(FOOTER);
+    expect(cuesOf(build({ agentInventoryState: "fallback" }))).toEqual(FOOTER);
+  });
+
+  it("labels the toolbar cue with the plugin tray's own wording", () => {
+    // The issue asks for one string, not a second that agrees today: the launcher
+    // and the tray point at the same settings page, so a copy edit to either has
+    // to move both.
+    expect(DOCK_LAUNCH_CUE_LABELS["customize-toolbar"]).toBe(TOOLBAR_CUSTOMIZE_LABEL);
+  });
+});
+
+describe("activateDockLaunchCue", () => {
+  const dispatchEventMock = vi.fn();
+
+  beforeEach(() => {
+    dispatchEventMock.mockReset();
+    // This suite runs in the node environment, where the setup cue's reach for
+    // `window` throws. Stubbed rather than skipped: a dropped `return` in the
+    // case above it lands here, and an exception is not a reading of that.
+    vi.stubGlobal("window", { dispatchEvent: dispatchEventMock });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("gives every cue exactly one effect, on exactly one channel", () => {
+    const effectsOf = (cue: Parameters<typeof activateDockLaunchCue>[0]) => {
+      actionDispatchMock.mockClear();
+      dispatchEventMock.mockClear();
+      activateDockLaunchCue(cue, "wt-1", "menu");
+      return {
+        dispatched: [...actionDispatchMock.mock.calls],
+        events: dispatchEventMock.mock.calls.map(([event]) => (event as Event).type),
+      };
+    };
+
+    // Exact call lists, both channels, all four cues. Routing is a switch now,
+    // and a dropped `return` runs the next case's effect on top of this one —
+    // which a matcher that only asks whether the expected call happened reads
+    // as a pass.
+    expect(effectsOf("create-recipe")).toEqual({
+      dispatched: [["recipe.editor.open", { worktreeId: "wt-1" }, { source: "menu" }]],
+      events: [],
+    });
+    expect(effectsOf("setup-agents")).toEqual({
+      dispatched: [],
+      events: ["daintree:open-agent-setup-wizard"],
+    });
+    // The two settings cues are one edit apart from being swapped, and either
+    // swap is silent: this used to route on two `if`s and then dispatch `agents`
+    // unconditionally.
+    expect(effectsOf("manage-agents")).toEqual({
+      dispatched: [["app.settings.openTab", { tab: "agents" }, { source: "menu" }]],
+      events: [],
+    });
+    expect(effectsOf("customize-toolbar")).toEqual({
+      dispatched: [["app.settings.openTab", { tab: "toolbar" }, { source: "menu" }]],
+      events: [],
+    });
   });
 });
 

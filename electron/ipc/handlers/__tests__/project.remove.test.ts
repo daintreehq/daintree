@@ -56,6 +56,23 @@ const teardownMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
 
+// Unmocked this resolves through the real fire-and-forget dynamic import, so
+// deleting the notify from the remove path left this whole file green (#12231).
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
+
+const fileSearchCacheInvalidatorMock = vi.hoisted(() => ({
+  handleWorktreeUpdate: vi.fn(),
+  handleWorktreeRemoved: vi.fn(),
+  handleProjectClosed: vi.fn(),
+  reset: vi.fn(),
+}));
+vi.mock("../../../services/workspace-client/fileSearchCacheInvalidation.js", () => ({
+  fileSearchCacheInvalidator: fileSearchCacheInvalidatorMock,
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
@@ -80,6 +97,34 @@ describe("project:remove handler", () => {
       confirmed: true,
       terminalsKilled: 0,
     });
+  });
+
+  it("drops the removed project's file indexes (#12240)", async () => {
+    // The worktree-delete path invalidates per worktree; a project removed
+    // whole never goes through it, so its indexes used to sit in main-process
+    // memory until something happened to read those exact paths again.
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-1",
+      name: "Project",
+      path: "/test/proj-1",
+    });
+    projectStoreMock.removeProject.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient: {
+        getProjectStats: vi.fn(),
+        onProjectSwitch: vi.fn(),
+        setActiveProject: vi.fn(),
+      },
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await handler(fakeEvent, "proj-1");
+
+    expect(fileSearchCacheInvalidatorMock.handleProjectClosed).toHaveBeenCalledWith("/test/proj-1");
   });
 
   it("gracefully tears down and journals terminals before removing the project", async () => {
@@ -119,6 +164,15 @@ describe("project:remove handler", () => {
 
     // The row is gone, so a window still bound to it has no project open (#11136).
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+
+    // A removed project's plugins must not outlive it, and the notify has to
+    // land BEFORE the row goes: afterwards the controller can no longer resolve
+    // the project to reconcile it away.
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+    expect(
+      pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+    ).toBeLessThan(removeOrder);
   });
 
   it("fails closed: does NOT remove the project when the teardown is unconfirmed", async () => {
@@ -149,6 +203,8 @@ describe("project:remove handler", () => {
     expect(projectStoreMock.removeProject).not.toHaveBeenCalled();
     expect(windowStateMock.pruneWindowStateForPath).not.toHaveBeenCalled();
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+    // The row survives with its agents still running, so its plugins do too.
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
   });
 
   it("fails closed when the teardown throws: the old swallow-and-remove is gone", async () => {

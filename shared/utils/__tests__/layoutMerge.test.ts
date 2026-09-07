@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeIdArrayDelta,
+  decodeIdArrayDelta,
   mergeIdArray,
   deepEqualIgnoringUndefined,
   computeRecordDelta,
@@ -43,6 +44,37 @@ describe("deepEqualIgnoringUndefined", () => {
   it("does not conflate a real key with an undefined-valued one of a different name", () => {
     expect(deepEqualIgnoringUndefined({ id: "p", a: undefined }, { id: "p", b: 1 })).toBe(false);
   });
+
+  it("matches JSON semantics for omitted object values and null-like array values", () => {
+    expect(
+      deepEqualIgnoringUndefined(
+        { id: "p", ignored: () => undefined, alsoIgnored: Symbol("x") },
+        { id: "p" }
+      )
+    ).toBe(true);
+    expect(deepEqualIgnoringUndefined([undefined, Number.NaN, Infinity], [null, null, null])).toBe(
+      true
+    );
+  });
+
+  it("ignores object key order without ignoring array order", () => {
+    expect(
+      deepEqualIgnoringUndefined(
+        { id: "p", nested: { b: 2, a: 1 } },
+        { nested: { a: 1, b: 2 }, id: "p" }
+      )
+    ).toBe(true);
+    expect(deepEqualIgnoringUndefined(["a", "b"], ["b", "a"])).toBe(false);
+  });
+
+  it("treats non-serializable nested values as changed", () => {
+    expect(deepEqualIgnoringUndefined({ id: "p", value: 1n }, { id: "p", value: 1n })).toBe(false);
+    const left: { id: string; self?: unknown } = { id: "p" };
+    const right: { id: string; self?: unknown } = { id: "p" };
+    left.self = left;
+    right.self = right;
+    expect(deepEqualIgnoringUndefined(left, right)).toBe(false);
+  });
 });
 
 describe("computeIdArrayDelta with JSON-round-trip equality", () => {
@@ -56,6 +88,29 @@ describe("computeIdArrayDelta with JSON-round-trip equality", () => {
 });
 
 describe("computeIdArrayDelta", () => {
+  it("round-trips the compact switch wire shape without repeating changed ids", () => {
+    const base = [
+      { id: "unchanged", v: "a" },
+      { id: "long-changed-panel-id", v: "b" },
+      { id: "removed", v: "c" },
+    ];
+    const current = [
+      { id: "unchanged", v: "a" },
+      { id: "long-changed-panel-id", v: "new" },
+    ];
+    const delta = computeIdArrayDelta(base, current, eq);
+
+    expect(delta.changedIds).toEqual(["long-changed-panel-id"]);
+    expect(delta.removedIds).toEqual(["removed"]);
+    expect(JSON.stringify(delta)).not.toContain("long-changed-panel-id");
+
+    const wire = structuredClone(delta);
+    expect(decodeIdArrayDelta(wire, current)).toEqual({
+      changedIds: ["long-changed-panel-id"],
+      removedIds: ["removed"],
+    });
+  });
+
   it("reports added ids as changed", () => {
     const delta = computeIdArrayDelta([{ id: "1" }], [{ id: "1" }, { id: "2" }], eq);
     expect(delta.changedIds).toEqual(["2"]);

@@ -223,7 +223,10 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       runAttentionServiceInstance?.getActiveSnoozes(),
       // A hidden assistant reports nothing, exactly as the pushed status map
       // has it — the two paths answering differently is what #10989 was.
-      (id) => helpSessionService.isPanelVisible(id)
+      (id) => helpSessionService.isPanelVisible(id),
+      // Lets concurrent assistants be ranked by who needs the user,
+      // rather than by whichever started last (#12108).
+      (terminalId) => helpSessionService.getSlotForTerminal(terminalId)
     );
 
     const result: BulkProjectStats = {};

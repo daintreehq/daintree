@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../../shared/perf/marks";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 export interface PackagedLaunchResult {
   durationMs: number;
@@ -215,13 +215,31 @@ async function stopProcess(child: ChildProcess, traceEnabled: boolean): Promise<
   await waitForExit(child, 2_000);
 }
 
+/**
+ * The marks a healthy packaged boot must leave in the NDJSON.
+ *
+ * Every number this module reports is a mark-to-mark duration, so a boot that
+ * emitted fewer marks reports fewer metrics rather than a worse one — the phase
+ * readings simply stop appearing, which reads as a clean run. The pair marks are
+ * required together because a half-present pair yields no duration at all.
+ */
+export const REQUIRED_BOOT_MARKS: readonly string[] = [
+  PERF_MARKS.APP_BOOT_START,
+  PERF_MARKS.RENDERER_READY,
+  PERF_MARKS.RENDERER_FIRST_INTERACTIVE,
+  PERF_MARKS.SERVICE_INIT_START,
+  PERF_MARKS.SERVICE_INIT_COMPLETE,
+  PERF_MARKS.HYDRATE_START,
+  PERF_MARKS.HYDRATE_COMPLETE,
+];
+
 export function parseBootDuration(ndjsonPath: string): {
   durationMs: number;
   metrics: Record<string, number>;
   degraded?: string;
 } {
   if (!fs.existsSync(ndjsonPath)) {
-    return { durationMs: -1, metrics: {} };
+    return { durationMs: -1, metrics: { bootMarkMisses: REQUIRED_BOOT_MARKS.length } };
   }
 
   const lines = fs.readFileSync(ndjsonPath, "utf-8").trim().split("\n");
@@ -243,9 +261,11 @@ export function parseBootDuration(ndjsonPath: string): {
     }
   }
 
+  const bootMarkMisses = REQUIRED_BOOT_MARKS.filter((mark) => !marks.has(mark)).length;
+
   const bootStart = marks.get(PERF_MARKS.APP_BOOT_START);
   if (!bootStart) {
-    return { durationMs: -1, metrics: {} };
+    return { durationMs: -1, metrics: { bootMarkMisses } };
   }
 
   // RENDERER_FIRST_INTERACTIVE fires post-hydration after 2x rAF + the
@@ -255,7 +275,7 @@ export function parseBootDuration(ndjsonPath: string): {
   const firstInteractive = marks.get(PERF_MARKS.RENDERER_FIRST_INTERACTIVE);
   const rendererReady = marks.get(PERF_MARKS.RENDERER_READY);
 
-  const metrics: Record<string, number> = {};
+  const metrics: Record<string, number> = { bootMarkMisses };
 
   // Extract key phase durations regardless of which terminal mark we use.
   const serviceInitStart = marks.get(PERF_MARKS.SERVICE_INIT_START);
@@ -338,8 +358,9 @@ export async function launchPackagedAndMeasure(
   const timeoutMs = options.timeoutMs ?? 30_000;
   const isWarm = Boolean(options.userDataDir);
   const cacheKind: "cold" | "warm" = isWarm ? "warm" : "cold";
-  const userDataDir =
-    options.userDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), `daintree-perf-${iteration}-`));
+  // A cold profile is this function's to reap; a warm one belongs to the caller
+  // and must survive the run loop to keep the compile cache warm.
+  const userDataDir = options.userDataDir ?? createPerfTempRoot(`daintree-perf-${iteration}-`);
   const ndjsonPath = path.join(userDataDir, "perf-metrics.ndjson");
 
   // Marks are append-only. When reusing a warm userDataDir across launches the
@@ -481,11 +502,7 @@ export async function launchPackagedAndMeasure(
     // needs it to persist across the run loop to keep the compile cache warm.
     if (!isWarm) {
       setTimeout(() => {
-        try {
-          fs.rmSync(userDataDir, { recursive: true, force: true });
-        } catch {
-          // Best effort
-        }
+        releasePerfTempRoot(userDataDir);
       }, 1000);
     }
   }

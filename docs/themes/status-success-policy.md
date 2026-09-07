@@ -97,6 +97,8 @@ Use the semantic spelling, not the legacy `daintree-*` aliases — `border-borde
 
 Enforcement is a contract test, at occurrence level: `src/config/__tests__/statusSuccessGuard.contract.test.ts`, with its data in `statusSuccessInventory.ts`.
 
+The inventory's `category` field uses five short keys, which map onto the prose above: `transient` (transient confirmations), `verification` (finite gates and checklists), `outcome` (enumerated outcomes), `domain` (domain notation), and `affordance` (the open question below). There is deliberately no key for the demoted categories — a site in one of those should not exist.
+
 It parses every production `.ts`/`.tsx` under `src/` and under the builtin plugin renderers (which ship in the app and paint the same tokens) and collects **paint sites** — string literals and template quasis containing a `status-success` Tailwind utility or a `var(--color-status-success)` read. Every site must appear in the inventory with a category and a rationale. Sites are keyed by a **signature** (the success-bearing lexemes of the literal, whitespace collapsed) plus an optional **anchor** (any substring of an enclosing node) when a signature repeats inside one file. Reformatting a component does not churn the inventory; changing which success utility it paints does.
 
 Deliberate boundaries:
@@ -125,3 +127,10 @@ What it does not catch, stated plainly because a guard trusted past its reach is
 3. If it stays, what is the non-colour channel — text, glyph, geometry, or a real border?
 4. If it is a running process, is it on `activity-working` rather than `status-success`?
 5. If you demoted it, did you avoid replacing it with a toast, an inbox entry, or a banner?
+
+## Related
+
+- [theme-tokens.md](./theme-tokens.md) — `status-success` and the four `status-*-surface` washes it derives.
+- [component-contract.md](./component-contract.md) — the `component-contract/*` rules the demotion vocabulary has to satisfy.
+- [../architecture/notification-system.md](../architecture/notification-system.md) — the runtime-signal tiering this rule falls out of.
+- [`.claude/rules/design-system.md`](../../.claude/rules/design-system.md) — accent restraint, the sibling scarcity rule.

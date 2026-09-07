@@ -194,7 +194,7 @@ export function IssuePickerDialog({
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" maxHeight="max-h-[70vh]">
-      <AppDialog.Header plainBody>
+      <AppDialog.Header>
         <AppDialog.Title icon={<Link className="w-5 h-5 text-pr-open" />}>
           Attach Issue
         </AppDialog.Title>
@@ -233,7 +233,7 @@ export function IssuePickerDialog({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 px-6 pb-4">
+      <div className="flex-1 overflow-y-auto min-h-0 dialog-body-inset pb-4">
         {isPending && issues.length === 0 ? (
           <Skeleton label="Loading issues" className="space-y-1">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -292,7 +292,7 @@ export function IssuePickerDialog({
       </div>
 
       {currentIssueNumber && (
-        <AppDialog.Footer plainBody>
+        <AppDialog.Footer>
           <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
             <Unlink className="w-4 h-4 mr-2" />
             Detach Issue

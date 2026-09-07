@@ -26,9 +26,10 @@ type StateCallback = (osDndActive: boolean | undefined) => void;
  * Electron-exposed event subscription — failing soft is the correct choice
  * for both.
  *
- * The state is consumed in two places only: the working-pulse audio gate in
- * `AgentNotificationService` and the read-only toolbar tooltip display. It
- * must NEVER be used to suppress in-app toasts.
+ * The state is consumed by the informational-audio gate in
+ * `AgentNotificationService` (working pulse and all-clear) and by the
+ * read-only DND indicators in the renderer (toolbar button + Notification
+ * Center). It must NEVER be used to suppress in-app toasts.
  */
 class OsDndService {
   private state: boolean | undefined = undefined;
@@ -75,7 +76,8 @@ class OsDndService {
    * without this we'd report `undefined` until the user toggled DND. The
    * `Assertions.json` file lists the active Focus-mode assertions; an empty
    * read means no mode is active. Anything that throws (file missing, parse
-   * failure, sandbox restriction) collapses to `undefined` — fail-soft.
+   * failure, sandbox restriction) collapses to `false` — the common cause is
+   * simply that no assertion is set.
    */
   private probeMacOsInitialState(): boolean | undefined {
     const assertionsPath = path.join(
@@ -121,8 +123,9 @@ class OsDndService {
   }
 
   /**
-   * Current DND state. `undefined` means "unknown" (unsupported platform or
-   * detection failed) — consumers must treat it as "do not gate".
+   * Current DND state. `undefined` means "unknown" — a platform with no
+   * detection, or before `initialize()` has run. Consumers must treat it as
+   * "do not gate"; only an explicit `true` suppresses.
    */
   getState(): boolean | undefined {
     return this.state;

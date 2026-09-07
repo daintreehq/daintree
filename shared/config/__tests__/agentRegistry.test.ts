@@ -13,6 +13,7 @@ import {
   setAgentPresets,
   getAssistantSupportedAgentIds,
   getAssistantWiredAgentIds,
+  hasAssistantMcpImplementation,
   invalidateEffectiveRegistryCache,
   AGENT_REGISTRY,
   type AgentConfig,
@@ -348,8 +349,11 @@ describe("agentRegistry", () => {
   });
 
   describe("user-defined agents in assistant lists", () => {
+    // `env-only` is the sole mode a third-party agent can be admitted under:
+    // it needs no host-side writer or arg-builder, only the DAINTREE_MCP_* env
+    // every help launch already carries (#12262).
     const stableSupports: AssistantSupports = {
-      mcpInjection: "cli-flags",
+      mcpInjection: "env-only",
       settingsOverlay: false,
       permissionBypass: true,
       trustDialog: false,
@@ -360,6 +364,16 @@ describe("agentRegistry", () => {
     const experimentalSupports: AssistantSupports = {
       ...stableSupports,
       tier: "experimental",
+    };
+
+    const cliFlagsSupports: AssistantSupports = {
+      ...stableSupports,
+      mcpInjection: "cli-flags",
+    };
+
+    const projectConfigSupports: AssistantSupports = {
+      ...stableSupports,
+      mcpInjection: "project-config",
     };
 
     const userDefinedWithStable: AgentConfig = {
@@ -511,6 +525,164 @@ describe("agentRegistry", () => {
       } finally {
         setUserRegistry({});
       }
+    });
+
+    it.each([
+      ["cli-flags", cliFlagsSupports],
+      ["project-config", projectConfigSupports],
+    ])(
+      "excludes a stable user-defined agent declaring %s — Daintree implements neither for a third party (#12262)",
+      (_mode, supports) => {
+        setUserRegistry({
+          "byo-agent": { ...userDefinedWithStable, id: "byo-agent", supports },
+        });
+        try {
+          expect(getAssistantWiredAgentIds()).not.toContain("byo-agent");
+          expect(getAssistantSupportedAgentIds()).not.toContain("byo-agent");
+          expect(hasAssistantMcpImplementation("byo-agent")).toBe(false);
+        } finally {
+          setUserRegistry({});
+        }
+      }
+    );
+
+    it("admits a user-defined agent declaring env-only — the spawn env is the whole contract (#12262)", () => {
+      setUserRegistry({ "my-cli-agent": userDefinedWithStable });
+      try {
+        expect(getAssistantWiredAgentIds()).toContain("my-cli-agent");
+        expect(getAssistantSupportedAgentIds()).toContain("my-cli-agent");
+        expect(hasAssistantMcpImplementation("my-cli-agent")).toBe(true);
+      } finally {
+        setUserRegistry({});
+      }
+    });
+
+    it("does not treat an inherited Object.prototype key as a native implementation", () => {
+      // `env-only` is the sensitive case: a bare `TABLE[id]` lookup resolves
+      // `constructor` off the prototype, finds a function rather than
+      // `undefined`, and compares it against the declared mode — wrongly
+      // rejecting an agent the open contract should admit.
+      const constructorAgent: AgentConfig = {
+        ...userDefinedWithStable,
+        id: "constructor",
+        name: "Constructor Agent",
+        command: "ctor",
+      };
+      setUserRegistry({ constructor: constructorAgent });
+      try {
+        expect(hasAssistantMcpImplementation("constructor")).toBe(true);
+        expect(getAssistantWiredAgentIds()).toContain("constructor");
+      } finally {
+        setUserRegistry({});
+      }
+    });
+
+    it("still rejects an inherited-key agent declaring an unimplemented mode", () => {
+      setUserRegistry({
+        constructor: {
+          ...userDefinedWithStable,
+          id: "constructor",
+          name: "Constructor Agent",
+          command: "ctor",
+          supports: cliFlagsSupports,
+        },
+      });
+      try {
+        expect(hasAssistantMcpImplementation("constructor")).toBe(false);
+        expect(getAssistantWiredAgentIds()).not.toContain("constructor");
+      } finally {
+        setUserRegistry({});
+      }
+    });
+  });
+
+  describe("mcpInjection is load-bearing (#12262)", () => {
+    it("every active built-in declares a mode Daintree implements for it", () => {
+      // The coverage guard: read the declarations directly rather than through
+      // the wired list, or a built-in whose mode drifted would quietly drop out
+      // of both the list and this assertion.
+      for (const id of BUILT_IN_AGENT_IDS) {
+        const supports = getAgentConfig(id)?.supports;
+        if (!supports || supports.tier === "deprecated") continue;
+        expect({ id, implemented: hasAssistantMcpImplementation(id) }).toEqual({
+          id,
+          implemented: true,
+        });
+      }
+    });
+
+    it("rejects a built-in whose declared mode drifts from its implementation", () => {
+      // Claude's literal-id branches write project config regardless of what it
+      // declares, so an `env-only` claim must not be admitted on the open
+      // third-party contract.
+      const original = AGENT_REGISTRY.claude as AgentConfig;
+      const drifted: AssistantSupports = {
+        ...(original.supports as AssistantSupports),
+        mcpInjection: "env-only",
+      };
+      AGENT_REGISTRY.claude = { ...original, supports: drifted } as AgentConfig;
+      invalidateEffectiveRegistryCache();
+      try {
+        expect(hasAssistantMcpImplementation("claude")).toBe(false);
+        expect(getAssistantWiredAgentIds()).not.toContain("claude");
+      } finally {
+        AGENT_REGISTRY.claude = original;
+        invalidateEffectiveRegistryCache();
+      }
+    });
+
+    it("the stable list is a subset of the wired list, custom agents included", () => {
+      setUserRegistry({
+        "byo-ok": {
+          id: "byo-ok",
+          name: "BYO OK",
+          command: "byo-ok",
+          color: "#FF8800",
+          iconId: "custom",
+          supportsContextInjection: true,
+          supports: {
+            mcpInjection: "env-only",
+            settingsOverlay: false,
+            permissionBypass: false,
+            trustDialog: false,
+            versionProbe: true,
+            tier: "stable",
+          },
+        },
+        "byo-bad": {
+          id: "byo-bad",
+          name: "BYO Bad",
+          command: "byo-bad",
+          color: "#FF8800",
+          iconId: "custom",
+          supportsContextInjection: true,
+          supports: {
+            mcpInjection: "cli-flags",
+            settingsOverlay: false,
+            permissionBypass: false,
+            trustDialog: false,
+            versionProbe: true,
+            tier: "stable",
+          },
+        },
+      });
+      try {
+        const wired = new Set(getAssistantWiredAgentIds());
+        const supported = getAssistantSupportedAgentIds();
+        expect(supported).toContain("byo-ok");
+        expect(supported).not.toContain("byo-bad");
+        for (const id of supported) {
+          expect({ id, wired: wired.has(id) }).toEqual({ id, wired: true });
+        }
+      } finally {
+        setUserRegistry({});
+      }
+    });
+
+    it("returns false for an agent with no supports declaration", () => {
+      expect(hasAssistantMcpImplementation("grok")).toBe(false);
+      expect(hasAssistantMcpImplementation("aider")).toBe(false);
+      expect(hasAssistantMcpImplementation("not-an-agent")).toBe(false);
     });
   });
 });

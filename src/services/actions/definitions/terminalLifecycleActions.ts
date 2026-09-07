@@ -1,5 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import type { ActionSource } from "@shared/types/actions";
+import type { ActionContext, ActionSource } from "@shared/types/actions";
+import {
+  ConfirmationStagedError,
+  confirmationStagedMessage,
+} from "@/services/actions/confirmationStaged";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
@@ -10,6 +14,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import {
   useTerminalPendingDestructiveActionStore,
   type TerminalPendingDestructiveActionKind,
+  type TerminalPendingDestructiveActionSnapshot,
 } from "@/store/terminalPendingDestructiveActionStore";
 import {
   collectRunningAgentTerminals,
@@ -18,10 +23,55 @@ import {
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { isForegroundDispatch } from "./dispatchSource";
+import { logWarn } from "@/utils/logger";
+import {
+  MAX_KILL_BATCH_TERMINALS,
+  TerminalKillBatchIdsSchema,
+} from "@shared/types/terminalKillBatch";
 
 function parseConfirmed(args: unknown): boolean {
   if (!args || typeof args !== "object") return false;
   return (args as { confirmed?: unknown }).confirmed === true;
+}
+
+/**
+ * Has this dispatch's destructive step already been approved?
+ *
+ * Two independent surfaces, deliberately. `args.confirmed` is how the in-app
+ * dialogs re-dispatch after the user clicks through: client-settable, which is
+ * harmless because it only skips the gate below — `ActionService` still made an
+ * agent clear the host modal to get here at all. `ctx.hostConfirmed` is that
+ * host attestation itself, stamped by `ActionService.dispatch` and unspoofable.
+ *
+ * Reading only the first is what made an MCP kill ask twice and kill nothing
+ * (#12120): the bridge sets the attestation in the dispatch options and leaves
+ * the model's args alone, so the approval the user had already given was
+ * invisible here.
+ *
+ * Deliberately NOT `ctx.dispatchSource === "agent"`. That reads as the same
+ * thing only for a statically `danger:"confirm"` action; where the tier is
+ * escalated from the args (`resolveEffectiveActionDanger`), an agent reaches
+ * `run()` with no approval at all and the inference becomes a silent bypass.
+ */
+function isConfirmed(args: unknown, ctx: ActionContext | undefined): boolean {
+  return parseConfirmed(args) || ctx?.hostConfirmed === true;
+}
+
+/**
+ * Park a confirmation for the user, and refuse the dispatch.
+ *
+ * Never returns — staging is not success. Returning normally here resolved the
+ * dispatch as `ok` while the terminal was still running, so an agent read a
+ * staged kill as a completed one and moved on (#12120). Same shape as the
+ * panel-limit refusal (#8814): a `run()` that declines to act must throw, or
+ * `dispatch` reports success for nothing happening.
+ */
+function stageConfirmation(
+  snapshot: TerminalPendingDestructiveActionSnapshot,
+  what: string
+): never {
+  useTerminalPendingDestructiveActionStore.getState().request(snapshot);
+  throw new ConfirmationStagedError(confirmationStagedMessage(what));
 }
 
 function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
@@ -36,6 +86,47 @@ const PanelCloseResultSchema = z.object({
     .array(z.string())
     .describe(
       "The panels this call closed. Empty means nothing closed: there was no panel to act on, the one named was already in the trash, or its teardown did not complete. Treat an empty array as a failed close rather than a quiet success."
+    ),
+});
+
+/**
+ * What one batch kill did, per target.
+ *
+ * Buckets rather than a count, because the causes need different responses from
+ * the caller and a bare success hides all of them: an excluded id was refused by
+ * a human and must never be retried, a missing one was already gone, and a
+ * skipped one is still alive and still working. Every id the call asked for
+ * lands in exactly one bucket, in the order it was requested.
+ */
+const TerminalKillBatchArgsSchema = z.object({
+  terminalIds: TerminalKillBatchIdsSchema.describe(
+    `Identifies the panels to destroy (1-${MAX_KILL_BATCH_TERMINALS}), using \`id\` values from the terminal listing. Each id must appear once. An id that is unchecked, already gone, or newly busy is reported back rather than failing the batch.`
+  ),
+});
+
+const TerminalKillBatchResultSchema = z.object({
+  killedIds: z
+    .array(z.string())
+    .describe("The panels this call destroyed. Their processes and scrollback are gone."),
+  excludedIds: z
+    .array(z.string())
+    .describe(
+      "Unchecked by the approver. A human refusal of these exact targets, not a transient failure: never retry them or re-ask on their behalf."
+    ),
+  notFoundIds: z
+    .array(z.string())
+    .describe(
+      "No panel with this id existed when the kill ran. Already gone rather than spared; nothing to retry."
+    ),
+  skippedIds: z
+    .array(z.string())
+    .describe(
+      "Started running an agent after the confirmation froze, so the approval described an idle panel these no longer are. Untouched and still working; check what the agent is doing before asking again."
+    ),
+  failedIds: z
+    .array(z.string())
+    .describe(
+      "The teardown errored, so whether the panel survived is unknown. Check the listing; the rest of the batch still ran."
     ),
 });
 
@@ -244,7 +335,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill Terminal",
     description:
-      "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is marked confirmed, so read back its state rather than assume it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
+      "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is confirmed, and an untouched call fails rather than reporting it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -257,7 +348,7 @@ export function registerTerminalLifecycleActions(
         .boolean()
         .optional()
         .describe(
-          "Acknowledges losing a running agent session. Without it, a panel running an agent is left alone and a confirmation is staged for the user instead, so the call returns having changed nothing."
+          "Acknowledges losing a running agent session. Redundant once the host has prompted for approval. Without either, the panel is left alone, a confirmation is staged, and the call fails rather than reporting success."
         ),
     }),
     run: async (args: unknown, ctx) => {
@@ -273,17 +364,112 @@ export function registerTerminalLifecycleActions(
       // Bare PTY stays D0 — only confirm when an agent session would lose
       // in-flight work. Mid-work is "working"; "waiting"/"directing" are
       // paused states where stopping is non-disruptive.
-      if (!parseConfirmed(args) && terminalHasRunningAgentSession(terminal)) {
-        useTerminalPendingDestructiveActionStore.getState().request({
-          kind: "kill",
-          targetCount: 1,
-          runningAgentCount: 1,
-          terminalId: targetId,
-        });
-        return;
+      if (!isConfirmed(args, ctx) && terminalHasRunningAgentSession(terminal)) {
+        stageConfirmation(
+          { kind: "kill", targetCount: 1, runningAgentCount: 1, terminalId: targetId },
+          "Killing this terminal"
+        );
       }
       clearPendingIf("kill");
       state.removePanel(targetId);
+    },
+  }));
+
+  actions.set("terminal.killBatch", () => ({
+    id: "terminal.killBatch",
+    title: "Kill terminals",
+    description:
+      "Permanently destroy several named panels and their processes at once, with no trash step and no recovery. Raises one confirmation listing every target, each separately deselectable — one prompt for the whole batch rather than one per panel. Reports each id on its own: destroyed, deselected by the approver, already gone, newly busy, or errored.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Permanently kills every named PTY process. Scrollback and session state are lost for each one.",
+    keywords: ["terminate", "stop", "remove", "delete", "batch", "bulk"],
+    // Hidden from the palette: it acts only on ids an automated caller supplies,
+    // and its confirmation is the host modal the MCP bridge raises. A user
+    // picking it here would have nothing to name; `terminal.kill` and
+    // `terminal.killAll` are the palette's versions.
+    palette: { mode: "hidden" },
+    argsSchema: TerminalKillBatchArgsSchema,
+    resultSchema: TerminalKillBatchResultSchema,
+    mcpOutputSchema: true,
+    run: async (args: unknown, ctx) => {
+      // Re-parsed rather than asserted. `ActionService` has already validated
+      // against this exact schema, so this cannot throw on the dispatch path —
+      // it just buys the narrowed type without an unchecked cast, and keeps
+      // `run()` honest if it is ever called outside the service.
+      const { terminalIds } = TerminalKillBatchArgsSchema.parse(args);
+      // The per-target attestation is what this action runs on, and it exists
+      // only when a selectable host confirmation actually resolved. Refusing on
+      // its absence is the whole gate: `hostConfirmed` alone says a human
+      // approved *something*, and reading that as "approved all of these" is
+      // exactly the sweep the deselectable dialog exists to prevent. Nothing
+      // else dispatches this action, so a missing attestation is a wiring bug,
+      // never a user in a hurry.
+      const approved = ctx?.hostApprovedTargets;
+      if (approved === undefined) {
+        throw new Error(
+          "terminal.killBatch requires a per-target approval from the host confirmation; nothing was destroyed."
+        );
+      }
+      // Only ids the call actually asked for. An attestation naming anything
+      // else is not consent about this batch.
+      const requested = new Set(terminalIds);
+      const observedAgentById = new Map(
+        approved
+          .filter((target) => requested.has(target.id))
+          .map((target) => [target.id, target.observedAgentRunning] as const)
+      );
+
+      const killedIds: string[] = [];
+      const excludedIds: string[] = [];
+      const notFoundIds: string[] = [];
+      const skippedIds: string[] = [];
+      const failedIds: string[] = [];
+
+      for (const id of terminalIds) {
+        if (!observedAgentById.has(id)) {
+          excludedIds.push(id);
+          continue;
+        }
+        // Re-read per id rather than snapshotting once before the loop: each
+        // removal mutates the store, and an agent can start working in a
+        // later target while an earlier one is being torn down.
+        const state = usePanelStore.getState();
+        // `Object.hasOwn`, not truthiness: `panelsById` is a plain object, so
+        // an id like "constructor" would otherwise resolve off the prototype
+        // and get removed as if it were a real panel.
+        if (!Object.hasOwn(state.panelsById, id)) {
+          notFoundIds.push(id);
+          continue;
+        }
+        const terminal = state.panelsById[id];
+        // The revalidation the approval is bound to. Only escalation counts: a
+        // row the approver saw running an agent and approved anyway still dies,
+        // and one that has since gone idle is strictly less than what they
+        // approved. A row shown idle that is now mid-work is the one case the
+        // approval never covered.
+        if (observedAgentById.get(id) !== true && terminalHasRunningAgentSession(terminal)) {
+          skippedIds.push(id);
+          continue;
+        }
+        // Contained per target, and that containment is the point. Letting a
+        // teardown throw escape would abandon the rest of the approved batch
+        // AND discard the record of the kills that already happened — for an
+        // irreversible action, a caller told only "execution error" cannot
+        // know what it lost, and its natural next move is to retry.
+        try {
+          state.removePanel(id);
+          killedIds.push(id);
+        } catch (err) {
+          logWarn("terminal.killBatch: removePanel threw", { terminalId: id, error: err });
+          failedIds.push(id);
+        }
+      }
+
+      return { killedIds, excludedIds, notFoundIds, skippedIds, failedIds };
     },
   }));
 
@@ -291,7 +477,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart Terminal",
     description:
-      "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is marked confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
+      "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -305,7 +491,7 @@ export function registerTerminalLifecycleActions(
         .boolean()
         .optional()
         .describe(
-          "Acknowledges interrupting a running agent session. Without it, a terminal running an agent is left alone and a confirmation is staged for the user instead, so the call returns having changed nothing."
+          "Acknowledges interrupting a running agent session. Redundant once the host has prompted for approval. Without either, the terminal is left alone, a confirmation is staged, and the call fails rather than reporting success."
         ),
     }),
     run: async (args: unknown, ctx) => {
@@ -316,14 +502,11 @@ export function registerTerminalLifecycleActions(
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
       const terminal = state.panelsById[targetId];
-      if (!parseConfirmed(args) && terminalHasRunningAgentSession(terminal)) {
-        useTerminalPendingDestructiveActionStore.getState().request({
-          kind: "restart",
-          targetCount: 1,
-          runningAgentCount: 1,
-          terminalId: targetId,
-        });
-        return;
+      if (!isConfirmed(args, ctx) && terminalHasRunningAgentSession(terminal)) {
+        stageConfirmation(
+          { kind: "restart", targetCount: 1, runningAgentCount: 1, terminalId: targetId },
+          "Restarting this terminal"
+        );
       }
       clearPendingIf("restart");
       state.restartTerminal(targetId);
@@ -611,7 +794,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.killAll",
     title: "Kill All Terminals",
     description:
-      "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is marked confirmed. Automated callers should never need this.",
+      "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is confirmed. Automated callers should never need this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -625,11 +808,11 @@ export function registerTerminalLifecycleActions(
           .boolean()
           .optional()
           .describe(
-            "Acknowledges losing every running agent session. Without it, nothing is destroyed while any agent is running — a confirmation is staged for the user and the call returns having changed nothing."
+            "Acknowledges losing every running agent session. Redundant once the host has prompted for approval. Without either, nothing is destroyed, a confirmation is staged, and the call fails rather than reporting success."
           ),
       })
       .optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       // Don't reuse bulkCloseAll() — it indiscriminately removes every panel,
       // including the tooling-internal assistant terminal. Filter those out
       // before issuing per-panel removes.
@@ -642,13 +825,15 @@ export function registerTerminalLifecycleActions(
         });
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);
-      if (!parseConfirmed(args) && runningAgents.length > 0) {
-        useTerminalPendingDestructiveActionStore.getState().request({
-          kind: "killAll",
-          targetCount: targets.length,
-          runningAgentCount: runningAgents.length,
-        });
-        return;
+      if (!isConfirmed(args, ctx) && runningAgents.length > 0) {
+        stageConfirmation(
+          {
+            kind: "killAll",
+            targetCount: targets.length,
+            runningAgentCount: runningAgents.length,
+          },
+          "Killing every terminal"
+        );
       }
       clearPendingIf("killAll");
       targets.forEach((t) => state.removePanel(t.id));
@@ -667,7 +852,7 @@ export function registerTerminalLifecycleActions(
       "Restarts every non-trash terminal. All scrollback is lost across all terminals.",
     keywords: ["relaunch", "reset", "rerun", "processes"],
     argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const state = usePanelStore.getState();
       // Location-only, deliberately narrower than `isEphemeralPanel`: this list
       // must match what `bulkRestartAll` actually restarts, and that still
@@ -681,13 +866,15 @@ export function registerTerminalLifecycleActions(
         );
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);
-      if (!parseConfirmed(args) && runningAgents.length > 0) {
-        useTerminalPendingDestructiveActionStore.getState().request({
-          kind: "restartAll",
-          targetCount: targets.length,
-          runningAgentCount: runningAgents.length,
-        });
-        return;
+      if (!isConfirmed(args, ctx) && runningAgents.length > 0) {
+        stageConfirmation(
+          {
+            kind: "restartAll",
+            targetCount: targets.length,
+            runningAgentCount: runningAgents.length,
+          },
+          "Restarting every terminal"
+        );
       }
       clearPendingIf("restartAll");
       await state.bulkRestartAll();

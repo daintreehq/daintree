@@ -175,6 +175,54 @@ export interface ViewContribution {
 }
 
 /**
+ * The project surfaces a project-local plugin can own. See §7.8 and
+ * `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
+ * `projectHome` and `defaultLayout` are not here yet.
+ */
+export type ProjectSurfaceSlot = "emptyCanvas";
+
+/** A surface slot claim naming one of the plugin's own `contributes.views`. */
+export interface SurfaceViewSlot {
+  viewId: string;
+}
+
+/** The `contributes.surfaces` block of a project plugin's manifest. */
+export interface SurfaceContributions {
+  emptyCanvas?: SurfaceViewSlot;
+}
+
+/**
+ * A resolved surface claim, as the renderer receives it.
+ *
+ * `panelKindId` is the RUNTIME, project-qualified panel-kind id the view
+ * registered under, not the manifest's bare `viewId` — the renderer already
+ * knows how to turn one of those into a mounted plugin view (icon, name, the
+ * `plugin://` component path, the error boundary), so a surface reuses that
+ * path wholesale instead of growing a second way to mount the same module.
+ */
+export interface ProjectSurfaceClaim {
+  /** The owning plugin INSTANCE key, matching `PanelKindConfig.extensionId`. */
+  pluginId: string;
+  panelKindId: string;
+}
+
+/** Every surface claimed in one project, keyed by slot. */
+export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
+
+/**
+ * The attribute the host stamps on the element a plugin view renders into, and
+ * the only DOM attribute this styling contract adds.
+ *
+ * Daintree compiles the Tailwind classes a plugin uses at runtime and emits them
+ * inside `@scope ([data-daintree-plugin-style-root])`, so the generated rules
+ * apply within a plugin's own subtree and can never reach host chrome. The host
+ * marks the view wrapper itself; the only place an author needs this is a
+ * container rendered through `createPortal`, which escapes that subtree. See
+ * {@link PanelViewProps.styleRootAttributes} for the spreadable form.
+ */
+export const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
+
+/**
  * Props every plugin-contributed panel view receives from the renderer host.
  * Intentionally narrower than the host-internal `PanelComponentProps` so the
  * SDK surface stays stable across a future `plugin://` → trusted-iframe
@@ -182,8 +230,11 @@ export interface ViewContribution {
  *
  * - `panelId` is the runtime panel instance id (the same value the host uses
  *   in `addPanelOptions` / IPC). Plugins should treat it as opaque.
- * - `pluginId` is the plugin's manifest `name` — useful for namespacing
- *   plugin-local storage keys and for logging.
+ * - `pluginId` is the plugin's RUNTIME id, sourced from
+ *   `PanelKindConfig.extensionId` — the bare manifest `name` for an installed
+ *   or builtin plugin, but the instance key `project__{projectId}__{manifestId}`
+ *   for a project plugin. Pass it back verbatim to `window.electron.plugin.*`;
+ *   a view that writes its own manifest name down instead addresses nothing.
  * - `disposeSignal` aborts on unmount AND when the host receives a
  *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
  *   broadcast fires before the main process tears down plugin IPC handlers,
@@ -226,10 +277,72 @@ export interface PanelViewProps {
    * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
    * the panel's `extensionState` (the same bag that survives the save/restore
    * round-trip), so a restored panel sees the args it was originally spawned
-   * with. Empty (no key) for panels opened without an initial argument. The
-   * host never mutates it; plugins should treat the contents as read-only.
+   * with. Empty (no key) for panels opened without an initial argument.
+   *
+   * This is a snapshot taken at mount, not a live value: it does not update
+   * while the view is mounted, including in response to your own
+   * {@link persistState} calls. Treat the contents as read-only and hold your
+   * working copy in React state seeded from here.
    */
   readonly initialArgs?: Record<string, unknown>;
+  /**
+   * Which version of your `stateVersion` schema {@link initialArgs} was written
+   * against — the other half of declaring one in `contributes.panels` (#12280).
+   *
+   * `0` means the bag predates versioning: it was persisted before the host
+   * stamped anything, so its shape is whatever you were writing at the time.
+   * Absent means you declared no `stateVersion`, so nothing was tracked and
+   * nothing is promised.
+   *
+   * Migrate forward from whatever this says and persist the result; your next
+   * {@link persistState} call re-stamps the bag at your current version. You
+   * never have to handle a value ABOVE the version you declare — the host
+   * refuses that bag rather than hand you state a newer build of your plugin
+   * wrote, and shows the user an error naming both versions. The state is kept
+   * on disk, so reinstalling the newer build brings it back intact.
+   */
+  readonly stateVersion?: number;
+  /**
+   * Persist view state onto the panel record, so the next mount of this panel
+   * sees it in {@link initialArgs}.
+   *
+   * The two are one bag: spawn seeds it, this updates it, `initialArgs` reads
+   * it back. That round trip is what lets a view survive the teardowns a panel
+   * routinely outlives — maximizing a sibling pane, leaving a dock tab, a
+   * cached project view, an app restart — without forgetting where the user
+   * was. A file browser's expanded paths, selection, root and sort are exactly
+   * this kind of state.
+   *
+   * The patch is **merged**, so two independent parts of a view can each
+   * persist their own key without reading and rewriting the whole bag; setting
+   * a key to `undefined` removes it. Writing state identical to what is already
+   * stored is free — it neither churns the store nor schedules a save — so
+   * calling this from a render-derived effect is fine.
+   *
+   * **Stored as JSON, canonically.** The host round-trips what you pass through
+   * `JSON.stringify`/`parse` and keeps that, so the value is detached from any
+   * object you still hold — mutating a patch afterwards changes nothing — and
+   * what you read back on the next mount is exactly what you would read back
+   * after a restart. A `NaN` becomes `null` and a `Date` becomes its ISO string
+   * at the moment you persist, not silently at the next launch.
+   *
+   * Keep it small. The bag rides the panel record into the layout save, and the
+   * host refuses an update whose serialized form exceeds 64KB. Anything larger,
+   * anything not JSON round-trippable, and anything that should outlive the
+   * panel belongs in `host.storage` instead. State here rides the panel
+   * snapshot into the project's `state.json` as plaintext JSON, so it is not a
+   * place for secrets.
+   *
+   * Returns whether the stored state is now what you asked for: `false` when
+   * the host rejected the update (over the cap, or not serializable), `true`
+   * when it was applied or already matched. Best-effort in the sense that
+   * `true` means "accepted and scheduled" — the layout save is debounced, so it
+   * is not a promise that bytes have reached disk.
+   *
+   * Absent when the host does not support persistence for this panel; call it
+   * optionally.
+   */
+  readonly persistState?: (patch: Record<string, unknown>) => boolean;
   /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching
@@ -238,6 +351,22 @@ export interface PanelViewProps {
    * or restored panel. `undefined` for a panel spawned without a worktree.
    */
   readonly worktreeId?: string;
+  /**
+   * Spread onto any container you render through `createPortal`, so the
+   * portalled subtree stays inside Daintree's styling contract.
+   *
+   * Tailwind classes in a plugin view are compiled at runtime and scoped to the
+   * element the host marks as the view's style root. A portal renders outside
+   * that element — into `document.body`, or a container of your own — so
+   * without this its classes generate CSS that never matches, and the subtree
+   * paints unstyled. Everything rendered normally is already inside the root
+   * and needs nothing.
+   *
+   * ```tsx
+   * createPortal(<div {...styleRootAttributes}>…</div>, document.body)
+   * ```
+   */
+  readonly styleRootAttributes: Readonly<Record<string, string>>;
 }
 
 /**
@@ -276,6 +405,36 @@ export interface PluginPanelLifecycleEvent {
   /** Owning plugin's manifest `name`. Always this plugin's own id. */
   readonly pluginId: string;
   readonly phase: PluginPanelLifecyclePhase;
+}
+
+/**
+ * One machine wake observation delivered to a plugin (#12175). Frozen before
+ * delivery, and carries only timing — never what the machine was doing while
+ * suspended.
+ *
+ * Emitted at most once per resume, after the host's own settle delay and after
+ * it has attempted to resync its pty and workspace hosts. Suspend has no
+ * counterpart event: a plugin cannot reliably run work between the OS
+ * signalling suspend and the process freezing, so only the wake edge is
+ * exposed.
+ */
+export interface PluginSystemWakeEvent {
+  /**
+   * Milliseconds the machine spent suspended.
+   *
+   * Measured from the observed suspend to the start of the host's post-wake
+   * recovery, so it includes the settle delay but not however long recovery
+   * itself took — a coarse "how stale is my state" figure, not a precise
+   * hardware sleep time.
+   *
+   * `0` is a sentinel, not a measurement: it means the matching suspend edge
+   * was never observed (the host started mid-sleep, or the OS delivered resume
+   * without a preceding suspend). Treat `0` as "unknown duration" — do not
+   * compare it against a staleness threshold and conclude the sleep was short.
+   */
+  readonly sleepDuration: number;
+  /** `Date.now()` at the moment the wake was published. */
+  readonly timestamp: number;
 }
 
 /**
@@ -541,6 +700,22 @@ export interface PluginAuthor {
   role?: string;
 }
 
+/**
+ * Which root a plugin was discovered under. Replaces the `isBuiltin` boolean at
+ * the manifest gate, which could only say "first-party or not" and had no way
+ * to express a third root:
+ *
+ * - `"builtin"` — shipped inside the app bundle (`plugins/builtin/`), plus the
+ *   E2E sideload root, which is loaded on the same trust footing.
+ * - `"user"` — installed by the user into the per-user plugins directory.
+ * - `"project"` — lives in a project's own `.daintree/plugins/`, is only ever
+ *   loaded while that project is open, and must declare `scope: "project"`.
+ *
+ * Host-internal: a plugin never learns its own origin, so this is deliberately
+ * not re-exported from the SDK barrel.
+ */
+export type PluginOrigin = "builtin" | "user" | "project";
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -565,6 +740,18 @@ export interface PluginManifest {
   engines?: {
     daintree?: string;
   };
+  /**
+   * Declares the plugin is only ever loaded project-locally. REQUIRED when the
+   * manifest is discovered under a project's own plugins directory, REJECTED
+   * under the user or builtin roots. The manifest gate enforces both directions,
+   * so a project plugin cannot be dropped into the user directory (or a user
+   * plugin into a project) and quietly keep working under assumptions its author
+   * never made.
+   *
+   * A guardrail against accidental promotion, not a security control: the trust
+   * decision is the project folder, not this field.
+   */
+  scope?: "project";
   capabilities?: PluginCapability[];
   /**
    * Per-capability scope bindings that attenuate the compound-capability
@@ -629,6 +816,17 @@ export interface PluginManifest {
      * qualified id. Empty unless the plugin ships recipes.
      */
     recipes: RecipeContribution[];
+    /**
+     * Project surfaces this plugin claims (§7.8). Optional in the type but
+     * always materialized by the manifest schema's `.default({})`, so a
+     * consumer reading it off a parsed manifest never sees `undefined` — the
+     * optionality is for the hand-built manifest literals in tests and tooling
+     * that predate the field.
+     *
+     * Only meaningful for a `scope: "project"` plugin; the manifest schema
+     * rejects the key outright for any other origin.
+     */
+    surfaces?: SurfaceContributions;
   };
 }
 
@@ -719,7 +917,18 @@ export interface PluginPickPathFilter {
   extensions: string[];
 }
 
-export type PluginSettingsScope = "user" | "project";
+/**
+ * Where a `contributes.settings` value is stored.
+ *
+ * `"user"` is one file shared by every project. `"project"` is written into the
+ * repository (`<projectRoot>/.daintree/plugin-settings/`) and travels to every
+ * clone. `"local"` is the third case neither covers: per project AND per
+ * machine, held in Daintree's own state directory beside the rest of this
+ * machine's per-project plugin state, never in the repo. An interpreter path is
+ * the canonical example — committing it publishes one machine's layout, and
+ * putting it in user scope applies it to unrelated projects.
+ */
+export type PluginSettingsScope = "user" | "project" | "local";
 
 /**
  * Scope for the private {@link StorageApi} key/value store. Unlike
@@ -1221,6 +1430,26 @@ export interface PluginInstallProgressEvent {
 
 export interface LoadedPluginInfo {
   manifest: PluginManifest;
+  /**
+   * The key this plugin is registered under, which is what every id-taking API
+   * (settings, invoke, actions) expects.
+   *
+   * Equal to `manifest.name` for installed and builtin plugins. For a PROJECT
+   * plugin it is the instance key (`project__{projectId}__{name}`), and the
+   * manifest is left alone — so `manifest.name` alone cannot tell the two
+   * apart, and a consumer that filtered on it would treat a project plugin as
+   * an installed one.
+   *
+   * This is also the field renderer-side maps key on. Keying them on
+   * `manifest.name` instead is what made every project-plugin lookup miss and
+   * fall back to rendering the raw instance key (#12211): a contribution never
+   * carries the bare manifest id, so the two never met.
+   */
+  instanceId: string;
+  /** `"project"` for a `.daintree/plugins` contribution, `"global"` otherwise. */
+  origin: "global" | "project";
+  /** Owning project for a project-owned plugin; `null` when `origin` is `"global"`. */
+  projectId: string | null;
   dir: string;
   loadedAt: number;
   /**
@@ -1427,6 +1656,78 @@ export interface PluginWorktreeSnapshot {
    */
   readonly status: PluginWorktreeStatus | null;
 }
+
+/**
+ * Why {@link PluginWorktreesResult} could not name a worktree set (#12174).
+ *
+ * The argument-less {@link PluginHostApi.getWorktrees} collapses every one of
+ * these to `[]`, which a plugin cannot tell apart from a project that genuinely
+ * has no worktrees. The reasons are deliberately semantic rather than one
+ * literal per internal branch: a plugin can act on "retry later" versus "this
+ * project is gone", but nothing it can do differs between a workspace client
+ * that is not wired yet and a workspace host that missed its readiness gate.
+ * The finer diagnosis stays in Daintree's logs.
+ *
+ * - `plugin-unloaded` — the plugin unloaded (or was replaced by a same-id
+ *   reload) before or during the read; a stale timer sees this
+ * - `workspace-unavailable` — the workspace subsystem cannot answer yet: no
+ *   client wired, no host serving the resolved window (a project still opening),
+ *   or a host that never finished populating
+ * - `scope-unresolved` — an unbound host found no focused project view to read
+ *   on behalf of (common mid-project-switch)
+ * - `project-unavailable` — a bound host's project cannot be resolved: the
+ *   binding carries no root, or the project has closed and its workspace-host
+ *   entry is gone
+ * - `fetch-failed` — a read was attempted against a live host and threw
+ */
+export type PluginWorktreesUnavailableReason =
+  | "plugin-unloaded"
+  | "workspace-unavailable"
+  | "scope-unresolved"
+  | "project-unavailable"
+  | "fetch-failed";
+
+/**
+ * Availability- and scope-aware outcome of a worktree read (#12174). Returned
+ * as plain data (never thrown), like {@link PluginCheckUpdateResult} and
+ * {@link PluginActivationResult}, so the structured result survives Electron's
+ * structured-clone IPC boundary.
+ *
+ * This exists because `[]` is overloaded. {@link PluginHostApi.getWorktrees}
+ * answers `[]` for an unloaded plugin, an unwired workspace client, an
+ * unresolved window scope, a rootless or closed project, a failed read, *and*
+ * for a project that really has no worktrees — seven states behind one value.
+ * A plugin that treats "no match in the list" as proof its stored worktree is
+ * gone will therefore false-positive during a project switch or after a wake.
+ *
+ * `status: "ok"` is the only authoritative answer, and it names `projectId` so
+ * a plugin can also tell *which* project the list describes. That matters on
+ * the unbound path: mid-switch the focused view can still be the outgoing
+ * project, so a populated list that omits the worktree you are looking for may
+ * simply belong to another project rather than confirm a mismatch. Compare
+ * `projectId` before concluding anything from the contents.
+ *
+ * The `unavailable` variant deliberately carries no `projectId`: there is no
+ * authoritative answer in that branch, so there is no project the absent
+ * worktrees can be said to be absent *from*.
+ */
+export type PluginWorktreesResult =
+  | {
+      readonly status: "ok";
+      /**
+       * The project whose workspace host produced `worktrees`, as the host
+       * itself knows it — captured from the entry that served this read, not
+       * re-resolved from focus afterwards, so a switch that lands while the
+       * read is in flight cannot relabel it.
+       */
+      readonly projectId: string;
+      /** Authoritative for `projectId`. Empty means the project has no worktrees. */
+      readonly worktrees: PluginWorktreeSnapshot[];
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason: PluginWorktreesUnavailableReason;
+    };
 
 /**
  * Read-only, frozen projection of an agent session's coarse state, exposed to
@@ -1801,16 +2102,93 @@ export interface PluginProcessApi {
   spawn(command: string, options?: PluginProcessSpawnOptions): Promise<PluginProcessHandle>;
 }
 
+/**
+ * What a symbolic link points at, as classified by the host's listing.
+ * Present on a {@link PluginFsDirEntry} only for a detailed read of a link.
+ *
+ * Deliberately mirrors the classification Daintree's own file browser renders,
+ * so a plugin presenting a file tree does not have to re-derive it — resolving
+ * a link correctly means resolving it against the *canonical* directory it was
+ * listed from, which differs from the lexical parent whenever the listed
+ * directory is itself reached through a link.
+ */
+export interface PluginFsSymlink {
+  /** Absolute path the link resolves to, the way the kernel would resolve it. */
+  target: string;
+  /**
+   * `"file"` and `"directory"` are the resolved, in-scope cases — the only two
+   * where `isDirectory` describes the target and descending is allowed.
+   * `"broken"` is a target that does not exist. `"external"` is a target that
+   * resolves outside the allowed root that contains the listed directory, so
+   * the host will refuse to read it through that listing. Conservative: a link
+   * into a different allowed root also reads as `"external"`. `"unknown"` is a
+   * target that could not be classified at all (a link loop, permission
+   * denied) — kept distinct from `"external"` so a UI never reports a link as
+   * leaving scope when the truth is that it could not be read.
+   */
+  targetKind: "file" | "directory" | "broken" | "external" | "unknown";
+}
+
 /** One directory entry returned by {@link PluginFsApi.readdir}. */
 export interface PluginFsDirEntry {
   /** Entry name (basename only — never a path). */
   name: string;
   /** True when the entry is a directory. */
   isDirectory: boolean;
-  /** True when the entry is a regular file. */
+  /**
+   * True when the entry is a regular file.
+   *
+   * On a detailed read a symbolic link is described by what it resolves to, so
+   * a link is `isFile` only when its `symlink.targetKind` is `"file"` — a
+   * broken or out-of-scope link is neither a file nor a directory, because
+   * there is nothing there to open. On a plain read this is the raw directory
+   * entry's own kind, so a link reads as neither file nor directory there.
+   *
+   * Caveat on a detailed read: a non-link entry that is neither a directory nor
+   * a regular file — a socket, fifo or device node — is reported as a file,
+   * because the underlying listing records only "directory or not". These do
+   * not occur in ordinary project trees; treat `isFile` as "not a directory"
+   * if your plugin might browse somewhere they do.
+   */
   isFile: boolean;
   /** True when the entry is a symbolic link (resolved containment still applies on read). */
   isSymbolicLink: boolean;
+  /**
+   * Size in bytes. Only present on a detailed read
+   * ({@link PluginFsReaddirOptions.detail}), and omitted there for directories
+   * and for an unresolved symlink — a link's own size is the byte length of the
+   * stored target string, which renders as a real but meaningless file size.
+   */
+  size?: number;
+  /**
+   * Last-modified time in epoch milliseconds. Only present on a detailed read.
+   * A resolved symlink reports its target's time, because that is what opening
+   * the entry would give you.
+   */
+  mtimeMs?: number;
+  /**
+   * Present only on a symbolic link, and only on a detailed read. Absence means
+   * the entry is a plain file or directory, which is why a consumer can keep
+   * reading `isDirectory` and ignore this field entirely.
+   */
+  symlink?: PluginFsSymlink;
+}
+
+/** Options for {@link PluginFsApi.readdir}. */
+export interface PluginFsReaddirOptions extends PluginHostCallOptions {
+  /**
+   * Return the same metadata Daintree's own file listing produces — `size`,
+   * `mtimeMs`, symlink target and kind — with entries ordered directories-first
+   * and then by a numeric-aware name collation.
+   *
+   * Off by default: a plain read is one `readdir` syscall, while a detailed one
+   * additionally `lstat`s every entry and resolves every link, so the cost is
+   * opt-in rather than silently imposed on existing callers. Turn it on when
+   * you are presenting a file tree — deriving these per entry with your own
+   * {@link PluginFsApi.stat} calls costs one host round trip *per entry* and
+   * still would not reproduce the link classification or the ordering.
+   */
+  detail?: boolean;
 }
 
 /** File metadata returned by {@link PluginFsApi.stat}. */
@@ -1855,14 +2233,32 @@ export interface PluginFsApi {
    */
   readFile(filePath: string, options?: PluginHostCallOptions): Promise<string>;
   /**
+   * Read a file as raw bytes, for the content UTF-8 decoding would corrupt —
+   * an image, a font, an archive, anything a plugin wants to hash or hand to a
+   * view as a data URL. Same capability gate, containment and cancellation as
+   * {@link readFile}, and the same absence of a size cap.
+   *
+   * A separate method rather than an `encoding`-shaped option on `readFile`:
+   * the return type stays unambiguous at every call site, the existing
+   * text contract is untouched, and no `string | Uint8Array` union is baked
+   * permanently into the published SDK surface.
+   */
+  readFileBytes(filePath: string, options?: PluginHostCallOptions): Promise<Uint8Array>;
+  /**
    * Write UTF-8 text to a file, creating it if absent (parent directories must
    * already exist within scope). Rejects on a missing write capability or an
    * out-of-scope path. Recorded in the audit trail. No cancellation signal —
    * partial-write semantics are deliberately out of scope.
    */
   writeFile(filePath: string, contents: string): Promise<void>;
-  /** List a directory's immediate children. Rejects on a missing read capability or an out-of-scope path. */
-  readdir(dirPath: string, options?: PluginHostCallOptions): Promise<PluginFsDirEntry[]>;
+  /**
+   * List a directory's immediate children. Rejects on a missing read capability
+   * or an out-of-scope path.
+   *
+   * Pass `{ detail: true }` to get the metadata and ordering Daintree's own file
+   * browser uses — see {@link PluginFsReaddirOptions.detail}.
+   */
+  readdir(dirPath: string, options?: PluginFsReaddirOptions): Promise<PluginFsDirEntry[]>;
   /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
   stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
   /**
@@ -2261,6 +2657,47 @@ export interface PluginActivationApi {
   onDidChangePanelLifecycle(
     callback: (event: PluginPanelLifecycleEvent) => void
   ): Promise<() => void>;
+  /**
+   * Subscribe to the machine waking from sleep (#12175). No capability is
+   * required — the event describes the machine's own suspend/resume timing and
+   * carries nothing about the workspace, the user, or any other plugin.
+   *
+   * This is the signal background work has no other way to get.
+   * {@link onDidChangePanelLifecycle} gives a *view* a re-validation point, but
+   * a plugin's timers, forge providers, and reconciliation passes keep running
+   * against state frozen at suspend. The host's own resume path only re-enables
+   * workspace polling if a window is focused, so a machine that wakes while the
+   * app is blurred leaves that state stale until the user comes back — for an
+   * unbounded stretch, with nothing else announcing the wake.
+   *
+   * Delivered at most once per resume, after the host has attempted to resync
+   * its pty and workspace hosts, so a plugin re-reading worktree state from the
+   * callback is not racing the host's own recovery. That recovery is
+   * best-effort: the wake is announced even when part of it failed, because a
+   * half-recovered host is when a plugin most needs to revalidate. Rapid
+   * resumes coalesce into one delivery, and a re-suspend during the settle
+   * window cancels the wake outright rather than emitting a spurious one.
+   *
+   * Nothing is replayed on subscribe: a wake is a one-shot pulse with no
+   * resting state, so a plugin that subscribes after a wake waits for the next
+   * one.
+   *
+   * The event is machine-scoped, not project-scoped: every loaded instance of
+   * the plugin receives it, including one bound to a project whose window is
+   * not focused.
+   *
+   * Callbacks receive a frozen {@link PluginSystemWakeEvent}. Resolves to a
+   * disposer; calling it more than once is a no-op, and all subscriptions are
+   * disposed automatically when the plugin is unloaded.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the subscription is rejected.
+   */
+  onDidWake(callback: (event: PluginSystemWakeEvent) => void): Promise<() => void>;
 }
 
 /**
@@ -2307,8 +2744,62 @@ export interface PluginHostActionsApi {
   canDispatch(actionId: ActionId): Promise<PluginCanDispatchResult>;
 }
 
+/**
+ * Who this plugin is, as the host knows it — the facts a plugin previously had
+ * to recover by string-splitting its own {@link PluginHostApi.pluginId}
+ * (#12211). Every field is fixed for the life of the host: the binding is
+ * captured once when the host is built, never resolved per call.
+ */
+export interface PluginIdentity {
+  /**
+   * The key this instance is indexed under host-side, byte-identical to
+   * {@link PluginHostApi.pluginId}. Present so a plugin passing identity around
+   * as one object never has to reach back for the bare id.
+   */
+  readonly instanceId: string;
+  /**
+   * The manifest id (`publisher.name`) — what belongs in anything the
+   * *repository* sees, since a project id is machine-local.
+   */
+  readonly manifestId: string;
+  /** `"project"` for a `.daintree/plugins` contribution, `"global"` otherwise. */
+  readonly origin: "global" | "project";
+  /** Owning project, or `null` for an app-global (installed/builtin) plugin. */
+  readonly projectId: string | null;
+  /** Absolute project root. Null iff `projectId` is null. */
+  readonly projectRoot: string | null;
+}
+
 export interface PluginHostApi extends PluginActivationApi {
   readonly pluginId: string;
+  /**
+   * This plugin's own identity, frozen at activation. Read `manifestId` rather
+   * than parsing {@link pluginId}: for a project-owned plugin the id is an
+   * instance key, and splitting it by hand is exactly the coupling to the
+   * host's internal key format that this exists to remove (#12211).
+   *
+   * Always readable — it is static closure data, not a live registration, so
+   * unlike the registration surface it neither throws after `activate()`
+   * resolves nor goes quiet once the plugin unloads.
+   */
+  readonly pluginInfo: PluginIdentity;
+  /**
+   * Qualify one of this plugin's own `contributes.panels[].id` values into the
+   * runtime panel kind id that {@link PluginHostApi.dispatch}'s
+   * `panel.openPluginPanel` expects — `{manifestId}.{bareId}` for a global
+   * plugin, `project:{projectId}/{manifestId}/{bareId}` for a project-owned one.
+   *
+   * Resolution is scoped to this host's own binding, never inferred from the
+   * shape of the string, so a plugin can hand over a bare id and get back the
+   * qualified form without knowing which of the two it lives under.
+   *
+   * Throws on an empty `bareId`, and on a project-owned plugin whose binding
+   * carries no project (a malformed binding cannot name a project kind) — an
+   * authoring or host error either way, surfaced loudly rather than returning
+   * an id that resolves to nothing. Synchronous: pure closure data, no
+   * round-trip. Always callable, for the same reason as {@link pluginInfo}.
+   */
+  panelKindId(bareId: string): string;
   /**
    * Push a fire-and-forget payload to every renderer subscribed to
    * `(pluginId, channel)` via `window.electron.plugin.on(...)`. This is the
@@ -2334,14 +2825,41 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
   /**
-   * Returns the currently-active worktree (`isCurrent === true`) across all
-   * projects as a frozen snapshot, or `null` if none is active. In multi-project
-   * sessions this returns the first match; plugins needing per-project scoping
-   * should filter from `getWorktrees()`.
+   * Returns the currently-active worktree (`isCurrent === true`) of the project
+   * this host reads for, as a frozen snapshot, or `null` if none is active.
+   *
+   * `null` is overloaded exactly as `[]` is on {@link getWorktrees} — it means
+   * "no active worktree" *or* "no answer available". Use
+   * {@link getWorktreesResult} and pick out `isCurrent` yourself when the
+   * difference matters.
    */
   getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
-  /** Returns all worktrees across all loaded projects as frozen snapshots. */
+  /**
+   * Returns the worktrees of the project this host reads for, as frozen
+   * snapshots — the project named by a project-bound host's binding, or the
+   * focused window's project for an app-global one.
+   *
+   * Resolves `[]` both when the project has no worktrees and when no answer is
+   * available at all; {@link getWorktreesResult} separates the two.
+   */
   getWorktrees(): Promise<PluginWorktreeSnapshot[]>;
+  /**
+   * The same read as {@link getWorktrees}, but able to say when it has no
+   * answer and which project the answer it does have describes (#12174).
+   *
+   * `getWorktrees()` collapses an unloaded plugin, an unwired workspace client,
+   * an unresolved window scope, a rootless or closed project and a failed read
+   * all to the same `[]` a genuinely empty project returns. Prefer this method
+   * wherever the absence of a worktree drives a decision — a stored binding
+   * that looks broken, a panel that looks orphaned — and only treat a
+   * `status: "ok"` result whose `projectId` matches your expectation as
+   * evidence. See {@link PluginWorktreesResult}.
+   *
+   * Like {@link getWorktrees} this is not revoke-guarded and never throws: once
+   * the plugin unloads it degrades to `{ status: "unavailable", reason:
+   * "plugin-unloaded" }`.
+   */
+  getWorktreesResult(): Promise<PluginWorktreesResult>;
   /**
    * Returns the changed-file / git-status projection for the worktree at the
    * given absolute `path` (the same {@link PluginWorktreeStatus} carried on
@@ -2479,14 +2997,21 @@ export interface PluginHostApi extends PluginActivationApi {
    * plugin is unloaded while the palette is open the pending call resolves
    * `undefined` (it never throws). Invalid items reject so authoring mistakes
    * surface loudly.
+   *
+   * Aborting `callOptions.signal` dismisses the open palette and resolves
+   * `undefined` rather than rejecting — a cancelled prompt is a dismissal, not a
+   * failure, so the never-throws contract above still holds (#12279). This is
+   * the one place {@link PluginHostCallOptions} settles instead of rejecting.
    */
   showQuickPick(
     items: PluginQuickPickItem[],
-    options: PluginQuickPickOptions & { canSelectMany: true }
+    options: PluginQuickPickOptions & { canSelectMany: true },
+    callOptions?: PluginHostCallOptions
   ): Promise<PluginQuickPickItem[] | undefined>;
   showQuickPick(
     items: PluginQuickPickItem[],
-    options?: PluginQuickPickOptions
+    options?: PluginQuickPickOptions,
+    callOptions?: PluginHostCallOptions
   ): Promise<PluginQuickPickItem | undefined>;
   /**
    * Imperatively prompt the user for a line of text, rendered through the app's
@@ -2495,19 +3020,24 @@ export interface PluginHostApi extends PluginActivationApi {
    * is enforced client-side at submit time.
    *
    * Async and NOT revoke-guarded for the same reason as {@link showQuickPick};
-   * resolves `undefined` if the plugin is unloaded while the dialog is open.
+   * resolves `undefined` if the plugin is unloaded while the dialog is open, and
+   * aborting `callOptions.signal` dismisses it and resolves `undefined` too.
    */
-  showInputBox(options?: PluginInputBoxOptions): Promise<string | undefined>;
+  showInputBox(
+    options?: PluginInputBoxOptions,
+    callOptions?: PluginHostCallOptions
+  ): Promise<string | undefined>;
   /**
    * Imperatively ask the user to confirm an action, rendered through the app's
    * `ConfirmDialog`. Resolves `true` if confirmed, `false` if cancelled,
    * dismissed, or the plugin is unloaded while the dialog is open.
    *
    * Async and NOT revoke-guarded for the same reason as {@link showQuickPick}.
+   * Aborting `callOptions.signal` dismisses the dialog and resolves `false`.
    * For an irreversible action set {@link PluginConfirmOptions.destructive} and
    * use a verb-noun `confirmLabel`.
    */
-  showConfirm(options: PluginConfirmOptions): Promise<boolean>;
+  showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
   /**
    * Persistent, plugin-scoped key/value settings. Plaintext JSON storage with
    * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.
@@ -2678,4 +3208,437 @@ export interface PluginActionDescriptor extends PluginActionContribution {
    * `requires` keeps the whole-manifest derivation.
    */
   effectiveDanger: "safe" | "confirm";
+}
+
+/**
+ * Durable scope a plugin's persisted per-plugin state belongs to. `"global"`
+ * covers installed and builtin plugins, which are app-wide by design; a
+ * project-scoped plugin uses its app-minted `projectId` (see `mintProjectId`),
+ * which is derived from the normalized folder path and stored outside the
+ * repository — so a repository cannot forge or address another project's key.
+ */
+export type PluginScopeKey = "global" | (string & {});
+
+/**
+ * Hostname segment of a `plugin://` URL. Minted per loaded plugin instance and
+ * invalidated on unload, so a URL captured before an unload resolves to
+ * nothing rather than into whatever now occupies that plugin id.
+ *
+ * Not a secret. It is a namespace, not a capability — never build
+ * authorization on possession of one.
+ */
+export type PluginProtocolAuthority = string & {
+  readonly __brand: "PluginProtocolAuthority";
+};
+
+/**
+ * Binds a plugin's host API to one project. Built once per plugin instance and
+ * captured by every closure in the host object, so "which project?" is
+ * answerable from the binding instead of from whichever window happens to be
+ * focused when the plugin calls.
+ *
+ * `projectId: null` marks an unbound plugin — installed and builtin plugins,
+ * which stay app-global. Unbound host surfaces still resolve their target from
+ * focus; each such site says so explicitly at the call site. A bound plugin
+ * never consults focus, because a plugin acting on a project it does not
+ * belong to is never right.
+ */
+export interface PluginHostBinding {
+  /** Owning project, or null for an app-global (installed/builtin) plugin. */
+  readonly projectId: string | null;
+  /** Absolute, realpath-resolved project root. Null iff `projectId` is null. */
+  readonly projectRoot: string | null;
+}
+
+/** An unbound binding — the app-global default for installed and builtin plugins. */
+export const UNBOUND_PLUGIN_HOST_BINDING: PluginHostBinding = {
+  projectId: null,
+  projectRoot: null,
+};
+
+/**
+ * Prefix marking a plugin instance key as project-owned.
+ *
+ * A project plugin is keyed `project__{projectId}__{manifestId}` everywhere the
+ * host indexes a plugin instance — `PluginService.plugins`, the contribution
+ * registries' `pluginId`/`extensionId`, the `plugin://` authority map, the
+ * capability-consent subject, the per-plugin settings/storage filename. That is
+ * what keeps two projects shipping the same manifest id genuinely separate:
+ * separate contributions, separate authority, separate grants, separate
+ * teardown. Keying them by bare manifest id would give one project's revoke the
+ * power to sweep the other's registrations, and one project's grant the power
+ * to answer for both.
+ *
+ * The separator is `__` rather than `/` or `:` on purpose: an instance key is
+ * joined onto a filesystem path for the user-scope settings and storage files,
+ * and both of those characters are either a path separator or illegal on
+ * Windows. A project id is 64 lowercase hex (`mintProjectId`) and a manifest id
+ * is `publisher.name` in `[a-z0-9-]`, so neither half can contain `__` and the
+ * parse below is unambiguous.
+ */
+export const PROJECT_PLUGIN_INSTANCE_PREFIX = "project__";
+
+const PROJECT_PLUGIN_INSTANCE_SEPARATOR = "__";
+
+/** Build the instance key a project-owned plugin loads under. */
+export function makeProjectPluginInstanceKey(projectId: string, manifestId: string): string {
+  return `${PROJECT_PLUGIN_INSTANCE_PREFIX}${projectId}${PROJECT_PLUGIN_INSTANCE_SEPARATOR}${manifestId}`;
+}
+
+/**
+ * Split an instance key back into its project and manifest halves, or `null`
+ * when the key is not a project instance key (an installed or builtin plugin
+ * id, which is its own manifest id).
+ */
+export function parseProjectPluginInstanceKey(
+  instanceKey: string
+): { projectId: string; manifestId: string } | null {
+  if (!instanceKey.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) return null;
+  const rest = instanceKey.slice(PROJECT_PLUGIN_INSTANCE_PREFIX.length);
+  const cut = rest.indexOf(PROJECT_PLUGIN_INSTANCE_SEPARATOR);
+  if (cut <= 0) return null;
+  const projectId = rest.slice(0, cut);
+  const manifestId = rest.slice(cut + PROJECT_PLUGIN_INSTANCE_SEPARATOR.length);
+  if (projectId.length === 0 || manifestId.length === 0) return null;
+  return { projectId, manifestId };
+}
+
+/**
+ * The manifest id behind a plugin instance key. Identity for an installed or
+ * builtin plugin; the bare `publisher.name` for a project instance.
+ *
+ * This is what belongs in anything the *repository* sees — the project-scope
+ * settings and storage filenames under `<projectRoot>/.daintree/` are
+ * git-tracked, so writing a machine-local project id into them would commit one
+ * developer's identity into everyone's checkout.
+ */
+export function pluginManifestIdFromInstanceKey(instanceKey: string): string {
+  return parseProjectPluginInstanceKey(instanceKey)?.manifestId ?? instanceKey;
+}
+
+/** The owning project of a plugin instance key, or null for an app-global one. */
+export function projectIdFromPluginInstanceKey(instanceKey: string): string | null {
+  return parseProjectPluginInstanceKey(instanceKey)?.projectId ?? null;
+}
+
+/**
+ * What the user decided about a project's `.daintree/plugins/` folder.
+ *
+ * `"session"` is deliberately absent from the persisted record — an
+ * enable-for-this-session choice lives in memory only and is gone on relaunch,
+ * which is the whole point of offering it.
+ */
+export type ProjectPluginTrustDecision = "enabled" | "disabled" | "session";
+
+/** The persisted half of a project's plugin trust state. */
+export interface ProjectPluginTrustRecord {
+  /** Persisted decisions only. A `"session"` enable never reaches this record. */
+  decision: "enabled" | "disabled";
+  /** Epoch ms of the decision, for the plugin manager's audit line. */
+  decidedAt: number;
+  /**
+   * Manifest ids this project has already surfaced to the user — activated,
+   * declined, or merely staged. A plugin id absent from here is NEW, and new is
+   * the one content change worth a notification. A plugin that disappears and
+   * comes back is still in this list, so it is treated as known, not new.
+   */
+  knownPluginIds: string[];
+  /**
+   * Manifest ids staged and not activated. Staged plugins are parsed but never
+   * executed. A declined stage stays here so it does not re-notify on every
+   * subsequent edit.
+   */
+  stagedPluginIds: string[];
+  /**
+   * Manifest ids the user switched off individually. Skipped by the reconcile
+   * exactly the way staged ids are, so a muted plugin is parsed and described
+   * but never run.
+   *
+   * Deliberately NOT a trust decision. Trust is granted once, at the folder, and
+   * stays there; muting is the ordinary case of two plugins in one repo where
+   * one should stay quiet. Keeping it a separate list is what lets the switch
+   * exist without giving trust a per-plugin granularity it does not have — and
+   * why unmuting re-loads rather than re-prompting.
+   */
+  mutedPluginIds: string[];
+}
+
+/**
+ * Per-project visibility for INSTALLED (global) plugins — the overlay that lets
+ * one installed plugin be on in project A and off in project B.
+ *
+ * Keyed by manifest id; `true` is an explicit allow and `false` an explicit
+ * deny. A plugin absent from the map takes the default, which is visible — so
+ * the overlay is empty in an app where nobody has changed anything, and every
+ * contribution filter short-circuits to the identity it had before this
+ * existed. Storing the tri-state rather than a bare deny list is what would let
+ * a future "off by default, opt in per project" mode flip the default without
+ * rewriting anyone's stored decisions.
+ *
+ * This lives in Daintree's own store keyed by project id, never in the
+ * repository — the same place VS Code keeps workspace enablement, and for the
+ * same reason: it is one person's choice about one checkout, not a fact about
+ * the project that every collaborator should inherit.
+ */
+export interface ProjectPluginVisibility {
+  /**
+   * Manifest ids hidden by DEFAULT — in every project that has not said
+   * otherwise. This is the half that makes "on only in the projects I pick"
+   * expressible: without it the only reachable shape is "on everywhere, minus
+   * the projects I have visited and switched off", which silently turns itself
+   * back on in every project created afterwards.
+   */
+  defaultHiddenPluginIds: string[];
+  /**
+   * Explicit decisions for THIS project, keyed by manifest id. An entry beats
+   * the default in either direction; absence takes the default.
+   */
+  overrides: Record<string, boolean>;
+}
+
+/**
+ * `plugin:project-plugin-visibility-changed` — the full overlay for one
+ * project, pushed to that project's renderers after any change so the settings
+ * tab is reactive rather than refetching.
+ */
+export interface ProjectPluginVisibilityChangedEvent {
+  projectId: string;
+  visibility: ProjectPluginVisibility;
+}
+
+/** Runtime state of one plugin directory found under a project's `.daintree/plugins/`. */
+export type ProjectPluginState =
+  /**
+   * Registered with the host. It is a load observation, not an activation one:
+   * a lazy plugin is `active` before its `activate()` has ever run, and one
+   * whose `activate()` threw stays `active` and carries {@link
+   * ProjectPluginInfo.loadError}. Collapsing the two would conflate the trust
+   * and load lifecycle with the most recent activation outcome.
+   */
+  | "active"
+  /** Manifest valid, trust granted, but the id is new — parsed, never executed. */
+  | "staged"
+  /** Manifest valid; no trust decision, or trust is disabled. Never executed. */
+  | "blocked"
+  /** The directory does not hold a loadable manifest. Never executed. */
+  | "invalid";
+
+/** One row of the project's plugin list, as the plugin manager and the trust gate render it. */
+export interface ProjectPluginInfo {
+  /** Owning project. */
+  projectId: string;
+  /** Manifest id (`publisher.name`), or the directory name when the manifest is unreadable. */
+  id: string;
+  /** The key this plugin loads under. Absent for an invalid manifest. */
+  instanceId?: string;
+  displayName: string;
+  version: string;
+  description?: string;
+  /** Declared capabilities, disclosed in the manager. Never a consent gate. */
+  capabilities: PluginCapability[];
+  /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
+  dirName: string;
+  state: ProjectPluginState;
+  /**
+   * The user switched this plugin off on its own. Orthogonal to {@link state}:
+   * a muted plugin never loads, so it reads as `"blocked"` like any other
+   * plugin that is not running — this is what says the folder is trusted and
+   * this one plugin is the thing that was turned off.
+   */
+  muted: boolean;
+  /** Why the directory was rejected at discovery. Set iff `state === "invalid"`. */
+  error?: string;
+  /**
+   * Most recent load or activation failure for the loaded instance — a thrown
+   * `activate()`, a worker that failed to fork, an activation that never
+   * settled, or a manifest command that could not be registered (#12232).
+   *
+   * Distinct from {@link error}, which is a discovery-time rejection of a
+   * directory that never loaded. This one describes a plugin that *did* load,
+   * so it is orthogonal to `state` and can accompany `"active"`. Held in
+   * memory only for the life of the load: a project plugin has no installed
+   * provenance record to persist it into, by design.
+   */
+  loadError?: PluginLoadError;
+  /**
+   * An installed or builtin plugin already claims this manifest id. Both load —
+   * the instance key keeps them apart — and the collision is surfaced here
+   * rather than resolved silently.
+   */
+  collidesWithGlobal: boolean;
+}
+
+/** The trust state a renderer needs to decide whether to prompt. */
+export interface ProjectPluginTrustState {
+  projectId: string;
+  /** `null` when no decision is on record — the only state that may prompt. */
+  decision: ProjectPluginTrustDecision | null;
+  /** Whether project plugins are currently permitted to run. */
+  enabled: boolean;
+  /**
+   * True when the decision is durably on disk. A decision the store refused to
+   * write is still in force while the project stays open but is not remembered,
+   * so the next open reads whatever record it replaced.
+   */
+  persisted: boolean;
+}
+
+/**
+ * `plugin:project-trust-prompt` — the one signal that may open the project
+ * plugin trust dialog. The controller emits it only when the folder holds at
+ * least one valid manifest and no decision is on record, so the renderer never
+ * decides for itself that a prompt is due.
+ */
+export interface ProjectPluginTrustPromptEvent {
+  projectId: string;
+  /** Every valid manifest in the folder, named so the dialog can list them. */
+  plugins: Array<{ id: string; displayName: string }>;
+}
+
+/**
+ * `plugin:project-plugins-changed` — a full snapshot, emitted on every project
+ * open, trust change and staged activation. It carries everything the plugin
+ * manager renders, so the manager can be purely reactive rather than refetching.
+ */
+export interface ProjectPluginsChangedEvent {
+  projectId: string;
+  plugins: ProjectPluginInfo[];
+  trust: ProjectPluginTrustState;
+}
+
+/**
+ * `plugin:project-plugin-staged` — a manifest id this project has never had
+ * appeared in a trusted folder. Non-blocking, and emitted once per new id: a
+ * staged plugin the user ignored or declined never re-announces itself.
+ */
+export interface ProjectPluginStagedEvent {
+  projectId: string;
+  pluginId: string;
+  displayName: string;
+}
+
+/**
+ * Health of the artifact watcher behind a `daintree-plugin dev` session.
+ *
+ * - `watching` — armed on the plugin root; rebuilds reload the plugin.
+ * - `waiting` — the plugin directory is not there yet (a session started before
+ *   the first build landed). Rebuilds are not observed, but the session is
+ *   healthy and will arm itself when the directory appears.
+ * - `degraded` — the watch stopped reporting and could not be re-armed. Hot
+ *   reload is off until the session restarts; this is the state that has to be
+ *   visible, because the symptom is otherwise indistinguishable from "my
+ *   rebuild changed nothing".
+ */
+export type PluginDevWatcherState = "watching" | "waiting" | "degraded";
+
+/**
+ * Lifecycle of one plugin's backend worker, as a mounted panel sees it (#12278).
+ *
+ * Every user-installed plugin (dev and prod alike) runs its `activate()` inside
+ * a forked `utilityProcess`. Until now nothing told a panel what that process
+ * was doing, so a worker that crashed left the panel rendering stale content
+ * with no way to understand it. These are the states the shell renders on the
+ * plugin's behalf, and they come from explicit lifecycle edges only:
+ *
+ * - `starting` — a worker process exists (or is being forked) but has not yet
+ *   completed its `ready` handshake. Also the state a crash respawn lands in,
+ *   which is what the shell renders as "Reloading".
+ * - `activating` — the handshake landed; the plugin's `activate()` is running.
+ * - `ready` — activation committed. It describes a settled activation, NOT
+ *   continuous proof of responsiveness: a worker that wedges on a request
+ *   afterwards still reads `ready`, because nothing on this channel probes it.
+ * - `failed` — terminal for this generation. Nothing will recover it on its own;
+ *   `reason` says why, and the user's way out is a restart.
+ * - `stopped` — no worker, deliberately: idle-disposed by governance, or
+ *   deactivated. Distinct from `failed`, which is an accident.
+ *
+ * Never inferred from `PluginDevWorkerHost.isReady()`, which only reports that a
+ * child process object exists — true long before `activate()` has run and still
+ * true for a worker whose activation failed.
+ */
+export type PluginWorkerState = "stopped" | "starting" | "activating" | "ready" | "failed";
+
+/**
+ * Why a worker is in its current state. Closed by design: each member names a
+ * real producer in `PluginService`, so a renderer can branch on the cause
+ * without parsing `detail`, which is free-form and may carry plugin-authored
+ * text.
+ */
+export type PluginWorkerReason =
+  | "fork-failed"
+  | "crashed"
+  | "crash-loop"
+  | "activation-failed"
+  | "activation-timeout"
+  | "protocol-violation"
+  | "deactivated";
+
+export interface PluginWorkerStatus {
+  /**
+   * Monotonic id of the worker PROCESS, bumped on every fork including the
+   * supervisor's own crash respawns. Deliberately not `viewGeneration`, which
+   * counts published module URLs and does not move when only the backend is
+   * replaced — a panel needs to know its backend was swapped even though its
+   * module specifier did not change.
+   */
+  generation: number;
+  state: PluginWorkerState;
+  /** When the worker entered {@link state}, for the shell's stalled-recovery gate. */
+  stateSince: number;
+  reason: PluginWorkerReason | null;
+  /** Free-form cause. May contain plugin-authored text — never render it raw. */
+  detail: string | null;
+}
+
+/** The `daintree-plugin dev` half of a runtime status (#12277). */
+export interface PluginDevSessionStatus {
+  /** Completed artifact reloads this session, for the "did my save land?" read. */
+  reloadCount: number;
+  watcher: PluginDevWatcherState;
+  /** Why the watcher is in a non-`watching` state, or the last reload error. */
+  detail: string | null;
+}
+
+/**
+ * Live runtime state of one plugin instance (#12277, #12278).
+ *
+ * Deliberately a per-plugin snapshot rather than a change notification: the
+ * point is that whatever reads it — a panel, a worker diagnostic — agrees on
+ * which generation is live, which a fire-and-forget "reloaded" event cannot
+ * give you. New facets of an instance's health belong here as additional fields
+ * on the same channel, not as a second channel.
+ *
+ * The two halves are independent and either may be absent:
+ * - `worker: null` — this instance has no utility-process backend at all (a
+ *   builtin, which activates in-process, or a plugin that has never been
+ *   activated). It is NOT the same as `state: "stopped"`, which means a
+ *   worker-backed plugin currently has none.
+ * - `dev: null` — not a `daintree-plugin dev` session, i.e. every installed and
+ *   project-owned plugin.
+ */
+export interface PluginRuntimeStatus {
+  /** Plugin instance id — the key every contribution carries. */
+  pluginId: string;
+  /**
+   * The view generation this plugin's panel kinds are currently published
+   * under, i.e. the `__dtv-N` segment in their `componentPath`. `null` while
+   * the plugin is not loaded (a reload whose manifest did not parse).
+   */
+  viewGeneration: number | null;
+  worker: PluginWorkerStatus | null;
+  dev: PluginDevSessionStatus | null;
+}
+
+/**
+ * `plugin:runtime-status-changed` — one instance's current state, replacing any
+ * prior state for that plugin. A `null` status means the instance left the
+ * inventory entirely (unloaded, uninstalled, dev session ended).
+ *
+ * A worker that FAILED keeps its status after its entry is torn down: the
+ * teardown is what the user needs explained, so dropping the status with the
+ * worker would erase the only account of why the panel went dark.
+ */
+export interface PluginRuntimeStatusChangedEvent {
+  pluginId: string;
+  status: PluginRuntimeStatus | null;
 }

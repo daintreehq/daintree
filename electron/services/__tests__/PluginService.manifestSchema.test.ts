@@ -240,7 +240,7 @@ describe("PluginManifestSchema name validation", () => {
     "acme.good-1",
     sixtyFourCharName,
   ])("accepts scoped name %j", (name) => {
-    const result = getPluginManifestSchema(false).safeParse({ name, ...validBase });
+    const result = getPluginManifestSchema("user").safeParse({ name, ...validBase });
     expect(result.success).toBe(true);
   });
 
@@ -266,7 +266,7 @@ describe("PluginManifestSchema name validation", () => {
     sixtyFiveCharName,
     "",
   ])("rejects unscoped or malformed name %j", (name) => {
-    const result = getPluginManifestSchema(false).safeParse({ name, ...validBase });
+    const result = getPluginManifestSchema("user").safeParse({ name, ...validBase });
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.some((i) => i.path[0] === "name")).toBe(true);
@@ -274,7 +274,7 @@ describe("PluginManifestSchema name validation", () => {
   });
 
   it("rejection includes an explanatory error message", () => {
-    const result = getPluginManifestSchema(false).safeParse({ name: "bare-plugin", ...validBase });
+    const result = getPluginManifestSchema("user").safeParse({ name: "bare-plugin", ...validBase });
     expect(result.success).toBe(false);
     if (!result.success) {
       const nameIssue = result.error.issues.find((i) => i.path[0] === "name");
@@ -287,7 +287,7 @@ describe("getPluginManifestSchema namespace lock", () => {
   const validBase = { name: "acme.test", version: "1.0.0" };
 
   it("rejects user plugin with daintree.* name", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       name: "daintree.github-evil",
     });
@@ -305,7 +305,7 @@ describe("getPluginManifestSchema namespace lock", () => {
   });
 
   it("accepts builtin plugin with daintree.* name", () => {
-    const result = getPluginManifestSchema(true).safeParse({
+    const result = getPluginManifestSchema("builtin").safeParse({
       ...validBase,
       name: "daintree.github",
     });
@@ -313,7 +313,7 @@ describe("getPluginManifestSchema namespace lock", () => {
   });
 
   it("accepts user plugin with non-daintree.* scoped name", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       name: "acme.daintree",
     });
@@ -321,7 +321,7 @@ describe("getPluginManifestSchema namespace lock", () => {
   });
 
   it("accepts user plugin with daintreehq.* name (not the daintree. prefix)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       name: "daintreehq.dev-tools",
     });
@@ -329,7 +329,7 @@ describe("getPluginManifestSchema namespace lock", () => {
   });
 
   it("rejects user plugin with bare daintree.foo name at schema level", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       name: "daintree.foo",
     });
@@ -350,7 +350,7 @@ describe("PluginManifestSchema capabilities field", () => {
   const validBase = { name: "acme.test", version: "1.0.0" };
 
   it("defaults to empty array when omitted", () => {
-    const result = getPluginManifestSchema(false).safeParse(validBase);
+    const result = getPluginManifestSchema("user").safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.capabilities).toEqual([]);
@@ -358,7 +358,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("accepts an empty capabilities array", () => {
-    const result = getPluginManifestSchema(false).safeParse({ ...validBase, capabilities: [] });
+    const result = getPluginManifestSchema("user").safeParse({ ...validBase, capabilities: [] });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.capabilities).toEqual([]);
@@ -366,7 +366,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("accepts built-in capability strings", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["fs:project-read", "network:fetch", "agent:invoke"],
     });
@@ -381,7 +381,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects custom (non-built-in) capability strings", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["custom:my-perm", "org.specific:do-thing"],
     });
@@ -392,7 +392,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects empty string in capabilities array", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["fs:project-read", ""],
     });
@@ -403,7 +403,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects whitespace-padded capability strings (no implicit trim)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["  fs:project-read  "],
     });
@@ -414,7 +414,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects whitespace-only capability strings", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["   "],
     });
@@ -422,7 +422,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects capability strings containing newline characters", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["fs:project-read\n"],
     });
@@ -430,7 +430,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it('rejects stale "permissions" key because schema is strict', () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       permissions: ["fs:project-read"],
     });
@@ -467,7 +467,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects null capabilities value", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: null,
     });
@@ -475,7 +475,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects scalar (non-array) capabilities value", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: "git:read",
     });
@@ -483,7 +483,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects non-string elements in capabilities array", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: [1, "git:read"],
     });
@@ -495,7 +495,7 @@ describe("PluginManifestSchema scopes field", () => {
   const validBase = { name: "acme.scope-test", version: "1.0.0" };
 
   it("accepts manifest with no scopes field", () => {
-    const result = getPluginManifestSchema(false).safeParse(validBase);
+    const result = getPluginManifestSchema("user").safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.scopes).toBeUndefined();
@@ -503,12 +503,12 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("accepts empty scopes object (both buckets optional)", () => {
-    const result = getPluginManifestSchema(false).safeParse({ ...validBase, scopes: {} });
+    const result = getPluginManifestSchema("user").safeParse({ ...validBase, scopes: {} });
     expect(result.success).toBe(true);
   });
 
   it("accepts a valid network scope with one https URL", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { network: { allowedUrls: ["https://api.example.com/v2"] } },
     });
@@ -544,7 +544,7 @@ describe("PluginManifestSchema scopes field", () => {
     ["https://*.example.com", "scope_wildcard_rejected"],
     ["not-a-url", "scope_url_invalid"],
   ])("rejects network.allowedUrls entry %j with errorCode %s", (url, errorCode) => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { network: { allowedUrls: [url] } },
     });
@@ -560,7 +560,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("rejects empty allowedUrls array (min 1 required)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { network: { allowedUrls: [] } },
     });
@@ -568,7 +568,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("rejects unknown key inside scopes (strict)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { networking: { allowedUrls: ["https://api.example.com"] } },
     });
@@ -579,7 +579,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("rejects unknown key inside scopes.network (strict)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: {
         network: {
@@ -603,7 +603,7 @@ describe("PluginManifestSchema scopes field", () => {
     // A manifest must parse identically wherever it's read — a Windows-authored
     // plugin has to validate on a Linux CI box and vice versa — so both endpoint
     // forms are accepted regardless of the host running the check.
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["socket:connect"],
       scopes: { socket: { allowedPaths: [socketPath] } },
@@ -622,7 +622,7 @@ describe("PluginManifestSchema scopes field", () => {
     [" /var/run/docker.sock"],
     [""],
   ])("rejects socket.allowedPaths entry %j", (socketPath) => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["socket:connect"],
       scopes: { socket: { allowedPaths: [socketPath] } },
@@ -631,7 +631,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("accepts socket:connect with no socket scope (scope is optional intent)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["socket:connect"],
     });
@@ -640,7 +640,7 @@ describe("PluginManifestSchema scopes field", () => {
 
   it("rejects an empty socket.allowedPaths array", () => {
     // Declaring the bucket and leaving it empty says nothing; omit it instead.
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["socket:connect"],
       scopes: { socket: { allowedPaths: [] } },
@@ -649,7 +649,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("rejects an unknown key inside scopes.socket (strict)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       capabilities: ["socket:connect"],
       scopes: { socket: { allowedPaths: ["/var/run/docker.sock"], deniedPaths: ["/x"] } },
@@ -661,7 +661,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("accepts a valid fs scope with an absolute path", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { fs: { allowedPaths: ["/home/user/projects"] } },
     });
@@ -679,7 +679,7 @@ describe("PluginManifestSchema scopes field", () => {
     ["/home/user/**", "scope_wildcard_rejected"],
     ["/home/*/projects", "scope_wildcard_rejected"],
   ])("rejects fs.allowedPaths entry %j with errorCode %s", (entryPath, errorCode) => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { fs: { allowedPaths: [entryPath] } },
     });
@@ -695,7 +695,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("rejects empty allowedPaths array (min 1 required)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { fs: { allowedPaths: [] } },
     });
@@ -703,7 +703,7 @@ describe("PluginManifestSchema scopes field", () => {
   });
 
   it("rejects scalar (non-array) allowedUrls value", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       scopes: { network: { allowedUrls: "https://api.example.com" } },
     });
@@ -744,7 +744,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   const validBase = { name: "acme.forge", version: "1.0.0" };
 
   it("defaults contributes.forgeProviders to [] when contributes is absent", () => {
-    const result = getPluginManifestSchema(false).safeParse(validBase);
+    const result = getPluginManifestSchema("user").safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.forgeProviders).toEqual([]);
@@ -752,7 +752,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("defaults contributes.forgeProviders to [] when contributes is an empty object", () => {
-    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema("user").safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.forgeProviders).toEqual([]);
@@ -760,7 +760,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("accepts a fully specified forgeProviders entry", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         // settingsScopeRef / viewRefs are cross-validated against the manifest's
@@ -803,7 +803,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("accepts a forgeProviders entry with only required fields", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"] }],
@@ -813,7 +813,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("rejects a forgeProviders entry with an empty matches array", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: [] }],
@@ -823,7 +823,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("rejects a forgeProviders entry missing required fields", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh" }],
@@ -833,7 +833,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("rejects unknown keys on a forgeProviders entry (strict schema)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"], unknownKey: true }],
@@ -851,7 +851,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   const validBase = { name: "acme.decor", version: "1.0.0" };
 
   it("defaults contributes.fileDecorationProviders to [] when contributes is absent", () => {
-    const result = getPluginManifestSchema(false).safeParse(validBase);
+    const result = getPluginManifestSchema("user").safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.fileDecorationProviders).toEqual([]);
@@ -859,7 +859,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("defaults to [] when contributes is an empty object", () => {
-    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema("user").safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.fileDecorationProviders).toEqual([]);
@@ -867,7 +867,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("accepts a valid fileDecorationProviders entry", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         fileDecorationProviders: [{ id: "worktree-diff-review", scopes: ["worktree-diff:*"] }],
@@ -882,7 +882,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects an entry with an empty scopes array", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { fileDecorationProviders: [{ id: "d", scopes: [] }] },
     });
@@ -890,7 +890,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects an entry missing required fields", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { fileDecorationProviders: [{ id: "d" }] },
     });
@@ -898,7 +898,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects unknown keys on the entry (strict schema)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         fileDecorationProviders: [{ id: "d", scopes: ["s:*"], extra: true }],
@@ -914,7 +914,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   it("rejects unknown keys inside contributes (typo'd contribution-point names)", () => {
     // `commandz` is a deliberate typo of `commands` (#9281) — strict-mode
     // rejection of unknown keys catches plugin-author typos.
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         commandz: [{ id: "foo", title: "Foo", description: "bar", category: "test" }],
@@ -928,7 +928,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("accepts the stable views key inside contributes (#10466)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         // A view needs a matching panel id (view_panel_ref_unknown, #10620).
@@ -943,7 +943,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("accepts an explicit dockable:false on a panel contribution (#11332)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc", dockable: false }],
@@ -956,7 +956,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("leaves dockable undefined when a panel omits it — the dockable-by-default path (#11332)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc" }],
@@ -974,7 +974,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("rejects a non-boolean dockable on a panel contribution (#11332)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc", dockable: "yes" }],
@@ -984,7 +984,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("accepts the stable mcpServers key inside contributes (#10466)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { mcpServers: [{ id: "svc", name: "Svc", command: "node" }] },
     });
@@ -995,7 +995,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("migrates the deprecated experimental_views alias to the stable views key (#10466)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         // A view needs a matching panel id (view_panel_ref_unknown, #10620).
@@ -1013,7 +1013,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("migrates the deprecated experimental_mcpServers alias to the stable mcpServers key (#10466)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
@@ -1027,7 +1027,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("prefers the canonical key over a deprecated alias when both are present (#10466)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         // The surviving canonical view needs a matching panel id (#10620).
@@ -1045,7 +1045,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("treats an explicit empty canonical array as canonical and does not adopt the alias (#10466)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         views: [],
@@ -1060,13 +1060,13 @@ describe("PluginManifestSchema contributes strict validation", () => {
 
   it("produces a clean error rather than throwing when contributes is not an object (#10466)", () => {
     for (const bad of [null, [], 42, "x"]) {
-      const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: bad });
+      const result = getPluginManifestSchema("user").safeParse({ ...validBase, contributes: bad });
       expect(result.success).toBe(false);
     }
   });
 
   it("rejects an arbitrary unknown key inside contributes", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { unknownKey: true },
     });
@@ -1074,7 +1074,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("accepts empty contributes object (no unknown keys, defaults populate)", () => {
-    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema("user").safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.views).toEqual([]);
@@ -1083,7 +1083,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("accepts known contributes keys without extra keys", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: {
         panels: [],
@@ -1104,7 +1104,7 @@ describe("panel contribution PTY / dockable cross-field rule (#11375)", () => {
   };
 
   it("rejects hasPty:true combined with an explicit dockable:false", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { panels: [{ ...basePanel, hasPty: true, dockable: false }] },
     });
@@ -1119,7 +1119,7 @@ describe("panel contribution PTY / dockable cross-field rule (#11375)", () => {
   });
 
   it("accepts hasPty:true with dockable:true", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { panels: [{ ...basePanel, hasPty: true, dockable: true }] },
     });
@@ -1127,7 +1127,7 @@ describe("panel contribution PTY / dockable cross-field rule (#11375)", () => {
   });
 
   it("accepts hasPty:true with dockable omitted (defaults to dockable)", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { panels: [{ ...basePanel, hasPty: true }] },
     });
@@ -1137,7 +1137,7 @@ describe("panel contribution PTY / dockable cross-field rule (#11375)", () => {
   it("accepts a non-PTY panel that opts out of the dock (dockable:false)", () => {
     // `hasPty` defaults to false, so the explicit opt-out is the whole point of
     // the flag for a non-PTY view — it must stay valid.
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       ...validBase,
       contributes: { panels: [{ ...basePanel, dockable: false }] },
     });

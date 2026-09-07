@@ -6,6 +6,7 @@ import type { IdentityWatcher } from "./IdentityWatcher.js";
 import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import type { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import type { SessionSnapshotter } from "./SessionSnapshotter.js";
+import { captureAgentEndSession } from "./agentEndCapture.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 
 export interface TerminalExitHandlerHost {
@@ -64,6 +65,35 @@ export class TerminalExitHandler {
       previousAgent !== undefined ||
       terminal.detectedProcessIconId !== undefined ||
       this.host.lastDetectedProcessIconId !== undefined;
+
+    // The agent printed its resume hint on the way out. Daintree-initiated
+    // teardown scrapes its own id (`gracefulShutdown`), but a user quitting the
+    // agent — Ctrl-C twice, or the process ending on its own — left the session
+    // unrecorded and invisible to the resume palette (#12179). Runs before the
+    // title and identity rewrites below, which the record reads.
+    //
+    // Skipped only when a Daintree teardown ALREADY HOLDS THIS AGENT'S id, not
+    // merely because one ran: `gracefulShutdown` kills on every outcome but
+    // writes `agentSessionId` only on a real capture, so gating on `wasKilled`
+    // alone would switch this backstop off over exactly the teardowns whose
+    // scrape failed — a quit signal swallowed by a running turn or an approval
+    // modal, the documented common failure for Codex. The agent has to match
+    // too: `agentSessionId` is also stamped at launch for agents that mint their
+    // id up front, and that id outlives the agent, so a pane whose user quit the
+    // launched agent and started another by hand would otherwise skip the
+    // backstop on the strength of the previous conversation's id.
+    const teardownHoldsThisSession =
+      terminal.wasKilled && !!terminal.agentSessionId && previousAgent === terminal.launchAgentId;
+    if (previousAgent && !teardownHoldsThisSession) {
+      captureAgentEndSession({
+        terminalId: this.host.id,
+        terminal,
+        agentId: previousAgent,
+        boundary: "exit",
+        recentOutput,
+      });
+    }
+
     if (hadDetectedIdentity && !terminal.wasKilled) {
       terminal.detectedAgentId = undefined;
       terminal.detectedProcessIconId = undefined;

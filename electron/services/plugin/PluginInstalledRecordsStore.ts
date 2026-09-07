@@ -1,5 +1,6 @@
 import { store } from "../../store.js";
 import type { InstalledPluginRecord, PluginInstallSource } from "../../../shared/types/plugin.js";
+import { parseProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
 
 /**
  * Owns the electron-store-backed `plugins.installed` provenance record CRUD and
@@ -55,6 +56,28 @@ export class PluginInstalledRecordsStore {
     patch: Partial<InstalledPluginRecord>
   ): InstalledPluginRecord {
     const records = this.getInstalledRecords();
+    // A project plugin is not installed: it has no provenance, no archive hash,
+    // no update channel and no disable toggle, and its identity is local to one
+    // machine's project id. Writing one here would persist that machine-local
+    // id into `plugins.installed` forever and surface it in the plugin manager
+    // as an installed row. The load and activation paths call this
+    // unconditionally, so the guard belongs here rather than at each of the
+    // seven call sites.
+    if (parseProjectPluginInstanceKey(name) !== null) {
+      return (
+        records[name] ?? {
+          source: "sideload" as PluginInstallSource,
+          installedAt: Date.now(),
+          archiveHash: null,
+          originalUrl: null,
+          disabled: false,
+          updateAvailable: null,
+          devMode: false,
+          loadError: null,
+          ...patch,
+        }
+      );
+    }
     const existing = records[name];
     const updated: InstalledPluginRecord = existing
       ? { ...existing, ...patch }

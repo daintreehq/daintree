@@ -170,12 +170,50 @@ describe("describeDiagnosticEvent", () => {
       { ...base, type: "install-started", command: "npm install" },
       { ...base, type: "install-completed" },
       { ...base, type: "install-failed", message: "exit 1" },
+      { ...base, type: "command-submitted", via: "shell-args" },
+      { ...base, type: "command-submitted", via: "pty-write" },
+      { ...base, type: "first-output" },
       { ...base, type: "url-detected", url: "http://localhost:1" },
+      { ...base, type: "candidate-url-chosen", url: "http://localhost:1", source: "predicted" },
+      { ...base, type: "candidate-url-chosen", url: "http://localhost:1", source: "output" },
+      { ...base, type: "marker-recognized", marker: "ready" },
+      { ...base, type: "marker-recognized", marker: "compile" },
+      {
+        ...base,
+        type: "readiness-http-attempt",
+        url: "http://localhost:1",
+        outcome: "reachable",
+        status: 404,
+        attempt: 1,
+        elapsedMs: 12,
+        remainingMs: 29000,
+      },
+      {
+        ...base,
+        type: "readiness-http-attempt",
+        url: "http://localhost:1",
+        outcome: "retry",
+        cause: "connection-error",
+        attempt: 3,
+        elapsedMs: 5,
+        remainingMs: 21000,
+      },
+      {
+        ...base,
+        type: "readiness-http-attempt",
+        url: "http://localhost:1",
+        outcome: "server-error",
+        status: 500,
+        attempt: 2,
+        elapsedMs: 40,
+        remainingMs: 25000,
+      },
       { ...base, type: "readiness-probe-succeeded", url: "http://localhost:1" },
       { ...base, type: "readiness-probe-timed-out", url: "http://localhost:1", timeoutMs: 30000 },
       { ...base, type: "readiness-probe-failed", message: "boom" },
       { ...base, type: "compile-started" },
-      { ...base, type: "compile-cleared" },
+      { ...base, type: "compile-cleared", reason: "silence" },
+      { ...base, type: "compile-cleared", reason: "ready-marker" },
       { ...base, type: "output-error", errorType: "oom", message: "heap" },
       { ...base, type: "restart-requested", mode: "clear-cache" },
       { ...base, type: "stop-requested", context: "project-hibernated" },
@@ -191,6 +229,47 @@ describe("describeDiagnosticEvent", () => {
       const { label } = describeDiagnosticEvent(event);
       expect(label.length, `label for ${event.type}`).toBeGreaterThan(0);
     }
+  });
+
+  // #12299: the silence timer only knows compile lines stopped arriving, so it
+  // must not claim the compile finished.
+  it("only claims a compile finished when a ready marker was observed", () => {
+    expect(
+      describeDiagnosticEvent({ ...base, type: "compile-cleared", reason: "ready-marker" }).label
+    ).toBe("Compile finished");
+    expect(
+      describeDiagnosticEvent({ ...base, type: "compile-cleared", reason: "silence" }).label
+    ).not.toMatch(/finished/i);
+  });
+
+  it("reports a 4xx attempt as a server that responded", () => {
+    const { label, detail } = describeDiagnosticEvent({
+      ...base,
+      type: "readiness-http-attempt",
+      url: "http://localhost:1",
+      outcome: "reachable",
+      status: 404,
+      attempt: 1,
+      elapsedMs: 12,
+      remainingMs: 29000,
+    });
+    expect(label).toBe("Server responded");
+    expect(detail).toContain("HTTP 404");
+  });
+
+  it("names the retry cause when no status came back", () => {
+    const { label, detail } = describeDiagnosticEvent({
+      ...base,
+      type: "readiness-http-attempt",
+      url: "http://localhost:1",
+      outcome: "retry",
+      cause: "request-timeout",
+      attempt: 4,
+      elapsedMs: 5000,
+      remainingMs: 10000,
+    });
+    expect(label).toBe("No response");
+    expect(detail).toContain("request timed out");
   });
 
   it("names the restart tier in the label", () => {

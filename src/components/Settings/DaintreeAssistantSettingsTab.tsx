@@ -44,7 +44,7 @@ import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import type { AgentModelConfig } from "@shared/config/agentRegistry";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import type {
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
@@ -58,7 +58,7 @@ import { isAuditRecord } from "@shared/types";
 import {
   HELP_TIER_CUMULATIVE,
   HELP_TIER_INCREMENTAL,
-  SYSTEM_TIER_HIGH_BLAST_RADIUS,
+  HIGH_BLAST_RADIUS_TOOLS,
 } from "@shared/config/helpAssistantTierAllowlists";
 
 const COPY_RESET_DELAY_MS = 2000;
@@ -90,9 +90,9 @@ const TIER_DESCRIPTIONS: Record<HelpAssistantTier, string> = {
   workbench:
     "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
   action:
-    "The assistant can spawn agents, send prompts, read terminal state, and close terminals — full in-app orchestration. Most assistance tasks need this.",
+    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources — full in-app orchestration. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
   system:
-    "Adds operations that touch disk or external services: delete worktrees, commit/push git, write the system clipboard, open GitHub issues/PRs. Reserve for trusted automation.",
+    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation. Reserve for trusted automation.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
@@ -163,12 +163,18 @@ interface BypassCopy {
 }
 
 // Names the tier rather than pointing at "the selector above" (#11907): with
-// the gate off, the tier is the entire remaining boundary, so the warning has
-// to say which one. Scoped to new sessions because both the tier and the
-// bypass preference are provision-time snapshots — a session already running
-// keeps the tier it was minted with, which the live-status card reports.
-const tierIsLastSafeguard = (tier: HelpAssistantTier): string =>
-  `New sessions run at the ${TIER_SHORT_LABEL[tier]} capability tier, which is the only remaining safeguard for Daintree actions.`;
+// the gate off, the tier carries most of the remaining boundary, so the
+// warning has to say which one. It isn't the *entire* boundary though, and
+// claiming so was the #12119 overclaim: a `danger: "confirm"` action still
+// opens the host confirmation dialog no matter the tier or the bypass flag
+// (`tierAuth.ts` — `requiresConfirmation: danger === "confirm" &&
+// !nativeGranted`), and only a native automation grant pre-authorizes it. So
+// the second sentence names that exception instead of dropping the warning.
+// Scoped to new sessions because both the tier and the bypass preference are
+// provision-time snapshots — a session already running keeps the tier it was
+// minted with, which the live-status card reports.
+const tierBoundsNewSessions = (tier: HelpAssistantTier): string =>
+  `New sessions are limited to the Daintree actions the ${TIER_SHORT_LABEL[tier]} capability tier allows. Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them.`;
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -178,7 +184,7 @@ const tierIsLastSafeguard = (tier: HelpAssistantTier): string =>
  * same failure as labelling every agent with Claude's flag.
  */
 // `warning` carries the agent-specific half only; `getBypassCopy` appends the
-// tier-naming safeguard sentence so every branch names the same effective tier.
+// tier-naming safeguard sentences so every branch names the same effective tier.
 const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: string }> = {
   claude: {
     title: "Bypass Claude permission prompts",
@@ -192,7 +198,7 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
     effect: "Skip Codex's approval prompts and run tools unsandboxed",
     ariaLabel: "Bypass Codex approvals and sandbox during help sessions",
     warning:
-      "With this on, Codex runs every tool without approval and outside its sandbox, so it reaches anywhere the process can.",
+      "With this on, Codex runs every tool without its own approval prompts and outside its sandbox, so it reaches anywhere the process can.",
   },
 };
 
@@ -207,7 +213,7 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
 function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassCopy | null {
   if (!agentId) return null;
 
-  const safeguard = tierIsLastSafeguard(tier);
+  const safeguard = tierBoundsNewSessions(tier);
 
   // The assistant has no CLI flag: bypass skips its own confirm sheet via
   // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no
@@ -217,7 +223,7 @@ function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassC
       title: "Auto-approve assistant actions",
       subtitle: "Skip the assistant's own per-action confirmation sheet",
       ariaLabel: "Auto-approve Daintree Assistant actions during help sessions",
-      warning: `With this on, the assistant acts without asking — no confirmation sheet for anything it does. ${safeguard}`,
+      warning: `With this on, the assistant acts without asking — it skips its own confirmation sheet for everything it does. ${safeguard}`,
     };
   }
 
@@ -237,7 +243,7 @@ function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassC
     title: `Bypass ${agentName} permission prompts`,
     subtitle: `Skip ${agentName}'s confirmation gate (passes ${flag})`,
     ariaLabel: `Bypass ${agentName} permission prompts during help sessions`,
-    warning: `With this on, ${agentName} runs every tool without asking. ${safeguard}`,
+    warning: `With this on, ${agentName} skips its own confirmation gate for every tool. ${safeguard}`,
   };
 }
 
@@ -1017,7 +1023,7 @@ export function DaintreeAssistantSettingsTab() {
       <SettingsSection
         icon={ShieldAlert}
         title="Security"
-        description="Pick how much the assistant can do without prompting, and whether to bypass the agent's own confirmation gate."
+        description="Pick how much of Daintree the assistant can reach, and whether to bypass the agent's own confirmation gate."
       >
         <SettingsSelect
           label="Capability tier"
@@ -1294,12 +1300,15 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
   const newAtTier = HELP_TIER_INCREMENTAL[tier].length;
   const groups = useMemo(() => {
     const cumulative = HELP_TIER_CUMULATIVE[tier];
-    if (tier !== "system") return groupToolsByNamespace(cumulative);
-    // Pin the load-bearing dangerous actions at the top of the system tier
-    // so users don't miss them when scanning a long alphabetical list.
-    const pinned = new Set(SYSTEM_TIER_HIGH_BLAST_RADIUS);
+    // Pin the load-bearing dangerous actions at the top of whichever tier is
+    // being previewed, so they can't be missed in a long alphabetical list.
+    // Intersected with this tier rather than pinned only on `system` (#12116):
+    // the preview's job is to show what selecting THIS tier grants, so a tool
+    // has to be called out at the tier that first reaches it.
+    const pinnedList = HIGH_BLAST_RADIUS_TOOLS.filter((tool) => cumulative.includes(tool));
+    if (pinnedList.length === 0) return groupToolsByNamespace(cumulative);
+    const pinned = new Set(pinnedList);
     const rest = cumulative.filter((tool) => !pinned.has(tool));
-    const pinnedList = SYSTEM_TIER_HIGH_BLAST_RADIUS.filter((tool) => cumulative.includes(tool));
     return [
       ["⚠ high blast radius", pinnedList] as [string, string[]],
       ...groupToolsByNamespace(rest),
@@ -1326,7 +1335,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
             )}
           />
           <span>
-            {totalCount} actions allowed without prompting
+            {totalCount} actions available at this tier
             {tier !== "workbench" && (
               <span className="text-text-secondary"> ({newAtTier} new at this tier)</span>
             )}
@@ -1520,7 +1529,7 @@ interface SessionLiveStatusCardProps {
 // tier field — covered by #10027); the snapshot refreshes on mount and on any
 // grant-lifecycle event for this session.
 function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
-  const sessionId = useHelpPanelStore((s) => s.sessionId);
+  const sessionId = useHelpPanelStore((s) => selectActiveSlot(s).sessionId);
   const { connected, tier, activeGrants } = useHelpSessionLiveStatus(sessionId);
   const perToolGrants = activeGrants.filter((g) => g.kind !== "native");
   const nativeGrants = activeGrants.filter((g) => g.kind === "native");

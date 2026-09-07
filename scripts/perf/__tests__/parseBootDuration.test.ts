@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { countCompileCacheFiles, parseBootDuration } from "../lib/packagedLaunch";
+import {
+  countCompileCacheFiles,
+  parseBootDuration,
+  REQUIRED_BOOT_MARKS,
+} from "../lib/packagedLaunch";
 import { PERF_MARKS } from "../../../shared/perf/marks";
 
 interface MarkLine {
@@ -123,6 +127,41 @@ describe("parseBootDuration", () => {
     expect(result.metrics.serviceInitMs).toBe(300);
     expect(result.metrics.hydrateMs).toBe(400);
     expect(result.durationMs).toBe(1200);
+  });
+
+  it("reports bootMarkMisses 0 only when every canonical boot mark is present", () => {
+    const file = writeNdjson(
+      REQUIRED_BOOT_MARKS.map((mark, index) => ({
+        mark,
+        timestamp: "t",
+        elapsedMs: index * 100,
+      }))
+    );
+    tmpFiles.push(file);
+
+    expect(parseBootDuration(file).metrics.bootMarkMisses).toBe(0);
+  });
+
+  it("counts the canonical boot marks a launch failed to emit", () => {
+    // PERF-004's headline is a mark-to-mark duration, so a boot missing the
+    // phase marks reports fewer metrics rather than a worse one. Without this
+    // count that reads as a clean run.
+    const file = writeNdjson([
+      { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+      { mark: PERF_MARKS.RENDERER_READY, timestamp: "t", elapsedMs: 800 },
+      { mark: PERF_MARKS.RENDERER_FIRST_INTERACTIVE, timestamp: "t", elapsedMs: 1200 },
+    ]);
+    tmpFiles.push(file);
+
+    const result = parseBootDuration(file);
+
+    expect(result.metrics.bootMarkMisses).toBe(REQUIRED_BOOT_MARKS.length - 3);
+    expect(result.metrics.serviceInitMs).toBeUndefined();
+  });
+
+  it("emits bootMarkMisses even when the ndjson file never appeared", () => {
+    const result = parseBootDuration(path.join(os.tmpdir(), "definitely-missing-perf.ndjson"));
+    expect(result.metrics.bootMarkMisses).toBe(REQUIRED_BOOT_MARKS.length);
   });
 });
 

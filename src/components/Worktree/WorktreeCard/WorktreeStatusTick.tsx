@@ -60,6 +60,31 @@ const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
 };
 
 /**
+ * How each state's pieces are laid into the collapsed square's 2x2 grid.
+ *
+ * The slot is 6px with a 2px gap, so both tracks are 2px and every piece lands
+ * on whole pixels. The counts are the SAME 1/2/3 as the bar — the channel does
+ * not change on a collapsed row, only the footprint it is drawn in — and the
+ * ink still falls as urgency does, harder here than the bar managed:
+ *
+ *   waiting  — one piece across both tracks. A solid 6x6, 36 square pixels.
+ *   cleanup  — two full-width pieces, one per row. Two 6x2 stripes, 24.
+ *   complete — three ordinary cells, placed in reading order, so the empty
+ *              fourth corner is what makes three read as three. 12.
+ *
+ * A stacked bar cut down to a square was the obvious move and the wrong one:
+ * the only square where three stacked segments still divide into whole pixels
+ * at 2px or more is 10x10, and that is 100 square pixels for `waiting` against
+ * the 16x4 bar's 64. The mark this issue exists to quieten would have got
+ * louder. Two dimensions, not one, is what buys a smaller square.
+ */
+const COLLAPSED_SEGMENT_SPANS: Record<WorktreeStatusTickState, string> = {
+  waiting: "col-span-2 row-span-2",
+  cleanup: "col-span-2",
+  complete: "",
+};
+
+/**
  * The card's status mark: a segmented vertical tick in the card's top-left
  * corner.
  *
@@ -99,6 +124,18 @@ const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
  * Equal on both axes wherever it is inset, so the mark sits on the corner's
  * diagonal rather than hanging off one edge of it.
  *
+ * `collapsed` shrinks the whole thing to a 6x6 square. A collapsed row is one
+ * line, and a 16px bar down the side of a single line reads as a rail the row
+ * hangs off rather than as a mark on a card — the corner is the statement, and
+ * at that height there is no corner left, just an edge. The square keeps the
+ * segment count (see `COLLAPSED_SEGMENT_SPANS`), which is not optional: it is
+ * the only thing separating `cleanup` from `complete` anywhere on the card, and
+ * under `forced-colors` the only thing separating any of the three.
+ *
+ * A separate flag rather than a third `variant`: `variant` is which card the
+ * mark sits on, and the two are near-exclusive anyway — `canCollapse` is
+ * `variant !== "grid"`, so the grid cell never collapses.
+ *
  * Logical `start-*`, not `left-*`: the overview grid's membership rail is
  * itself logical, so a physical inset would put the two on the same side again
  * under RTL.
@@ -121,11 +158,14 @@ const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
 export function WorktreeStatusTick({
   state,
   variant = "sidebar",
+  collapsed = false,
   ...rest
 }: {
   state: WorktreeStatusTickState;
   /** Which card the mark is sitting on — the corner it gets is a property of that card's radius, not of the mark. */
   variant?: "sidebar" | "grid";
+  /** True on a collapsed row, where the bar shrinks to a square in the same corner. */
+  collapsed?: boolean;
 } & React.ComponentProps<"div">) {
   return (
     <div
@@ -134,7 +174,8 @@ export function WorktreeStatusTick({
       // line is the component's own and must win over what Radix passes.
       {...rest}
       className={cn(
-        "absolute z-30 flex h-4 w-1 cursor-default flex-col gap-0.5",
+        "absolute z-30 cursor-default gap-0.5",
+        collapsed ? "grid h-1.5 w-1.5 grid-cols-2 grid-rows-2" : "flex h-4 w-1 flex-col",
         variant === "grid" ? "top-1 start-1" : "top-0 start-0"
       )}
       data-testid="worktree-status-tick"
@@ -152,7 +193,8 @@ export function WorktreeStatusTick({
             // each SEGMENT, never the container — the gaps are real absences
             // between elements, and that is what keeps the three states apart
             // once the repaint has taken the hue away.
-            "status-mark flex-1",
+            "status-mark",
+            collapsed ? COLLAPSED_SEGMENT_SPANS[state] : "flex-1",
             CHIP_FILLS[state]
           )}
         />

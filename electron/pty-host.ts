@@ -46,6 +46,11 @@ import {
 } from "./services/pty/analysis/AnalysisWorkerPool.js";
 import { PtyPool, getPtyPool, shouldEnablePtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
+import {
+  TerminalLineageLedger,
+  beginTeardownProbeWindow,
+  lineageFilePath,
+} from "./services/TerminalLineageLedger.js";
 import { ImagePathProbe } from "./services/pty/ImagePathProbe.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
 import { events } from "./services/events.js";
@@ -173,6 +178,17 @@ if (!analysisWorkersDisabled()) {
 // `claude --version`-style blips. Adaptive backoff (see ProcessTreeCache)
 // stretches this out when the tree is quiet.
 const processTreeCache = new ProcessTreeCache(1500);
+// Records every descendant ever seen under a PTY shell so teardown can still
+// reach the ones that reparented to PID 1 before it ran (#12203). Persisted
+// per shard — each shard is its own process with its own terminals, and the
+// write is a whole-file replace.
+const lineageLedger = new TerminalLineageLedger(
+  process.env.DAINTREE_USER_DATA
+    ? lineageFilePath(process.env.DAINTREE_USER_DATA, process.env.DAINTREE_PTY_SHARD_SERVICE)
+    : null,
+  process.env.DAINTREE_PTY_SHARD_SERVICE ?? "daintree-pty-host"
+);
+processTreeCache.attachLineageLedger(lineageLedger);
 // Image-path identity signal — defeats `process.title`/`setproctitle` rewrites
 // where comm/argv have been clobbered but the on-disk binary path still
 // identifies the agent. Shared across all terminals so the per-PID cache is
@@ -1666,6 +1682,11 @@ port.on("message", async (rawMsg: any) => {
 function cleanup(): void {
   console.log("[PtyHost] Disposing resources...");
 
+  // One synchronous `ps` budget for the whole teardown. Every terminal's
+  // disposal below can run two verification passes, and Main force-kills this
+  // host about a second after it asks for the exit.
+  beginTeardownProbeWindow();
+
   // Disconnect all renderer windows
   for (const windowId of Array.from(rendererConnections.keys())) {
     disconnectWindow(windowId, "cleanup");
@@ -1683,6 +1704,10 @@ function cleanup(): void {
 
   terminalResourceMonitor.dispose();
   processTreeCache.stop();
+  // Disposed after ptyManager.dispose() below would be too late: that call
+  // tears down every terminal and needs the ledger to reach detached
+  // descendants. Detach it from the census now, drop its state afterwards.
+  processTreeCache.attachLineageLedger(null);
   imagePathProbe.dispose();
 
   // Release every plugin PTY's native handle through its teardown chokepoint —
@@ -1695,6 +1720,7 @@ function cleanup(): void {
   }
 
   ptyManager.dispose();
+  lineageLedger.dispose();
 
   // Workers are persistent by design (never terminated — Electron 37+
   // flush_tasks_ assertion); dispose only drops bookkeeping. The unref'd
@@ -1726,6 +1752,7 @@ async function initialize(): Promise<void> {
     // Start the process tree cache (shared across all terminals)
     processTreeCache.start();
     ptyManager.setProcessTreeCache(processTreeCache);
+    ptyManager.setLineageLedger(lineageLedger);
     ptyManager.setImagePathProbe(imagePathProbe);
     console.log("[PtyHost] ProcessTreeCache started");
 

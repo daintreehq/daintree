@@ -25,6 +25,7 @@ import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
@@ -241,7 +242,11 @@ export function PluginTrayButton({
   const lastPinActionAt = useRef(0);
 
   const groups = useMemo(
-    () => groupPluginToolbarButtons(configs, (id) => pluginMetaById.get(id)?.displayName ?? id),
+    () =>
+      groupPluginToolbarButtons(
+        configs,
+        (id) => pluginMetaById.get(id)?.displayName ?? pluginManifestIdFromInstanceKey(id)
+      ),
     [configs, pluginMetaById]
   );
 

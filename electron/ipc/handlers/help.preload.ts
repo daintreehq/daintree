@@ -10,6 +10,7 @@ export const HELP_METHOD_CHANNELS = {
   peekPendingHibernation: "help:peek-pending-hibernation",
   takePendingHibernation: "help:take-pending-hibernation",
   restorePendingHibernation: "help:restore-pending-hibernation",
+  listPendingHibernationSlots: "help:list-pending-hibernation-slots",
   reportPanelOpen: "help:report-panel-open",
   getPinnedActionContext: "help:get-pinned-action-context",
 } as const satisfies Record<string, keyof IpcInvokeMap>;

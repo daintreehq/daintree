@@ -63,6 +63,13 @@ export interface PtyHostSpawnOptions {
   restore?: boolean;
   /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
   isEphemeral?: boolean;
+  /**
+   * This PTY backs the Daintree Assistant overlay rather than a grid pane.
+   * Stamped by Main from a validated help token, or from the live help-session
+   * binding when a restart respawns without one — never from a renderer field,
+   * which would let any pane opt itself out of journaling.
+   */
+  isAssistantTerminal?: boolean;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
@@ -623,16 +630,20 @@ export type PtyHostEvent =
   | { type: "terminal-restored"; id: string }
   | {
       /**
-       * Trash expiry captured a resumable session in the pty-host. The record
-       * is shipped to Main for persistence — Main is the journal's single
-       * writer, so cross-process read-modify-write races on the file can't
-       * drop records, and the real retention setting applies. `terminalId` +
-       * `launchGeneration` key the capture to one terminal incarnation so
-       * Main's lifecycle ledger can journal it exactly once.
+       * The pty-host captured a resumable session — trash expiry, a natural
+       * agent exit, or a `/quit`-style demotion. The record is shipped to Main
+       * for persistence — Main is the journal's single writer, so cross-process
+       * read-modify-write races on the file can't drop records, and the real
+       * retention setting applies. `terminalId` + `launchGeneration` key the
+       * capture to one terminal incarnation so Main's lifecycle ledger can
+       * journal it exactly once. `null` opts out of that gate for a capture
+       * that is NOT a terminal close: a demoted pane survives and can host
+       * several agent runs in one generation, so gating would drop all but the
+       * first.
        */
       type: "agent-session-captured";
       terminalId: string;
-      launchGeneration?: number;
+      launchGeneration?: number | null;
       record: Omit<AgentSessionRecord, "savedAt">;
     }
   | { type: "terminal-pid"; id: string; pid: number }
@@ -718,6 +729,16 @@ export type PtyHostEvent =
       results: Array<{ id: string; agentSessionId: string | null }>;
     }
   | {
+      // One terminal's capture, streamed the moment it lands. The aggregate
+      // result above only arrives once every terminal in the project has
+      // settled, so a main-process caller that stops waiting for it reads these
+      // instead of discarding the project's finished captures too (#12180).
+      type: "graceful-kill-by-project-progress";
+      requestId: string;
+      projectId: string;
+      result: { id: string; agentSessionId: string | null };
+    }
+  | {
       type: "fd-leak-warning";
       fdCount: number;
       activeTerminals: number;
@@ -762,8 +783,17 @@ export interface FdLeakWarningPayload {
  * without `as any` casts: the discriminant union of `PtyHostEvent` already types
  * `requestId` on every response member, but a switch case can't reach it without
  * narrowing first.
+ *
+ * A `requestId` is a correlation token, not a response marker: progress events
+ * carry one to say which call they belong to while that call is still open.
+ * Resolving the broker off one would settle the request on its FIRST terminal
+ * and drop every sibling's id — #12180 with a wider blast radius — so they are
+ * excluded here rather than left to a future caller to notice.
  */
-export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
+export type PtyHostResponseEvent = Exclude<
+  Extract<PtyHostEvent, { requestId: string }>,
+  { type: "graceful-kill-by-project-progress" }
+>;
 
 /**
  * Result of a graceful kill: the captured resume `sessionId` (null when there is
@@ -821,7 +851,11 @@ export interface TrimStateSummary extends TrimStateResult {
 }
 
 export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostResponseEvent {
-  return "requestId" in event && typeof (event as { requestId?: unknown }).requestId === "string";
+  return (
+    "requestId" in event &&
+    typeof (event as { requestId?: unknown }).requestId === "string" &&
+    event.type !== "graceful-kill-by-project-progress"
+  );
 }
 
 /** Terminal info sent from Host → Main for getTerminal queries */
@@ -829,6 +863,8 @@ export interface PtyHostTerminalInfo {
   id: string;
   projectId?: string;
   kind?: PanelKind;
+  /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
+  isAssistantTerminal?: boolean;
   /** Launch hint — agent this terminal was launched to run. Not identity. */
   launchAgentId?: AgentId;
   title?: string;

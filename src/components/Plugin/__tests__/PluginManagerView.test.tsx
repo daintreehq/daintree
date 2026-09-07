@@ -46,6 +46,9 @@ vi.stubGlobal("matchMedia", (query: string) => ({
 
 function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
   return {
+    instanceId: "acme.demo",
+    origin: "global",
+    projectId: null,
     manifest: {
       name: "acme.demo",
       version: "1.0.0",
@@ -156,7 +159,7 @@ async function selectPlugin(name = "Acme Demo") {
 describe("PluginManagerView", () => {
   it("renders the section header immediately", async () => {
     renderDialog();
-    expect(screen.getByText("Installed plugins")).toBeTruthy();
+    expect(screen.getByText("All plugins")).toBeTruthy();
   });
 
   it("moves focus into the view on open so the keyboard isn't left on the background", async () => {
@@ -411,6 +414,7 @@ describe("PluginManagerView", () => {
   it("re-hydrates settings for the newly selected plugin when switching", async () => {
     const pluginA = makePluginWithSettings();
     const pluginB = makePluginWithSettings({
+      instanceId: "beta.demo",
       manifest: {
         ...makePlugin().manifest,
         name: "beta.demo",

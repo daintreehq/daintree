@@ -28,7 +28,15 @@ const EMPTY_SECRET_INFO: SecretTierInfo = { tier: "plaintext", plaintext: new Se
 const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
   user: "User",
   project: "Project",
+  local: "Local",
 };
+
+/**
+ * Scopes whose file is resolved from a project, so their values reload on a
+ * project switch and read as unavailable with no project open. `user` is the
+ * only scope that is not one of these.
+ */
+const PROJECT_BOUND_SCOPES: readonly PluginSettingsScope[] = ["project", "local"];
 
 const INPUT_CLASS =
   "w-full px-2.5 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:cursor-not-allowed";
@@ -57,6 +65,60 @@ function toDraft(value: unknown, type: SettingFieldType): string {
     }
   }
   return String(value);
+}
+
+/** One scope's loaded values. `values === null` means "not loaded yet". */
+interface ScopeValues {
+  values: Record<string, unknown> | null;
+  secrets: Set<string>;
+  secretInfo: SecretTierInfo;
+}
+
+const UNLOADED_SCOPE: ScopeValues = {
+  values: null,
+  secrets: new Set(),
+  secretInfo: EMPTY_SECRET_INFO,
+};
+const EMPTY_SCOPE: ScopeValues = { values: {}, secrets: new Set(), secretInfo: EMPTY_SECRET_INFO };
+
+/**
+ * Fetch one scope's stored values into `setState`, returning the effect cleanup.
+ *
+ * A project-bound scope with no project resolves to empty rather than staying
+ * unloaded: there is no file to read, and leaving it pending would show a
+ * loading state that never resolves instead of the "open a project" hint the
+ * field renders for exactly this case.
+ */
+function loadScopeValues(
+  pluginId: string,
+  scope: PluginSettingsScope,
+  projectId: string | null,
+  setState: (next: ScopeValues) => void
+): (() => void) | undefined {
+  if (scope !== "user" && projectId === null) {
+    setState(EMPTY_SCOPE);
+    return undefined;
+  }
+  let cancelled = false;
+  setState(UNLOADED_SCOPE);
+  window.electron.plugin
+    .getSettingValues(pluginId, scope, projectId)
+    .then((res) => {
+      if (cancelled) return;
+      setState({
+        values: res.values,
+        secrets: new Set(res.secretsSet),
+        secretInfo: { tier: res.secretTier, plaintext: new Set(res.secretsPlaintext) },
+      });
+    })
+    .catch((err) => {
+      if (cancelled) return;
+      setState(EMPTY_SCOPE);
+      logError(`Failed to load ${scope} plugin settings for ${pluginId}`, err);
+    });
+  return () => {
+    cancelled = true;
+  };
 }
 
 interface SettingFieldProps {
@@ -537,70 +599,45 @@ interface PluginSettingsFormProps {
  * changes (the fields are remounted so their drafts re-initialize).
  */
 export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
-  const pluginId = plugin.manifest.name;
+  // The registry key, not the manifest name: they are the same for an installed
+  // plugin, but a project plugin is addressed by its instance key everywhere on
+  // the settings bridge — which is also what pins its files to its own project.
+  const pluginId = plugin.instanceId;
   const settings = plugin.manifest.contributes.settings ?? [];
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
+  const [userScope, setUserScope] = useState<ScopeValues>(UNLOADED_SCOPE);
+  const [projectScope, setProjectScope] = useState<ScopeValues>(UNLOADED_SCOPE);
+  const [localScope, setLocalScope] = useState<ScopeValues>(UNLOADED_SCOPE);
+
+  const byScope: Record<PluginSettingsScope, ScopeValues> = {
+    user: userScope,
+    project: projectScope,
+    local: localScope,
+  };
+
   const hasUserScope = settings.some((s) => settingScope(s) === "user");
   const hasProjectScope = settings.some((s) => settingScope(s) === "project");
-
-  const [userValues, setUserValues] = useState<Record<string, unknown> | null>(null);
-  const [userSecrets, setUserSecrets] = useState<Set<string>>(new Set());
-  const [projectValues, setProjectValues] = useState<Record<string, unknown> | null>(null);
-  const [projectSecrets, setProjectSecrets] = useState<Set<string>>(new Set());
-  const [userSecretInfo, setUserSecretInfo] = useState<SecretTierInfo>(EMPTY_SECRET_INFO);
-  const [projectSecretInfo, setProjectSecretInfo] = useState<SecretTierInfo>(EMPTY_SECRET_INFO);
+  const hasLocalScope = settings.some((s) => settingScope(s) === "local");
 
   // User-scoped values: load once per plugin.
   useEffect(() => {
     if (!hasUserScope) return;
-    let cancelled = false;
-    window.electron.plugin
-      .getSettingValues(pluginId, "user", null)
-      .then((res) => {
-        if (cancelled) return;
-        setUserValues(res.values);
-        setUserSecrets(new Set(res.secretsSet));
-        setUserSecretInfo({ tier: res.secretTier, plaintext: new Set(res.secretsPlaintext) });
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setUserValues({});
-        logError(`Failed to load user plugin settings for ${pluginId}`, err);
-      });
-    return () => {
-      cancelled = true;
-    };
+    return loadScopeValues(pluginId, "user", null, setUserScope);
   }, [pluginId, hasUserScope]);
 
   // Project-scoped values: reload on project switch (#9301 re-render requirement).
   useEffect(() => {
     if (!hasProjectScope) return;
-    if (projectId === null) {
-      setProjectValues({});
-      setProjectSecrets(new Set());
-      setProjectSecretInfo(EMPTY_SECRET_INFO);
-      return;
-    }
-    let cancelled = false;
-    setProjectValues(null);
-    window.electron.plugin
-      .getSettingValues(pluginId, "project", projectId)
-      .then((res) => {
-        if (cancelled) return;
-        setProjectValues(res.values);
-        setProjectSecrets(new Set(res.secretsSet));
-        setProjectSecretInfo({ tier: res.secretTier, plaintext: new Set(res.secretsPlaintext) });
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setProjectValues({});
-        logError(`Failed to load project plugin settings for ${pluginId}`, err);
-      });
-    return () => {
-      cancelled = true;
-    };
+    return loadScopeValues(pluginId, "project", projectId, setProjectScope);
   }, [pluginId, hasProjectScope, projectId]);
+
+  // Local scope resolves from the same project id as `project`, so it reloads on
+  // exactly the same switches — the file it reaches just isn't in the repo.
+  useEffect(() => {
+    if (!hasLocalScope) return;
+    return loadScopeValues(pluginId, "local", projectId, setLocalScope);
+  }, [pluginId, hasLocalScope, projectId]);
 
   if (settings.length === 0) return null;
 
@@ -609,14 +646,15 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
       <h4 className="text-xs font-medium text-text-secondary">Settings</h4>
       {settings.map((def) => {
         const scope = settingScope(def);
-        const loaded = scope === "user" ? userValues !== null : projectValues !== null;
-        const values = scope === "user" ? userValues : projectValues;
-        const secrets = scope === "user" ? userSecrets : projectSecrets;
-        const secretInfo = scope === "user" ? userSecretInfo : projectSecretInfo;
+        const state = byScope[scope];
+        const loaded = state.values !== null;
+        const values = state.values;
+        const secrets = state.secrets;
+        const secretInfo = state.secretInfo;
         return (
           <SettingField
-            // Remount project-scoped fields on project switch so drafts reset.
-            key={scope === "project" ? `${def.id}:${projectId ?? "none"}` : def.id}
+            // Remount project-bound fields on project switch so drafts reset.
+            key={PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id}
             def={def}
             pluginId={pluginId}
             projectId={projectId}

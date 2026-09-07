@@ -43,6 +43,17 @@ export const TerminalLocationSchema = z.enum(["grid", "dock", "overlay", "trash"
 /**
  * Schema for panel/terminal kind - distinguishes built-in panel types.
  */
+/**
+ * Whether a passthrough `kindRef` marks this snapshot as a project-local
+ * plugin's panel (#12280). Deliberately structural rather than schema-validated:
+ * `kindRef` is never declared on the snapshot schemas, because a malformed one
+ * would fail validation and take the whole panel with it.
+ */
+function isProjectPanelKindRef(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  return (value as { origin?: unknown }).origin === "project";
+}
+
 export const PanelKindSchema = z.union([
   z.enum(BUILT_IN_PANEL_KINDS),
   z.string(), // Allow extension-provided kinds
@@ -108,6 +119,16 @@ export const AppStateTerminalEntrySchema = z
         }
       }
 
+      // A project-local plugin's kind is persisted PORTABLY (#12280), and that
+      // portable form is byte-identical to a global plugin's runtime form. So a
+      // registry lookup here can answer from a DIFFERENT plugin that happens to
+      // share the manifest and kind id — an ordinary situation while developing
+      // a plugin in `.daintree/plugins` with the published one still installed.
+      // If that global kind declares `hasPty`, this refinement would demand a
+      // `cwd` the project panel never had and `filterValidTerminalEntries` would
+      // drop the panel outright. Plugin panels are not PTY-backed in v1 (their
+      // kind collapses to `terminal` at creation), so a project ref is exempt.
+      if (isProjectPanelKindRef(data.kindRef)) return true;
       if (panelKindHasPty(kind)) {
         return data.cwd !== undefined;
       }
@@ -180,6 +201,16 @@ export const TerminalSnapshotSchema = z
         }
       }
 
+      // A project-local plugin's kind is persisted PORTABLY (#12280), and that
+      // portable form is byte-identical to a global plugin's runtime form. So a
+      // registry lookup here can answer from a DIFFERENT plugin that happens to
+      // share the manifest and kind id — an ordinary situation while developing
+      // a plugin in `.daintree/plugins` with the published one still installed.
+      // If that global kind declares `hasPty`, this refinement would demand a
+      // `cwd` the project panel never had and `filterValidTerminalEntries` would
+      // drop the panel outright. Plugin panels are not PTY-backed in v1 (their
+      // kind collapses to `terminal` at creation), so a project ref is exempt.
+      if (isProjectPanelKindRef(data.kindRef)) return true;
       if (panelKindHasPty(kind)) {
         return data.cwd !== undefined;
       }
@@ -808,6 +839,16 @@ export const WorktreeCreatePayloadSchema = z.object({
     sourcePrUrl: z.string().optional(),
     sourcePrState: z.enum(["open", "closed", "merged"]).optional(),
     sourcePrLinkedIssueNumber: z.number().optional(),
+    // Omitted until #12138 follow-up: the comment above promised every field of
+    // CreateWorktreeOptions was declared, but this one was not — so a caller
+    // asking for `all` or `none` had it silently stripped here and the host
+    // fell back to `inherit`. A worktree of a submodule repo is born
+    // unbuildable when that request is dropped.
+    submoduleInit: z.enum(["inherit", "all", "none"]).optional(),
+    // How a branch-name collision is resolved. Declared here so the policy
+    // reaches WorkspaceService, which owns collision handling atomically — a
+    // renderer-side check cannot, because it reserves nothing.
+    collisionPolicy: z.enum(["suffix", "error"]).optional(),
   }),
 });
 
@@ -1181,3 +1222,38 @@ export function parseAssistantHostSessionDescriptor(
 
 /** Re-exported so callers validating a handshake don't import two modules. */
 export { ASSISTANT_HOST_PROTOCOL_VERSION };
+
+const DimensionSchema = z.object({
+  width: z.number().int().min(1).max(20000),
+  height: z.number().int().min(1).max(20000),
+});
+
+const DeviceEmulationParametersSchema = z.object({
+  screenPosition: z.enum(["desktop", "mobile"]),
+  screenSize: DimensionSchema,
+  viewPosition: z.object({
+    x: z.number().int().min(0).max(20000),
+    y: z.number().int().min(0).max(20000),
+  }),
+  deviceScaleFactor: z.number().min(0).max(10),
+  viewSize: DimensionSchema,
+  scale: z.number().min(0.01).max(10),
+});
+
+export const WebviewSetDeviceEmulationPayloadSchema = z.object({
+  webContentsId: z.number().int().nonnegative(),
+  panelId: z.string().min(1).max(256),
+  emulation: z
+    .object({
+      params: DeviceEmulationParametersSchema,
+      // Guest-visible header value; keep it printable ASCII so a malformed
+      // override cannot inject header separators.
+      userAgent: z
+        .string()
+        .min(1)
+        .max(1024)
+        .regex(/^[\x20-\x7e]+$/, "User agent must be printable ASCII"),
+      touch: z.boolean(),
+    })
+    .nullable(),
+});

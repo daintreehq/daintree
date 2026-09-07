@@ -120,7 +120,7 @@ describe("TerminalRestartStatusBanner", () => {
     it("renders neutral title and a non-accusatory description", () => {
       render(
         <TerminalRestartStatusBanner
-          variant={{ type: "session-resume-unavailable" }}
+          variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
           onRestart={vi.fn()}
           onDismiss={vi.fn()}
         />
@@ -134,7 +134,7 @@ describe("TerminalRestartStatusBanner", () => {
     it("uses role=status with a polite live region (toned down per #10823)", () => {
       render(
         <TerminalRestartStatusBanner
-          variant={{ type: "session-resume-unavailable" }}
+          variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
           onRestart={vi.fn()}
           onDismiss={vi.fn()}
         />
@@ -149,7 +149,7 @@ describe("TerminalRestartStatusBanner", () => {
     it("has no restart action — the terminal already relaunched fresh (#10823)", () => {
       render(
         <TerminalRestartStatusBanner
-          variant={{ type: "session-resume-unavailable" }}
+          variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
           onRestart={vi.fn()}
           onDismiss={vi.fn()}
         />
@@ -164,7 +164,7 @@ describe("TerminalRestartStatusBanner", () => {
       const onDismiss = vi.fn();
       render(
         <TerminalRestartStatusBanner
-          variant={{ type: "session-resume-unavailable" }}
+          variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
           onRestart={vi.fn()}
           onDismiss={onDismiss}
         />
@@ -181,7 +181,7 @@ describe("TerminalRestartStatusBanner", () => {
       it("offers a second control when onDismissAll is supplied", () => {
         render(
           <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable" }}
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
             onRestart={vi.fn()}
             onDismiss={vi.fn()}
             onDismissAll={vi.fn()}
@@ -197,7 +197,7 @@ describe("TerminalRestartStatusBanner", () => {
       it("names the bulk control with its visible label plus the missing scope", () => {
         render(
           <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable" }}
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
             onRestart={vi.fn()}
             onDismiss={vi.fn()}
             onDismissAll={vi.fn()}
@@ -218,7 +218,7 @@ describe("TerminalRestartStatusBanner", () => {
         const onDismissAll = vi.fn();
         render(
           <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable" }}
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
             onRestart={vi.fn()}
             onDismiss={onDismiss}
             onDismissAll={onDismissAll}
@@ -237,7 +237,7 @@ describe("TerminalRestartStatusBanner", () => {
       it("still offers no restart action alongside the bulk control", () => {
         render(
           <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable" }}
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
             onRestart={vi.fn()}
             onDismiss={vi.fn()}
             onDismissAll={vi.fn()}
@@ -263,6 +263,85 @@ describe("TerminalRestartStatusBanner", () => {
           expect(screen.queryByRole("button", { name: /dismiss all/i })).toBeNull();
           unmount();
         }
+      });
+    });
+
+    // Reason-specific copy (issue #12182) — a sibling pane already holding the
+    // conversation must read differently from there being nothing to resume.
+    describe("reason-specific copy (issue #12182)", () => {
+      it("names a sibling holding the exact conversation", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable", reason: "sibling-owns-session-id" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+          />
+        );
+        expect(screen.getByText("Session already open elsewhere")).toBeTruthy();
+        expect(screen.queryByText("Session no longer reachable")).toBeNull();
+      });
+
+      it("names a sibling holding the folder's most-recent slot", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{
+              type: "session-resume-unavailable",
+              reason: "sibling-owns-resume-latest-slot",
+            }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+          />
+        );
+        expect(screen.getByText("Most recent session claimed elsewhere")).toBeTruthy();
+      });
+
+      it("uses the same 'nothing to resume' copy for no-resume-command and no-resume-path", () => {
+        const { unmount } = render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+          />
+        );
+        expect(screen.getByText("Session no longer reachable")).toBeTruthy();
+        unmount();
+
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-path" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+          />
+        );
+        expect(screen.getByText("Session no longer reachable")).toBeTruthy();
+      });
+    });
+
+    // "Find session" (issue #12182) — a pre-built slot the caller supplies,
+    // since only it knows whether this pane's agent has one to offer.
+    describe("findSessionSlot (issue #12182)", () => {
+      it("renders nothing extra when the caller supplies no slot", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+          />
+        );
+        expect(screen.getAllByRole("button")).toHaveLength(1);
+      });
+
+      it("renders the caller-supplied slot alongside dismiss", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+            findSessionSlot={<button type="button">Find session</button>}
+          />
+        );
+        expect(screen.getByRole("button", { name: "Find session" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
       });
     });
   });

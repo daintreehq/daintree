@@ -7,7 +7,11 @@ const { parcelWatcherCallbacks, mockGetGitCommonDir, mockParcelSubscribe } = vi.
     parcelWatcherCallbacks: callbacks,
     mockGetGitCommonDir: vi.fn<(arg: string) => string | null>().mockReturnValue(null),
     mockParcelSubscribe: vi.fn(
-      (_dir: string, cb: (err: Error | null, events: unknown[]) => void) => {
+      (
+        _dir: string,
+        cb: (err: Error | null, events: unknown[]) => void,
+        _opts?: Record<string, unknown>
+      ) => {
         callbacks.push(cb);
         return Promise.resolve({ unsubscribe: vi.fn() });
       }
@@ -15,10 +19,8 @@ const { parcelWatcherCallbacks, mockGetGitCommonDir, mockParcelSubscribe } = vi.
   };
 });
 
-vi.mock("@parcel/watcher", () => ({
-  default: {
-    subscribe: mockParcelSubscribe,
-  },
+vi.mock("../../utils/parcelWatcherBackend.js", () => ({
+  subscribeParcelWatcher: mockParcelSubscribe,
 }));
 
 vi.mock("../../utils/gitUtils.js", () => ({
@@ -87,7 +89,8 @@ describe("TopologyWatcher", () => {
       await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalled());
       expect(mockParcelSubscribe).toHaveBeenCalledWith(
         "/test/root/.git/worktrees",
-        expect.any(Function)
+        expect.any(Function),
+        expect.any(Object)
       );
     });
 

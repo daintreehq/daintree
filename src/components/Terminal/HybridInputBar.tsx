@@ -1104,7 +1104,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           maxHeight="max-h-[70vh]"
           dismissible
         >
-          <AppDialog.Header plainBody>
+          <AppDialog.Header>
             <AppDialog.Title>Expanded Editor</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>

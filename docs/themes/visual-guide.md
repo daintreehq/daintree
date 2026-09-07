@@ -953,7 +953,7 @@ The app supports three modes via `applyColorVisionMode()`:
 - **Red-green (protanopia/deuteranopia):** Replaces red/green with orange/blue alternatives
 - **Blue-yellow (tritanopia):** Replaces blue/yellow with vermillion/sky alternatives
 
-The override maps in `shared/theme/colorVisionOverrides.ts` cover ~39 distinct `--theme-*` tokens (31 in `RED_GREEN_OVERRIDES`, 26 in `BLUE_YELLOW_OVERRIDES`, with overlap) — spanning status, activity, PR-state, syntax, terminal ANSI, and category colors — with science-based replacements that maintain perceptual distinguishability. (Diff tokens are not overridden.)
+The override maps in `shared/theme/colorVisionOverrides.ts` replace status, activity, PR-state, syntax, terminal ANSI and category colors with science-based substitutes that stay perceptually distinguishable. Both maps are **derived**: a literal seed of base tokens is expanded by `withStatusSurfaces()` (the matching translucent `*-surface` fill) and `withDiffSurfaces()` (each status colour's diff background, edit background and gutter), so the diff viewer **is** covered — it inherits from `status-success` / `status-danger` rather than being listed separately. `ALL_CVD_TOKENS` is the union of both maps; take counts from the code, not from prose.
 
 ---
 
@@ -970,6 +970,7 @@ Each theme creates a distinct atmosphere through the combination of surface tint
 - **Highlands:** Purple/heather surfaces. Atmospheric fog shadows. SVG noise texture. Moody and textured.
 - **Namib:** Warm ochre/sand surfaces. Sandy-tinted overlays. Minimal opacity values. Quiet and vast.
 - **Redwoods:** Deep warm brown (forest floor). Earth-tinted overlays. Atmospheric shadows. Dense and enveloping.
+- **Movile** (the contrast-budget theme): Warm limestone black, near-achromatic surfaces, a desaturated stone accent. Deliberately the quietest of the cohort — exactly two things are allowed to be bright (an agent waiting on you, and something broken), and every other indicator colour is capped well below them. Read `movile.ts`'s header comment before touching it; the numbers are the design.
 
 **Light themes:**
 

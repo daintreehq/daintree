@@ -45,7 +45,7 @@ function createPtyClientMock() {
       if (event === "data") dataListeners.delete(callback as DataListener);
       if (event === "exit") exitListeners.delete(callback as ExitListener);
     }),
-    spawn: vi.fn((id: string, spawnOptions: { projectId?: string }) => {
+    spawn: vi.fn((id: string, spawnOptions: { projectId?: string; args?: string[] }) => {
       terminals.set(id, { projectId: spawnOptions.projectId, hasPty: true });
     }),
     kill: vi.fn((id: string) => {

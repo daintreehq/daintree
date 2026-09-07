@@ -1,7 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { PluginPanelBadge, PluginPanelBadgeColor } from "@shared/types/plugin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBadgeStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 /**
  * Live badges a plugin set on this panel via `host.setPanelBadge` (#10585),
@@ -34,17 +36,28 @@ const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
 
 function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPanelBadge }) {
   const color = badge.color ?? "default";
+  // A primitive selector, read per badge rather than once over the whole map in
+  // the parent: the meta record is rebuilt on every provenance pull, so
+  // selecting it whole would re-render every badge on pulls that changed
+  // nothing (same reasoning as PluginViewContent). `pluginId` here is the
+  // instance key main broadcasts, which is what the store keys on — and the
+  // `?? pluginId` fallback keeps the pre-snapshot render fail-open.
+  // The fallback is the manifest id, never the raw key: this renders before the
+  // first snapshot lands, and a machine-local project id is not a name.
+  const pluginName = usePluginRuntimeStore(
+    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
+  );
   const indicator =
     badge.kind === "dot" ? (
       <span
         role="status"
-        aria-label={badge.tooltip ?? `${pluginId} status`}
+        aria-label={badge.tooltip ?? `${pluginName} status`}
         className={`status-mark w-2 h-2 rounded-full shrink-0 ${DOT_COLOR[color]}`}
       />
     ) : (
       <span
         role="status"
-        aria-label={badge.tooltip ?? `${pluginId}: ${badge.text}`}
+        aria-label={badge.tooltip ?? `${pluginName}: ${badge.text}`}
         className={`shrink-0 rounded px-1 text-3xs font-medium leading-4 ${LABEL_COLOR[color]}`}
       >
         {badge.text}
@@ -65,7 +78,29 @@ export function PluginPanelBadges({ panelId }: { panelId: string }) {
   useEffect(() => init(), [init]);
 
   const badges = usePanelBadges(panelId);
-  const entries = Object.entries(badges).sort(([a], [b]) => a.localeCompare(b));
+  const entries = useMemo(
+    () => Object.entries(badges).sort(([a], [b]) => a.localeCompare(b)),
+    [badges]
+  );
+
+  // Pull the plugin list when a badge arrives from a plugin we have no snapshot
+  // for. `init()` would not do: it only pulls for whoever subscribes *first*,
+  // and by the time a panel renders the toolbar has long since initialised the
+  // store — so a plugin that never announced itself (`daintree-plugin dev`
+  // broadcasts no provenance) would keep its raw id here forever. Keyed on the
+  // owners actually missing rather than on mount, so the common case where
+  // every owner is already known costs no round-trip, and a badge pushed later
+  // still triggers exactly one pull.
+  const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
+  const hasUnresolvedOwner = usePluginRuntimeStore((s) =>
+    entries.some(([pluginId]) => !s.pluginMetaById.has(pluginId))
+  );
+  useEffect(() => {
+    // No loop: a pull that resolves the owner flips this false, and one that
+    // does not leaves the boolean unchanged, so the effect does not re-fire.
+    if (hasUnresolvedOwner) refreshPluginRuntime();
+  }, [hasUnresolvedOwner, refreshPluginRuntime]);
+
   if (entries.length === 0) return null;
 
   return (

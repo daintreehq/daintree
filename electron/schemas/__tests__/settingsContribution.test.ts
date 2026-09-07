@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { getPluginManifestSchema } from "../plugin.js";
+import type { PluginOrigin } from "../../../shared/types/plugin.js";
 
 type SettingInput = Record<string, unknown>;
 
-function parseSettings(settings: SettingInput[], isBuiltin = false) {
-  return getPluginManifestSchema(isBuiltin).safeParse({
+function parseSettings(settings: SettingInput[], origin: PluginOrigin = "user") {
+  return getPluginManifestSchema(origin).safeParse({
     name: "acme.settings-test",
     version: "1.0.0",
     contributes: { settings },
@@ -125,7 +126,7 @@ describe("contributes.settings schema (#9301)", () => {
   });
 
   it("defaults contributes.settings to an empty array when absent", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       name: "acme.no-settings",
       version: "1.0.0",
     });

@@ -123,6 +123,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Repo's git remotes changed — forge provider must be re-resolved",
   },
+  "sys:wake": {
+    category: "system",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Machine resumed from sleep, after the host's settle delay",
+  },
 
   // File events
   "file:open": {
@@ -563,6 +569,18 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * Machine resumed from sleep, emitted from the same debounced resume handler
+   * that pushes `system:wake` to the renderer — after the pty and workspace
+   * hosts have been resynced, so a listener that re-reads state sees post-wake
+   * data. `sleepDuration` is `0` when the matching suspend edge was never
+   * observed, which means "unknown", not "a short sleep".
+   */
+  "sys:wake": {
+    sleepDuration: number;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when a new AI agent (Claude, Gemini, etc.) is spawned in a terminal.
    * Use this to track agent creation and associate agents with worktrees.
    */
@@ -644,6 +662,8 @@ export type DaintreeEventMap = {
    */
   "agent:all-clear": {
     timestamp: number;
+    /** Computed main-process-side from the freshest settings; see AgentNotificationService.checkAllClear. */
+    shouldFlash: boolean;
   };
 
   /**
@@ -863,17 +883,22 @@ export type DaintreeEventMap = {
   };
 
   /**
-   * Emitted in the pty-host when trash expiry captures a resumable session,
-   * and re-emitted on the Main bus by PtyEventsBridge. Main persists the
-   * record (single journal writer — the pty-host writing the file itself
-   * would race Main's own close-path writes) and then emits
-   * `agent-session:recorded`.
+   * Emitted in the pty-host when a capture path finds a resumable session —
+   * trash expiry, a natural agent exit, or a `/quit`-style demotion — and
+   * re-emitted on the Main bus by PtyEventsBridge. Main persists the record
+   * (single journal writer — the pty-host writing the file itself would race
+   * Main's own close-path writes) and then emits `agent-session:recorded`.
    */
   "agent-session:captured": {
     /** Terminal whose close produced the record — keys ledger dedupe. */
     terminalId: string;
-    /** Launch generation of that terminal incarnation, when known. */
-    launchGeneration?: number;
+    /**
+     * Launch generation of that terminal incarnation, when known. `null`
+     * deliberately opts out of generation gating for a capture that is not a
+     * terminal close (a demotion), where one generation can legitimately
+     * produce several records.
+     */
+    launchGeneration?: number | null;
     record: Omit<
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"
@@ -1012,6 +1037,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "sys:pr:detection-state",
   "sys:issue:detected",
   "sys:issue:not-found",
+  "sys:wake",
   "agent:spawned",
   "agent:state-changed",
   "agent:state-transition-dropped",

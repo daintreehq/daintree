@@ -292,6 +292,23 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
   });
 
   test("112. After app restart, the paneled dock chip and preset color are restored", async () => {
+    // Panel autosaves are deliberately debounced. Playwright's app.close() can
+    // tear the renderer down before its visibilitychange flush is acknowledged,
+    // so observe the main-process snapshot before testing rehydration instead of
+    // making this assertion depend on incidental time spent in test 111.
+    await expect
+      .poll(
+        () =>
+          ctx.window.evaluate(async (terminalId) => {
+            const project = await window.electron.project.getCurrent();
+            if (!project) return null;
+            const terminals = await window.electron.project.getTerminals(project.id);
+            return terminals.find((terminal) => terminal.id === terminalId)?.location ?? null;
+          }, presetPanelId),
+        { timeout: T_LONG, intervals: [100, 250, 500] }
+      )
+      .toBe("dock");
+
     const userDataDir = ctx.userDataDir;
     await closeApp(ctx.app);
     removeSingletonFiles(userDataDir);

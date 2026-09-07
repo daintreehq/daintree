@@ -11,6 +11,7 @@ import type {
   MergePRResult,
   PR,
   PRDraftStateResult,
+  PRLookupResult,
   PullRequestReview,
   RequestReviewersResult,
   Page,
@@ -187,8 +188,23 @@ export const forgeClient = {
     return window.electron.forge.getIssuesByNumbers({ cwd, numbers });
   },
 
-  getPRsByNumbers: (cwd: string, numbers: number[]): Promise<PR[]> => {
+  /**
+   * Batch PR lookup with each number's own outcome. Prefer this over
+   * {@link getPRsByNumbers} anywhere the difference between "no such PR" and
+   * "could not find out" changes what the caller does.
+   */
+  getPRsByNumbersDetailed: (cwd: string, numbers: number[]): Promise<PRLookupResult[]> => {
     return window.electron.forge.getPRsByNumbers({ cwd, numbers });
+  },
+
+  /**
+   * The found PRs only, in input order — the shape the resource-list dropdown
+   * has always consumed, where a number that does not resolve simply has no row
+   * to show and the reason is not actionable.
+   */
+  getPRsByNumbers: async (cwd: string, numbers: number[]): Promise<PR[]> => {
+    const results = await window.electron.forge.getPRsByNumbers({ cwd, numbers });
+    return results.flatMap((entry) => (entry.status === "found" && entry.pr ? [entry.pr] : []));
   },
 
   getPRReviewThreads: (cwd: string, prNumber: number): Promise<ReviewThread[]> => {

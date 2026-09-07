@@ -56,10 +56,15 @@ export function filterRestorableTerminalSnapshots(
  */
 export function countResumableAgentPanels(
   terminals: unknown[] | null | undefined,
-  context: string
+  context: string,
+  projectId?: string | null
 ): number {
   return filterRestorableTerminalSnapshots(terminals, context).filter((t) => {
-    const kind = inferKind(t);
+    // Same `projectId` restore itself uses (#12280), so a plugin kind is
+    // classified against the registry entry it will actually resolve to rather
+    // than against its portable form. A count derived from a different verdict
+    // than the restore is a number the switcher row promises and then breaks.
+    const kind = inferKind(t, projectId);
     // `assistant` is named explicitly rather than left to `panelKindHasPty`:
     // restore skips it by name, so the count has to skip it by name too or the
     // two drift the moment that kind's PTY-backing changes.

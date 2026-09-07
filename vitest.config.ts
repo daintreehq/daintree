@@ -1,8 +1,14 @@
 import { defineConfig } from "vitest/config";
 import { availableParallelism } from "os";
 import path from "path";
+// Same virtual module the renderer build uses for the plugin Tailwind
+// compiler's stylesheets. Without it the adapter's contract tests compile
+// against empty strings: Vitest stubs every `.css` specifier — `?raw` included
+// — so the bytes have to arrive as a virtual JS module instead.
+import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
 
 export default defineConfig({
+  plugins: [pluginStyleContract()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -34,7 +40,7 @@ export default defineConfig({
       "electron/**/*.{test,spec}.{js,ts}",
       "src/**/*.{test,spec}.{js,ts,jsx,tsx}",
       "shared/**/*.{test,spec}.{js,ts}",
-      "scripts/**/*.{test,spec}.{js,ts,mjs}",
+      "scripts/**/*.{test,spec}.{js,ts,mjs,tsx}",
       "e2e/helpers/__tests__/*.{test,spec}.{js,ts}",
       "plugins/**/*.{test,spec}.{js,ts,jsx,tsx}",
       "packages/**/*.{test,spec}.{js,ts,jsx,tsx}",
@@ -48,6 +54,14 @@ export default defineConfig({
       "**/*.integration.test.{js,ts}",
     ],
     testTimeout: 15000,
+    // Paired with testTimeout the way vitest.integration.config.ts pairs its
+    // own. Left unset, hooks keep vitest's 10s default, so a `beforeAll` that
+    // does strictly more work than any single test in its file gets less time
+    // than one: the action suites reset the module graph and re-import every
+    // definition cold, which is the heaviest thing in those files. That fits
+    // easily in 10s on a warm machine and only misses it under CI contention,
+    // which makes it a shard-ordering lottery rather than a real signal.
+    hookTimeout: 15000,
     env: {
       NODE_ENV: "development",
     },

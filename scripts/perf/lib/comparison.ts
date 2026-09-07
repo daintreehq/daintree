@@ -1,5 +1,5 @@
 import type { ComparisonResult, ComparisonSample } from "../types";
-import { mean, stdDev } from "./stats";
+import { mean } from "./stats";
 
 function pooledStdDev(a: number[], b: number[]): number {
   const nA = a.length;

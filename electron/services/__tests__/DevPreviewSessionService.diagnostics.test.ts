@@ -192,6 +192,88 @@ describe("DevPreviewSessionService diagnostics", () => {
     expect(snapshot.restoredFromManifest).toBe(false);
   });
 
+  // #12299: "command launched" and "server responding" have to be separate
+  // observations rather than things inferred from the poll's outcome.
+  describe("startup observations (#12299)", () => {
+    it("records command-submitted and first-output once per launch", async () => {
+      const started = await service.ensure(baseRequest);
+      const terminalId = started.terminalId!;
+
+      expect(eventTypes().filter((t) => t === "command-submitted")).toHaveLength(1);
+      expect(eventTypes()).not.toContain("first-output");
+
+      ptyClient.emitData(terminalId, "starting up\n");
+      ptyClient.emitData(terminalId, "still starting\n");
+
+      expect(eventTypes().filter((t) => t === "first-output")).toHaveLength(1);
+    });
+
+    it("does not count an empty chunk as first output", async () => {
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitData(started.terminalId!, "");
+      expect(eventTypes()).not.toContain("first-output");
+    });
+
+    it("names the predicted URL as the probe's first candidate", async () => {
+      await service.ensure(baseRequest);
+      await vi.waitFor(() => {
+        expect(eventTypes()).toContain("candidate-url-chosen");
+      });
+      const chosen = service
+        .getDiagnostics(stateRequest)
+        .events.filter((event) => event.type === "candidate-url-chosen");
+      expect(chosen[0]).toMatchObject({ source: "predicted" });
+    });
+
+    it("records the URL from output as an output-sourced candidate", async () => {
+      const started = await service.ensure(baseRequest);
+      scanOutputMock.mockImplementation((_data, buffer) => ({
+        buffer,
+        url: "http://localhost:4173",
+      }));
+      ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+
+      await vi.waitFor(() => {
+        expect(service.getState(stateRequest).status).toBe("running");
+      });
+
+      const chosen = service
+        .getDiagnostics(stateRequest)
+        .events.filter((event) => event.type === "candidate-url-chosen");
+      expect(chosen.some((event) => "source" in event && event.source === "output")).toBe(true);
+    });
+
+    it("records a settled HTTP attempt with its status and budget", async () => {
+      const started = await service.ensure(baseRequest);
+      scanOutputMock.mockImplementation((_data, buffer) => ({
+        buffer,
+        url: "http://localhost:4173",
+      }));
+      ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+
+      await vi.waitFor(() => {
+        expect(service.getState(stateRequest).status).toBe("running");
+      });
+
+      const attempt = service
+        .getDiagnostics(stateRequest)
+        .events.find((event) => event.type === "readiness-http-attempt");
+      expect(attempt).toMatchObject({ outcome: "reachable", status: 200, attempt: 1 });
+    });
+
+    it("records a recognized ready marker", async () => {
+      const started = await service.ensure(baseRequest);
+      scanOutputMock.mockImplementation((_data, buffer) => ({ buffer, readyMarker: true }));
+      ptyClient.emitData(started.terminalId!, "VITE v8.0.1 ready in 87 ms\n");
+
+      const recognized = service
+        .getDiagnostics(stateRequest)
+        .events.filter((event) => event.type === "marker-recognized");
+      expect(recognized).toHaveLength(1);
+      expect(recognized[0]).toMatchObject({ marker: "ready" });
+    });
+  });
+
   it("records a repeat ensure as configChanged:false without a second spawn", async () => {
     await service.ensure(baseRequest);
     const spawnsAfterFirst = ptyClient.spawn.mock.calls.length;

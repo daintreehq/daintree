@@ -37,6 +37,13 @@ const teardownMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
 
+const helpSessionServiceMock = vi.hoisted(() => ({
+  revokeByProjectId: vi.fn<(projectId: string) => Promise<void>>(async () => {}),
+}));
+vi.mock("../../../services/HelpSessionService.js", () => ({
+  helpSessionService: helpSessionServiceMock,
+}));
+
 const hibernationMock = vi.hoisted(() => ({
   evictProjectRenderer: vi.fn<(projectId: string) => number>(),
 }));
@@ -48,6 +55,13 @@ const persistenceMock = vi.hoisted(() => ({
   writeHibernatedMarker: vi.fn<(terminalId: string) => void>(),
 }));
 vi.mock("../../../services/pty/terminalSessionPersistence.js", () => persistenceMock);
+
+// Mocked rather than exercised: the real seam dynamically imports the whole
+// PluginService module graph, which this handler test has no business loading.
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
 const broadcastMock = vi.hoisted(() => vi.fn());
 // Partial: `typedHandle` — which `defineIpcNamespace` registers through — lives
@@ -63,6 +77,9 @@ import { registerProjectSleepHandlers } from "../projectSleep.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { ProjectSleepResult } from "../../../../shared/types/ipc/project.js";
+
+/** Let the handler run up to its first real suspension point. */
+const flushMicrotasks = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const PROJECT: StoredProject = {
   id: "proj-1",
@@ -127,6 +144,9 @@ describe("project:sleep", () => {
       ],
     });
     hibernationMock.evictProjectRenderer.mockReturnValue(1);
+    // `clearAllMocks` clears calls but not a queued `...Once`, so a rejection a
+    // test sets up but never reaches would leak into the next one.
+    helpSessionServiceMock.revokeByProjectId.mockReset().mockResolvedValue(undefined);
   });
 
   describe("validation", () => {
@@ -141,6 +161,7 @@ describe("project:sleep", () => {
       // A silent fallback to "the current project" here would tear down the
       // wrong one — the invalid arg must reach validation as invalid (#7880).
       expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
@@ -150,6 +171,9 @@ describe("project:sleep", () => {
 
       await expect(invoke("ghost")).rejects.toThrow(/Project not found/);
       expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+      // A scratch scope or a stale id lands here, so the revoke never runs
+      // against a scope `revokeByProjectId` could not match anyway.
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
     });
 
     it("no-ops on an already-sleeping project instead of re-journaling it", async () => {
@@ -162,6 +186,7 @@ describe("project:sleep", () => {
         workspaceEvicted: false,
       });
       expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
       expect(persistenceMock.writeHibernatedMarker).not.toHaveBeenCalled();
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
@@ -179,6 +204,60 @@ describe("project:sleep", () => {
       const [scopeId, , , options] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[0]!;
       expect(scopeId).toBe("proj-1");
       expect(options).toEqual({ preserveSession: true, writeBackSessionIds: true });
+    });
+
+    it("capture-revokes the assistant's session before tearing the project down", async () => {
+      const { invoke } = setup();
+
+      await invoke("proj-1");
+
+      // The generic teardown kills the assistant's PTY along with everything
+      // else, and `revokeSession` needs it alive to read the resume id — so the
+      // capture has to land first or there is nothing left to capture (#12181).
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      expect(helpSessionServiceMock.revokeByProjectId.mock.invocationCallOrder[0]!).toBeLessThan(
+        teardownMock.gracefulTeardownAndJournalProject.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("waits for the capture to settle before tearing the project down", async () => {
+      // Invocation order can't tell an awaited capture from a fire-and-forget
+      // one, and fire-and-forget IS the bug: the teardown would kill the
+      // assistant's PTY out from under an unresolved `gracefulKill`, leaving
+      // the placeholder entry with no resume id to overwrite it.
+      let releaseCapture!: () => void;
+      helpSessionServiceMock.revokeByProjectId.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseCapture = resolve;
+        })
+      );
+      const { invoke } = setup();
+
+      const pending = invoke("proj-1");
+      await flushMicrotasks();
+      expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+
+      releaseCapture();
+      await pending;
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalled();
+    });
+
+    it("still sleeps when the assistant capture fails", async () => {
+      helpSessionServiceMock.revokeByProjectId.mockRejectedValueOnce(new Error("no pty host"));
+      const { invoke } = setup();
+
+      await expect(invoke("proj-1")).resolves.toMatchObject({ terminalsKilled: 2 });
+
+      // Without this the test passes under a full revert: the queued rejection
+      // is simply never consumed and the sleep succeeds for the wrong reason.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+
+      // A lost resume entry costs the assistant its conversation, nothing more —
+      // it must never turn the user's sleep into an INTERNAL failure.
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
     });
 
     it("marks every killed terminal hibernated, agent or not", async () => {
@@ -199,6 +278,45 @@ describe("project:sleep", () => {
 
       expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
+    });
+
+    it("unloads the project's plugins, not just its terminals (#12216)", async () => {
+      const { invoke } = setup();
+
+      await invoke("proj-1");
+
+      // Sleeping to free memory has to take the plugin workers, startup timers,
+      // spawned children and the native watcher with it. Before #12216 nothing
+      // ran the unload cascade here, so they survived until the user happened
+      // to switch into a different project.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+
+      // Order is load-bearing, not cosmetic: the status write is the commit
+      // point, so close intent must not be published before the row carries it.
+      expect(projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+        pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("does not unload plugins for a project it refused to sleep (#12216)", async () => {
+      projectStoreMock.getProjectById.mockReturnValue(null);
+      const { invoke } = setup();
+
+      await expect(invoke("ghost")).rejects.toThrow(/Project not found/);
+
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+    });
+
+    it("does not re-unload a project that was already asleep (#12216)", async () => {
+      projectStoreMock.getProjectById.mockReturnValue({ ...PROJECT, status: "closed" });
+      const { invoke } = setup();
+
+      await invoke("proj-1");
+
+      // The no-op branch returns before the status write, so nothing was
+      // closed here and there is no cascade to run.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("reclaims the cached views and the workspace host", async () => {
@@ -274,6 +392,9 @@ describe("project:sleep", () => {
       expect(result.terminalsKilled).toBe(2);
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
       expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+      // Same reason the status write survives: the row says closed, so the
+      // plugins behind it have to go too.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
     });
   });
 
@@ -288,12 +409,20 @@ describe("project:sleep", () => {
 
       await expect(invoke("proj-1")).rejects.toBeInstanceOf(AppError);
 
+      // The capture runs ahead of the confirmation gate on purpose: the row
+      // stays open, and the pending entry is what lets an assistant panel that
+      // reopens there resume instead of starting cold.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+
       // Nothing downstream may run: marking it closed would hide still-running
       // agents behind a "reopen to resume" that has nothing to resume.
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(persistenceMock.writeHibernatedMarker).not.toHaveBeenCalled();
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
       expect(broadcastMock).not.toHaveBeenCalled();
+      // The project is still open with live agents behind it — unloading its
+      // plugins here would tear down half a project the user still has.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("surfaces a teardown rejection without marking the project closed", async () => {
@@ -302,6 +431,7 @@ describe("project:sleep", () => {
 
       await expect(invoke("proj-1")).rejects.toBeInstanceOf(AppError);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
   });
 
@@ -313,6 +443,10 @@ describe("project:sleep", () => {
       await invoke("proj-1");
 
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
+      // The capture is keyed on the requested project, not the pointer — the
+      // one arrangement where reading the wrong one is visible.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
     });
 
     it("clears the pointer when it does", async () => {

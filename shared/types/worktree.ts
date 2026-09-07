@@ -55,6 +55,61 @@ export interface WorktreeLifecycleStatus {
 }
 
 /**
+ * How far the post-create initialization tail has got.
+ *
+ * Distinct from {@link WorktreeLifecycleStatus} on purpose, and neither one
+ * substitutes for the other. `lifecycleStatus` is a single generic slot for
+ * whichever lifecycle phase ran LAST — a later resource-pause or teardown
+ * overwrites a setup result in it — and it is never written at all when the
+ * project declares no setup commands. So an absent `lifecycleStatus` means
+ * either "setup has not started", "setup finished and something else has since
+ * run", or "there was nothing to run", which is exactly the ambiguity a caller
+ * asking "can I use this worktree yet?" cannot afford.
+ *
+ * This field answers only that question, is written at every transition of the
+ * create tail including the no-setup path, and is never repurposed by a later
+ * phase.
+ *
+ * Held in memory by the monitor, like `worktreeMode`. It is therefore absent
+ * for a worktree the host did not create in this session — which readers must
+ * treat as "unknown", never as "ready".
+ */
+export interface WorktreeSetupStatus {
+  state: WorktreeSetupState;
+  /** Which stage is running, or which one failed. Absent once `ready`. */
+  stage?: WorktreeSetupStage;
+  startedAt: number;
+  completedAt?: number;
+  /**
+   * One-line failure summary. Deliberately NOT the setup script's output: this
+   * field rides every worktree snapshot and reaches model context through
+   * `worktree.list`, while `lifecycleStatus.output` carries up to 8 KiB of
+   * arbitrary command output and stays where it is.
+   */
+  error?: string;
+}
+
+/**
+ * `pending` — the git worktree exists; the initialization tail has not started.
+ * `running` — config copy, submodule init, or the setup script and any
+ * configured resource provisioning, is in flight.
+ * `ready` — every stage finished, including the no-setup-commands path.
+ * `failed` / `timed-out` — a stage failed; `stage` says which.
+ */
+export type WorktreeSetupState = "pending" | "running" | "ready" | "failed" | "timed-out";
+
+/**
+ * The three stages of the create tail, in the order they run. `setup-script`
+ * covers the project's setup commands AND the resource provisioning that
+ * optionally follows them, since a caller waiting on readiness is waiting on
+ * both.
+ */
+export type WorktreeSetupStage = "copy-config" | "submodules" | "setup-script";
+
+/** Longest failure text carried on a setup status. See {@link WorktreeSetupStatus.error}. */
+export const WORKTREE_SETUP_ERROR_MAX_LENGTH = 200;
+
+/**
  * Failure-severity classification for a settled lifecycle phase.
  * `billing-critical` — the failure may leave cloud resources running and
  * billing (resource teardown). `cosmetic` — local cleanup failed but the
@@ -231,6 +286,12 @@ export interface Worktree {
 
   /** Current or last completed lifecycle script status */
   lifecycleStatus?: WorktreeLifecycleStatus;
+
+  /**
+   * How far post-create initialization has got. Absent for a worktree this
+   * host process did not create — see {@link WorktreeSetupStatus}.
+   */
+  setupStatus?: WorktreeSetupStatus;
 
   /** Whether a plan file (TODO.md, PLAN.md, etc.) exists in the worktree root */
   hasPlanFile?: boolean;
@@ -420,6 +481,26 @@ export interface WorktreeState extends Worktree {
  * is the honest "not classified yet" — callers must treat it as unknown and
  * stay permissive, never as `false`.
  */
+/**
+ * The outcome of creating a worktree.
+ *
+ * `branch` is what the host actually landed on, not what was asked for:
+ * collision recovery can suffix the name or switch to reusing an existing local
+ * branch. It is part of the RESULT rather than something a caller reads back,
+ * because the worktree rows a renderer sees arrive over a different port than
+ * this value and have no ordering relationship with it.
+ */
+export interface WorktreeCreateResult {
+  worktreeId: string;
+  branch: string;
+  /**
+   * Setup state at the moment creation returned — normally `pending` or
+   * `running`, since the initialization tail outlives the create. `unknown`
+   * only when the host answered without it.
+   */
+  setupState: WorktreeSetupState | "unknown";
+}
+
 export interface WorktreeListResult {
   worktrees: WorktreeState[];
   gitBacked: boolean | null;

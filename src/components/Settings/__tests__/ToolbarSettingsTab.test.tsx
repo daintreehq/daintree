@@ -9,6 +9,7 @@ const moveButtonMock = vi.fn();
 const toggleButtonVisibilityMock = vi.fn();
 const setPluginButtonPromotedMock = vi.fn();
 const setPanelButtonOnToolbarMock = vi.fn();
+const setLauncherItemOnToolbarMock = vi.fn();
 const setAlwaysShowDevServerMock = vi.fn();
 const setDefaultSelectionMock = vi.fn();
 const resetMock = vi.fn();
@@ -30,6 +31,7 @@ interface ToolbarState {
   toggleButtonVisibility: typeof toggleButtonVisibilityMock;
   setPluginButtonPromoted: typeof setPluginButtonPromotedMock;
   setPanelButtonOnToolbar: typeof setPanelButtonOnToolbarMock;
+  setLauncherItemOnToolbar: typeof setLauncherItemOnToolbarMock;
   setAlwaysShowDevServer: typeof setAlwaysShowDevServerMock;
   setDefaultSelection: typeof setDefaultSelectionMock;
   reset: typeof resetMock;
@@ -52,6 +54,7 @@ function makeToolbarState(
     toggleButtonVisibility: toggleButtonVisibilityMock,
     setPluginButtonPromoted: setPluginButtonPromotedMock,
     setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
+    setLauncherItemOnToolbar: setLauncherItemOnToolbarMock,
     setAlwaysShowDevServer: setAlwaysShowDevServerMock,
     setDefaultSelection: setDefaultSelectionMock,
     reset: resetMock,
@@ -68,6 +71,7 @@ function clearStoreMocks() {
   toggleButtonVisibilityMock.mockClear();
   setPluginButtonPromotedMock.mockClear();
   setPanelButtonOnToolbarMock.mockClear();
+  setLauncherItemOnToolbarMock.mockClear();
   setAlwaysShowDevServerMock.mockClear();
   setDefaultSelectionMock.mockClear();
   resetMock.mockClear();
@@ -86,6 +90,13 @@ vi.mock("@/store/agentSettingsStore", () => ({
       setAgentPinned: typeof setAgentPinnedMock;
     }) => unknown
   ) => selector({ settings: mockAgentSettings, setAgentPinned: setAgentPinnedMock }),
+}));
+
+const mockRecipes = vi.hoisted(() => ({ list: [] as Array<{ id: string; name: string }> }));
+
+vi.mock("@/store/recipeStore", () => ({
+  useRecipeStore: (selector: (s: { recipes: Array<{ id: string; name: string }> }) => unknown) =>
+    selector({ recipes: mockRecipes.list }),
 }));
 
 vi.mock("@/store/cliAvailabilityStore", () => ({
@@ -893,5 +904,108 @@ describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
     expect(getByTestId("section-Panel buttons").getAttribute("data-description")).toContain(
       "3 of 4 pinned"
     );
+  });
+});
+
+describe("ToolbarSettingsTab — launcher pins (#12217)", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    mockAgentSettings = null;
+    mockRecipes.list = [];
+    pluginButtons.configs = new Map();
+  });
+
+  afterEach(() => {
+    mockToolbarState = makeToolbarState();
+    mockRecipes.list = [];
+  });
+
+  function pinned(pinnedButtons: Record<string, boolean>) {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["launcher"],
+      rightButtons: [],
+      pinnedButtons,
+    });
+  }
+
+  it("has no section at all when nothing was pinned from the launcher", () => {
+    // The common profile. An empty shell would be a heading promising rows the
+    // page can never show.
+    pinned({});
+    const { queryByTestId } = render(<ToolbarSettingsTab />);
+    expect(queryByTestId("section-Pinned from the launcher")).toBeNull();
+  });
+
+  it("lists a pinned recipe under the name the recipe actually has", () => {
+    mockRecipes.list = [{ id: "r-1", name: "Ship it" }];
+    pinned({ "launcher:recipe:r-1": true });
+
+    const { getByTestId, getByLabelText } = render(<ToolbarSettingsTab />);
+    expect(getByTestId("section-Pinned from the launcher")).toBeTruthy();
+    expect(getByLabelText("Show Ship it in toolbar").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("lists a pinned plugin agent and a pinned panel kind alongside it", () => {
+    // All three classes the issue names reach this one section.
+    mockRecipes.list = [{ id: "r-1", name: "Ship it" }];
+    pinned({
+      "launcher:recipe:r-1": true,
+      "launcher:agent:my-plugin-agent": true,
+      "launcher:panel:review": true,
+    });
+
+    const { getByTestId } = render(<ToolbarSettingsTab />);
+    const section = getByTestId("section-Pinned from the launcher");
+    expect(section.querySelectorAll('[role="switch"]')).toHaveLength(3);
+    expect(section.getAttribute("data-description")).toContain("3 pinned");
+  });
+
+  it("unpins through the launcher-item setter, not the panel or plugin one", () => {
+    mockRecipes.list = [{ id: "r-1", name: "Ship it" }];
+    pinned({ "launcher:recipe:r-1": true });
+
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Show Ship it in toolbar"));
+
+    expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:r-1", false);
+    expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+    expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("shows no row for a pin whose source is not here, and leaves the pin alone", () => {
+    // A recipe belonging to another project, or one since deleted. The row is
+    // absent because nothing can name or launch it — but "not live right now"
+    // is not "gone", so the page must not write anything to clean it up.
+    pinned({ "launcher:recipe:from-another-project": true });
+
+    const { queryByTestId } = render(<ToolbarSettingsTab />);
+    expect(queryByTestId("section-Pinned from the launcher")).toBeNull();
+    expect(setLauncherItemOnToolbarMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores an entry that is not an explicit promotion", () => {
+    // Unpinning deletes the key, so a `false` should never occur — but if a
+    // stale profile carries one it must not resurrect the row.
+    mockRecipes.list = [{ id: "r-1", name: "Ship it" }];
+    pinned({ "launcher:recipe:r-1": false });
+
+    const { queryByTestId } = render(<ToolbarSettingsTab />);
+    expect(queryByTestId("section-Pinned from the launcher")).toBeNull();
+  });
+
+  it("keeps a dotted launcher id out of the plugin section", () => {
+    // A plugin-contributed recipe's id is `publisher.name`. The dot test that
+    // narrows a plugin button id would claim this one if registry membership
+    // weren't checked first.
+    mockRecipes.list = [{ id: "acme.deploy", name: "Deploy" }];
+    pinned({ "launcher:recipe:acme.deploy": true });
+
+    const { queryByTestId, getByLabelText } = render(<ToolbarSettingsTab />);
+    expect(queryByTestId("section-Plugin buttons")).toBeNull();
+
+    fireEvent.click(getByLabelText("Show Deploy in toolbar"));
+    expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:acme.deploy", false);
+    expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
   });
 });

@@ -89,6 +89,9 @@ vi.mock("@/store/helpPanelStore", () => {
     isOpen: false,
     terminalId: null as string | null,
   };
+  // #12108: dictation targets the lane on screen. This fixture runs one lane,
+  // so the selector projects the same flat state as that lane.
+  const selectActiveSlot = (s: typeof state) => s;
   const fns = {
     setOpen: vi.fn((open: boolean) => {
       state.isOpen = open;
@@ -98,6 +101,7 @@ vi.mock("@/store/helpPanelStore", () => {
   const getState = () => ({ ...state, ...fns });
   return {
     useHelpPanelStore: Object.assign(getState, { getState }),
+    selectActiveSlot,
     __state: state,
     __fns: fns,
   };

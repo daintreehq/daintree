@@ -27,7 +27,7 @@ import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 import type { Issue, ListOptions, PR } from "@shared/types/forge";
 import type { GitHubSortOrder } from "../../shared/types.js";
-import { parseNumberQuery } from "@/lib/parseNumberQuery";
+import { MULTI_FETCH_CAP, parseNumberQuery } from "@/lib/parseNumberQuery";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 type StateFilter = string;
@@ -502,6 +502,15 @@ export function useGitHubResourceListSWR({
       return;
     }
 
+    // The clear further down lives inside `if (!isFirstMount)`, and a numeric
+    // query on mount never reaches it: this effect returns above before
+    // setting `mountedRef`, so when the query later becomes text the effect
+    // still counts as a first mount and skips that block on a cold cache. A
+    // missed `#999` then leaves the empty state claiming "No issue #999 in
+    // this view" over the text-search results that replaced it. Clear on entry
+    // instead — it is idempotent, and every other path already agrees.
+    setExactNumberNotFound(null);
+
     const abortController = new AbortController();
     loadMoreAbortRef.current?.abort();
     const gen = nextGeneration(cacheKey);
@@ -766,7 +775,11 @@ export function useGitHubResourceListSWR({
         }
 
         case "multi": {
-          const results = await getByNumbers(numberQuery.numbers);
+          // Capped the same way a range is: the parser keeps every number the
+          // user asked for so the chip can say how many were dropped, but the
+          // batch lookup pages through them 20 at a time and an uncapped paste
+          // would fan out into a run of sequential GraphQL calls.
+          const results = await getByNumbers(numberQuery.numbers.slice(0, MULTI_FETCH_CAP));
           if (abortController.signal.aborted) return;
           const filtered = results.filter(
             (r): r is NonNullable<typeof r> => r !== null && matchesFilter(r)

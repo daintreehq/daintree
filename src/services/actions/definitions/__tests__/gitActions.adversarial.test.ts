@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { utf8ByteLength } from "@shared/utils/boundedOutput";
 import {
   GIT_COMMIT_BODY_MAX_BYTES,
@@ -48,6 +53,8 @@ type GitStub = {
       | "commit"
       | "push"
       | "pullRebase"
+      | "fetch"
+      | "forcePushWithLease"
       | "getFileDiff"
       | "listCommits"
       | "getStagingStatus"
@@ -64,6 +71,8 @@ function makeGitStub(): GitStub {
     commit: vi.fn().mockResolvedValue({ sha: "abc" }),
     push: vi.fn().mockResolvedValue({ ok: true }),
     pullRebase: vi.fn().mockResolvedValue(undefined),
+    fetch: vi.fn().mockResolvedValue(undefined),
+    forcePushWithLease: vi.fn().mockResolvedValue(undefined),
     getFileDiff: vi.fn().mockResolvedValue({
       content: "diff",
       offset: 0,
@@ -129,6 +138,7 @@ function setupActions(): {
 beforeEach(() => {
   // Lets the shared location resolver turn a `worktreeId` into its path.
   setWorktreePathIndexAccessor(() => new Map([["wt-1", "/repo/one"]]));
+  notifyMock.mockClear();
 });
 
 afterEach(() => {
@@ -142,6 +152,249 @@ afterEach(() => {
   if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
     useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
   }
+  const forcePending = useGitForcePushStore.getState().pendingConfirm;
+  if (forcePending) {
+    useGitForcePushStore.getState().resolveConfirmation(forcePending.requestId, false);
+  }
+  useGitForcePushStore.setState({ recovery: {}, pendingConfirm: null });
+});
+
+/** Same deferred-Promise gate, for `git.forcePushWithLease`. */
+async function resolveForcePushConfirm(ok: boolean): Promise<void> {
+  await vi.waitFor(() => {
+    expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
+  });
+  const pending = useGitForcePushStore.getState().pendingConfirm;
+  if (pending) useGitForcePushStore.getState().resolveConfirmation(pending.requestId, ok);
+}
+
+/** The error shape the preload reconstructs from a `GitOperationError`. */
+function rejectedPush(fields: { leaseSha?: string; branchName?: string }): Error {
+  const lease = fields.leaseSha ? encodeURIComponent(fields.leaseSha) : "";
+  const branch = fields.branchName ? encodeURIComponent(fields.branchName) : "";
+  return new Error(
+    `[GitError|push-rejected-outdated|${lease}|${branch}] Updates were rejected because the remote contains work you do not have locally`
+  );
+}
+
+const LEASE = "deadbeefcafe";
+
+describe("git.forcePushWithLease lease capture (#7822)", () => {
+  it("keeps the lease the rejection reported, never one it derived", async () => {
+    const { run, git } = setupActions();
+    git.push.mockRejectedValueOnce(rejectedPush({ leaseSha: LEASE, branchName: "feature/x" }));
+
+    const pushed = run("git.push", { cwd: "/repo/one" });
+    await resolvePushConfirm(true);
+    await expect(pushed).rejects.toThrow(/rejected/i);
+
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toMatchObject({
+      cwd: "/repo/one",
+      branchName: "feature/x",
+      leaseSha: LEASE,
+    });
+  });
+
+  it("captures nothing when the rejection could not read a lease", async () => {
+    // `handlePush` omits `leaseSha` when its revparse fails. Suppressing the
+    // CTA is the documented behaviour; falling back to a lease-less force is
+    // the bug #7822 fixed.
+    const { run, git } = setupActions();
+    git.push.mockRejectedValueOnce(rejectedPush({ branchName: "feature/x" }));
+
+    const pushed = run("git.push", { cwd: "/repo/one" });
+    await resolvePushConfirm(true);
+    await expect(pushed).rejects.toThrow();
+
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toBeNull();
+  });
+
+  it("captures nothing from a rejection that is not a divergence", async () => {
+    const { run, git } = setupActions();
+    git.push.mockRejectedValueOnce(new Error("[GitError|auth-failed||] Permission denied"));
+
+    const pushed = run("git.push", { cwd: "/repo/one" });
+    await resolvePushConfirm(true);
+    await expect(pushed).rejects.toThrow();
+
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toBeNull();
+  });
+
+  it("drops a stale lease as soon as a new push runs", async () => {
+    const { run } = setupActions();
+    useGitForcePushStore
+      .getState()
+      .recordRejection({ cwd: "/repo/one", branchName: "feature/x", leaseSha: LEASE });
+
+    const pushed = run("git.push", { cwd: "/repo/one" });
+    await resolvePushConfirm(true);
+    await pushed;
+
+    // The push succeeded, so the remote state the old lease described is one
+    // nobody has observed since.
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toBeNull();
+  });
+
+  it("does not capture when the confirm gate declined the push", async () => {
+    const { run, git } = setupActions();
+    const pushed = run("git.push", { cwd: "/repo/one" });
+    await resolvePushConfirm(false);
+    await pushed;
+
+    expect(git.push).not.toHaveBeenCalled();
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toBeNull();
+  });
+});
+
+describe("git.forcePushWithLease dispatch", () => {
+  function seed(cwd = "/repo/one", branchName = "feature/x", leaseSha = LEASE) {
+    return useGitForcePushStore.getState().recordRejection({ cwd, branchName, leaseSha })!;
+  }
+
+  it("refuses before any confirm or IPC when no lease is held", async () => {
+    const { run, git } = setupActions();
+
+    await expect(run("git.forcePushWithLease", { cwd: "/repo/one" })).rejects.toThrow(
+      /only after a push was rejected/i
+    );
+    expect(git.forcePushWithLease).not.toHaveBeenCalled();
+    expect(useGitForcePushStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("forwards the captured branch and lease verbatim", async () => {
+    const { run, git } = setupActions();
+    seed();
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await resolveForcePushConfirm(true);
+
+    // A declined confirm also resolves ok, so the two outcomes have to be
+    // distinguishable — ReviewHub's banner keys its recovery state off this.
+    expect(await forced).toEqual({ forced: true });
+    expect(git.forcePushWithLease).toHaveBeenCalledWith("/repo/one", "feature/x", LEASE);
+    // The lease is spent; leaving it would offer a second force against a
+    // remote state that no longer exists.
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toBeNull();
+  });
+
+  it("never reaches IPC when the confirm is declined, and keeps the lease", async () => {
+    const { run, git } = setupActions();
+    seed();
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await resolveForcePushConfirm(false);
+
+    expect(await forced).toEqual({ forced: false });
+    expect(git.forcePushWithLease).not.toHaveBeenCalled();
+    // Cancelling is not the same as spending it — the row stays available.
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).not.toBeNull();
+  });
+
+  it("aborts when a newer push replaced the lease while the confirm was open", async () => {
+    const { run, git } = setupActions();
+    seed();
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await vi.waitFor(() => {
+      expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
+    });
+    // A push landing mid-confirm captures a different lease. The confirm on
+    // screen described the old one, so it cannot authorise this one.
+    useGitForcePushStore
+      .getState()
+      .recordRejection({ cwd: "/repo/one", branchName: "feature/x", leaseSha: "abc123" });
+    const pending = useGitForcePushStore.getState().pendingConfirm!;
+    useGitForcePushStore.getState().resolveConfirmation(pending.requestId, true);
+
+    await expect(forced).rejects.toThrow(/changed while confirming/i);
+    expect(git.forcePushWithLease).not.toHaveBeenCalled();
+  });
+
+  it("drops a lease the remote has proven stale", async () => {
+    const { run, git } = setupActions();
+    seed();
+    git.forcePushWithLease.mockRejectedValueOnce(
+      new Error("[GitError|unknown||] ! [rejected] feature/x -> feature/x (stale info)")
+    );
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await resolveForcePushConfirm(true);
+    await expect(forced).rejects.toThrow(/stale info/);
+
+    // The remote refused the lease, so it is no longer where the rejection that
+    // captured it said. Keeping the row would offer an operation that cannot
+    // succeed until someone rewinds the remote to that exact commit.
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toBeNull();
+  });
+
+  it("strips the transport envelope off the error it rethrows", async () => {
+    // Consumers classify and display `error.message`. Left encoded, the
+    // ReviewHub banner and the card toast both show the wire format.
+    const { run, git } = setupActions();
+    seed();
+    git.forcePushWithLease.mockRejectedValueOnce(
+      new Error("[GitError|auth-failed||] Permission denied (publickey)")
+    );
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await resolveForcePushConfirm(true);
+    await expect(forced).rejects.toThrow(/^Permission denied \(publickey\)$/);
+  });
+
+  it("keeps the lease when the force push itself fails", async () => {
+    const { run, git } = setupActions();
+    seed();
+    git.forcePushWithLease.mockRejectedValueOnce(
+      new Error("[GitError|network-error||] Could not resolve host: github.com")
+    );
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await resolveForcePushConfirm(true);
+    await expect(forced).rejects.toThrow(/Could not resolve host/);
+
+    // A transport failure says nothing about where the remote is, so the
+    // capture is still the best evidence available for a retry.
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).not.toBeNull();
+  });
+
+  it("skips the renderer confirm store entirely for agent dispatch", async () => {
+    // The MCP bridge already cleared ActionService's host-attested gate, and
+    // this deferred store resolves only from a dialog no headless client can
+    // click — awaiting it would hang forever (#11538).
+    const { run, git } = setupActions();
+    seed();
+
+    await run("git.forcePushWithLease", { cwd: "/repo/one" }, { dispatchSource: "agent" });
+
+    expect(git.forcePushWithLease).toHaveBeenCalledWith("/repo/one", "feature/x", LEASE);
+    expect(useGitForcePushStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("still gates plugin dispatch on the confirm store", async () => {
+    const { run, git } = setupActions();
+    seed();
+
+    const forced = run(
+      "git.forcePushWithLease",
+      { cwd: "/repo/one" },
+      { dispatchSource: "plugin" }
+    );
+    await resolveForcePushConfirm(false);
+    await forced;
+
+    expect(git.forcePushWithLease).not.toHaveBeenCalled();
+  });
+
+  it("falls back to ctx.activeWorktreePath when no cwd arg is given", async () => {
+    const { run, git } = setupActions();
+    seed("/repo/two", "feature/y", "beef1234");
+
+    const forced = run("git.forcePushWithLease", undefined, { activeWorktreePath: "/repo/two" });
+    await resolveForcePushConfirm(true);
+    await forced;
+
+    expect(git.forcePushWithLease).toHaveBeenCalledWith("/repo/two", "feature/y", "beef1234");
+  });
 });
 
 describe("gitActions adversarial", () => {
@@ -203,6 +456,77 @@ describe("gitActions adversarial", () => {
     await resolvePushConfirm(false);
     await p;
     expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("git.fetch fires IPC immediately — a fetch has no local work to protect", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo" });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
+    expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("git.fetch passes prune through only when explicitly requested", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo", prune: true });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
+  });
+
+  it("git.fetch treats an absent prune as false, never as truthy", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo", prune: undefined });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
+  });
+
+  it("git.fetch's schema rejects a non-boolean prune instead of coercing it", async () => {
+    // The args schema is the MCP surface too: a client sending `prune: 1` must
+    // be refused, not quietly handed the ref-deleting variant. Goes through
+    // `runParsed`, because plain `run()` never sees `argsSchema` at all.
+    const { runParsed, git } = setupActions();
+
+    await expect(runParsed("git.fetch", { cwd: "/repo", prune: 1 })).rejects.toThrow();
+    expect(git.fetch).not.toHaveBeenCalled();
+
+    await runParsed("git.fetch", { cwd: "/repo", prune: true });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
+  });
+
+  it("git.fetch surfaces a failure itself — the menu drops the dispatch result", async () => {
+    // ActionService's only fallback toast lives in the action palette, so an
+    // action dispatched from a context menu that does not own its own error
+    // fails in total silence.
+    const { run, git } = setupActions();
+    git.fetch.mockRejectedValue(new Error("Authentication failed"));
+
+    await expect(run("git.fetch", { cwd: "/repo" })).rejects.toThrow("Authentication failed");
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Fetch failed" })
+    );
+  });
+
+  it("git.fetch notifies when there is no worktree to fetch, not only on IPC failure", async () => {
+    // `selfNotifiesOnExecutionError` stands the palette's own toast down, so an
+    // un-notified throw from location resolution is swallowed everywhere.
+    const { run, git } = setupActions();
+
+    await expect(run("git.fetch", {})).rejects.toThrow();
+    expect(git.fetch).not.toHaveBeenCalled();
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Fetch failed" })
+    );
+  });
+
+  it("git.fetch strips the GitError transport prefix out of the toast", async () => {
+    // A GitOperationError crossing the contextBridge arrives as
+    // `[GitError|<reason>||] <message>`, and `formatErrorMessage` returns that
+    // verbatim — so without decoding, the user reads the wire format.
+    const { run, git } = setupActions();
+    git.fetch.mockRejectedValue(new Error("[GitError|network-unavailable||] Could not fetch"));
+
+    await expect(run("git.fetch", { cwd: "/repo" })).rejects.toThrow();
+    const payload = notifyMock.mock.calls.at(-1)![0] as { message: string };
+    expect(payload.message).toBe("Could not fetch");
+    expect(payload.message).not.toContain("[GitError|");
   });
 
   it("git.pullRebase fires IPC only after the confirm gate is accepted", async () => {

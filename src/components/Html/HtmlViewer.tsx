@@ -11,10 +11,11 @@ export interface HtmlViewerProps {
    */
   previewUrl: string | null;
   /**
-   * Bumped by FilePane on every (re)load so a rewritten file re-renders. The
-   * cross-origin sandboxed frame can't be `location.reload()`-ed from here, so a
-   * changing cache-buster query is the only way to force a fresh navigation; the
-   * daintree-html:// handler ignores the query when mapping to disk.
+   * Bumped by the host surface on every (re)load so a rewritten file
+   * re-renders. The cross-origin sandboxed frame can't be `location.reload()`-ed
+   * from here, so a changing cache-buster query is the only way to force a fresh
+   * navigation; the daintree-html:// handler ignores the query when mapping to
+   * disk.
    */
   reloadNonce: number;
   /** Accessible name for the frame (the file name). */
@@ -28,8 +29,9 @@ export interface HtmlViewerProps {
  * token-scoped CSP; `sandbox="allow-scripts"` WITHOUT `allow-same-origin` gives
  * it an opaque origin, so its scripts run but it cannot reach the app, the
  * bridge, storage, or the network. Source mode stays on CodeViewer (owned by
- * FilePane), so this component is rendered-only — a thin, non-lazy iframe
- * wrapper with no heavy deps.
+ * whichever surface hosts this — FilePane, the file browser's viewer), so this
+ * component is rendered-only — a thin, non-lazy iframe wrapper with no heavy
+ * deps.
  */
 export function HtmlViewer({ previewUrl, reloadNonce, title, className }: HtmlViewerProps) {
   const src = useMemo(() => {

@@ -10,6 +10,20 @@ import {
   restoreClosedTerminals,
   type WorktreeTerminalRestoreSnapshot,
 } from "@/components/Worktree/worktreeDeleteHelper";
+import { PartialSuccessError } from "@shared/utils/partialSuccess";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/**
+ * The clause `WorkspaceService.deleteWorktree` emits when the safe `branch -d`
+ * refused a branch Git does not consider fully merged.
+ *
+ * Duplicated rather than imported: the other consumer holds it as a private
+ * const inside `createWorktreeStore`, and that module is the per-project view
+ * store — importing it here would pull a store into an action definition
+ * evaluated at registry build time. Matched as a substring, so a wrapped or
+ * prefixed variant still classifies.
+ */
+const BRANCH_KEPT_MARKER = "was kept because Git reports it isn't fully merged";
 
 export function registerWorktreeCreateActions(
   actions: ActionRegistry,
@@ -48,7 +62,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.create",
       title: "Create Worktree",
       description:
-        "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed path when it should also track a pull request or start a recipe's terminals. It writes to disk, may branch from a remote base or reuse a branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree; setup can still fail after the worktree exists.",
+        "Low-level worktree creator, taking an explicit repository root and filesystem path. Reach for the managed creator instead for ordinary creation in the active project — it resolves the path and branch collisions itself. Use this one only when the root, the path, an environment mode or resource provisioning must be stated explicitly. Setup can still fail after the worktree exists.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -78,13 +92,24 @@ export function registerWorktreeCreateActions(
         },
         { legacy: ["rootPath"], requireSelector: true }
       ),
-      resultSchema: z.string(),
+      // Object-rooted so the result can carry the effective branch alongside
+      // the id — and so it can advertise an MCP output schema at all, which a
+      // bare string never could.
+      resultSchema: z.object({
+        worktreeId: z.string(),
+        branch: z
+          .string()
+          .describe(
+            "The branch the worktree is actually on. Differs from the requested name when the host resolved a collision."
+          ),
+      }),
+      mcpOutputSchema: true,
       run: async ({ options, ...location }, ctx) => {
-        const worktreeId = await worktreeClient.create(options, requireWorktreePath(location, ctx));
-        if (!worktreeId) {
+        const created = await worktreeClient.create(options, requireWorktreePath(location, ctx));
+        if (!created?.worktreeId) {
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }
-        return worktreeId;
+        return created;
       },
     })
   );
@@ -124,7 +149,7 @@ export function registerWorktreeCreateActions(
           // unconditionally rather than gated on `getByWorktree` — that gate
           // would miss multi-panel sessions sharing the same worktreeId.
           await window.electron.devPreview.stopByWorktree({ worktreeId });
-          await worktreeClient.delete(worktreeId, force, deleteBranch);
+          await worktreeClient.delete(worktreeId, { force, deleteBranch });
         } catch (error) {
           // This action path has no outbox retry, so a throw here ends the
           // delete. Bring the closed terminals back rather than losing them to a
@@ -136,6 +161,25 @@ export function registerWorktreeCreateActions(
             .then((worktrees) => worktrees.some((worktree) => worktree.id === worktreeId))
             .catch(() => true);
           if (stillExists) void restoreClosedTerminals(restoreSnapshot);
+          // The kept-branch outcome is not a failed delete: the branch step
+          // runs after `git worktree remove` has already succeeded, and the
+          // branch was retained on purpose because `branch -d` judged it not
+          // fully merged. Rethrowing it plain lands as a retryable
+          // `EXECUTION_ERROR`, which tells an agent to try again at the one
+          // thing that cannot work — the worktree it names is gone. The
+          // `PARTIAL_SUCCESS` code says what actually happened instead.
+          //
+          // The payload deliberately omits `worktreeId`: the MCP ownership
+          // ledger reads that field to attribute a half-CREATED worktree, and
+          // nothing good comes of handing a delete's payload the shape that
+          // mints ownership.
+          const message = formatErrorMessage(error, "Worktree delete failed");
+          if (message.includes(BRANCH_KEPT_MARKER)) {
+            throw new PartialSuccessError(message, {
+              worktreeDeleted: true,
+              branchDeleted: false,
+            });
+          }
           throw error;
         }
       },

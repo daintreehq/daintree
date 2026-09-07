@@ -99,6 +99,49 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.showProjectPulse).toBe(false);
   });
 
+  it("a sibling's explicit wrap `false` survives a write from a view still on auto", async () => {
+    // `diffWrapLines` is the one tri-state scalar here (#12170). `null` is a
+    // real value, not an absent one, so the merge has to tell "this view never
+    // touched it" from "this view set it to false" — a falsy-coercing or
+    // null-skipping comparison would resurrect auto and re-wrap every prose
+    // diff the sibling had deliberately unwrapped.
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+    expect(store.getState().diffWrapLines).toBeNull();
+
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: store.persist.getOptions().version,
+        state: { diffWrapLines: false },
+      })
+    );
+
+    // This view changes something unrelated while its own baseline is auto.
+    store.getState().setDockDensity("compact");
+
+    const written = readBlob(backing);
+    expect(written.state.diffWrapLines).toBe(false);
+    expect(written.state.dockDensity).toBe("compact");
+  });
+
+  it("this view's explicit wrap choice beats a sibling's on-disk value", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: store.persist.getOptions().version,
+        state: { diffWrapLines: true },
+      })
+    );
+
+    store.getState().setDiffWrapLines(false);
+
+    expect(readBlob(backing).state.diffWrapLines).toBe(false);
+  });
+
   it("independent map and scalar changes from two views both survive", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");
@@ -322,6 +365,42 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
   // is not pushed across views — an already-hydrated view can still show the
   // hint once before it reloads. What must not happen is that view's write
   // erasing the record, sending the hint back to every view on next launch.
+  // The reading size is one global value shared by every project view, so a
+  // stale view writing any other preference must not hand it back (#12134).
+  it("keeps a sibling's reading size through an unrelated preference write", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("compact");
+
+    const disk = readBlob(backing);
+    disk.state.markdownFontSize = "2xl";
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setShowProjectPulse(false);
+
+    const written = readBlob(backing);
+    expect(written.state.markdownFontSize).toBe("2xl");
+    expect(written.state.showProjectPulse).toBe(false);
+  });
+
+  it("carries this view's reading size while keeping a sibling's unrelated scalar", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("compact");
+
+    const disk = readBlob(backing);
+    disk.state.reduceAnimations = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setMarkdownFontSize("lg");
+
+    const written = readBlob(backing);
+    expect(written.state.markdownFontSize).toBe("lg");
+    expect(written.state.reduceAnimations).toBe(true);
+  });
+
   it("keeps a sibling's spent prefix hint on disk through an unrelated write", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");

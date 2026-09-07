@@ -10,8 +10,8 @@ This doc is the map for that machinery: the signals, the profile state machine a
 
 Two loops, different time constants:
 
-- **Slow loop — `ResourceProfileService`** (`electron/services/ResourceProfileService.ts`, ~818 LOC). Runs in the main process on a 30 s aligned interval. Aggregates memory, thermal, battery, CPU-speed-limit, fleet-size, system-available-memory, and terminal-workload-memory signals into a `pressureScore`, maps the score to a profile, applies asymmetric hysteresis, and pushes the resulting `ResourceProfileConfig` to every consumer. This is **policy** — it changes cadences and budgets, never pauses anyone.
-- **Fast loop — `ResourceGovernor`** (`electron/pty-host/ResourceGovernor.ts`, ~525 LOC). Runs in the **PTY host process** on a 2 s interval, watching V8 heap + external memory across **every isolate in the process** — its own, plus the analysis workers' self-reported samples (see [Cross-isolate accounting](#cross-isolate-accounting-analysis-workers)). When memory approaches its budget it pauses terminal output (the `paused-resource-governor` flow state) and resumes when pressure clears. The profile service feeds it one input — `setResourceProfile(profile)` — which lowers the governor's thresholds under `efficiency`; otherwise the governor is autonomous.
+- **Slow loop — `ResourceProfileService`** (`electron/services/ResourceProfileService.ts`). Runs in the main process on a 30 s aligned interval. Aggregates memory, thermal, battery, CPU-speed-limit, fleet-size, system-available-memory, and terminal-workload-memory signals into a `pressureScore`, maps the score to a profile, applies asymmetric hysteresis, and pushes the resulting `ResourceProfileConfig` to every consumer. This is **policy** — it changes cadences and budgets, never pauses anyone.
+- **Fast loop — `ResourceGovernor`** (`electron/pty-host/ResourceGovernor.ts`). Runs in the **PTY host process** on a 2 s interval, watching V8 heap + external memory across **every isolate in the process** — its own, plus the analysis workers' self-reported samples (see [Cross-isolate accounting](#cross-isolate-accounting-analysis-workers)). When memory approaches its budget it pauses terminal output (the `paused-resource-governor` flow state) and resumes when pressure clears. The profile service feeds it one input — `setResourceProfile(profile)` — which lowers the governor's thresholds under `efficiency`; otherwise the governor is autonomous.
 
 Bridging the two: a third fast path lives **inside** `ResourceProfileService` — an event-loop-lag monitor (5 s interval) that can force the whole app into `efficiency` immediately, bypassing the slow loop's hysteresis, when the JS thread is genuinely saturated.
 
@@ -96,7 +96,7 @@ Direction is determined by `isUpgrade()` against the order `[efficiency, balance
 
 ### Profile config table
 
-Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resourceProfile.ts`). `balanced` values are pinned to the subsystems' historical hardcoded defaults (see the contract comment beside them) so enabling the profile system changed nothing on a healthy machine.
+Every host-independent per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resourceProfile.ts`); the RAM-dependent WebGL thresholds are resolved separately (see below the table). `balanced` values are pinned to the subsystems' historical hardcoded defaults (see the contract comment beside them) so enabling the profile system changed nothing on a healthy machine.
 
 | Knob | performance | balanced | efficiency | Consumer |
 | --- | --- | --- | --- | --- |
@@ -104,11 +104,17 @@ Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resour
 | `backgroundGitWatcherCap` | 20 | 12 | 6 | WorkspaceService LRU watcher budget |
 | `processTreePollInterval` (ms) | 2000 | 2500 | 5000 | ProcessTreeCache |
 | `projectStatsPollInterval` (ms) | 5000 | 5000 | 25000 | ProjectStatsService |
-| `webglUpperThreshold` / `webglLowerThreshold` | 14 / 12 | 12 / 10 | 8 / 6 | Renderer TerminalWebGLConfig |
+| `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`) |
 | `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | Renderer FetchScheduler |
+| `portBatchThroughputDelayMs` (ms) | 16 | 16 | 40 | pty-host PortBatcher throughput flush window |
 | `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | HibernationService |
 | `paintGateTimeoutMs` / `paintGateHardTimeoutMs` (ms) | 1500 / 4000 | 1500 / 4000 | 2500 / 6000 | ProjectViewManager cold paint gate |
 | `warmPaintGateTimeoutMs` / `warmPaintGateHardTimeoutMs` (ms) | 500 / 1500 | 500 / 1500 | 800 / 2500 | ProjectViewManager warm paint gate |
+| `viewLoadTimeoutMs` / `viewLoadHardTimeoutMs` (ms) | 10000 / 30000 | 10000 / 30000 | 15000 / 45000 | ProjectViewManager view-load bounds |
+
+**The WebGL thresholds are no longer in this table (#11192).** `webglUpperThreshold` / `webglLowerThreshold` are RAM-dependent: they are derived from the machine's effective per-renderer WebGL-context ceiling (itself RAM-tiered via the `max-active-webgl-contexts` switch) rather than pinned per profile, so devtools and other in-renderer WebGL consumers keep headroom on a small machine. `RESOURCE_PROFILE_CONFIGS` is typed as `BaseResourceProfileConfig` — the config _without_ those two fields — so a stale literal cannot be read off the static table again. Main-process callers must assemble the renderer payload through `resolveResourceProfileConfig(profile, ceiling)` (`electron/utils/resourceProfileConfig.ts`), which is what makes the push path (`applyProfile`) and the pull path (the `getResourceProfile` IPC handler) share one derivation.
+
+Two entries also pin values that live in a second place and must move together: `balanced`'s paint-gate and view-load numbers must match the `DEFAULT_*` constants in `ProjectViewManager.ts` (the fallback until the first profile push lands), and `portBatchThroughputDelayMs` must match the pty-host's own `PORT_BATCH_THROUGHPUT_DELAY_MS` for the same reason. Both carry the contract comment inline.
 
 ## Fan-out contract
 
@@ -160,7 +166,7 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 ### ProjectViewManager — freeze + LRU eviction + paint gate
 
-`ProjectViewManager` (`electron/window/ProjectViewManager.ts`) is the **most-involved** consumer; it owns three independent profile-driven behaviors. (Each project gets its own `WebContentsView` with an independent V8 context — see the multi-window/per-view notes in [docs/development.md](../development.md) and [vision.md](../vision.md).)
+`ProjectViewManager` (`electron/window/ProjectViewManager.ts`) is the **most-involved** consumer; it owns three independent profile-driven behaviors. (Each project gets its own `WebContentsView` with an independent V8 context — see [process-and-window-model.md](./process-and-window-model.md).)
 
 **1. CDP freeze of cached views** — `setEfficiencyFreeze(true)` on efficiency entry, `(false)` on exit. Freezing puts cached (non-active) views into Chromium's `frozen` web-lifecycle state via CDP (`freezeWebContents` → `Page.setWebLifecycleState`, `electron/utils/webContentsLifecycle.ts`), suppressing timer wake-ups on top of background throttling. The active view is never frozen.
 
@@ -192,14 +198,14 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 On every `applyProfile`, the service broadcasts `resource:profile-changed` with `{ profile, config }` (`ResourceProfileService.ts`). In the renderer:
 
-- `useResourceProfile()` (`src/hooks/useResourceProfile.ts`) subscribes via `window.electron.system.onResourceProfileChanged`, mounted once in `App.tsx`. It applies WebGL thresholds (`setWebglThresholds` + `terminalInstanceService.refreshWebGLMode()`) and writes the profile + fetch intervals into the store.
+- `useResourceProfile()` (`src/hooks/useResourceProfile.ts`) subscribes via `window.electron.system.onResourceProfileChanged`, mounted once in `App.tsx`. It applies the resolved WebGL thresholds (`setWebglThresholds` + `terminalInstanceService.refreshWebGLMode()`), re-applies the agent scrollback ceiling to foreground terminals, and writes the profile + fetch intervals into the store.
 - `useResourceProfileStore` (`src/store/resourceProfileStore.ts`) holds `profile`, `fetchIntervalActiveMs`, `fetchIntervalBackgroundMs`. Worktree cards (`MainWorktreeSecondaryRow`, `NonMainSecondaryRow`) read the fetch intervals to scale per-card git-status fetch cadence by focus.
 
-What each profile actually changes in the renderer: **WebGL DOM/GPU mode thresholds** (efficiency flips terminals to DOM-mode renderer sooner, where each WebGL context is comparatively more expensive on constrained hardware, staying below Chromium's per-renderer context cap) and **FetchScheduler intervals**. The `config` payload also carries the main-process knobs, but those are applied main-side; the renderer reads only WebGL + fetch fields.
+What each profile actually changes in the renderer: **WebGL DOM/GPU mode thresholds** (efficiency flips terminals to DOM-mode renderer sooner, where each WebGL context is comparatively more expensive on constrained hardware, staying below Chromium's per-renderer context cap), the **agent scrollback ceiling**, and **FetchScheduler intervals**. The `config` payload also carries the main-process knobs, but those are applied main-side.
 
 ## Relationship to the Tier-1 ambient-signal model
 
-Resource governance is deliberately **quiet**. Per `CLAUDE.md`'s runtime-signal tiers, the auto-recovering pause states (`paused-resource-governor`, `paused-backpressure`) sit at **Tier 1 — ambient indicator**: the flow-status pill in `TerminalHeaderContent.tsx` shows the state on pane chrome, no toast. They recover on their own (buffer drains / memory eases), so escalating would only train users to ignore the signal. A state that stays in auto-recovery beyond ~30 s without progress, or exhausts retries, is what `CLAUDE.md` says to promote to a Tier-3 inline error banner — but the steady-state resource-governance signals never reach the user as anything louder than chrome. The profile itself is silent: there is no toast on a profile transition, only a logged `resource-profile-changed` event.
+Resource governance is deliberately **quiet**. Per the runtime-signal tiers in [`.claude/rules/user-signals.md`](../../.claude/rules/user-signals.md), the auto-recovering pause states (`paused-resource-governor`, `paused-backpressure`) sit at **Tier 1 — ambient indicator**: the flow-status pill in `TerminalHeaderContent.tsx` shows the state on pane chrome, no toast. They recover on their own (buffer drains / memory eases), so escalating would only train users to ignore the signal. A state that stays in auto-recovery beyond ~30 s without progress, or exhausts retries, is what that ladder says to promote to a Tier-3 inline error banner — but the steady-state resource-governance signals never reach the user as anything louder than chrome. The profile itself is silent: there is no toast on a profile transition, only a logged `resource-profile-changed` event.
 
 ## Where to look
 
@@ -207,6 +213,7 @@ Resource governance is deliberately **quiet**. Per `CLAUDE.md`'s runtime-signal 
 | --- | --- |
 | Profile state machine, signals, lag monitor, fan-out | `electron/services/ResourceProfileService.ts` |
 | Profile config table + types | `shared/types/resourceProfile.ts` |
+| RAM-tiered WebGL threshold resolution | `electron/utils/resourceProfileConfig.ts`, `electron/utils/webglContextBudget.ts` |
 | Composite memory snapshot (Electron + terminal-workload slices, freshness) | `electron/services/memoryAccounting.ts`, `shared/types/memoryAccounting.ts` |
 | PTY-host heap governor (cross-process) | `electron/pty-host/ResourceGovernor.ts` |
 | Worker-governance aggregation + trim fan-out | `electron/services/WorkerGovernanceService.ts` |
@@ -224,5 +231,7 @@ Resource governance is deliberately **quiet**. Per `CLAUDE.md`'s runtime-signal 
 ## Related docs
 
 - [terminal-lifecycle.md](./terminal-lifecycle.md) — flow-status states (`paused-resource-governor`, `paused-backpressure`) and pause-token coordination.
-- [development.md](../development.md) — service registry, multi-window / per-view (`WebContentsView`) architecture.
+- [process-and-window-model.md](./process-and-window-model.md) — the process inventory and the per-view `WebContentsView` topology this doc's consumers act on.
+- [crash-recovery-and-safe-mode.md](./crash-recovery-and-safe-mode.md) — the liveness guards that sit beside this policy layer.
+- [development.md](../development.md) — service registry and the practical on-ramp.
 - [vision.md](../vision.md) — why adaptive resource governance is a strategic frontier as agent counts grow.

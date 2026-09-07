@@ -132,6 +132,20 @@ export function startSteadyStatePerfFlush(intervalMs = 15000): () => void {
   };
 }
 
+// E2E-only mark injector so a Playwright spec can drop its own marks (e.g. the
+// nonce-painted probes of the switch benchmark) into the same NDJSON stream as
+// the app's. Gated on the preload-injected E2E flag exactly like the terminal
+// introspection bridges in TerminalInstanceService, so it never attaches in a
+// production session.
+if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
+  window.__daintreeMarkPerf = (mark: string, meta?: Record<string, unknown>): void => {
+    markRendererPerformance(mark, meta);
+    // A probe mark is read by the harness right away; the steady-state flush
+    // would hold it for up to 15 s.
+    flushPendingPerfMarks();
+  };
+}
+
 export function startRendererSpan(
   mark: PerfMarkName | string,
   meta?: Record<string, unknown>

@@ -232,7 +232,7 @@ describe("WorktreeMonitor", () => {
       // Advance past the initial-delay max (5s) so the timer fires.
       await vi.advanceTimersByTimeAsync(6_000);
       expect(onScheduleFetch).toHaveBeenCalledTimes(1);
-      expect(onScheduleFetch).toHaveBeenCalledWith(TEST_WORKTREE.id, false, false);
+      expect(onScheduleFetch).toHaveBeenCalledWith(TEST_WORKTREE.id, false, false, undefined);
 
       monitor.stop();
     });
@@ -259,7 +259,7 @@ describe("WorktreeMonitor", () => {
       onScheduleFetch.mockClear();
 
       await monitor.triggerFetchNow();
-      expect(onScheduleFetch).toHaveBeenCalledWith(TEST_WORKTREE.id, false, true);
+      expect(onScheduleFetch).toHaveBeenCalledWith(TEST_WORKTREE.id, false, true, undefined);
 
       monitor.stop();
     });

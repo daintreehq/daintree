@@ -43,6 +43,7 @@ interface UpstreamSyncBadgeProps {
 }
 
 const STALENESS_MULTIPLIER = 1.5;
+const FLASH_DURATION_MS = 250;
 
 export function UpstreamSyncBadge({
   aheadCount,
@@ -64,6 +65,8 @@ export function UpstreamSyncBadge({
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
+  const hasBaseAhead = baseAheadCount != null && baseAheadCount > 0;
+  const hasBaseBehind = baseBehindCount != null && baseBehindCount > 0;
 
   // The base segment is a *relationship*, not an alarm: it renders whenever we
   // know which branch this one is measured against, and only its glyph and
@@ -72,10 +75,26 @@ export function UpstreamSyncBadge({
   // upstream yet said nothing at all about where it came from, which is the
   // state every worktree is in the moment it is created.
   const hasBaseName = baseBranchName != null;
-  const showBaseDivergence =
-    hasBaseName &&
-    ((baseAheadCount != null && baseAheadCount > 0) ||
-      (baseBehindCount != null && baseBehindCount > 0));
+  // `BaseDivergence` tries the remote compare ref first and falls back to the
+  // LOCAL base branch when that ref won't resolve — which is exactly what
+  // "Fetch and prune" leaves behind when the base branch is gone from the
+  // remote (#12091). The fallback is observable here because the fallback ref
+  // is the bare branch name where a healthy compare is `remote/branch`, so the
+  // tooltip can say the counts are local rather than passing them off as
+  // measured against the remote.
+  //
+  // What it must NOT say is WHY. The same fallback covers a pruned-away ref, a
+  // repo with no remote at all, and a transient git error, and the renderer
+  // cannot tell them apart — so the copy reports the comparison it got, not a
+  // cause it did not observe.
+  const comparedWithLocalBase =
+    hasBaseName && baseCompareRef != null && baseCompareRef === baseBranchName;
+  // `||`, not `??`: an empty-string compare ref has to fall through to the
+  // branch name the same way it always did, or the tooltip renders "behind ".
+  const compareLabel = comparedWithLocalBase
+    ? `local ${baseBranchName}`
+    : baseCompareRef || baseBranchName;
+  const showBaseDivergence = hasBaseName && (hasBaseAhead || hasBaseBehind);
   // Equality has to be measured, not assumed. `BaseDivergence` keeps the base
   // name and nulls a count it could not parse, so a missing count is "we do
   // not know", and the resting form is the one claim we cannot make on a
@@ -122,10 +141,8 @@ export function UpstreamSyncBadge({
   // does.
   const displayedAhead = showUpstreamDelta && hasAhead ? aheadCount : null;
   const displayedBehind = showUpstreamDelta && hasBehind ? behindCount : null;
-  const displayedBaseAhead =
-    showBaseDivergence && baseAheadCount != null && baseAheadCount > 0 ? baseAheadCount : null;
-  const displayedBaseBehind =
-    showBaseDivergence && baseBehindCount != null && baseBehindCount > 0 ? baseBehindCount : null;
+  const displayedBaseAhead = showBaseDivergence && hasBaseAhead ? baseAheadCount : null;
+  const displayedBaseBehind = showBaseDivergence && hasBaseBehind ? baseBehindCount : null;
 
   const prevDisplayedRef = useRef({
     displayedAhead,
@@ -150,7 +167,7 @@ export function UpstreamSyncBadge({
     };
     if (!changed) return;
     setIsFlashing(true);
-    const safetyTimer = window.setTimeout(() => setIsFlashing(false), 250);
+    const safetyTimer = window.setTimeout(() => setIsFlashing(false), FLASH_DURATION_MS);
     return () => window.clearTimeout(safetyTimer);
   }, [displayedAhead, displayedBehind, displayedBaseAhead, displayedBaseBehind]);
 
@@ -236,9 +253,7 @@ export function UpstreamSyncBadge({
               never said what it was. Without this line the auth state is the
               one place a truncated name has nowhere to be read in full. */}
           {showBaseSegment && baseBranchName && (
-            <div className="text-text-muted break-words">
-              Compared with {baseCompareRef || baseBranchName}
-            </div>
+            <div className="text-text-muted break-words">Compared with {compareLabel}</div>
           )}
           {lastFetchedAt != null && (
             <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
@@ -303,10 +318,10 @@ export function UpstreamSyncBadge({
               >
                 {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
               </span>
-              {baseAheadCount != null && baseAheadCount > 0 && (
+              {hasBaseAhead && (
                 <span className="text-status-success shrink-0">↑{baseAheadCount}</span>
               )}
-              {baseBehindCount != null && baseBehindCount > 0 && (
+              {hasBaseBehind && (
                 <span className="text-status-warning shrink-0">↓{baseBehindCount}</span>
               )}
               {/* Same tier as the branch name it qualifies, so it inherits the
@@ -339,21 +354,25 @@ export function UpstreamSyncBadge({
         )}
         {showBaseDivergence && baseBranchName && (
           <div className="text-text-muted/70 break-words">
-            {baseAheadCount != null && baseAheadCount > 0 && (
+            {hasBaseAhead && (
               <span>
-                {baseAheadCount} ahead of {baseCompareRef || baseBranchName}
+                {baseAheadCount} ahead of {compareLabel}
               </span>
             )}
-            {baseBehindCount != null && baseBehindCount > 0 && (
+            {hasBaseAhead && hasBaseBehind && <span>, </span>}
+            {hasBaseBehind && (
               <span>
-                {baseBehindCount} behind {baseCompareRef || baseBranchName}
+                {baseBehindCount} behind {compareLabel}
               </span>
             )}
           </div>
         )}
         {showBaseResting && baseBranchName && (
-          <div className="text-text-muted break-words">
-            In sync with {baseCompareRef || baseBranchName}
+          <div className="text-text-muted break-words">In sync with {compareLabel}</div>
+        )}
+        {comparedWithLocalBase && showBaseSegment && (
+          <div className="text-text-muted" data-testid="upstream-sync-local-base">
+            Remote comparison unavailable
           </div>
         )}
         {hasNoUpstream && showBaseSegment && (

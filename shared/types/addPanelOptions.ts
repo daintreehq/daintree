@@ -9,6 +9,7 @@ import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
+  SessionLostReason,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -35,12 +36,39 @@ export interface AddPanelOptionsBase {
   worktreeIdSource?: "explicit" | "inferred";
   cwd?: string;
   location?: PanelLocation;
+  /**
+   * Opt-in placement hint: land the new panel immediately after this one
+   * instead of at the end. Resolved against live store state at commit time,
+   * never precomputed as a numeric index — `addPanel` has async gaps (agent
+   * settings IPC, project-store resolution) during which the source can be
+   * reordered, re-homed, or trashed.
+   *
+   * Honored only when the source shares the new panel's rendered scope
+   * (`panelMatchesWorktreeScope` at the resolved grid/dock location). A source
+   * in an explicit tab group anchors to that group's rendered slot — its
+   * earliest member — because both grid and dock emit a group at that position;
+   * anchoring to a later member would drop the copy past the panels rendered in
+   * between. The copy stays ungrouped either way: joining the source's group is
+   * `addTabForPanel`'s job, not this hint's.
+   *
+   * Falls back to the ordinary append whenever the hint can't be honored
+   * (absent, out of scope, source gone) and is ignored inside hydration/spawn
+   * batches, whose `panelIds` append is deferred to flush.
+   */
+  insertAfterId?: string;
   /** If provided, request a stable ID when spawning a new backend process */
   requestedId?: string;
   /** If provided, reconnect to existing backend process instead of spawning */
   existingId?: string;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Version {@link extensionState} was written against, carried in from a
+   * restored snapshot (#12280). Omitted when spawning fresh — `addPanel` stamps
+   * the registered kind's current `stateVersion` instead, because a bag built
+   * from spawn arguments is by definition current.
+   */
+  extensionStateVersion?: number;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin
@@ -146,17 +174,18 @@ export interface AddPanelOptionsBase {
   /** Chain index consumed so far from the primary preset's fallback list. */
   fallbackChainIndex?: number;
   /**
-   * PTY-only, transient. True when session restore fell through to a fresh
+   * PTY-only, transient. Set when session restore fell through to a fresh
    * agent launch because no resume command was usable — either none was
    * available (neither exact-session nor resume-latest), or resume-latest was
    * suppressed because a sibling pane owns this agent+cwd's single slot
-   * (#11461) — so the prior conversation is unreachable for this pane.
+   * (#11461) — so the prior conversation is unreachable for this pane. The
+   * value names which of those it was (#12182).
    * Drives the "Session no longer reachable" restart banner, and doubles as the
    * "not yet acknowledged" gate: dismissing the banner consumes this flag
    * (#11589), as does the next restart. Never persisted — see
    * `serializePtyPanel` (intentionally omitted).
    */
-  sessionLostOnRestore?: boolean;
+  sessionLostOnRestore?: SessionLostReason;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →

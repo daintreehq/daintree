@@ -1,0 +1,17 @@
+node_modules/
+
+# dist/ is deliberately NOT ignored, and is force-included below.
+#
+# Daintree loads this plugin from its committed dist/. The host never compiles
+# it, never reads src/, and never runs package.json — so a checkout without
+# dist/ is a plugin that cannot load, on any machine or branch.
+#
+# The negations matter: this repository ignores `dist/` at its root, and that
+# pattern would cover this directory too. A deeper .gitignore wins, so these two
+# lines are what keep the build output tracked. Do not remove them.
+#
+# Both are needed. `!dist/` re-includes the directory so git descends into it at
+# all; `!dist/**` re-includes the files, which a parent rule matching contents
+# (`dist/*`, `**/dist/**`, even `*.js`) would otherwise still exclude.
+!dist/
+!dist/**

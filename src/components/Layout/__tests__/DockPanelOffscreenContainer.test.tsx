@@ -34,6 +34,11 @@ vi.mock("@/store", () => {
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: (selector: (s: { terminalId: string | null }) => unknown) =>
     selector({ terminalId: null }),
+  // #12108: the offscreen container filters against every lane's terminal.
+  selectSlotTerminalIds: () => [],
+  selectSlot: (s: unknown) => s,
+  selectActiveSlot: (s: unknown) => s,
+  selectOpenSlots: () => [0],
 }));
 
 // Mock the panel body but keep it a REAL consumer of DragHandleContext, so the

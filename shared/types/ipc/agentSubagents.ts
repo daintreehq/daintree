@@ -131,6 +131,28 @@ export interface AgentSubagentTranscriptOk {
 export type AgentSubagentTranscriptResult = AgentSubagentTranscriptOk | AgentSubagentsUnavailable;
 
 /**
+ * One root Codex session recorded for a folder — what "Find session"
+ * (issue #12182) offers to reopen after a restore couldn't reattach to the
+ * prior conversation.
+ *
+ * Deliberately minimal: `preview` is the session's own first message, which
+ * is conversation text and must stay local — never logged, sent anywhere but
+ * the renderer that asked for it, or persisted.
+ */
+export interface CodexFolderSession {
+  id: string;
+  preview: string;
+  updatedAt: number;
+}
+
+export interface CodexFolderSessionsOk {
+  status: "ok";
+  sessions: CodexFolderSession[];
+}
+
+export type CodexFolderSessionsResult = CodexFolderSessionsOk | AgentSubagentsUnavailable;
+
+/**
  * Messages returned per transcript read. Bounded so one long-running child
  * can't flood IPC. When it bites, the delegated task is kept and the oldest
  * replies are dropped — the task is the one message that explains the rest.

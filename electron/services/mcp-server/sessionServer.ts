@@ -15,6 +15,12 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
+import {
+  readDispatchTerminalCommand,
+  readDispatchTerminalCwd,
+  TERMINAL_LAUNCH_ACTION_ID,
+} from "../../../shared/utils/dispatchTerminalCommand.js";
+import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
@@ -307,6 +313,16 @@ export interface SessionServerDeps {
     tier: McpTier;
     args: unknown;
     durationMs: number;
+    /**
+     * The handler's dispatch-start snapshot (#12122), forwarded so the
+     * persisted record carries the same start the live strip's started event
+     * does. Required — the audit record's own `timestamp` is a later clock
+     * read, so a site that omitted this would leave its row unable to be
+     * ordered against its siblings. Every CallTool audit write has it in
+     * scope; making it mandatory here is what stops the next one from
+     * dropping it.
+     */
+    startedAt: number;
     outcome: AuditOutcome;
     confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
     bannerSuppressed?: boolean;
@@ -331,10 +347,12 @@ export interface SessionServerDeps {
     toolId: string;
     tier: McpTier;
     /**
-     * Minimum tier that permits the denied tool, or `null` if no tier permits
-     * it (unknown tool). The renderer uses this to label the elevation buttons
-     * — "Allow Action tier" / "Allow System tier" — and to drive the
-     * `setSessionTier` call.
+     * Minimum tier that permits the denied tool, or `null` if no non-external
+     * help tier permits it — an unknown id, or a deliberately non-grantable
+     * one. The renderer's "Set project default" elevates to it
+     * via `setSessionTier`; its "Allow this tool" issues a per-tool grant for
+     * the denied tool without changing the session tier at all. A `null`
+     * withholds both affordances — the denial isn't actionable.
      */
     targetTier: "workbench" | "action" | "system" | null;
   }) => void;
@@ -674,10 +692,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const perToolGrantedActionIds = new Set<string>(
             sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId)
           );
+          // Filtered to what the dispatch gate would actually honour: a grant
+          // listing a per-resolved-target tool buys nothing, because
+          // `peekNativeGrant` refuses it (#12121). Naming it here would produce
+          // the discoverable-but-uncallable state #11585 rejects — an agent
+          // would find `terminal.killAll` in `actions.search`, then be told
+          // TIER_NOT_PERMITTED when it called it.
           const nativeGrantedActionIds = new Set<string>(
             sessionStore.grantCache
               .getLiveNativeGrants(sessionId)
               .flatMap((grant) => [...grant.allowedTools])
+              .filter((toolId) => isGenericNativeGrantEligible(toolId))
           );
           return {
             permittedActionIds: new Set<string>([
@@ -819,8 +844,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // the call, so the peek cannot be nested under any one admission source
     // (#11878). It used to sit inside the tier-denied branch, behind the
     // per-tool check — which left the grant unreachable both for a tool the
-    // tier already permitted (`worktree.delete` is `danger: "confirm"` but
-    // system-tier permitted) and for one a per-tool grant had just admitted.
+    // tier already permitted (`worktree.delete` is `danger: "confirm"` and sits
+    // on the `action` floor since #12116) and for one a per-tool grant had just
+    // admitted.
     // Either way the modal still fired on every call despite an explicit
     // Settings pre-authorisation.
     //
@@ -852,6 +878,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           tier,
           args,
           durationMs: Date.now() - startedAt,
+          startedAt,
           outcome: { kind: "unauthorized" },
           bannerSuppressed: suppressBanner ? true : undefined,
           capturedTurnId,
@@ -926,6 +953,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs: Date.now() - startedAt,
+            startedAt,
             outcome: { kind: "throw", error: err },
             capturedTurnId,
           });
@@ -968,15 +996,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
       }
 
-      // A dispatch can need confirmation for either of two reasons, and neither
-      // is satisfiable here. The first is the manifest's own `danger:
-      // "confirm"`, collected into `withheldIds` above. The second is
-      // args-conditional (#11860): the host elevates any agent-sourced dispatch
-      // carrying a `recipeId` to `"confirm"`, so a statically-`safe` composite
-      // like `worktree.createWithRecipe` clears the withheld set and would then
-      // raise the very dialog this guard exists to avoid. Read through the same
-      // extraction point the elevation uses, so the refusal and the elevation
-      // can never disagree about what names a recipe.
+      // Which launch argument elevated a `terminal.new` dispatch, in the
+      // resolver's own precedence — a command is the stronger claim, so it wins
+      // when both are present. Scoped by action id for the reason the resolver
+      // is: `command` is an ordinary field name that other safe actions take
+      // without running anything.
+      const terminalLaunchArg =
+        actionId === TERMINAL_LAUNCH_ACTION_ID
+          ? readDispatchTerminalCommand(args) !== undefined
+            ? "command"
+            : readDispatchTerminalCwd(args) !== undefined
+              ? "cwd"
+              : undefined
+          : undefined;
+
+      // A dispatch can need confirmation for any of three reasons, and none of
+      // them is satisfiable here. The first is the manifest's own `danger:
+      // "confirm"`, collected into `withheldIds` above. The other two are
+      // args-conditional: the host elevates any agent-sourced dispatch carrying
+      // a `recipeId` to `"confirm"` (#11860), so a statically-`safe` composite
+      // like `worktree.createWithRecipe` clears the withheld set, and it
+      // elevates a `terminal.new` carrying `command` or `cwd` for the same
+      // reason (#12216) — both would then raise the very dialog this guard
+      // exists to avoid. Read through the same extraction points the elevation
+      // uses, so the refusal and the elevation can never disagree about which
+      // dispatches are gated.
       const boundConfirmRefusal = withheldIds.has(actionId)
         ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
           `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
@@ -989,7 +1033,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
             `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
             `recipe from Daintree, or connect without a workspace binding.`
-          : undefined;
+          : terminalLaunchArg !== undefined
+            ? `Action '${actionId}' was called with a '${terminalLaunchArg}', so it would start a shell and ` +
+              `requires confirmation. This MCP session is bound to workspace ` +
+              `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+              `to approve the dialog. The action was not run — call it without 'command' or 'cwd', open ` +
+              `the terminal from Daintree, or connect without a workspace binding.`
+            : undefined;
 
       if (boundConfirmRefusal !== undefined) {
         const message = boundConfirmRefusal;
@@ -1011,6 +1061,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs: Date.now() - startedAt,
+            startedAt,
             outcome: { kind: "result", value },
             capturedTurnId,
           });
@@ -1035,8 +1086,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // When the grant WAS the authorization, losing it fails closed. When the
     // floor or a per-tool grant already admitted it, the grant only bought a
     // confirmation bypass — so drop the bypass and let the normal modal
-    // decide. Refusing there would answer a `system`-tier `worktree.delete`
-    // with "not permitted for the 'system' tier", which is simply untrue.
+    // decide. Refusing there would answer an `action`-tier `worktree.delete`
+    // with "not permitted for the 'action' tier", which is simply untrue.
     //
     // Accounting note: a matching call spends a use even when the tool is not
     // confirm-gated, so the grant buys it nothing. Charging only where the
@@ -1048,6 +1099,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // extend a confirm-gated sibling's bypass window (bounded by the hard
     // lifetime ceiling), and because this site precedes dedup, a replayed
     // duplicate spends a use without dispatching.
+    //
+    // One use is also the ONLY cost this site can express, which is why a tool
+    // that fans out across every target it resolves at dispatch time is barred
+    // from native grants entirely rather than charged here (#12121). Learning
+    // that count would mean reaching into the renderer before the charge — the
+    // async dependency the paragraph above rules out — so `peekNativeGrant`
+    // never hands one back a grant id and `nativeGrantId` stays undefined:
+    // no bypass, no use, and the confirm modal decides as it normally would.
     if (nativeGrantId !== undefined) {
       const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
       if (!consumed) {
@@ -1084,6 +1143,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 tier,
                 args,
                 durationMs: Date.now() - startedAt,
+                startedAt,
                 outcome: { kind: "collision" },
                 capturedTurnId,
               });
@@ -1104,6 +1164,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               tier,
               args,
               durationMs: Date.now() - startedAt,
+              startedAt,
               outcome: { kind: "dedup" },
               capturedTurnId,
             });
@@ -1125,6 +1186,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               tier,
               args,
               durationMs: Date.now() - startedAt,
+              startedAt,
               outcome: { kind: "collision" },
               capturedTurnId,
             });
@@ -1145,6 +1207,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs: Date.now() - startedAt,
+            startedAt,
             outcome: { kind: "dedup" },
             capturedTurnId,
           });
@@ -1825,6 +1888,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs,
+            startedAt,
             outcome: settledOutcome,
             confirmationDecision,
             capturedTurnId,

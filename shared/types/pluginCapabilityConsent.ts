@@ -1,4 +1,4 @@
-import type { BuiltInPluginCapability } from "./plugin.js";
+import type { BuiltInPluginCapability, PluginScopeKey } from "./plugin.js";
 
 /**
  * Just-in-time (JIT) capability consent for plugin host-API surfaces (#10524).
@@ -7,7 +7,7 @@ import type { BuiltInPluginCapability } from "./plugin.js";
  * that gates each `(pluginId, serverId, toolName)` MCP `tools/call` on a
  * fingerprint of the advertised tool surface. This gates the FIRST runtime use
  * of a high-risk host capability — `shell:exec`, `fs:*-write`, `git:write` —
- * on a single `(pluginId, capability)` grant. A plugin declares the capability
+ * on a single `(scopeKey, pluginId, capability)` grant. A plugin declares the capability
  * in its manifest (static gate), but the user is no longer asked to consent at
  * install/activation time; instead the consent prompt is deferred to the first
  * call into that capability and the grant is cached so later calls run silently.
@@ -21,16 +21,24 @@ import type { BuiltInPluginCapability } from "./plugin.js";
 
 /**
  * Stable pin-store identity for a single plugin capability grant. Keyed in the
- * store by the JSON-encoded `[pluginId, capability]` pair (see
+ * store by the JSON-encoded `[scopeKey, pluginId, capability]` triple (see
  * `PluginCapabilityConsentStore.makeKey`) — JSON-encoded, never `::`-joined, so
  * a pluginId containing the separator cannot collide with another plugin's
  * grant (pluginIds are author-controlled in the manifest).
+ *
+ * The scope is part of the identity so the same plugin id, loaded from a
+ * project rather than app-wide, cannot inherit a grant the user made elsewhere.
  */
 export interface PluginCapabilityIdentity {
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
   /** The high-risk capability being gated. */
   capability: BuiltInPluginCapability;
+  /**
+   * Scope the grant belongs to. Omitted means `"global"` — the app-wide scope
+   * every installed and builtin plugin loads into.
+   */
+  scopeKey?: PluginScopeKey;
 }
 
 /**
@@ -40,6 +48,11 @@ export interface PluginCapabilityIdentity {
 export interface PluginCapabilityConsentRecord {
   pluginId: string;
   capability: BuiltInPluginCapability;
+  /**
+   * Scope the grant was minted in. Records written before the key widened have
+   * no `scopeKey` on disk and read back as `"global"`.
+   */
+  scopeKey: PluginScopeKey;
   /** Wall-clock epoch millis the grant was minted. */
   approvedAt: number;
 }

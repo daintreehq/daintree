@@ -3271,6 +3271,47 @@ describe("useProjectSwitcherPalette", () => {
       expect(target).toBe(highlighted.id);
     });
 
+    it("suppresses the dropdown's close-autofocus only for the close that commits a switch", async () => {
+      const result = await openIn("dropdown");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      // Nothing armed by merely opening, and asking disarms nothing.
+      expect(result.current.consumeCloseAutoFocusSuppression()).toBe(false);
+
+      const target = asProject(result.current.results.find((project) => !project.isActive));
+      act(() => {
+        void result.current.selectProject(target);
+      });
+      await waitFor(() => {
+        expect(result.current.isOpen).toBe(false);
+      });
+      // Armed exactly once: the shell asks on close and the answer is spent.
+      expect(result.current.consumeCloseAutoFocusSuppression()).toBe(true);
+      expect(result.current.consumeCloseAutoFocusSuppression()).toBe(false);
+    });
+
+    it("does not suppress the modal's close-autofocus or a plain dismissal", async () => {
+      const modal = await openIn("modal");
+      await waitFor(() => {
+        expect(modal.current.results).toHaveLength(3);
+      });
+      const target = asProject(modal.current.results.find((project) => !project.isActive));
+      act(() => {
+        void modal.current.selectProject(target);
+      });
+      await waitFor(() => {
+        expect(modal.current.isOpen).toBe(false);
+      });
+      expect(modal.current.consumeCloseAutoFocusSuppression()).toBe(false);
+
+      const dropdown = await openIn("dropdown");
+      act(() => {
+        dropdown.current.close();
+      });
+      expect(dropdown.current.consumeCloseAutoFocusSuppression()).toBe(false);
+    });
+
     it("treats picking the current project as a dismissal, not a dead end", async () => {
       const result = await openIn("modal");
       await waitFor(() => {

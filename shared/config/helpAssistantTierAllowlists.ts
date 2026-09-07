@@ -25,6 +25,9 @@ export const WORKBENCH_TIER_TOOLS = [
   "worktree.listBranches",
   "worktree.getDefaultPath",
   "worktree.getAvailableBranch",
+  // Read-only, and the counterpart to the setup state every worktree listing
+  // now carries: a caller that can see `running` must be able to wait for it.
+  "worktree.waitUntilReady",
   "worktree.resource.status",
   "worktree.compareDiff",
   "worktree.reviewReadiness",
@@ -79,6 +82,10 @@ export const WORKBENCH_TIER_TOOLS = [
   "forge.listIssueComments",
   "forge.getChecks",
   "forge.getPR",
+  // The plural counterpart, at the same tier as the singular read it replaces
+  // for a known set. Admitting one without the other is what produced the
+  // N-call fan-out this exists to remove.
+  "forge.getPRs",
   "forge.getCIStatus",
 
   "workflow.prepBranchForReview",
@@ -94,6 +101,14 @@ export const WORKBENCH_TIER_TOOLS = [
   "notifications.recent",
   "errors.recent",
 
+  // Reads for the plugin-authoring loop (#12214). Both are pure reads — one
+  // parses a manifest already on disk, the other reports why a plugin is in the
+  // state it is in — and an agent writing a plugin needs them from the lowest
+  // tier it might be running at, since the alternative is guessing at a schema
+  // it cannot see.
+  "plugin.validate",
+  "plugin.diagnostics",
+
   "help.displayImage",
 ] as const satisfies readonly BuiltInActionId[];
 
@@ -101,9 +116,33 @@ export const ACTION_TIER_ADDONS = [
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
+  // Cleaning up a worktree the assistant just finished with is ordinary
+  // orchestration, not a privilege escalation (#12116). Admission is all this
+  // tier grants: the action is `danger: "confirm"`, so an unconfirmed dispatch
+  // is still sent to the renderer for a native ConfirmDialog, and a force whose
+  // live target resolves to D3 still escalates to the typed-name gate (#12115)
+  // even under a grant. The one thing that skips the per-call modal is an
+  // explicit native automation grant, which is a user pre-authorisation and was
+  // never gated on tier. Note this is the UNSCOPED delete: it reaches any
+  // eligible worktree in the project, not only ones the session made.
+  // `worktree.create` stays at `system` for a reason that does not apply here —
+  // see the note on it below.
+  "worktree.delete",
+  // The session-scoped form of `worktree.delete` (#11909), carried here for the
+  // same subset invariant as `terminal.closeOwned`. It tracks the tier of the
+  // delete it delegates to, and is the narrower of the two: ownership is
+  // verified in main, and `force`, `deleteBranch` and `closeTerminals` are
+  // absent from its schema and stripped from the delegated call.
+  "worktree.deleteOwned",
   "worktree.resource.provision",
   "worktree.resource.pause",
   "worktree.resource.resume",
+  // Sits with its lifecycle siblings rather than above them (#12116). The
+  // teardown command is project-defined and may destroy a remote resource, so
+  // it keeps `danger: "confirm"` — the tier decides reachability, the danger
+  // class decides approval. Worth knowing when reading the deletes above: they
+  // run this same teardown implicitly, before removing the tree.
+  "worktree.resource.teardown",
 
   "terminal.inject",
   "terminal.new",
@@ -118,6 +157,7 @@ export const ACTION_TIER_ADDONS = [
   "terminal.closeOwned",
   "terminal.closeAll",
   "terminal.kill",
+  "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
   "terminal.moveToDock",
@@ -188,6 +228,12 @@ export const ACTION_TIER_ADDONS = [
   // Runs a project-declared command as a real child process. Read-only
   // workbench sessions detect runners but must not execute them.
   "project.runCheck",
+
+  // Re-runs project plugin discovery and reconciliation — the write half of the
+  // authoring loop whose reads sit at workbench. It restarts running code, so a
+  // read-only session must not reach it, but within a project it does nothing a
+  // reopen would not (#12214).
+  "plugin.reloadProject",
 ] as const satisfies readonly BuiltInActionId[];
 
 export const SYSTEM_TIER_ADDONS = [
@@ -199,12 +245,6 @@ export const SYSTEM_TIER_ADDONS = [
   // included — reaches it only at an explicitly selected `system` tier or
   // through a scoped grant (#11880, #11907).
   "worktree.create",
-  "worktree.delete",
-  // The session-scoped form of `worktree.delete` (#11909), carried here for the
-  // same subset invariant as `terminal.closeOwned`. It sits at system rather
-  // than action because the delete it delegates to does.
-  "worktree.deleteOwned",
-  "worktree.resource.teardown",
 
   "terminal.arm",
   "terminal.disarm",
@@ -218,6 +258,7 @@ export const SYSTEM_TIER_ADDONS = [
   "git.unstageAll",
   "git.commit",
   "git.push",
+  "git.fetch",
 
   "forge.openIssues",
   "forge.openPRs",
@@ -245,7 +286,15 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.addIssueComment",
   "forge.addIssueLabel",
   "forge.removeIssueLabel",
-  "forge.validateToken",
+  // `forge.validateToken` is deliberately absent from every tier. It takes a
+  // raw forge access token as an argument, and a tool argument IS model
+  // context: even though ActionService redacts it from audit summaries and
+  // logs, admitting the tool means the credential has to be composed in the
+  // model channel to be sent. Token entry stays a UI-owned flow — the Test
+  // button in the provider settings tab dispatches it directly as
+  // `source: "user"`, which no tier gates. The action is also
+  // `mcpVisibility: "hidden"` so a future allowlist edit cannot re-advertise it
+  // by accident.
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -259,8 +308,8 @@ export const HELP_TIER_INCREMENTAL: Record<HelpAssistantTier, readonly string[]>
 };
 
 /**
- * Cumulative allow-list per tier — every tool the assistant can call
- * without prompting at that tier.
+ * Cumulative static allow-list per tier — every tool that tier permits before
+ * a live grant widens the session.
  */
 export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> = {
   workbench: WORKBENCH_TIER_TOOLS,
@@ -269,11 +318,23 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
 };
 
 /**
- * Tools whose blast radius is high enough that the UI pins them at the top
- * of the system-tier preview so users don't miss them in a long list.
+ * Tools whose blast radius is high enough that the UI pins them at the top of a
+ * tier's preview so users don't miss them in a long list.
+ *
+ * Operational risk, not minimum tier. The preview intersects this list with the
+ * tier being previewed, so the same tool is called out wherever it first
+ * becomes reachable — which is why #12116 could not leave this keyed to
+ * `system`: promoting the worktree deletes would otherwise have made them
+ * invisible at the tier that newly grants them, which is the one tier where a
+ * user is deciding whether to grant them at all.
  */
-export const SYSTEM_TIER_HIGH_BLAST_RADIUS: readonly string[] = [
+export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
   "git.push",
   "git.commit",
+  // All three run project-defined teardown — arbitrary commands from
+  // `.daintree/config.json`, and resource teardown that can destroy a remote
+  // devbox. The two delete variants then remove the tree as well.
   "worktree.delete",
+  "worktree.deleteOwned",
+  "worktree.resource.teardown",
 ];

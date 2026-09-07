@@ -35,6 +35,7 @@ import {
   encodeBrokerError,
 } from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
+import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
 import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
@@ -88,6 +89,7 @@ import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRel
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
+import { buildWebviewEmulationPreloadBindings } from "./ipc/handlers/webviewEmulation.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
@@ -110,6 +112,7 @@ import type {
   ErrorRecord,
   ElectronAPI,
   CreateWorktreeOptions,
+  WorktreeCreateResult,
   IpcInvokeMap,
   IpcEventMap,
   IpcEventBusMap,
@@ -876,6 +879,19 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:deep-link",
   "window:disk-space-status",
   "plugin:archive-install-intent",
+  // Project-local plugin trust: both are pushed during `onProjectOpened`, which
+  // on a cold project view runs before the React tree that subscribes has
+  // mounted. The trust prompt is the one and only signal permitted to raise the
+  // consent gate and main never re-emits it once a decision is stored, so a
+  // dropped push means the folder stays silently blocked with no way back but
+  // the indicator. Both are latest-wins single-shot signals, which is exactly
+  // what this buffer is for.
+  "plugin:project-trust-prompt",
+  "plugin:project-plugins-changed",
+  // Staged plugins are announced exactly once per new manifest id — main records
+  // the id as it stages it and never announces it again — so a push that lands
+  // before the subscriber mounts is a notification the user never gets.
+  "plugin:project-plugin-staged",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -884,6 +900,10 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
 // current value matters. Buffered payloads replay in arrival order.
 const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:archive-install-intent",
+  // Same reasoning: two plugin ids staged before the subscriber mounts are two
+  // separate "something new wants to run here" signals, and collapsing them to
+  // the latest would silently drop one.
+  "plugin:project-plugin-staged",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -1116,7 +1136,7 @@ function buildElectronApi(): ElectronAPI {
       setActive: (worktreeId: string) =>
         _unwrappingInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
 
-      create: (options: CreateWorktreeOptions, rootPath: string): Promise<string> =>
+      create: (options: CreateWorktreeOptions, rootPath: string): Promise<WorktreeCreateResult> =>
         _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
 
       listBranches: (rootPath: string) =>
@@ -1222,7 +1242,7 @@ function buildElectronApi(): ElectronAPI {
       onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void) =>
         _eventBusOn("agent:fallback-triggered", callback),
 
-      onAllAgentsClear: (callback: (data: { timestamp: number }) => void) =>
+      onAllAgentsClear: (callback: (data: { timestamp: number; shouldFlash: boolean }) => void) =>
         _eventBusOn("agent:all-clear", callback),
 
       onActivity: (callback: (data: TerminalActivityPayload) => void) =>
@@ -1667,8 +1687,9 @@ function buildElectronApi(): ElectronAPI {
 
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
-      onViewRevealed: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
-      onViewWarmActivated: (callback: () => void) =>
+      onViewRevealed: (callback: (payload?: { switchId?: string }) => void) =>
+        _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
+      onViewWarmActivated: (callback: (payload?: { switchId?: string }) => void) =>
         _typedOn(CHANNELS.APP_VIEW_WARM_ACTIVATED, callback),
       onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
       isViewCached: () => _viewCached,
@@ -1795,6 +1816,7 @@ function buildElectronApi(): ElectronAPI {
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
         options?: {
           focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
+          trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
@@ -1855,8 +1877,9 @@ function buildElectronApi(): ElectronAPI {
 
       reopen: (
         projectId: string,
-        outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState
-      ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState),
+        outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
+        options?: { trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace }
+      ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState, options),
 
       getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),
 
@@ -2117,6 +2140,8 @@ function buildElectronApi(): ElectronAPI {
 
       pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
 
+      ...buildGitFetchPreloadBindings(_unwrappingInvoke),
+
       forcePushWithLease: (cwd: string, branchName: string, leaseSha: string) =>
         _unwrappingInvoke(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, { cwd, branchName, leaseSha }),
 
@@ -2126,6 +2151,42 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, { cwd, branchName, limit }),
       listRebaseCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_REBASE_COMMITS, { cwd, branchName, limit }),
+      listBaseIntegrationCommits: (
+        cwd: string,
+        baseBranch: string,
+        kind: "rebase-onto-base" | "merge-base",
+        limit?: number
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS, {
+          cwd,
+          baseBranch,
+          kind,
+          limit,
+        }),
+      rebaseOntoBase: (
+        cwd: string,
+        baseBranch: string,
+        expected?: { branch?: string; headOid?: string; baseOid?: string }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_REBASE_ONTO_BASE, {
+          cwd,
+          baseBranch,
+          expectedBranch: expected?.branch,
+          expectedHeadOid: expected?.headOid,
+          expectedBaseOid: expected?.baseOid,
+        }),
+      mergeBaseIntoBranch: (
+        cwd: string,
+        baseBranch: string,
+        expected?: { branch?: string; headOid?: string; baseOid?: string }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, {
+          cwd,
+          baseBranch,
+          expectedBranch: expected?.branch,
+          expectedHeadOid: expected?.headOid,
+          expectedBaseOid: expected?.baseOid,
+        }),
 
       onPushProgress: (callback: (event: PushProgressEvent) => void) =>
         _typedOn(CHANNELS.GIT_PUSH_PROGRESS, callback),
@@ -2288,8 +2349,19 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
       clearConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
-      getConsoleProperties: (webContentsId: number, objectId: string) =>
-        _unwrappingInvoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
+      getConsoleProperties: (
+        webContentsId: number,
+        paneId: string,
+        rowId: number,
+        objectId: string
+      ) =>
+        _unwrappingInvoke(
+          CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES,
+          webContentsId,
+          paneId,
+          rowId,
+          objectId
+        ),
       onConsoleMessage: (
         callback: (
           row: import("../shared/types/ipc/webviewConsole.js").SerializedConsoleRow
@@ -2300,10 +2372,11 @@ function buildElectronApi(): ElectronAPI {
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, callback),
       reloadIgnoringCache: (webContentsId: number, panelId: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, webContentsId, panelId),
-      getScrollPosition: (webContentsId: number): Promise<number> =>
+      getScrollPosition: (webContentsId: number): Promise<number | null> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
       ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
       ...buildWebviewCapturePreloadBindings(_unwrappingInvoke),
+      ...buildWebviewEmulationPreloadBindings(_unwrappingInvoke),
     },
 
     // Hibernation API
@@ -2436,6 +2509,7 @@ function buildElectronApi(): ElectronAPI {
         workingPulseEnabled: boolean;
         workingPulseSoundFile: string;
         uiFeedbackSoundEnabled: boolean;
+        flashEnabled: boolean;
         quietHoursEnabled: boolean;
         quietHoursStartMin: number;
         quietHoursEndMin: number;
@@ -2455,6 +2529,7 @@ function buildElectronApi(): ElectronAPI {
           workingPulseEnabled: boolean;
           workingPulseSoundFile: string;
           uiFeedbackSoundEnabled: boolean;
+          flashEnabled: boolean;
           quietHoursEnabled: boolean;
           quietHoursStartMin: number;
           quietHoursEndMin: number;
@@ -3568,6 +3643,10 @@ contextBridge.exposeInMainWorld("__DAINTREE_SURFACE_HOST__", {
 // same runtime flag as the rest of the perf pipeline; `process.env` is polyfilled
 // in the sandboxed preload, and the flag is intentionally NOT esbuild-stripped.
 if (process.env.DAINTREE_PERF_CAPTURE === "1") {
+  // Let the renderer know a capture run is live: the launch-time env var never
+  // reaches the sandboxed renderer, so without this bridge the renderer-side
+  // flush (`isRendererPerfCaptureEnabled`) stays off for the whole session.
+  contextBridge.exposeInMainWorld("__DAINTREE_PERF_CAPTURE__", true);
   const preloadEvalEndMs = perfNowMs();
   const timestamp = new Date().toISOString();
   ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, {

@@ -134,6 +134,7 @@ vi.mock("../ProjectStore.js", () => ({
 }));
 
 import path from "path";
+import { resolve as pathResolve } from "path";
 import { WorkspaceClient } from "../WorkspaceClient.js";
 import { projectStore } from "../ProjectStore.js";
 
@@ -186,6 +187,68 @@ describe("WorkspaceClient multi-process manager", () => {
     h(hostIndex).resolveRequest(req.requestId);
     await tick();
   }
+
+  describe("fetchWorktree (#12091)", () => {
+    /** Load a project and settle its init round-trip so the pool can route. */
+    async function loadedProject(rootPath: string): Promise<MockHost> {
+      const load = client.loadProject(rootPath, 1);
+      await readyAndResolveLoad(0);
+      await load;
+      return h(0);
+    }
+
+    it("routes to the owning host and sends the normalized worktree id", async () => {
+      // Monitor ids are `path.resolve`d, so an un-normalized spelling would
+      // route correctly and then miss `monitors.get()` on the far side.
+      const host = await loadedProject("/project-a");
+      host.sendWithResponse.mockClear();
+
+      const pending = client.fetchWorktree("/project-a/./wt-1/", false);
+      await tick();
+
+      const request = host.sendWithResponse.mock.calls.at(-1)![0] as {
+        requestId: string;
+        type: string;
+        worktreeId: string;
+        prune: boolean;
+      };
+      expect(request.type).toBe("fetch-worktree");
+      expect(request.worktreeId).toBe(pathResolve("/project-a/wt-1"));
+      expect(request.prune).toBe(false);
+
+      host.resolveRequest(request.requestId, { result: { status: "success", remote: "origin" } });
+      await expect(pending).resolves.toEqual({ status: "success", remote: "origin" });
+    });
+
+    it("budgets far above the broker default — a fetch can queue behind another repo-wide batch", async () => {
+      const host = await loadedProject("/project-a");
+      host.sendWithResponse.mockClear();
+
+      void client.fetchWorktree("/project-a/wt-1", true).catch(() => {});
+      await tick();
+
+      const timeoutMs = host.sendWithResponse.mock.calls.at(-1)![1] as number;
+      expect(timeoutMs).toBeGreaterThan(30_000);
+    });
+
+    it("rejects rather than hanging when no host owns the path", async () => {
+      await expect(client.fetchWorktree("/nowhere/wt", false)).rejects.toThrow(/No workspace host/);
+    });
+
+    it("rejects when the host answered but no fetch ran", async () => {
+      // A result-less answer means the monitor was gone; resolving would report
+      // a refresh that never happened.
+      const host = await loadedProject("/project-a");
+      host.sendWithResponse.mockClear();
+
+      const pending = client.fetchWorktree("/project-a/wt-1", false);
+      await tick();
+      const request = host.sendWithResponse.mock.calls.at(-1)![0] as { requestId: string };
+      host.resolveRequest(request.requestId, {});
+
+      await expect(pending).rejects.toThrow(/did not run/);
+    });
+  });
 
   describe("loadProject", () => {
     it("creates a new host process for a new project", async () => {
@@ -443,6 +506,195 @@ describe("WorkspaceClient multi-process manager", () => {
           .getAllRequests()
           .filter((r: any) => r.type === "get-all-states")
       ).toHaveLength(0);
+    });
+  });
+
+  describe("result-shaped state reads (#12174)", () => {
+    const idFor = (p: string) => `id-for-${path.resolve(p)}`;
+
+    it("names the serving project on a successful project-scoped read", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const promise = client.getAllStatesForProjectResultAsync("/project-a", idFor("/project-a"));
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a", name: "A" }] });
+
+      expect(await promise).toEqual({
+        status: "ok",
+        projectId: idFor("/project-a"),
+        states: [{ id: "wt-a", name: "A" }],
+      });
+    });
+
+    it("reports an authoritative empty project, not an unavailable one", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const promise = client.getAllStatesForProjectResultAsync("/project-a", idFor("/project-a"));
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      h(0).resolveRequest(req.requestId, { states: [] });
+
+      // The whole point: a live host that genuinely has no worktrees is a
+      // successful answer, distinguishable from every failure below.
+      expect(await promise).toEqual({
+        status: "ok",
+        projectId: idFor("/project-a"),
+        states: [],
+      });
+    });
+
+    it("reports project-unavailable for an unknown path, without contacting any host", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      expect(
+        await client.getAllStatesForProjectResultAsync(
+          "/no-such-project",
+          idFor("/no-such-project")
+        )
+      ).toEqual({ status: "unavailable", reason: "project-unavailable" });
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("reports project-unavailable on an immutable-projectId mismatch", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      expect(
+        await client.getAllStatesForProjectResultAsync("/project-a", idFor("/project-b"))
+      ).toEqual({ status: "unavailable", reason: "project-unavailable" });
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("reports workspace-unavailable when no host serves the window yet", async () => {
+      // Not project-unavailable: the window->project mapping is established at
+      // the end of loadProject, so a window mid-open lands here and "the
+      // workspace cannot answer yet" is the honest reason.
+      expect(await client.getAllStatesResultAsync(99)).toEqual({
+        status: "unavailable",
+        reason: "workspace-unavailable",
+      });
+    });
+
+    it("names the project a window-scoped read landed on", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const promise = client.getAllStatesResultAsync(1);
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a" }] });
+
+      expect(await promise).toEqual({
+        status: "ok",
+        projectId: idFor("/project-a"),
+        states: [{ id: "wt-a" }],
+      });
+    });
+
+    it("keeps a window read labelled with the project it started on across a switch", async () => {
+      // The race #12174 is really about. Start a read while window 1 is on A,
+      // complete the switch to B with the state RPC still pending, then answer
+      // it. The captured entry must still label the answer A — re-resolving the
+      // window after the await would mislabel A's worktrees as B's, which is
+      // strictly worse than the [] the old surface returned.
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const promise = client.getAllStatesResultAsync(1);
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(req).toBeDefined();
+
+      const loadB = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a" }] });
+      expect(await promise).toEqual({
+        status: "ok",
+        projectId: idFor("/project-a"),
+        states: [{ id: "wt-a" }],
+      });
+
+      // And the switch invalidated the cache, so the next read reaches B rather
+      // than replaying A's coalesced answer.
+      const after = client.getAllStatesResultAsync(1);
+      await tick();
+      const reqB = h(1)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(reqB).toBeDefined();
+      h(1).resolveRequest(reqB.requestId, { states: [{ id: "wt-b" }] });
+      expect(await after).toMatchObject({ projectId: idFor("/project-b") });
+    });
+
+    it("reports workspace-unavailable when readiness fails, and never reads a partial map", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      h(0).simulateReady();
+      await tick();
+      const loadReq = h(0).getLastRequest()!;
+      expect(loadReq.type).toBe("load-project");
+
+      const promise = client.getAllStatesForProjectResultAsync("/project-a", idFor("/project-a"));
+      await tick();
+
+      h(0).rejectRequest(loadReq.requestId, new Error("load failed"));
+      await loadA.catch(() => {});
+
+      expect(await promise).toEqual({
+        status: "unavailable",
+        reason: "workspace-unavailable",
+      });
+      // "unknown", never a partial list — get-all-states was never sent.
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+    });
+
+    it("evicts a rejected read so the next call retries instead of replaying it", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const first = client.getAllStatesForProjectResultAsync("/project-a", idFor("/project-a"));
+      await tick();
+      const req1 = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      h(0).rejectRequest(req1.requestId, new Error("host down"));
+      await expect(first).rejects.toThrow("host down");
+
+      const second = client.getAllStatesForProjectResultAsync("/project-a", idFor("/project-a"));
+      await tick();
+      const req2 = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states")
+        .at(-1)!;
+      expect(req2.requestId).not.toBe(req1.requestId);
+      h(0).resolveRequest(req2.requestId, { states: [] });
+      expect(await second).toMatchObject({ status: "ok" });
     });
   });
 

@@ -68,7 +68,7 @@ describe("CopyTreeService streaming to a file", () => {
     outputPath = path.join(tempDir, "bundle.xml");
     vi.clearAllMocks();
     _resetConfigCacheForTests();
-    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
+    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true, set: vi.fn() });
   });
 
   afterEach(async () => {

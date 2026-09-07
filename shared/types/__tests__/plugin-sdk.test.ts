@@ -3,6 +3,8 @@ import type {
   PluginManifest,
   PluginHostApi,
   PluginActivationApi,
+  PluginWorktreesResult,
+  PluginWorktreesUnavailableReason,
   PluginSettingsScope,
   PluginStorageScope,
   PluginHostCallOptions,
@@ -18,6 +20,7 @@ import type {
   PanelViewProps,
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
+  PluginSystemWakeEvent,
   McpServerContribution,
   PluginCapability,
   BuiltInPluginCapability,
@@ -253,6 +256,51 @@ describe("plugin-sdk boundary", () => {
       >();
     });
 
+    it("PluginHostApi.getWorktreesResult returns the availability-aware result (#12174)", () => {
+      const host = {} as PluginHostApi;
+      expectTypeOf(host.getWorktreesResult).toEqualTypeOf<() => Promise<PluginWorktreesResult>>();
+      // The ambiguous siblings keep their shape — the result method sits beside
+      // them rather than replacing them.
+      expectTypeOf(host.getWorktrees).toEqualTypeOf<() => Promise<PluginWorktreeSnapshot[]>>();
+    });
+
+    it("PluginWorktreesResult narrows on status", () => {
+      const result = {} as PluginWorktreesResult;
+      if (result.status === "ok") {
+        expectTypeOf(result.projectId).toEqualTypeOf<string>();
+        expectTypeOf(result.worktrees).toEqualTypeOf<PluginWorktreeSnapshot[]>();
+        // No `reason` on the authoritative branch.
+        expectTypeOf<Extract<PluginWorktreesResult, { status: "ok" }>>().not.toHaveProperty(
+          "reason"
+        );
+      } else {
+        expectTypeOf(result.reason).toEqualTypeOf<PluginWorktreesUnavailableReason>();
+        // …and no project identity on the branch that has no authoritative answer.
+        expectTypeOf<
+          Extract<PluginWorktreesResult, { status: "unavailable" }>
+        >().not.toHaveProperty("projectId");
+      }
+    });
+
+    it("PluginWorktreesUnavailableReason names every collapse the sentinel hid", () => {
+      expectTypeOf<"plugin-unloaded">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"workspace-unavailable">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"scope-unresolved">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"project-unavailable">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"fetch-failed">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"whatever">().not.toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      // Exact, not merely inclusive: an unintended sixth literal would widen the
+      // public vocabulary plugins have to switch on, and membership checks alone
+      // would not notice.
+      expectTypeOf<PluginWorktreesUnavailableReason>().toEqualTypeOf<
+        | "plugin-unloaded"
+        | "workspace-unavailable"
+        | "scope-unresolved"
+        | "project-unavailable"
+        | "fetch-failed"
+      >();
+    });
+
     it("PluginHostApi.getWorktreeStatus takes a path and returns the status projection or null", () => {
       const host = {} as PluginHostApi;
       expectTypeOf(host.getWorktreeStatus).toEqualTypeOf<
@@ -274,12 +322,25 @@ describe("plugin-sdk boundary", () => {
       >();
     });
 
-    it("PluginStorageScope adds 'worktree' beyond the settings scopes", () => {
-      // "worktree" is assignable to the storage scope but not the settings scope —
-      // the two are intentionally distinct so the settings UI never sees it.
+    it("settings and storage scopes overlap on user/project and diverge past it", () => {
+      // Both carry `user` and `project`, and each adds exactly one scope the
+      // other deliberately lacks — neither is a subset of the other.
+      expectTypeOf<"user">().toMatchTypeOf<PluginSettingsScope>();
+      expectTypeOf<"user">().toMatchTypeOf<PluginStorageScope>();
+      expectTypeOf<"project">().toMatchTypeOf<PluginSettingsScope>();
+      expectTypeOf<"project">().toMatchTypeOf<PluginStorageScope>();
+
+      // `worktree` resolves the active git worktree at call time — a property of
+      // the private key/value store, which the generated settings form and the
+      // manifest schema must never have to reason about.
       expectTypeOf<"worktree">().toMatchTypeOf<PluginStorageScope>();
-      expectTypeOf<PluginSettingsScope>().toMatchTypeOf<PluginStorageScope>();
       expectTypeOf<"worktree">().not.toMatchTypeOf<PluginSettingsScope>();
+
+      // `local` is per project AND per machine, for a declared setting whose
+      // value belongs in neither the repo nor a user-wide file. Storage already
+      // covers machine-local state through `worktree`, so it does not need it.
+      expectTypeOf<"local">().toMatchTypeOf<PluginSettingsScope>();
+      expectTypeOf<"local">().not.toMatchTypeOf<PluginStorageScope>();
     });
 
     it("PluginHostApi.actions exposes the built-in catalog surface (#10561)", () => {
@@ -393,6 +454,8 @@ describe("plugin-sdk boundary", () => {
       const _getActive = activation.getActiveWorktree;
       // @ts-expect-error — getWorktrees (the accessor) is not on the slice
       const _getAll = activation.getWorktrees;
+      // @ts-expect-error — getWorktreesResult (the accessor) is not on the slice
+      const _getAllResult = activation.getWorktreesResult;
       // @ts-expect-error — settings accessor is not on the slice
       const _settings = activation.settings;
       // @ts-expect-error — storage accessor is not on the slice
@@ -407,10 +470,11 @@ describe("plugin-sdk boundary", () => {
         _pluginId,
         _getActive,
         _getAll,
+        _getAllResult,
         _settings,
         _storage,
         _process,
-      ]).toHaveLength(10);
+      ]).toHaveLength(11);
     });
 
     it("PluginProcessHandle carries the lifecycle controls", () => {
@@ -492,6 +556,9 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(props.panelRemovedSignal).toEqualTypeOf<AbortSignal>();
       // Optional: a panel can be spawned without a worktree (#11297).
       expectTypeOf(props.worktreeId).toEqualTypeOf<string | undefined>();
+      // Spreadable onto a `createPortal` container, which is the one place a
+      // view leaves the subtree the host marked as its style root (#12220).
+      expectTypeOf(props.styleRootAttributes).toEqualTypeOf<Readonly<Record<string, string>>>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {
@@ -512,6 +579,20 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(activation.onDidChangePanelLifecycle).returns.toEqualTypeOf<
         Promise<() => void>
       >();
+    });
+
+    it("exposes the system wake contract as a named SDK type (#12175)", () => {
+      // Named export, not just structural presence: the docs tell authors to
+      // `import type { PluginSystemWakeEvent } from "@daintreehq/plugin-sdk"`.
+      const event = {} as PluginSystemWakeEvent;
+      expectTypeOf(event.sleepDuration).toEqualTypeOf<number>();
+      expectTypeOf(event.timestamp).toEqualTypeOf<number>();
+    });
+
+    it("PluginActivationApi revoke-guards the wake subscription", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.onDidWake).toBeFunction();
+      expectTypeOf(activation.onDidWake).returns.toEqualTypeOf<Promise<() => void>>();
     });
 
     it("PluginIpcContext has required fields", () => {

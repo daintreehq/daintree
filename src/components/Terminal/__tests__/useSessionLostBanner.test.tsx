@@ -9,7 +9,12 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PtyPanelData,
+  type SessionLostReason,
+} from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -74,7 +79,7 @@ function seed(...panels: PanelInstance[]) {
   });
 }
 
-function flagOf(id: string): boolean | undefined {
+function flagOf(id: string): SessionLostReason | undefined {
   const panel = usePanelStore.getState().panelsById[id];
   return panel && isPtyPanel(panel) ? panel.sessionLostOnRestore : undefined;
 }
@@ -86,15 +91,15 @@ beforeEach(() => {
 
 describe("useSessionLostBanner", () => {
   it("reports the pane's unacknowledged signal", () => {
-    seed(panel("t-1", { sessionLostOnRestore: true }));
+    seed(panel("t-1", { sessionLostOnRestore: "no-resume-command" }));
     const { result } = renderHook(() => useSessionLostBanner("t-1"));
-    expect(result.current.sessionLostOnRestore).toBe(true);
+    expect(result.current.sessionLostOnRestore).toBe("no-resume-command");
   });
 
   it("reports no signal for a pane that resumed cleanly", () => {
     seed(panel("t-1"));
     const { result } = renderHook(() => useSessionLostBanner("t-1"));
-    expect(result.current.sessionLostOnRestore).toBe(false);
+    expect(result.current.sessionLostOnRestore).toBeUndefined();
   });
 
   it("reports no signal for an unknown or non-PTY pane", () => {
@@ -107,53 +112,53 @@ describe("useSessionLostBanner", () => {
     seed(browserPanel);
     const { result: unknown } = renderHook(() => useSessionLostBanner("missing"));
     const { result: browser } = renderHook(() => useSessionLostBanner("b-1"));
-    expect(unknown.current.sessionLostOnRestore).toBe(false);
-    expect(browser.current.sessionLostOnRestore).toBe(false);
+    expect(unknown.current.sessionLostOnRestore).toBeUndefined();
+    expect(browser.current.sessionLostOnRestore).toBeUndefined();
   });
 
   // The bug: this sequence is exactly what a worktree switch does to a pane.
   it("keeps the acknowledgement across an unmount and remount (#11589)", () => {
-    seed(panel("t-1", { sessionLostOnRestore: true }));
+    seed(panel("t-1", { sessionLostOnRestore: "no-resume-command" }));
 
     const first = renderHook(() => useSessionLostBanner("t-1"));
-    expect(first.result.current.sessionLostOnRestore).toBe(true);
+    expect(first.result.current.sessionLostOnRestore).toBe("no-resume-command");
     act(() => first.result.current.dismiss());
-    expect(first.result.current.sessionLostOnRestore).toBe(false);
+    expect(first.result.current.sessionLostOnRestore).toBeUndefined();
 
     // Switch away: the pane leaves the grid entirely.
     first.unmount();
 
     // Switch back: a brand-new hook instance with no memory of the dismissal.
     const second = renderHook(() => useSessionLostBanner("t-1"));
-    expect(second.result.current.sessionLostOnRestore).toBe(false);
+    expect(second.result.current.sessionLostOnRestore).toBeUndefined();
   });
 
   it("still reports the signal on remount when it was never acknowledged", () => {
-    seed(panel("t-1", { sessionLostOnRestore: true }));
+    seed(panel("t-1", { sessionLostOnRestore: "no-resume-command" }));
 
     const first = renderHook(() => useSessionLostBanner("t-1"));
     first.unmount();
 
     const second = renderHook(() => useSessionLostBanner("t-1"));
-    expect(second.result.current.sessionLostOnRestore).toBe(true);
+    expect(second.result.current.sessionLostOnRestore).toBe("no-resume-command");
   });
 
   it("acknowledges only its own pane", () => {
     seed(
-      panel("t-1", { sessionLostOnRestore: true }),
-      panel("t-2", { sessionLostOnRestore: true })
+      panel("t-1", { sessionLostOnRestore: "no-resume-command" }),
+      panel("t-2", { sessionLostOnRestore: "no-resume-command" })
     );
 
     const { result } = renderHook(() => useSessionLostBanner("t-1"));
     act(() => result.current.dismiss());
 
     expect(flagOf("t-1")).toBeUndefined();
-    expect(flagOf("t-2")).toBe(true);
+    expect(flagOf("t-2")).toBe("no-resume-command");
   });
 
   describe("bulk dismissal gate", () => {
     it("withholds the bulk action when this is the only flagged pane", () => {
-      seed(panel("t-1", { sessionLostOnRestore: true }), panel("t-2"));
+      seed(panel("t-1", { sessionLostOnRestore: "no-resume-command" }), panel("t-2"));
       const { result } = renderHook(() => useSessionLostBanner("t-1"));
       expect(result.current.dismissAll).toBeUndefined();
     });
@@ -161,8 +166,8 @@ describe("useSessionLostBanner", () => {
     it("withholds the bulk action from an unflagged pane even when others are flagged", () => {
       seed(
         panel("t-1"),
-        panel("t-2", { sessionLostOnRestore: true }),
-        panel("t-3", { sessionLostOnRestore: true })
+        panel("t-2", { sessionLostOnRestore: "no-resume-command" }),
+        panel("t-3", { sessionLostOnRestore: "no-resume-command" })
       );
       const { result } = renderHook(() => useSessionLostBanner("t-1"));
       expect(result.current.dismissAll).toBeUndefined();
@@ -170,8 +175,8 @@ describe("useSessionLostBanner", () => {
 
     it("offers the bulk action once a second pane is flagged", () => {
       seed(
-        panel("t-1", { sessionLostOnRestore: true }),
-        panel("t-2", { sessionLostOnRestore: true })
+        panel("t-1", { sessionLostOnRestore: "no-resume-command" }),
+        panel("t-2", { sessionLostOnRestore: "no-resume-command" })
       );
       const { result } = renderHook(() => useSessionLostBanner("t-1"));
       expect(result.current.dismissAll).toBeInstanceOf(Function);
@@ -181,8 +186,8 @@ describe("useSessionLostBanner", () => {
     // dismissal would leave banners waiting behind a switch — the bug itself.
     it("counts flagged panes in other worktrees", () => {
       seed(
-        panel("t-1", { sessionLostOnRestore: true, worktreeId: "wt-a" }),
-        panel("t-2", { sessionLostOnRestore: true, worktreeId: "wt-b" })
+        panel("t-1", { sessionLostOnRestore: "no-resume-command", worktreeId: "wt-a" }),
+        panel("t-2", { sessionLostOnRestore: "no-resume-command", worktreeId: "wt-b" })
       );
       const { result } = renderHook(() => useSessionLostBanner("t-1"));
       expect(result.current.dismissAll).toBeInstanceOf(Function);
@@ -190,8 +195,8 @@ describe("useSessionLostBanner", () => {
 
     it("clears every flagged pane and then withdraws the bulk action", () => {
       seed(
-        panel("t-1", { sessionLostOnRestore: true, worktreeId: "wt-a" }),
-        panel("t-2", { sessionLostOnRestore: true, worktreeId: "wt-b" }),
+        panel("t-1", { sessionLostOnRestore: "no-resume-command", worktreeId: "wt-a" }),
+        panel("t-2", { sessionLostOnRestore: "no-resume-command", worktreeId: "wt-b" }),
         panel("t-3")
       );
 
@@ -200,14 +205,14 @@ describe("useSessionLostBanner", () => {
 
       expect(flagOf("t-1")).toBeUndefined();
       expect(flagOf("t-2")).toBeUndefined();
-      expect(result.current.sessionLostOnRestore).toBe(false);
+      expect(result.current.sessionLostOnRestore).toBeUndefined();
       expect(result.current.dismissAll).toBeUndefined();
     });
 
     it("withdraws the bulk action when the other flagged pane is dismissed elsewhere", () => {
       seed(
-        panel("t-1", { sessionLostOnRestore: true }),
-        panel("t-2", { sessionLostOnRestore: true })
+        panel("t-1", { sessionLostOnRestore: "no-resume-command" }),
+        panel("t-2", { sessionLostOnRestore: "no-resume-command" })
       );
 
       const { result } = renderHook(() => useSessionLostBanner("t-1"));
@@ -215,7 +220,7 @@ describe("useSessionLostBanner", () => {
 
       act(() => usePanelStore.getState().dismissSessionLost("t-2"));
 
-      expect(result.current.sessionLostOnRestore).toBe(true);
+      expect(result.current.sessionLostOnRestore).toBe("no-resume-command");
       expect(result.current.dismissAll).toBeUndefined();
     });
   });
@@ -223,14 +228,14 @@ describe("useSessionLostBanner", () => {
   it("re-renders when the signal arrives after mount", () => {
     seed(panel("t-1"));
     const { result } = renderHook(() => useSessionLostBanner("t-1"));
-    expect(result.current.sessionLostOnRestore).toBe(false);
+    expect(result.current.sessionLostOnRestore).toBeUndefined();
 
     act(() => {
       usePanelStore.setState({
-        panelsById: { "t-1": panel("t-1", { sessionLostOnRestore: true }) },
+        panelsById: { "t-1": panel("t-1", { sessionLostOnRestore: "no-resume-command" }) },
       });
     });
 
-    expect(result.current.sessionLostOnRestore).toBe(true);
+    expect(result.current.sessionLostOnRestore).toBe("no-resume-command");
   });
 });

@@ -16,6 +16,8 @@ import type {
   Worktree,
   WorktreeMood,
   WorktreeLifecycleStatus,
+  WorktreeSetupStatus,
+  WorktreeSetupState,
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
@@ -151,6 +153,13 @@ export interface WorktreeSnapshot {
   lifecycleStatus?: WorktreeLifecycleStatus;
 
   /**
+   * How far post-create initialization has got. Absent for a worktree this host
+   * process did not create, which readers must treat as unknown rather than
+   * ready. See {@link WorktreeSetupStatus}.
+   */
+  setupStatus?: WorktreeSetupStatus;
+
+  /**
    * Per-phase teardown results, accumulated across a multi-phase teardown run
    * (resource-teardown then teardown). Distinct from `lifecycleStatus`, which
    * only reflects the last-active phase — a later phase no longer overwrites an
@@ -209,6 +218,23 @@ export interface WorktreeSnapshot {
    * gitignored paths (#11330). Absent until the first fs write is observed.
    */
   workingTreeChangedAt?: number;
+
+  /**
+   * The worktree-relative parent directories of every path in the burst behind
+   * `workingTreeChangedAt` — `""` is the worktree root. Lets the file browser
+   * re-list only what changed instead of every expanded directory (#12244).
+   *
+   * Three distinct answers, and a consumer must keep them apart: absent means
+   * no burst has been described (an older host, or a stamp retained before the
+   * first snapshot), `null` means the burst could not be classified and
+   * everything must be re-read (the pre-#12244 behaviour), and `[]` means a
+   * real burst that resolved to no directory at all.
+   *
+   * Excluded from snapshot dedup and carried in the store's side map, for the
+   * same reason `workingTreeChangedAt` is: it advances on events that change
+   * nothing else in the snapshot.
+   */
+  workingTreeChangedDirs?: readonly string[] | null;
 
   /** True when this worktree's repo is in an auth-failed fetch state. */
   fetchAuthFailed?: boolean;
@@ -322,6 +348,63 @@ export interface MonitorConfig {
    * fall back to the adaptive poll path. See `ResourceProfileConfig`.
    */
   backgroundGitWatcherCap?: number;
+}
+
+/**
+ * Result of one `RepoFetchCoordinator` fetch, as it crosses the workspace-host
+ * boundary. Shared rather than host-local because a user-triggered fetch has to
+ * report its real outcome back to the main process (#12091) — a manual "Fetch"
+ * that hit an auth wall must not read as a success.
+ */
+export interface WorkspaceFetchResult {
+  status: "success" | "skipped" | "failed";
+  /** Present when status === "failed". */
+  reason?: import("./ipc/errors.js").GitOperationReason;
+  /** Why we skipped — for logging / diagnostics. */
+  skipReason?: "no-common-dir" | "in-failure-window" | "auth-suspended" | "stale-generation";
+  /**
+   * `RepoFetchCoordinator`'s `lastSuccessfulFetch` for the primary
+   * (commondir, remote)
+   * after this call settled. Set on success (the timestamp just written) and
+   * on skipped/failed outcomes (the prior timestamp, if any). Lets
+   * `WorkspaceService` propagate the freshest known value to monitors without
+   * reaching into coordinator internals.
+   *
+   * Scoped to the primary remote on purpose: taking the newest timestamp
+   * across every fetched remote would let a healthy auxiliary `origin` vouch
+   * for counts measured against a base remote that failed, which is a
+   * fresh-looking badge over stale data — the same class of bug #11747 exists
+   * to fix.
+   */
+  lastFetchedAt?: number | null;
+  /**
+   * True when this call ended in (or remained in) an auth-class failure for
+   * the primary remote. Includes the `auth-suspended` skip case so the
+   * renderer keeps showing the "Sign in to refresh" affordance instead of
+   * flashing stale counts when a sibling's force-fetch is rate-cached.
+   */
+  authFailed?: boolean;
+  /**
+   * True when this call ended in (or remained in) a transient (network /
+   * repo-not-found-first / generic transient) failure for the primary remote.
+   * Drives the "Couldn't reach the remote" tooltip line on the worktree card.
+   * False on success, on auth-class failures (those use `authFailed`), and on
+   * the `no-common-dir` skip path where we have no state to report.
+   */
+  networkFailed?: boolean;
+  /** Remote this result describes. Absent only on the `no-common-dir` skip. */
+  remote?: string;
+  /**
+   * True when a NON-primary remote of the same call failed. The rest of this
+   * result speaks only for the primary remote — deliberately, because an
+   * auxiliary success must never vouch for the counts the card renders. That
+   * leaves a gap in the other direction: on a fork layout the base ref and the
+   * branch's own upstream live on different remotes, so a call whose primary
+   * succeeded can still have left half the counts stale. A user-triggered fetch
+   * reports that as a partial failure instead of a clean success (#12091);
+   * scheduled fetches ignore it and let their own backoff handle the retry.
+   */
+  auxiliaryFailed?: boolean;
 }
 
 /**
@@ -447,6 +530,13 @@ export type WorkspaceHostRequest =
     }
   // Re-probe the WSL default distro on demand and refresh eligibility (Windows only)
   | { type: "reprobe-wsl"; worktreeId: string }
+  /**
+   * User-triggered `git fetch` for one worktree's repo (#12091). Carries a
+   * `requestId` because, unlike the scheduled cadence, the caller is a menu row
+   * whose action must report the real outcome — `prune` false is the plain
+   * "Fetch" row, true is "Fetch and prune".
+   */
+  | { type: "fetch-worktree"; requestId: string; worktreeId: string; prune: boolean }
   // Background/foreground lifecycle
   | { type: "background" }
   | { type: "foreground" }
@@ -649,11 +739,38 @@ export type WorkspaceHostEvent =
       requestId: string;
       success: boolean;
       worktreeId?: string;
+      /**
+       * The branch the host actually landed on, which is not necessarily the
+       * one it was asked for — collision recovery can suffix it or switch to
+       * reusing a stale local branch. Reported here because the renderer's
+       * worktree rows arrive over a different port than this result, so reading
+       * the branch back from the store races it.
+       */
+      branch?: string;
+      /**
+       * The worktree's setup state at the moment the create returned — always
+       * `pending` or `running`, since the tail outlives creation. Carried here
+       * for the same reason as `branch`: reading it back from a store row that
+       * arrives on a different port races this result, and `unknown` there
+       * would be indistinguishable from "this app did not create it".
+       */
+      setupState?: WorktreeSetupState;
       error?: string;
     }
   | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
+  /**
+   * Outcome of a `fetch-worktree` request. `error` marks a TRANSPORT failure
+   * (no such monitor, host torn down); a fetch that ran and failed comes back
+   * with `result.status === "failed"` so its git classification survives.
+   */
+  | {
+      type: "fetch-worktree-result";
+      requestId: string;
+      result?: WorkspaceFetchResult;
+      error?: string;
+    }
   | { type: "get-recent-branches-result"; requestId: string; branches: string[]; error?: string }
   | {
       type: "fetch-pr-branch-result";

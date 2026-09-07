@@ -19,6 +19,13 @@ export { scrubSecrets };
  * `USER` placeholder. Username-agnostic — uses only static patterns, so it is
  * safe in the renderer where `os.homedir()` is unavailable. Handles both
  * forward-slash and backslash Windows paths (lesson #4979).
+ *
+ * Every "rest of the segment" class excludes CR and LF. A username cannot
+ * contain either, and without that bound a home path sitting at the end of one
+ * section of a multi-section report consumes every following section into the
+ * replacement — silently truncating the document it was meant to redact.
+ * Spaces stay inside the classes: usernames and directories can contain them,
+ * and stopping at one would leak the remainder of the name.
  */
 export function scrubReportPath(str: string): string {
   return (
@@ -30,22 +37,22 @@ export function scrubReportPath(str: string): string {
       // `wsl.localhost` prefixes without `$` acting as an end-of-line anchor.
       // Handle the JSON-doubled backslash form before the raw form. The distro
       // is kept (useful WSL signal); only the username is redacted.
-      .replace(/(\\\\\\\\wsl[$.][^\\"]*\\\\[^\\"]+\\\\home\\\\)[^\\"]+/gi, "$1USER")
-      .replace(/(\\\\wsl[$.][^\\"]*\\[^\\"]+\\home\\)[^\\"]+/gi, "$1USER")
+      .replace(/(\\\\\\\\wsl[$.][^\\"\r\n]*\\\\[^\\"\r\n]+\\\\home\\\\)[^\\"\r\n]+/gi, "$1USER")
+      .replace(/(\\\\wsl[$.][^\\"\r\n]*\\[^\\"\r\n]+\\home\\)[^\\"\r\n]+/gi, "$1USER")
       // macOS / Linux — the username is the segment after /Users/ or /home/,
       // ending at a path separator, JSON-string quote, or end of string. Matching
       // only the username (not requiring a trailing slash) also catches paths that
       // appear at the end of a JSON value, e.g. `{"cwd":"/Users/alice"}`.
-      .replace(/(\/Users\/)[^/"\\]+/g, "$1USER")
-      .replace(/(\/home\/)[^/"\\]+/g, "$1USER")
+      .replace(/(\/Users\/)[^/"\\\r\n]+/g, "$1USER")
+      .replace(/(\/home\/)[^/"\\\r\n]+/g, "$1USER")
       // Windows backslash — JSON.stringify doubles backslashes, so handle the
       // double-backslash form before the single-backslash (raw path) form. The
       // drive letter is generalized to any letter so non-`C:` profiles
       // (e.g. `D:\Users\alice`) are scrubbed too.
-      .replace(/([A-Za-z]:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
-      .replace(/([A-Za-z]:\\Users\\)[^\\"]+/gi, "$1USER")
+      .replace(/([A-Za-z]:\\\\Users\\\\)[^\\"\r\n]+/gi, "$1USER")
+      .replace(/([A-Za-z]:\\Users\\)[^\\"\r\n]+/gi, "$1USER")
       // Windows forward-slash form (e.g. from a posix-normalized path).
-      .replace(/([A-Za-z]:\/Users\/)[^/"\\]+/gi, "$1USER")
+      .replace(/([A-Za-z]:\/Users\/)[^/"\\\r\n]+/gi, "$1USER")
       // Git remotes — the org/repo segment names private projects. The host is
       // kept (useful signal, same rationale as keeping the WSL distro). SSH
       // form first (a `.git` suffix folds into the redaction — repo names may

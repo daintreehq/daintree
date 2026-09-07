@@ -42,10 +42,18 @@ export type {
 // ── View component props ────────────────────────────────────────────
 
 export type { PanelViewProps } from "./plugin.js";
+// A value, not a type: a bundled view marking its own portal container needs
+// the attribute name at runtime. A raw `plugin://` view cannot import this, so
+// `PanelViewProps.styleRootAttributes` carries the same thing as a prop.
+export { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "./plugin.js";
 
 // ── Panel lifecycle (worker-facing) ─────────────────────────────────
 
 export type { PluginPanelLifecycleEvent, PluginPanelLifecyclePhase } from "./plugin.js";
+
+// ── System wake (worker-facing) ─────────────────────────────────────
+
+export type { PluginSystemWakeEvent } from "./plugin.js";
 
 // ── Manifest root ───────────────────────────────────────────────────
 
@@ -56,6 +64,7 @@ export type { PluginManifest, PluginAuthor } from "./plugin.js";
 export type {
   PluginActivate,
   PluginHostApi,
+  PluginIdentity,
   PluginHostActionsApi,
   PluginActivationApi,
   PluginHostCallOptions,
@@ -116,6 +125,8 @@ export type {
 
 export type {
   PluginWorktreeSnapshot,
+  PluginWorktreesResult,
+  PluginWorktreesUnavailableReason,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,

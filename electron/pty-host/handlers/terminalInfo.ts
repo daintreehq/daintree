@@ -46,6 +46,7 @@ export function mapTerminalInfo(t: NonNullable<TerminalInfoLike>, ctx: HostConte
     ptyRows: ptyRows ?? undefined,
 
     launchAgentId: t.launchAgentId,
+    isAssistantTerminal: t.isAssistantTerminal,
     title: t.title,
     titleMode: t.titleMode,
     // Preferred over `title` for resume-record labels on the kill/shutdown

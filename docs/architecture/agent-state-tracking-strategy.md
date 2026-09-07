@@ -100,4 +100,4 @@ If the proposal fails any of these, it does not belong in the state-tracking lay
 - [agent-activity-monitoring.md](./agent-activity-monitoring.md) — the implementation of the detection layer
 - [terminal-lifecycle.md](./terminal-lifecycle.md) — PTY lifecycle, pane attachment, hibernation
 - [terminal-identity.md](./terminal-identity.md) — `detectedAgentId` vs `launchAgentId`
-- CLAUDE.md "Agent Config Boundary" — the principle that gates spawn-time behavior
+- [`CLAUDE.md`](../../CLAUDE.md) "Product invariants" — **never modify user-owned agent config**, the principle that gates spawn-time behavior (precedent #4100)

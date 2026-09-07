@@ -3,7 +3,13 @@ import { isDockPanel, type PanelInstance } from "@shared/types/panel";
 export interface DockPanelScope {
   /** Structural so both the store's trash `Map` and a plain `Set` satisfy it. */
   trashedTerminals: { has: (id: string) => boolean };
-  helpTerminalId: string | null;
+  /**
+   * Every live assistant lane's terminal (#12108). All of them are rendered by
+   * `HelpPanel` rather than the dock, so all of them must be filtered out —
+   * carrying only the focused lane would leak a background assistant into the
+   * dock as a stray chip.
+   */
+  helpTerminalIds: ReadonlySet<string>;
   activeWorktreeId: string | null;
 }
 
@@ -30,12 +36,12 @@ export interface DockPanelScope {
  */
 export function isDockPanelRendered(
   panel: PanelInstance | undefined,
-  { trashedTerminals, helpTerminalId, activeWorktreeId }: DockPanelScope
+  { trashedTerminals, helpTerminalIds, activeWorktreeId }: DockPanelScope
 ): boolean {
   if (!panel || !isDockPanel(panel)) return false;
   if (panel.location !== "dock") return false;
   if (trashedTerminals.has(panel.id)) return false;
-  if (panel.id === helpTerminalId) return false;
+  if (helpTerminalIds.has(panel.id)) return false;
   // Global panels (no worktree) ride along with every worktree.
   return panel.worktreeId == null || panel.worktreeId === activeWorktreeId;
 }
@@ -62,7 +68,7 @@ export interface DockPopoverPointerState {
  */
 export function selectOpenDockPopoverId(
   state: DockPopoverPointerState,
-  { helpTerminalId, activeWorktreeId }: Omit<DockPanelScope, "trashedTerminals">
+  { helpTerminalIds, activeWorktreeId }: Omit<DockPanelScope, "trashedTerminals">
 ): string | null {
   const id = state.activeDockTerminalId;
   if (id === null) return null;
@@ -71,7 +77,7 @@ export function selectOpenDockPopoverId(
   const panel = state.panelIds.includes(id) ? state.panelsById[id] : undefined;
   return isDockPanelRendered(panel, {
     trashedTerminals: state.trashedTerminals,
-    helpTerminalId,
+    helpTerminalIds,
     activeWorktreeId,
   })
     ? id

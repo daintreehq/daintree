@@ -56,6 +56,7 @@ function makePlugin(settings: SettingDefinition[]): LoadedPluginInfo {
         settings,
       },
     },
+    instanceId: "acme.test",
     dir: "/tmp/acme.test",
     loadedAt: 0,
     isBuiltin: false,

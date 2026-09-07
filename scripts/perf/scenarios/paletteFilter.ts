@@ -141,14 +141,21 @@ const RANK_CONTEXT: RankContext = {
 // rankActionMatches per keystroke, so every prefix is a real re-rank. Includes
 // short high-yield prefixes (worst case — many matches survive scoring),
 // acronym queries (wtd), and multi-word queries.
-const TYPED_QUERIES = [
-  "git commit",
-  "new terminal",
-  "broadcast",
-  "wtd",
-  "settings",
-  "split panel",
-  "diff",
+//
+// `expectMatch` is what makes `rankMisses` two-sided. The generated catalog has
+// no "New" verb, so "new terminal" genuinely resolves to nothing — and a query
+// that matches nothing is the CHEAP end of the ranker, since no candidate
+// survives to be scored and sorted. Recording it as the miss case keeps it in
+// the typing mix as itself, and catches both a ranker that stopped matching and
+// one that stopped filtering.
+const TYPED_QUERIES: ReadonlyArray<{ text: string; expectMatch: boolean }> = [
+  { text: "git commit", expectMatch: true },
+  { text: "new terminal", expectMatch: false },
+  { text: "broadcast", expectMatch: true },
+  { text: "wtd", expectMatch: true },
+  { text: "settings", expectMatch: true },
+  { text: "split panel", expectMatch: true },
+  { text: "diff", expectMatch: true },
 ];
 
 interface FilterStreamResult {
@@ -156,6 +163,14 @@ interface FilterStreamResult {
   reRankCount: number;
   p99KeystrokeMs: number;
   totalMatches: number;
+  /**
+   * Queries whose completed text disagreed with its expected outcome.
+   * `reRankCount` is a function of the query list and `totalMatches` is an
+   * aggregate one surviving query can prop up, so neither notices a scoring
+   * branch that went dark — and a ranker that returns an empty array is the
+   * fastest one there is.
+   */
+  rankMisses: number;
 }
 
 // Type each query one keystroke at a time, timing every individual re-rank.
@@ -165,15 +180,19 @@ function runFilterStream(
 ): FilterStreamResult {
   const perKeystroke: number[] = [];
   let totalMatches = 0;
+  let rankMisses = 0;
 
   for (const query of TYPED_QUERIES) {
-    for (let end = 1; end <= query.length; end += 1) {
-      const prefix = query.slice(0, end);
+    let finalMatches = 0;
+    for (let end = 1; end <= query.text.length; end += 1) {
+      const prefix = query.text.slice(0, end);
       const start = performance.now();
       const matches = rank(prefix, mru, RANK_CONTEXT);
       perKeystroke.push(performance.now() - start);
       totalMatches += matches.length;
+      finalMatches = matches.length;
     }
+    if (finalMatches > 0 !== query.expectMatch) rankMisses += 1;
   }
 
   return {
@@ -181,6 +200,7 @@ function runFilterStream(
     reRankCount: perKeystroke.length,
     p99KeystrokeMs: percentile(perKeystroke, 99),
     totalMatches,
+    rankMisses,
   };
 }
 
@@ -197,6 +217,7 @@ export const paletteFilterScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 18, nightly: 24 },
     warmups: 2,
+    correctness: ["rankMisses"],
     run() {
       // Catalog + MRU are precomputed once at palette registration in production,
       // so build them outside the timed bracket — the gate measures re-ranking.
@@ -214,6 +235,7 @@ export const paletteFilterScenarios: PerfScenario[] = [
           p99KeystrokeMs: result.p99KeystrokeMs,
           avgKeystrokeMs: result.totalReRankMs / Math.max(1, result.reRankCount),
           totalMatches: result.totalMatches,
+          rankMisses: result.rankMisses,
         },
       };
     },
@@ -230,6 +252,7 @@ export const paletteFilterScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 1,
+    correctness: ["rankMisses"],
     run() {
       const sizes = [380, 760, 1520];
       const REPEATS = 12;
@@ -245,16 +268,23 @@ export const paletteFilterScenarios: PerfScenario[] = [
       });
       const worstBySize = new Map<number, number>();
       let checksum = 0;
+      // Catalog sizes where the single-character worst case survived nothing.
+      // The whole premise is that many matches survive scoring; a ranker that
+      // returns an empty array posts the best slope this scenario can measure.
+      let rankMisses = 0;
 
       const start = performance.now();
       for (const { size, rank, mru } of fixtures) {
         const samples: number[] = [];
+        let lastMatchCount = 0;
         for (let r = 0; r < REPEATS; r += 1) {
           const t0 = performance.now();
           const matches = rank("e", mru, RANK_CONTEXT);
           samples.push(performance.now() - t0);
           checksum += matches.length;
+          lastMatchCount = matches.length;
         }
+        if (lastMatchCount === 0) rankMisses += 1;
         worstBySize.set(size, percentile(samples, 95));
       }
       const durationMs = performance.now() - start;
@@ -269,6 +299,7 @@ export const paletteFilterScenarios: PerfScenario[] = [
           worstMs1520: worstLarge,
           msPerKAction,
           checksum,
+          rankMisses,
         },
       };
     },

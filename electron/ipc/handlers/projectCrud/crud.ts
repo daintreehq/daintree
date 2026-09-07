@@ -3,6 +3,7 @@ import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { notifyProjectPluginsClosed } from "../../../window/projectPluginLifecycle.js";
 import {
   collectActiveProjectIds,
   projectViewManagersFrom,
@@ -11,6 +12,7 @@ import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { notificationService } from "../../../services/NotificationService.js";
+import { fileSearchCacheInvalidator } from "../../../services/workspace-client/fileSearchCacheInvalidation.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project, ProjectAddOptions } from "../../../types/index.js";
 import type { ProjectCreationIdentity } from "../../../../shared/types/project.js";
@@ -18,6 +20,8 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
+import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { logError } from "../../../utils/logger.js";
 
 /**
  * Rejection copy for a destructive teardown (close+kill / remove) the pty-host
@@ -136,9 +140,24 @@ export async function removeProjectWithCleanup(
     }
   }
 
+  // Before the row disappears: a removed project's plugins must not outlive it,
+  // and after `removeProject` the controller could no longer resolve the
+  // project to reconcile it away.
+  notifyProjectPluginsClosed(projectId);
+
   await projectStore.removeProject(projectId);
   if (removedPath) {
     pruneWindowStateForPath(removedPath);
+    // The project's file indexes are megabytes apiece and nothing will read
+    // them again — the worktree-delete path invalidates per worktree, but a
+    // project removed whole never goes through it (#12240). Best-effort, like
+    // the worktree lifecycle handlers: a cache drop must not fail a removal the
+    // user asked for and that has already deleted the row.
+    try {
+      fileSearchCacheInvalidator.handleProjectClosed(removedPath);
+    } catch (error) {
+      console.warn("[project.remove] Failed to invalidate file search cache:", error);
+    }
   }
   broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
   // The row is gone, so a window still bound to it no longer has a project open.
@@ -311,6 +330,20 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
 
     try {
       if (killTerminals) {
+        // Capture the assistant's session before the project-wide teardown:
+        // `revokeSession` reads its resume id off a still-live PTY, and the
+        // generic kill below would already have taken it, so a reopen would
+        // start the assistant cold instead of resuming (#12181). Only this
+        // branch needs it — the background branch leaves terminals running.
+        //
+        // Best-effort: an uncaught rejection would be relabelled INTERNAL by
+        // the catch below and abort a close the user asked for.
+        try {
+          await helpSessionService.revokeByProjectId(projectId);
+        } catch (revokeError) {
+          logError("project-close-help-revoke-failed", revokeError, { projectId });
+        }
+
         // Gracefully tear down and journal each agent session before wiping the
         // project's restoration state, so agent conversations stay resumable
         // from the picker. Fail closed: if the host can't confirm the kills,
@@ -339,6 +372,24 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           projectStore.clearCurrentProject();
         }
         projectStore.updateProjectStatus(projectId, "closed");
+
+        // The user closed this project, so every plugin it owns unloads now:
+        // contributions unregistered, `plugin://` authorities invalidated,
+        // workers killed by the unload cascade. Deliberately NOT wired to
+        // `cleanupEntry` — that funnel is also how a memory-pressure eviction
+        // reclaims a renderer, and an eviction is not a close. The trust
+        // decision is not forgotten here; a close is not a revoke.
+        notifyProjectPluginsClosed(projectId);
+
+        // Its worktrees stop being watched as the project closes, so a retained
+        // index can only go stale while holding memory (#12240). The next search
+        // after a reopen pays a cold load, which is the correct price for a
+        // listing we could no longer keep fresh.
+        try {
+          fileSearchCacheInvalidator.handleProjectClosed(project.path);
+        } catch (error) {
+          logError("project-close-file-search-invalidate-failed", error, { projectId });
+        }
 
         // After the "closed" write, not merely after clearCurrentProject(): the
         // closing window's ProjectViewManager still points at this project, so
@@ -374,6 +425,15 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         projectStore.updateProjectStatus(projectId, "background");
         if (deps.worktreeService) {
           deps.worktreeService.pauseProject(project.path);
+        }
+        // A backgrounded project is on no screen, so nothing is searching it and
+        // its indexes are pure memory — several megabytes per worktree, held for
+        // a picker session that is not happening (#12240). Reopening it pays one
+        // cold load.
+        try {
+          fileSearchCacheInvalidator.handleProjectClosed(project.path);
+        } catch (error) {
+          logError("project-close-file-search-invalidate-failed", error, { projectId });
         }
 
         console.log(

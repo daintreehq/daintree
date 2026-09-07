@@ -29,7 +29,7 @@ This carve-out is scoped to this one pair. Other cross-store references still ro
 
 ### Leaf accessor module (`src/store/storeAccessors.ts`)
 
-Holds seven mutable getter/callback slots and a paired reader for each. It imports no other store module—only a shared type (`TabGroup`) and a panel-registry selector used to derive the `PanelStoreSnapshot` carrier type—so it cannot participate in a store cycle. Stores import from this leaf unidirectionally:
+Holds eleven mutable getter/callback slots and a paired reader for each. It imports no other store module—only shared types and a panel-registry selector used to derive the `PanelStoreSnapshot` carrier type—so it cannot participate in a store cycle. Stores import from this leaf unidirectionally:
 
 ```typescript
 // imports elided (TabGroup type, panel-registry selector for the carrier type)
@@ -76,15 +76,21 @@ if (!terminalState) {
 
 ## Accessor Slots
 
-| Slot | Reader | Setter | Consumer |
-| --- | --- | --- | --- |
-| Panel snapshot | `getPanelStoreSnapshot()` | `setPanelStoreAccessor()` | `projectStore.buildOutgoingState()` |
-| Worktree selection | `getWorktreeSelectionSnapshot()` | `setWorktreeSelectionAccessor()` | `projectStore.buildOutgoingState()` |
-| Worktree id set | `getWorktreeIdSet()` | `setWorktreeIdSetAccessor()` | `projectStore.buildOutgoingState()` |
-| Panel store clear-for-switch | `clearPanelStoreForSwitchThroughAccessor()` | `setPanelStoreClearForSwitchAccessor()` | `projectStore.switchProject()` |
-| Fleet arming clear | `clearFleetArmingThroughAccessor()` | `setFleetArmingClearAccessor()` | `projectStore.switchProject()` |
-| Fleet armed ids | `getFleetArmedIds()` | `setFleetArmedIdsAccessor()` | `worktreeStore.applyWorktreeTerminalPolicy()` |
-| Fleet last armed id | `getFleetLastArmedId()` | `setFleetLastArmedIdAccessor()` | `worktreeStore.exitFleetScope()` |
+| Slot | Reader | Setter |
+| --- | --- | --- |
+| Panel snapshot | `getPanelStoreSnapshot()` | `setPanelStoreAccessor()` |
+| Worktree selection | `getWorktreeSelectionSnapshot()` | `setWorktreeSelectionAccessor()` |
+| Worktree id set | `getWorktreeIdSet()` | `setWorktreeIdSetAccessor()` |
+| Worktree git dir by id | `getWorktreeGitDirById()` | `setWorktreeGitDirAccessor()` |
+| Worktree path index | `getWorktreePathIndex()` | `setWorktreePathIndexAccessor()` |
+| Project path index | `getProjectPathIndex()` | `setProjectPathIndexAccessor()` |
+| Panel extension state | `persistPanelExtensionStateThroughAccessor()` | `setPanelExtensionStateAccessor()` |
+| Panel store clear-for-switch | `clearPanelStoreForSwitchThroughAccessor()` | `setPanelStoreClearForSwitchAccessor()` |
+| Fleet arming clear | `clearFleetArmingThroughAccessor()` | `setFleetArmingClearAccessor()` |
+| Fleet armed ids | `getFleetArmedIds()` | `setFleetArmedIdsAccessor()` |
+| Fleet last armed id | `getFleetLastArmedId()` | `setFleetLastArmedIdAccessor()` |
+
+`storeAccessors.ts` is the source of truth for this list — the consumers move around more than the slots do, so read the call sites from the file rather than from a column here. The historical anchors: `projectStore.buildOutgoingState()` reads the panel/worktree snapshots during a project switch, `projectStore.switchProject()` fires the two clear callbacks, and `worktreeStore.applyWorktreeTerminalPolicy()` / `exitFleetScope()` read the fleet slots.
 
 `panelPersistence.setProjectIdGetter()` is **not** in the accessor module—it is a one-directional optional dep (`panelPersistence` depends on `projectStore`, never the reverse), so a direct call at the bottom of `projectStore.ts` is load-order-safe and stays there. The accessor module is reserved for slots that previously caused cycles.
 
@@ -110,6 +116,11 @@ if (!terminalState) {
 
 - `ReferenceError: Cannot access 'X' before initialization` — you dereferenced a partner store's binding at module-evaluation time (top-level code or a `create()` initializer). The fix is to move the read into a later-running function body, or behind `storeAccessors.ts`—not necessarily to delete the import.
 - Test mocks needing to stub `setXxxGetter` exports on `projectStore`/`worktreeStore` — those exports are gone; mock the accessor reader instead, or call the setter from the accessor module directly.
+
+## Related
+
+- [state-management.md](./state-management.md) — the store layer this ordering protects: the two store flavors, the panel-listener subsystem, and the two persistence paths.
+- [process-and-window-model.md](./process-and-window-model.md) — the per-view V8 topology that makes "module-level singleton" mean something narrower than it looks.
 
 ## Multi-Renderer Context
 

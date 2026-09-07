@@ -75,6 +75,8 @@ const {
   buildArgsForOrphanedTerminal,
   inferWorktreeIdFromCwd,
 } = await import("../statePatcher");
+type SavedTerminalData = import("../statePatcher").SavedTerminalData;
+type AddTerminalArgs = import("../statePatcher").AddTerminalArgs;
 
 beforeEach(() => {
   buildResumeCommandMock.mockReset();
@@ -648,7 +650,7 @@ describe("buildArgsForRespawn", () => {
         "/tmp"
       );
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("no-resume-command");
     });
 
     it("is set when no session was captured and resume-latest is unavailable (branch 3)", () => {
@@ -666,7 +668,7 @@ describe("buildArgsForRespawn", () => {
       // that flags the session lost without trying to recover it first.
       expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude", undefined);
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("no-resume-path");
     });
 
     it("is left unset when agent settings are unavailable (no fresh launch produced)", () => {
@@ -718,9 +720,15 @@ describe("buildArgsForRespawn", () => {
         undefined,
         { allowResumeLatest: false }
       );
-      expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+      // The bare single-arg call is the reason-classification probe (#12182) —
+      // it never builds a usable command, only names why the pane fell
+      // through. The fallback must still never be genuinely ATTEMPTED: no
+      // call carries flags/baseCommand, and its return value never reaches
+      // `result.command` below — that's the suppression #11461 exists for.
+      expect(buildResumeLatestCommandMock).toHaveBeenCalledTimes(1);
+      expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude");
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
     });
 
     it("does not inherit a persisted resume-latest command when suppressed (#11461)", () => {
@@ -746,7 +754,7 @@ describe("buildArgsForRespawn", () => {
         { allowResumeLatest: false }
       );
       expect(result.command).toBe("claude");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
     });
 
     it("still resumes an exact session id when resume-latest is suppressed (#11461)", () => {
@@ -793,7 +801,7 @@ describe("buildArgsForRespawn", () => {
         { allowResumeLatest: false }
       );
       expect(result.command).toBe("claude --flagged");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
     });
 
     it("leaves an agent with no resume-latest fallback untouched when suppressed (#11461)", () => {
@@ -847,7 +855,7 @@ describe("buildArgsForRespawn", () => {
         { allowSessionIdResume: false, allowResumeLatest: false }
       );
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-session-id");
     });
 
     it("does not inherit a persisted --resume command when the id is withheld (#11461)", () => {
@@ -877,7 +885,7 @@ describe("buildArgsForRespawn", () => {
         { allowSessionIdResume: false, allowResumeLatest: false }
       );
       expect(result.command).toBe("claude");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-session-id");
     });
 
     it("does not fall back to resume-latest when the session id is withheld (#11461)", () => {
@@ -904,7 +912,7 @@ describe("buildArgsForRespawn", () => {
         { allowSessionIdResume: false }
       );
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-session-id");
     });
 
     it("resumes its own session id by default when no allowance is passed (#11461)", () => {
@@ -2447,7 +2455,7 @@ describe("buildArgsForRespawn — persisted launch env (#10922)", () => {
       false,
       "/tmp"
     );
-    expect(result.sessionLostOnRestore).toBe(true);
+    expect(result.sessionLostOnRestore).toBe("no-resume-command");
     expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
   });
 });
@@ -3326,7 +3334,7 @@ describe("buildArgsForRespawn — assigned session id", () => {
       "/tmp"
     );
 
-    expect(result.sessionLostOnRestore).toBe(true);
+    expect(result.sessionLostOnRestore).toBe("no-resume-command");
     expect(result.agentSessionId).not.toBe("sess-expired");
     // Must be a real UUID — the CLI rejects anything else — and, crucially, the
     // SAME id the rebuilt command was given. A record holding an id the command
@@ -3371,4 +3379,206 @@ describe("buildArgsForRespawn — assigned session id", () => {
 
     expect(result.agentSessionId).toBeUndefined();
   });
+});
+
+describe("buildArgsForRespawn — a named resume-latest session (#12178)", () => {
+  const codexPane = {
+    id: "t1",
+    kind: "terminal" as const,
+    agentId: "codex",
+    cwd: "/p",
+    location: "grid" as const,
+  };
+
+  it("launches the resolved session by name instead of `--last`", () => {
+    buildResumeCommandMock.mockReturnValue("codex resume sess-9");
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.command).toBe("codex resume sess-9");
+    expect(buildResumeCommandMock.mock.calls[0]?.slice(0, 2)).toEqual(["codex", "sess-9"]);
+    expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("records the id on the pane, so the PTY is never an unknown writer", () => {
+    buildResumeCommandMock.mockReturnValue("codex resume sess-9");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.agentSessionId).toBe("sess-9");
+    expect(result.sessionLostOnRestore).toBeUndefined();
+  });
+
+  it("passes the resolved executable and reconciled flags through, like the exact-id branch", () => {
+    buildResumeCommandMock.mockReturnValue("/bin/codex resume sess-9");
+
+    const result = buildArgsForRespawn(
+      { ...codexPane, agentLaunchFlags: ["--yolo"] },
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9", resolvedAgentBaseCommand: "/bin/codex" }
+    );
+
+    // Flags are the reconciled set, not the raw saved array — the same ones the
+    // `--last` branch would have prepended, which is the point of the swap.
+    const [agentId, sessionId, flags, baseCommand] = buildResumeCommandMock.mock.calls[0] ?? [];
+    expect([agentId, sessionId, baseCommand]).toEqual(["codex", "sess-9", "/bin/codex"]);
+    expect(flags).toEqual(expect.arrayContaining(["--yolo"]));
+    expect(result.command).toBe("/bin/codex resume sess-9");
+  });
+
+  it("keeps today's `--last` behaviour when the lookup resolved nothing", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp"
+    );
+
+    expect(result.command).toBe("codex resume --last");
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("falls back to `--last` if the exact resume cannot be built, and attaches no id", () => {
+    buildResumeCommandMock.mockReturnValue(undefined);
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.command).toBe("codex resume --last");
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("is ignored when the election suppressed this pane's resume-latest slot (#11461)", () => {
+    buildResumeCommandMock.mockReturnValue("codex resume sess-9");
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9", allowResumeLatest: false }
+    );
+
+    expect(result.command).toBe("codex --generated");
+    expect(result.agentSessionId).not.toBe("sess-9");
+    expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
+  });
+
+  it("never displaces the exact id a snapshot already carries", () => {
+    buildResumeCommandMock.mockImplementation(
+      (_agentId: string, sessionId: string) => `codex resume ${sessionId}`
+    );
+
+    const result = buildArgsForRespawn(
+      { ...codexPane, agentSessionId: "saved-1" },
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.command).toBe("codex resume saved-1");
+    expect(result.agentSessionId).toBe("saved-1");
+  });
+});
+
+describe("extension state and its version travel together (#12280)", () => {
+  // Every restore path must carry the bag AND the version that describes it. A
+  // builder that forwards only the bag leaves `addPanel` reading the absent
+  // version as "fresh spawn" and stamping whatever the plugin declares TODAY,
+  // relabelling a legacy bag as current and skipping the plugin's migration.
+  const BAG = { activeTab: "overview" };
+
+  function saved(extra: Partial<SavedTerminalData> = {}): SavedTerminalData {
+    return { id: "t1", location: "grid", cwd: "/project", ...extra };
+  }
+
+  const builders: ReadonlyArray<{
+    name: string;
+    build: (s: SavedTerminalData) => AddTerminalArgs;
+  }> = [
+    {
+      name: "buildArgsForNonPtyRecreation",
+      build: (s) => buildArgsForNonPtyRecreation(s, "acme.dash.overview", "/project"),
+    },
+    {
+      name: "buildArgsForRespawn",
+      build: (s) => buildArgsForRespawn(s, "terminal", "/project", undefined, false, undefined),
+    },
+    {
+      name: "buildArgsForBackendTerminal",
+      build: (s) =>
+        buildArgsForBackendTerminal(
+          { id: "t1", kind: "terminal", title: "Shell", cwd: "/project" },
+          s,
+          "/project"
+        ),
+    },
+    {
+      name: "buildArgsForReconnectedFallback",
+      build: (s) => buildArgsForReconnectedFallback({ id: "t1", cwd: "/project" }, s, "/project"),
+    },
+  ];
+
+  for (const { name, build } of builders) {
+    it(`${name} keeps a stamped version with its bag`, () => {
+      expect(
+        build(saved({ extensionState: BAG, extensionStateVersion: 3 })).extensionStateVersion
+      ).toBe(3);
+    });
+
+    it(`${name} resolves an unstamped restored bag to explicit legacy v0`, () => {
+      // Absent, `addPanel` would read it as a fresh spawn and stamp the version
+      // the plugin declares now — the silent relabel this exists to stop.
+      expect(build(saved({ extensionState: BAG })).extensionStateVersion).toBe(0);
+    });
+
+    it(`${name} leaves the version absent when there is no bag`, () => {
+      expect(build(saved()).extensionStateVersion).toBeUndefined();
+    });
+  }
 });

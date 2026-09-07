@@ -122,11 +122,19 @@ const {
     // change tick rather than only what renders.
     treeArgs: {
       changeTick: undefined as number | undefined,
+      changedDirs: undefined as
+        { at: number; previousAt: number | null; dirs: readonly string[] | null } | undefined,
+      gitChangeTick: undefined as number | undefined,
       sort: undefined as { key: string; direction: string } | undefined,
       selectedPath: undefined as string | null | undefined,
     },
     // Ticks the worktree store reports for wt-1; both default to "never moved".
-    worktreeTicks: { git: undefined as number | undefined, fs: undefined as number | undefined },
+    worktreeTicks: {
+      git: undefined as number | undefined,
+      fs: undefined as number | undefined,
+      // Directories the fs tick's burst touched, or null for "unknown" (#12244).
+      dirs: null as readonly string[] | null,
+    },
     // The rest of what the store reports for wt-1. `changes` stays null by
     // default so the bulk of this suite keeps the lastUpdated-only snapshot
     // shape it was written against — which is also a real runtime state (the
@@ -229,6 +237,24 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
       workingTreeChangedAtById: new Map<string, number>(
         worktreeTicks.fs === undefined ? [] : [["wt-1", worktreeTicks.fs]]
       ),
+      // And the affected-directory record that rides the same stamp (#12244) —
+      // absent for a worktree that has seen no burst, which is the "re-read
+      // everything" answer the tree already took before scoping existed.
+      workingTreeChangedDirsById: new Map(
+        worktreeTicks.fs === undefined
+          ? []
+          : [
+              [
+                "wt-1",
+                {
+                  at: worktreeTicks.fs,
+                  previousAt: null,
+                  dirs: worktreeTicks.dirs,
+                  run: "test-run",
+                },
+              ],
+            ]
+      ),
     }),
 }));
 
@@ -238,10 +264,14 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("../useFileBrowserTree", () => ({
   useFileBrowserTree: (args: {
     changeTick?: number;
+    changedDirs?: { at: number; previousAt: number | null; dirs: readonly string[] | null };
+    gitChangeTick?: number;
     sort?: { key: string; direction: string };
     selectedPath?: string | null;
   }) => {
     treeArgs.changeTick = args.changeTick;
+    treeArgs.changedDirs = args.changedDirs;
+    treeArgs.gitChangeTick = args.gitChangeTick;
     treeArgs.sort = args.sort;
     treeArgs.selectedPath = args.selectedPath;
     // The real hook resolves this against its listings map; here the stubbed
@@ -364,6 +394,9 @@ const { insertFileReferenceMock, canInsertRef } = vi.hoisted(() => ({
 vi.mock("@/hooks/useInsertFileReference", () => ({
   useInsertFileReference: () => ({
     canInsert: canInsertRef.current,
+    // The pane only reads the boolean; the reason is here so the shared menu
+    // item renders the same shape it does in production.
+    refusalReason: canInsertRef.current ? null : "multiple-eligible-agents",
     insert: insertFileReferenceMock,
   }),
 }));
@@ -411,6 +444,23 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
   ),
   ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   ContextMenuSeparator: () => null,
+  // Flat, always-rendered stand-ins for the submenu primitives (#12206). The
+  // real ones need a Radix menu root this harness never mounts, and gate their
+  // content behind an open state — so every nested "Copy path" assertion here
+  // would look for something that is not in the DOM and pass for the wrong
+  // reason. What this suite owns is which path each item names, not Radix's
+  // nesting; the hook's own suite drives the real submenus.
+  ContextMenuSub: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuSubTrigger: ({ children }: { children: React.ReactNode }) => (
+    <button type="button">{children}</button>
+  ),
+  // Marked rather than bare so a test can still tell a root row from a nested
+  // one — flattening is what makes the items reachable here, and it is also
+  // what would otherwise hide a regression that moved something up to the root.
+  ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-submenu-content="">{children}</div>
+  ),
+  ContextMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The view's own workspace root, behind a worktree-less browser (#11482). The
@@ -498,6 +548,7 @@ import {
   FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE as COARSE_W,
 } from "../sidebarWidth";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import {
   getFileBrowserRowGitStatus,
   type FileBrowserGitStatusIndex,
@@ -567,6 +618,8 @@ beforeEach(() => {
   mockPanel.browserWorkspaceRooted = undefined;
   mockPanel.browserExpandedPaths = undefined;
   treeArgs.changeTick = undefined;
+  treeArgs.changedDirs = undefined;
+  treeArgs.gitChangeTick = undefined;
   treeProps.onActivate = undefined;
   treeProps.onInsertFileReference = undefined;
   treeProps.canInsertFileReference = undefined;
@@ -582,6 +635,7 @@ beforeEach(() => {
   dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
   worktreeTicks.fs = undefined;
+  worktreeTicks.dirs = null;
   worktreeMock.path = "/repo";
   worktreeMock.changes = null;
   worktreeMock.changesRootPath = "/repo";
@@ -1632,6 +1686,55 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     expect(treeArgs.changeTick).toBe(300);
   });
 
+  it("hands the tree the affected directories behind its own filesystem tick", () => {
+    worktreeTicks.fs = 300;
+    worktreeTicks.dirs = ["src/panels"];
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(300);
+    expect(treeArgs.changedDirs).toEqual({
+      at: 300,
+      previousAt: null,
+      dirs: ["src/panels"],
+      run: "test-run",
+    });
+  });
+
+  it("hands over an unclassifiable burst as-is rather than dropping the record", () => {
+    // `null` dirs and no record at all both end in a full refresh, but they are
+    // different states and the pane is not the layer that decides between them.
+    worktreeTicks.fs = 300;
+    worktreeTicks.dirs = null;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changedDirs).toEqual({
+      at: 300,
+      previousAt: null,
+      dirs: null,
+      run: "test-run",
+    });
+  });
+
+  it("hands over nothing when the worktree has seen no filesystem write", () => {
+    worktreeTicks.git = 450;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(450);
+    expect(treeArgs.changedDirs).toBeUndefined();
+  });
+
+  it("hands the git half of the tick over separately", () => {
+    // `changeTick` is the max of the two, which hides a git-status pass a later
+    // filesystem burst outran inside one React batch — the tree needs the git
+    // stamp itself to notice one it never acted on.
+    worktreeTicks.git = 150;
+    worktreeTicks.fs = 300;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(300);
+    expect(treeArgs.gitChangeTick).toBe(150);
+  });
+
   it("ignores the placement worktree's change ticks once workspace-rooted", () => {
     // Both worktree tick maps are keyed by worktree id, so following the
     // placement worktree's would refresh the tree on writes in a folder this
@@ -2502,6 +2605,165 @@ describe("FileBrowserPane re-reads when the project view is revealed (#11588)", 
     expect(lifecycleListeners.size).toBe(0);
   });
 
+  // #12165: the media nonce is split from `surfaceRefreshNonce` so a reveal can
+  // hold it still without also stalling the text re-read, the PDF frame, or the
+  // reclassification that revives a failed preview.
+  describe("playing media (#12165)", () => {
+    // Both kinds, because FileBrowserViewer wires them in two separate branches:
+    // an audio-only suite would let the video one drift back to the surface
+    // nonce with everything still green.
+    const KINDS = [
+      { tag: "audio" as const, path: "media/track.mp3", next: "media/other.mp3" },
+      { tag: "video" as const, path: "media/demo.mp4", next: "media/other.mp4" },
+    ];
+    const row = (path: string) => ({
+      path,
+      name: path.split("/").pop()!,
+      isDirectory: false,
+      depth: 1,
+      isExpanded: false,
+      isLoading: false,
+    });
+
+    const mediaFetchMock = vi.fn();
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+      let objectUrlSequence = 0;
+      mediaFetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+      vi.stubGlobal("fetch", mediaFetchMock);
+      // Unique per call: a constant would let a stale response satisfy an
+      // assertion that a fresh one arrived.
+      URL.createObjectURL = vi.fn(() => `blob:app://daintree/pane-play-${objectUrlSequence++}`);
+      URL.revokeObjectURL = vi.fn();
+      treeState.rows = [
+        ...defaultRows,
+        ...KINDS.flatMap((kind) => [row(kind.path), row(kind.next)]),
+      ];
+      mockPanel.browserSidebarCollapsed = true;
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      mediaFetchMock.mockReset();
+      // `vi.unstubAllGlobals` does not restore a directly assigned method.
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    // jsdom neither decodes media nor tracks playback: `fireEvent.play` fires
+    // the event but leaves `paused` true, so the preview's own paused/ended
+    // read would see the opposite of what the test just said happened.
+    function setPlaybackState(
+      element: HTMLMediaElement,
+      state: { paused: boolean; ended?: boolean }
+    ): void {
+      Object.defineProperty(element, "paused", { configurable: true, value: state.paused });
+      Object.defineProperty(element, "ended", { configurable: true, value: state.ended ?? false });
+    }
+
+    async function renderPlaying(kind: (typeof KINDS)[number]) {
+      mockPanel.browserSelectedPath = kind.path;
+      const view = renderPane();
+      await waitFor(() => expect(view.container.querySelector(kind.tag)).not.toBeNull());
+      const player = view.container.querySelector<HTMLMediaElement>(kind.tag)!;
+      setPlaybackState(player, { paused: false });
+      fireEvent.play(player);
+      return { ...view, player };
+    }
+
+    for (const kind of KINDS) {
+      it(`leaves a playing ${kind.tag} alone on reveal while still re-listing the tree`, async () => {
+        // Both halves matter: a re-fetch mints a new object URL and drops the
+        // listener back to zero, while the tree has nothing to protect and must
+        // still catch up on what changed while the project sat cached.
+        const { player, container } = await renderPlaying(kind);
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+        const srcBefore = player.getAttribute("src");
+
+        await emit("revealed");
+
+        expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+        // The same element, still pointed at the same blob — a src comparison
+        // alone would go green on the empty gap while a replacement loads.
+        expect(container.querySelector(kind.tag)).toBe(player);
+        expect(player.getAttribute("src")).toBe(srcBefore);
+        expect(treeState.refresh).toHaveBeenCalledTimes(1);
+      });
+
+      it(`re-fetches the ${kind.tag} on the next reveal once it ends`, async () => {
+        // The suppression is scoped to playback, not permanent — and the spec
+        // leaves `paused` false at the end, so `ended` is what says it stopped.
+        const { player } = await renderPlaying(kind);
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+        await emit("revealed");
+        expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+
+        setPlaybackState(player, { paused: false, ended: true });
+        fireEvent.ended(player);
+        await emit("revealed");
+
+        await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+      });
+
+      it(`still re-fetches the ${kind.tag} when Refresh is pressed`, async () => {
+        // A gesture outranks playback: someone pressing Refresh mid-track is
+        // asking for the rewritten bytes and accepts losing their place.
+        await renderPlaying(kind);
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+        act(() => {
+          fireEvent.click(screen.getByTestId("file-browser-refresh"));
+        });
+
+        await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+      });
+
+      it(`does not carry ${kind.tag} playing state to the next selected file`, async () => {
+        // The stale-flag failure this would otherwise invite: a track left
+        // playing, a different file selected, and every later reveal silently
+        // refusing to refresh a player that was never running.
+        const { rerender, container } = await renderPlaying(kind);
+
+        mockPanel.browserSelectedPath = kind.next;
+        await act(async () => {
+          rerender(paneElement());
+        });
+        await waitFor(() => expect(container.querySelector(kind.tag)).not.toBeNull());
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+        await emit("revealed");
+
+        await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+      });
+
+      it(`re-reads a text file revealed after a played ${kind.tag}`, async () => {
+        // The player is gone by the time this reveal lands, so the flag must be
+        // too. It is retracted when the preview unmounts, not by anything the
+        // pane does — leave that out of the leaf and the open file goes stale
+        // for the rest of the session.
+        const { rerender } = await renderPlaying(kind);
+
+        mockPanel.browserSelectedPath = "src/app.ts";
+        await act(async () => {
+          rerender(paneElement());
+        });
+        await waitFor(() => expect(readMock).toHaveBeenCalledTimes(1));
+
+        await emit("revealed");
+
+        await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+      });
+    }
+  });
+
   describe("dock parking", () => {
     it("defers the refresh while parked offscreen, then runs it once on activation", async () => {
       // A dock panel stays mounted in the offscreen parking container whether
@@ -2850,6 +3112,28 @@ describe("FileBrowserPane tree navigation vs the viewer", () => {
     });
 
     expect(viewerWrites()).toEqual([FOLDER_ROW.path]);
+  });
+
+  it("reads as one menu: the folder prefix, then the shared direct actions", () => {
+    // The prefix lives here and the core lives in the shared hook, so nothing
+    // else asserts that they compose. Order only — this suite's menu stub
+    // renders no separators, and the hook's own suite counts those.
+    renderPane();
+
+    const menu = screen.getByTestId("file-tree-view");
+    expect(
+      within(menu)
+        .getAllByRole("button")
+        .filter((item) => item.closest("[data-submenu-content]") === null)
+        .map((item) => item.textContent ?? "")
+    ).toEqual([
+      "Show contents",
+      "Set as root",
+      "Refresh",
+      revealCopy().label,
+      expect.stringContaining("Insert file reference"),
+      "Copy",
+    ]);
   });
 
   it("reveals a collapsed viewer for both explicit folder routes", () => {

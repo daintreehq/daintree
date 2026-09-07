@@ -7,6 +7,7 @@ import {
   replaySnapshot,
   REPRESENTATIVE_FLEET,
 } from "../lib/scrollbackSnapshotFixture";
+import { runScriptedTurns } from "../lib/sessionSnapshotSchedulingFixture";
 import { percentile } from "../lib/stats";
 import type { PerfScenario } from "../types";
 
@@ -37,6 +38,9 @@ import type { PerfScenario } from "../types";
 /** A serialized 10k-line coloured buffer is ~600 KiB; well under this is empty or broken. */
 const MIN_LARGE_SNAPSHOT_BYTES = 250_000;
 
+/** Scripted agent turns per terminal in PERF-408. */
+const SCHEDULED_TURNS = 3;
+
 export const scrollbackSnapshotScenarios: PerfScenario[] = [
   {
     id: "PERF-195",
@@ -45,12 +49,14 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
       "Real SerializeAddon.serialize() across a 12-terminal fleet filled to the 10,000-line " +
       "scrollback maximum with SGR-dense agent output — the teardown cost paid on every quit. " +
       "durationMs is the whole fleet; p95TerminalMs is what one preserved terminal costs and " +
-      "snapshotKB is what it writes to disk. Every terminal's payload is checked individually so " +
-      "one healthy snapshot cannot mask eleven empty ones.",
+      "snapshotKB is what it writes to disk. snapshotMisses counts terminals whose payload came " +
+      "back under the size floor, checked individually so one healthy snapshot cannot mask " +
+      "eleven empty ones.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 9, nightly: 14 },
     warmups: 1,
+    correctness: ["snapshotMisses"],
     async run() {
       const fleet = await getSnapshotFleet(SCROLLBACK_MAX, REPRESENTATIVE_FLEET);
 
@@ -68,13 +74,12 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
       }
       const durationMs = performance.now() - start;
 
-      perTerminalBytes.forEach((bytes, index) => {
-        if (bytes < MIN_LARGE_SNAPSHOT_BYTES) {
-          throw new Error(
-            `terminal ${index} serialized only ${bytes} bytes (expected >= ${MIN_LARGE_SNAPSHOT_BYTES}) — its buffer is empty or serialize is broken`
-          );
-        }
-      });
+      // Per terminal, not in aggregate: `serialize()` returning an empty
+      // string is instantaneous, and one healthy snapshot in a summed byte
+      // total would happily cover for eleven empty ones.
+      const snapshotMisses = perTerminalBytes.filter(
+        (bytes) => bytes < MIN_LARGE_SNAPSHOT_BYTES
+      ).length;
 
       const totalBytes = perTerminalBytes.reduce((sum, bytes) => sum + bytes, 0);
 
@@ -86,7 +91,12 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
           snapshotKB: totalBytes / 1024 / fleet.sources.length,
           fleetSnapshotKB: totalBytes / 1024,
           fleetSize: fleet.sources.length,
+          snapshotMisses,
         },
+        notes:
+          snapshotMisses > 0
+            ? `${snapshotMisses}/${fleet.sources.length} terminals serialized under the size floor`
+            : undefined,
       };
     },
   },
@@ -98,12 +108,13 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
       "waits for each write to drain, at both the 1,000-line default and the 10,000-line maximum. " +
       "This is the PARSER FLOOR, not wall-clock restore: production chunks payloads this size at " +
       "32 KiB with UI yields via TerminalRestoreController, which cannot run in-process. Target " +
-      "terminals are built and disposed outside the bracket. Every target is verified to have been " +
-      "rebuilt to its full line count.",
+      "terminals are built and disposed outside the bracket. replayMisses counts targets that were " +
+      "not rebuilt to their full line count.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["replayMisses"],
     async run() {
       const largeFleet = await getSnapshotFleet(SCROLLBACK_MAX, REPRESENTATIVE_FLEET);
       const smallFleet = await getSnapshotFleet(SCROLLBACK_DEFAULT, REPRESENTATIVE_FLEET);
@@ -135,23 +146,24 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
 
         // Check EVERY target in both arms: a no-op write is the fastest possible
         // result, so one verified terminal would happily hide 23 broken ones.
-        const verify = (targets: typeof largeTargets, expected: number, arm: string): number => {
+        const verify = (
+          targets: typeof largeTargets,
+          expected: number
+        ): { minLines: number; misses: number } => {
           let minLines = Infinity;
-          targets.forEach((terminal, index) => {
+          let misses = 0;
+          targets.forEach((terminal) => {
             const lines = terminal.buffer.active.length;
             minLines = Math.min(minLines, lines);
-            if (lines < expected) {
-              throw new Error(
-                `${arm} target ${index} holds ${lines} lines (expected >= ${expected}) — snapshot replay did not rebuild the buffer`
-              );
-            }
+            if (lines < expected) misses += 1;
           });
-          return minLines;
+          return { minLines, misses };
         };
         // Serialize emits the trimmed buffer, so a faithful replay lands on the
         // full scrollback; allow a small margin for the trailing partial row.
-        const largeMinLines = verify(largeTargets, SCROLLBACK_MAX - 8, "large");
-        verify(smallTargets, SCROLLBACK_DEFAULT - 8, "small");
+        const largeVerdict = verify(largeTargets, SCROLLBACK_MAX - 8);
+        const smallVerdict = verify(smallTargets, SCROLLBACK_DEFAULT - 8);
+        const replayMisses = largeVerdict.misses + smallVerdict.misses;
 
         return {
           durationMs,
@@ -160,8 +172,13 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
             smallPerTerminalMs: smallMs / smallPayloads.length,
             msPerKLine: largeMs / largePayloads.length / (SCROLLBACK_MAX / 1000),
             fleetReparseMs: largeMs,
-            restoredLines: largeMinLines,
+            restoredLines: largeVerdict.minLines,
+            replayMisses,
           },
+          notes:
+            replayMisses > 0
+              ? `${replayMisses} restore targets did not rebuild to their full line count`
+              : undefined,
         };
       } finally {
         // Without this, warmups plus iterations leave hundreds of filled
@@ -170,6 +187,61 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
         disposeTerminals(largeTargets);
         disposeTerminals(smallTargets);
       }
+    },
+  },
+  {
+    id: "PERF-408",
+    name: "Session Snapshot Scheduling - Agent Turn Coalescing",
+    description:
+      "Drives the real SessionSnapshotter through the sequence that ends every agent turn — " +
+      "output burst arming the 5s debounce, FSM settle firing the event-driven flush 2s later, " +
+      "then quiet past the debounce deadline — across a 12-terminal fleet at maximum scrollback. " +
+      "serializeCallsPerTurn is the subject: two independent scheduling paths pay for the same " +
+      "buffer twice, one coordinator pays once. The hosts have no launchAgentId, so this measures " +
+      "the terminals that get BOTH triggers — a runtime-detected agent in an ordinary terminal. " +
+      "Explicitly launched agent terminals are event-driven only and never had the periodic half " +
+      "to remove. payloadMisses re-checks every terminal's persisted bytes against a direct " +
+      "serialize after EVERY turn, so coalescing cannot be bought with a stale snapshot or a " +
+      "skipped turn; writeMisses catches a writer that serialized and quietly wrote nothing.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 3, ci: 4, nightly: 6 },
+    warmups: 1,
+    correctness: ["payloadMisses", "writeMisses"],
+    workloadFloors: {
+      fleetSize: REPRESENTATIVE_FLEET,
+      snapshotKB: MIN_LARGE_SNAPSHOT_BYTES / 1024,
+    },
+    async run() {
+      // Its own fleet: this scenario writes turn output into the buffers, and
+      // PERF-195/196 read their cached sources expecting them unchanged.
+      const fleet = await getSnapshotFleet(SCROLLBACK_MAX, REPRESENTATIVE_FLEET, "scheduling");
+      const result = await runScriptedTurns(fleet.sources, SCHEDULED_TURNS);
+
+      const turnCount = fleet.sources.length * SCHEDULED_TURNS;
+      // Serialize time only, matching PERF-195: the writes are real and counted
+      // but their latency is not in the bracket.
+      const durationMs = result.serializeMs;
+
+      return {
+        durationMs,
+        metrics: {
+          serializeCalls: result.serializeCalls,
+          persistWrites: result.persistWrites,
+          serializeCallsPerTurn: result.serializeCalls / turnCount,
+          persistWritesPerTurn: result.persistWrites / turnCount,
+          msPerTurn: durationMs / turnCount,
+          snapshotKB: result.totalPayloadBytes / 1024 / fleet.sources.length,
+          fleetSize: fleet.sources.length,
+          turnCount,
+          payloadMisses: result.payloadMisses,
+          writeMisses: result.writeMisses,
+        },
+        notes:
+          result.payloadMisses > 0 || result.writeMisses > 0
+            ? `${result.payloadMisses} stale final payloads, ${result.writeMisses} captures wrote nothing`
+            : undefined,
+      };
     },
   },
 ];

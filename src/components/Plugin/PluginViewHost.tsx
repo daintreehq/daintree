@@ -4,6 +4,14 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { logWarn } from "@/utils/logger";
+import {
+  getPanelStoreSnapshot,
+  persistPanelExtensionStateThroughAccessor,
+} from "@/store/storeAccessors";
+import {
+  decodePanelExtensionState,
+  panelExtensionStateVersionMessage,
+} from "@shared/utils/panelExtensionState";
 
 /**
  * Plugin panels are ordinary grid panels: `ContentPanel` owns their chrome and
@@ -14,6 +22,8 @@ import { logWarn } from "@/utils/logger";
  */
 export interface PluginViewHostProps extends BasePanelProps {
   extensionState?: Record<string, unknown>;
+  /** Version `extensionState` was persisted at (#12280). */
+  extensionStateVersion?: number;
   tabs?: TabInfo[];
   groupId?: string;
   onTabClick?: (tabId: string) => void;
@@ -41,6 +51,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   const pluginId = config.extensionId;
   const kindId = config.id;
   const displayName = config.name;
+  const stateVersion = config.stateVersion;
 
   if (!componentPath || !pluginId) {
     // The else-branch of usePluginPanelKinds guards this, but a defensive
@@ -64,6 +75,10 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   // (`useMemo` with a stable dep array would survive ordinary rerenders, but it
   // ties the view's identity to a hook that remounts it whenever a dep changes;
   // the construction belongs outside the component entirely.)
+  // Re-bound inside the guarded region so the narrowing survives into the
+  // component closure below, where the misconfigured branch is already gone.
+  const ownerPluginId: string = pluginId;
+
   const PluginViewContent = makePluginViewContent({
     id: kindId,
     name: displayName,
@@ -71,14 +86,60 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
     extensionId: pluginId,
   });
 
-  function PluginViewHost({ extensionState, ...panelProps }: PluginViewHostProps) {
+  function PluginViewHost({
+    extensionState,
+    extensionStateVersion,
+    ...panelProps
+  }: PluginViewHostProps) {
     const { onClose } = panelProps;
+    // Refuse a bag written by a NEWER build of this plugin rather than hand the
+    // view state it will misread and then overwrite (#12280). The record and
+    // its `extensionState` are untouched by this — reinstalling the newer build
+    // brings the user's state back intact — so the only thing withheld is the
+    // view's chance to corrupt it.
+    const decoded = decodePanelExtensionState({
+      state: extensionState,
+      persistedVersion: extensionStateVersion,
+      declaredVersion: stateVersion,
+    });
     // `ContentPanel`'s own close control already sits in the header; this hands
     // the same action to the diagnostics fallback so a crashed view offers the
     // way out where the failure is actually shown (#11301). Wrapped to drop
     // `ContentPanel`'s `force` argument — the fallback's button is the ordinary
     // recoverable close, never a forced one.
     const handleRequestClose = useCallback(() => onClose(), [onClose]);
+    // The view's write path back into `extensionState`. Routed through the
+    // cross-store accessor rather than the store itself: this component is a
+    // leaf by design, and it never subscribes to what it writes — the value is
+    // only ever read back on the NEXT mount, so persisting cannot re-render the
+    // panel that just persisted.
+    const panelId = panelProps.id;
+    const persistState = useCallback(
+      (patch: Record<string, unknown>): boolean =>
+        persistPanelExtensionStateThroughAccessor(panelId, patch),
+      [panelId]
+    );
+    // What recovery restores, read at the moment it starts rather than at mount
+    // (#12278). The props above are a snapshot of the record as of THIS render,
+    // and a view that persisted state after mounting has moved on from them —
+    // restoring those on a restart would quietly undo the user's work. Read
+    // through the accessor for the same reason `persistState` is: this
+    // component is a leaf and must not subscribe to what it writes.
+    //
+    // Runs the same version guard as the mount path, so a bag written by a
+    // newer build of the plugin is withheld on recovery exactly as it is on
+    // open, rather than smuggled in through the back door.
+    const readRecoveryState = useCallback(() => {
+      const panel = getPanelStoreSnapshot()?.panelsById[panelId];
+      if (!panel) return null;
+      const decodedRecovery = decodePanelExtensionState({
+        state: panel.extensionState,
+        persistedVersion: panel.extensionStateVersion,
+        declaredVersion: stateVersion,
+      });
+      if (!decodedRecovery.ok) return null;
+      return { state: decodedRecovery.state, version: decodedRecovery.version };
+    }, [panelId]);
     return (
       // ContentPanel owns click-to-focus, the focus-registry entry, and the pane
       // chrome, exactly as it does for every other non-PTY kind (#11228). It sits
@@ -98,12 +159,27 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}
-        <PluginViewContent
-          panelId={panelProps.id}
-          initialArgs={extensionState}
-          onRequestClose={handleRequestClose}
-          worktreeId={panelProps.worktreeId}
-        />
+        {decoded.ok ? (
+          <PluginViewContent
+            panelId={panelProps.id}
+            initialArgs={decoded.state}
+            stateVersion={decoded.version}
+            persistState={persistState}
+            readRecoveryState={readRecoveryState}
+            onRequestClose={handleRequestClose}
+            worktreeId={panelProps.worktreeId}
+          />
+        ) : (
+          <PluginViewLoadError
+            pluginId={ownerPluginId}
+            displayName={displayName}
+            message={panelExtensionStateVersionMessage(
+              displayName,
+              decoded.persistedVersion,
+              decoded.declaredVersion
+            )}
+          />
+        )}
       </ContentPanel>
     );
   }

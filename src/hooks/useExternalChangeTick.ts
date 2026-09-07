@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FileWatchFingerprintResult } from "@shared/types";
 import { fileWatchClient } from "@/clients/fileWatchClient";
-import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
+import { useSharedPollTick } from "@/hooks/useSharedPollTick";
 
 /**
  * A live "something moved on disk" tick for paths no worktree covers.
@@ -158,7 +158,12 @@ export function useExternalChangeTick(
   // Pauses while the document is hidden and re-samples immediately on reveal —
   // which is what keeps a change that landed while a project view was
   // backgrounded from needing a manual refresh to surface.
-  useVisibilityAwareInterval(sample, POLL_INTERVAL_MS, watchKey !== "");
+  //
+  // Shared rather than per-pane: every file surface polls at this same cadence,
+  // and one ticker puts their requests in the same task so Main's coalescing
+  // sampler folds them onto one read per path. With an interval each, their
+  // phases drift and the same paths get read once per pane per cycle.
+  useSharedPollTick(sample, POLL_INTERVAL_MS, watchKey !== "");
 
   return watchKey === "" ? undefined : tick;
 }

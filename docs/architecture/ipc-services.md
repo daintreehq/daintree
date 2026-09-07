@@ -1,6 +1,6 @@
 # IPC, services & clients reference
 
-This document maps the backend and bridge surface that connects the Renderer to the Main process: ~165 top-level services in `electron/services/`, ~90 top-level IPC handler files in `electron/ipc/handlers/` (each paired with a `.preload.ts`), ~88 namespaces exposed across the `window.electron` bridge in `electron/preload.cts`, and ~40 typed client wrappers in `src/clients/`. The goal is to make the conventions durable so a feature author knows which layer to touch and why.
+This document maps the backend and bridge surface that connects the Renderer to the Main process: ~190 top-level services in `electron/services/`, ~90 top-level IPC handler files in `electron/ipc/handlers/` (each paired with a `.preload.ts`), ~88 namespaces exposed across the `window.electron` bridge in `electron/preload.cts`, and ~40 typed client wrappers in `src/clients/`. The goal is to make the conventions durable so a feature author knows which layer to touch and why.
 
 For the mechanical "add a channel" recipe, see the [IPC pattern checklist in development.md](../development.md#ipc-pattern). This doc documents the layering, the wire mechanics, error propagation, and where the major service clusters live — it does not duplicate the five-step recipe.
 
@@ -43,11 +43,11 @@ Every `on*` method on `window.electron` returns its own unsubscribe function. Re
 
 ### Channels
 
-Channel strings are a single source of truth: `CHANNELS` in `electron/ipc/channels.ts` (~880 lines, one `as const` object). Preload, handlers, and the event bus all import from it — never hand-write a channel literal at a call site.
+Channel strings are a single source of truth: `CHANNELS` in `electron/ipc/channels.ts` — one large `as const` object. Preload, handlers, and the event bus all import from it — never hand-write a channel literal at a call site.
 
 ### The typed contract
 
-The handler signature and the preload binding are both constrained by the shared `IpcInvokeMap` (request/response) and `IpcEventMap` / `IpcEventBusMap` (events) in `shared/types/ipc/`. Wiring is done via the declare-once helpers in `electron/ipc/define.ts`:
+The handler signature and the preload binding are both constrained by the shared `IpcInvokeMap` (request/response) and `IpcEventMap` / `IpcEventBusMap` (events) in `shared/types/ipc/`. Both maps and roughly half the bridge namespaces are **generated**, never hand-edited: `scripts/codegen/ipc-map.mjs` emits `shared/types/ipc/generated.ts` from the channel definitions, and `scripts/codegen/ipc-renderer.mjs` emits `GeneratedElectronAPI` in `shared/types/ipc/generated-api.ts` from the `*_METHOD_CHANNELS` constants each `electron/ipc/handlers/*.preload.ts` exports (a preload file opts out with `export const RENDERER_API_SKIP = true`). `ElectronAPI` in `shared/types/ipc/api.ts` extends that generated interface with the still-hand-written namespaces; the `check:ipc-handwritten` ratchet stops that hand-written set from growing. Regenerate with `npm run codegen:ipc && npm run codegen:ipc-renderer`. Wiring is done via the declare-once helpers in `electron/ipc/define.ts`:
 
 - `defineIpcNamespace({ name, ops })` colocates channel strings, handler implementations, and the preload binding shape in one definition. Its `op(channel, handler)` / `opValidated(channel, schema, handler)` entries are type-checked against `IpcInvokeMap[channel]`. `register()` wires `ipcMain.handle` for every op and returns a cleanup; `preloadBindings(invoke)` produces the matching renderer-side object. The `build*PreloadBindings(...)` functions imported at the top of `electron/preload.cts` are these namespace bindings.
 - Lower-level handlers register through `typedHandle` / `typedHandleWithContext` (and `*Validated` variants) in `electron/ipc/utils.ts`. The `WithContext` forms receive an `IpcContext` (`{ event, webContentsId, senderWindow, projectId }`, from `electron/ipc/types.ts`) so a handler can scope to the calling project view in the multi-window architecture.
@@ -68,11 +68,11 @@ On the renderer side, `_unwrappingInvoke` in `electron/preload.cts` unwraps the 
 
 ### The event bus
 
-High-frequency and migrated per-domain events funnel through a single `ipcRenderer` listener on `CHANNELS.EVENTS_PUSH`, multiplexed by event name in the preload (`_eventBusOn`, ref-counted per name). This keeps the `ipcRenderer` listener count at exactly 1 so Node's `MaxListenersExceededWarning` (10/channel) can't trip as more events migrate onto the bus. A small replay buffer (`_eventBusReplayable`, currently just `plugin:deep-link`) delivers a latest-wins signal to a late-mounting subscriber.
+High-frequency and migrated per-domain events funnel through a single `ipcRenderer` listener on `CHANNELS.EVENTS_PUSH`, multiplexed by event name in the preload (`_eventBusOn`, ref-counted per name). This keeps the `ipcRenderer` listener count at exactly 1 so Node's `MaxListenersExceededWarning` (10/channel) can't trip as more events migrate onto the bus. Two small replay buffers cover events that fire before their subscriber mounts. `_eventBusReplayable` delivers a **latest-wins** signal (`plugin:deep-link`, `window:disk-space-status`, and the project-local plugin trust/staging pushes that main emits exactly once during `onProjectOpened`); `_eventBusFifoReplay` marks the subset that must **accumulate** instead of superseding, because each payload is a separate user decision — a double-clicked `.dntr` archive (#11280) is one install intent per file, and collapsing two would silently drop one. Read both sets in `electron/preload.cts`; each entry carries its reason inline.
 
 ### Zod validation
 
-Structural validation lives at the IPC boundary. `opValidated` / `typedHandle*Validated` parse the first arg with a Zod schema (`electron/schemas/`: `ipc.ts`, `plugin.ts`, `agent.ts`, `customSchemes.ts`, `external.ts`) before the handler body runs. On parse failure the full Zod issue list is logged **locally in Main only**, and a sanitized `ValidationError` (channel name only — no schema shape, field paths, or user values) is thrown to the renderer. Semantic checks (path containment, access control) still belong inside the handler; `opValidated` only enforces structure.
+Structural validation lives at the IPC boundary. `opValidated` / `typedHandle*Validated` parse the first arg with a Zod schema (`electron/schemas/`: `ipc.ts`, `plugin.ts`, `agent.ts`, `customSchemes.ts`, `external.ts`, `pluginIdentifiers.ts`, `copyTreeHistory.ts`, `runHistory.ts`) before the handler body runs. On parse failure the full Zod issue list is logged **locally in Main only**, and a sanitized `ValidationError` (channel name only — no schema shape, field paths, or user values) is thrown to the renderer. Semantic checks (path containment, access control) still belong inside the handler; `opValidated` only enforces structure.
 
 ### Rate limiting
 
@@ -104,7 +104,7 @@ Not all "services" run in the Main process. Two heavy subsystems run in their ow
 
 | Process | Entry | Renderer-facing client (in Main) | Owns |
 | --- | --- | --- | --- |
-| **PTY host** | `electron/pty-host.ts`, `electron/pty-host/` | `PtyClient` (`electron/services/pty/`) | node-pty processes, backpressure, `FdMonitor`, `ResourceGovernor` |
+| **PTY host** | `electron/pty-host.ts`, `electron/pty-host/` | `PtyClient` (`electron/services/pty/`) | node-pty processes, backpressure, `FdMonitor`, `ResourceGovernor`. One app-global host by default; behind `DAINTREE_PTY_FABRIC` it becomes a pool of per-project shards behind the same `PtyClient` interface — see [pty-host-fabric.md](./pty-host-fabric.md) |
 | **Workspace host** | `electron/workspace-host.ts`, `electron/workspace-host/` | `electron/services/workspace-client/` (`WorkspaceHostPool`, `WorkspaceHostEventRouter`) | `WorkspaceService` git polling, `WorktreeMonitor`, PR integration |
 
 These hosts keep expensive/risky work off the Main thread; a host crash is isolated and recoverable. The renderer's worktree mutations route through a dedicated MessagePort (`window.electron.worktreePort`) rather than ordinary invoke channels, so a host crash rejects in-flight requests with `HOST_EXITED` instead of leaving promises pending. The cross-process request/response correlation primitive lives in `electron/services/rpc/RequestResponseBroker.ts`.
@@ -113,7 +113,7 @@ These hosts keep expensive/risky work off the Main thread; a host crash is isola
 
 Top-level files live directly in `electron/services/`; cohesive subsystems get a subdirectory with its own `index.ts`. Where to look:
 
-- **`pty/`** (~76 files) — agent terminal brain. `PtyClient` (host transport + correlation), `AgentStateService` / `AgentStateMachine`, `AgentPatternDetector`, `CompletionDetector`/`CompletionTimer`, `BootDetector`, `agentSessionHistory`, `PtyEventRouter`/`PtyEventsBridge`/`PtyEventBuffer`. This is where output heuristics turn raw PTY bytes into idle/working/waiting/completed state.
+- **`pty/`** (~78 files) — agent terminal brain. `PtyClient` (host transport + correlation), `AgentStateService` / `AgentStateMachine`, `AgentPatternDetector`, `CompletionDetector`/`CompletionTimer`, `BootDetector`, `agentSessionHistory`, `PtyEventRouter`/`PtyEventsBridge`/`PtyEventBuffer`. This is where output heuristics turn raw PTY bytes into idle/working/waiting/completed state.
 - **`git/`** + top-level `GitService.ts` / `GitServiceCache.ts` — simple-git operations, porcelain conflict parsing (`porcelainConflicts.ts`, `conflictMarkerScan.ts`), repo operation state.
 - **`worktree/`** + `workspace-client/` — worktree polling strategy, mood/notes readers; the `workspace-client/` shims that talk to the workspace host.
 - **DevPreview (`DevPreview*.ts`, 12 top-level files)** — `DevPreviewSessionService`, `DevPreviewProxyService`, `DevPreviewPortAllocator`, `DevPreviewReadinessProbe`, `DevPreviewManifestService`, `DevPreviewCommandNormalizer`, `DevPreviewRequestValidators`, `DevPreviewTerminalController`, `DevPreviewOutputProcessor`, `DevPreviewCrashLoopGuard`, `DevPreviewDiagnosticsRing`, `DevPreviewDiskUsage`. Event routing for this cluster has its own doc: [dev-preview-event-routing.md](./dev-preview-event-routing.md).
@@ -129,3 +129,5 @@ Top-level files live directly in `electron/services/`; cohesive subsystems get a
 - [dev-preview-event-routing.md](./dev-preview-event-routing.md) — event routing for the DevPreview cluster.
 - [forge-provider-abstraction.md](./forge-provider-abstraction.md) — the forge provider service layer.
 - [terminal-lifecycle.md](./terminal-lifecycle.md) — how the PTY host cluster is driven across a terminal's life.
+- [process-and-window-model.md](./process-and-window-model.md) — the full process inventory, the three IPC transports, and the port-distribution paths this doc's "Multi-process topology" section summarizes.
+- [`.claude/rules/ipc-channels.md`](../../.claude/rules/ipc-channels.md) — the abbreviated agent rule that loads when you touch a channel or handler.

@@ -427,17 +427,15 @@ async function runSample(scale: number, round: number, warmup: boolean): Promise
     await expect(ctx.window.locator(SEL.github.item(issues[0]!.number))).toBeVisible({
       timeout: T_LONG,
     });
-    // The bulk helpers follow selection mode rather than a non-empty query, so
-    // enter selection first: the cursor moves to the first row and Shift+Space
-    // takes it.
-    await ctx.window.keyboard.press("ArrowDown");
-    await ctx.window.keyboard.press("Shift+Space");
+    await ctx.window.getByRole("button", { name: "Select issues" }).click();
 
     const selectAll = ctx.window
       .locator(SEL.github.selectionActions)
       .getByRole("button", { name: /Select all/ });
     await expect(selectAll).toBeVisible({ timeout: T_MEDIUM });
-    await selectAll.click();
+    // Avoid coupling this benchmark to Radix's transient entry geometry. The
+    // button's supported keyboard path invokes the same selection action.
+    await selectAll.press("Enter");
     issueSelectionMs = Date.now() - flowStartedAt;
 
     await expect(ctx.window.locator(SEL.github.bulkActionBar)).toBeVisible({ timeout: T_MEDIUM });

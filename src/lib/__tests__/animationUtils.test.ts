@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
+import { readHostCss } from "@/__tests__/support/hostCss";
 import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
@@ -160,9 +161,11 @@ describe("spring easing constants", () => {
 });
 
 describe("--anti-flicker-delay CSS contract", () => {
-  // Read the source CSS once. Asserting authored intent in src/index.css —
-  // the build pipeline (Tailwind, autoprefixer) doesn't affect these regexes.
-  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+  // Read the source CSS once. Asserting authored intent in the host's own CSS
+  // — index.css plus the design contract it imports, since the motion tokens
+  // live there (#12220) — not built output; the build pipeline (Tailwind,
+  // autoprefixer) doesn't affect these regexes.
+  const css = readHostCss();
 
   it("declares --anti-flicker-delay inside the :root block", () => {
     // Scope matters: a stray declaration in a narrower selector would let
@@ -209,7 +212,7 @@ describe("--anti-flicker-delay-palette CSS contract", () => {
   // almost never fire before the next keystroke resets it. Industry convention
   // (Algolia, React useDeferredValue) is 200ms. Asserting the split so future
   // changes can't silently recombine the two tokens.
-  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+  const css = readHostCss();
 
   it("declares --anti-flicker-delay-palette inside the :root block", () => {
     expect(css).toMatch(/:root\s*\{[^}]*--anti-flicker-delay-palette\s*:\s*\d+ms/);
@@ -253,7 +256,7 @@ describe("discrete-feedback easing CSS contract", () => {
   // feedback — it belongs to ambient loops (terminal-ping wash) and interactive
   // base transitions (--focus-transition-easing), which intentionally retain it.
   // This contract guards against either drifting back onto the symmetric literal.
-  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+  const css = readHostCss();
 
   // Each selector's block is extracted individually so the negative assertion
   // can't tunnel across a closing brace into a neighbouring rule that legitimately
@@ -331,7 +334,7 @@ describe("panel-motion-tier CSS contract (#10704)", () => {
   // from the @theme block. These cross-check the CSS tokens against the JS
   // constants in animationUtils.ts (two separate sources of truth), so a silent
   // drift in either layer fails here rather than shipping a desynced curve.
-  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+  const css = readHostCss();
 
   it("--duration-120 token matches PANEL_MINIMIZE_DURATION", () => {
     const match = css.match(/--duration-120\s*:\s*([^;]+);/);
@@ -393,7 +396,7 @@ describe(".animate-spin suppression CSS contract (SpinningIcon backstop premise)
   // backstop would be arming for a case that no longer needs it (harmless), but
   // if BOTH the event and the suppression drifted, a real user could be stranded
   // mid-spin. These assertions fail loudly if the suppression is removed.
-  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+  const css = readHostCss();
 
   it("reduced-motion neutralizes .animate-spin", () => {
     expect(css).toMatch(/\.animate-spin\b[\s\S]{0,800}animation:\s*none/);

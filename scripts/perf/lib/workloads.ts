@@ -17,11 +17,6 @@ export interface PersistedLayout {
   worktrees: string[];
 }
 
-export interface DevPreviewLogFrame {
-  message: string;
-  hasUrl: boolean;
-}
-
 const KIND_SEQUENCE: PanelState["kind"][] = ["terminal", "agent", "browser", "dev-preview"];
 
 export function createRng(seed = 1337): () => number {
@@ -99,260 +94,153 @@ export function createPersistedLayout(
   };
 }
 
-export function simulateLayoutHydration(layout: PersistedLayout): {
-  restoredPanels: number;
-  restoredGroups: number;
+/**
+ * The four project-switch phases that genuinely cannot run in this process.
+ *
+ * THIS IS A SIMULATION, and it is one deliberately. Every other phase of a
+ * switch is now driven through the real product code — the outgoing delta and
+ * the three-way merge via `lib/layoutMergeFixture.ts`, the per-panel restore
+ * decisions via `lib/hydrationFixture.ts`, the worktree re-scope via
+ * `lib/worktreeScopeFixture.ts`. These four are what is left, and each one is a
+ * stand-in of a known and stated shape:
+ *
+ * - PTY hibernate. The real path asks the pty-host to park every live PTY for
+ *   the outgoing project over the MessagePort, and the cost is the host's
+ *   bookkeeping plus the IPC round trip — neither of which exists here. What
+ *   runs below is a `Map.set` per terminal.
+ * - Store reset. The real path resets ~108 Zustand stores through
+ *   `resetProjectScopedStores`, each firing its own subscriber fan-out into
+ *   React. There is no React here, so what runs below is a fill-and-clear over
+ *   17 plain Maps and prices none of the notification cost.
+ * - PTY warmup. The real path spawns processes through the pty-host. What runs
+ *   below allocates descriptor-shaped objects.
+ * - Git status fetch. The real path spawns `git status` per worktree through
+ *   the workspace host (measured for real by PERF-100..104 and PERF-130..141).
+ *   What runs below fills a Map.
+ *
+ * NO DURATION LEAVES THIS FUNCTION, and that is the point of its current
+ * shape. It used to time each of the four loops and hand the four numbers back,
+ * and `projectSwitch.ts` added them into `visibleMs`, `hydrateMs` and
+ * `totalMs` — so a headline a reader would optimise against was part fiction:
+ * four hand-written loops reported as project-switch latency. Cutting a
+ * simulated loop would have "improved" the switch. The loops still run, because
+ * a count incremented at the call site is the only reading here worth anything
+ * and a literal cannot be one, but the clock is not started around any of them
+ * and no caller can sum what it is not given.
+ *
+ * The counts are therefore the whole output, and each is graded by
+ * {@link unreachablePhaseMisses}. The phases are kept because dropping them
+ * would silently shorten the switch the phased scenarios describe; they are
+ * labelled because an earlier version of this file presented the same loops as
+ * "the project switch".
+ */
+export interface UnreachableSwitchPhases {
   checksum: number;
-} {
-  const indexById = new Map<string, PanelState>();
-  let checksum = 0;
-
-  for (const panel of layout.panels) {
-    indexById.set(panel.id, panel);
-    checksum += panel.id.length + panel.title.length + panel.cwd.length;
-
-    if (panel.command) checksum += panel.command.length;
-    if (panel.browserUrl) checksum += panel.browserUrl.length;
-  }
-
-  let restoredGroups = 0;
-  for (const group of layout.tabGroups) {
-    const validTabIds = group.tabIds.filter((tabId) => indexById.has(tabId));
-    if (validTabIds.length === 0) continue;
-
-    restoredGroups += 1;
-    checksum += validTabIds.length + group.id.length;
-
-    if (!indexById.has(group.activeTabId)) {
-      checksum += validTabIds[0].length;
-    }
-  }
-
-  return {
-    restoredPanels: indexById.size,
-    restoredGroups,
-    checksum,
-  };
+  /** Entries in the hibernation map. */
+  hibernatedTerminals: number;
+  /** Stores that were filled and cleared. */
+  resetStores: number;
+  /** PTY descriptors allocated. */
+  ptyDescriptors: number;
+  /** File status entries aggregated. */
+  fileStatuses: number;
 }
 
-export function simulateProjectSwitchCycle(params: {
-  outgoingStateSize: number;
-  incomingLayout: PersistedLayout;
-  iterations?: number;
-}): { checksum: number; elapsedMs: number } {
-  const start = performance.now();
-  let checksum = 0;
-  const iterations = Math.max(1, params.iterations ?? 1);
-
-  for (let i = 0; i < iterations; i += 1) {
-    const outgoingState = {
-      activeWorktreeId: `wt-${(i % 5) + 1}`,
-      sidebarWidth: 280 + (i % 6) * 10,
-      terminals: Array.from({ length: params.outgoingStateSize }, (_, index) => ({
-        id: `term-${i}-${index}`,
-        cwd: `/repo/switch/${index}`,
-        title: `Terminal ${index}`,
-      })),
-    };
-
-    const payload = JSON.stringify(outgoingState);
-    checksum += payload.length;
-
-    const hydrated = simulateLayoutHydration(params.incomingLayout);
-    checksum += hydrated.checksum;
-  }
-
-  return {
-    checksum,
-    elapsedMs: performance.now() - start,
-  };
-}
-
-export interface ProjectSwitchPhaseResult {
-  checksum: number;
-  phases: {
-    serializeMs: number;
-    ptyHibernateMs: number;
-    storeResetMs: number;
-    projectLoadMs: number;
-    terminalRestoreMs: number;
-    ptyWarmupMs: number;
-    gitFetchMs: number;
-    totalMs: number;
-    /**
-     * Time until the incoming view would be visible to the user (skeleton
-     * painted). With the decoupled cold-switch path this is when
-     * `ProjectViewManager` swaps the outgoing view for the incoming one.
-     * Modeled as the sum of phases 1-4 (serialize + pty hibernate + store
-     * reset + project load) since terminal restore / pty warmup / git fetch
-     * are post-visible hydration.
-     */
-    visibleMs: number;
-    /**
-     * Time until full data hydration completes (terminal restore, pty
-     * warmup, git fetch). Equal to `totalMs` — the alias exists so dashboards
-     * can plot visible-vs-hydrate latency without referencing two metric
-     * names with different semantics across scenarios.
-     */
-    hydrateMs: number;
-  };
-}
-
-export function simulateProjectSwitchPhased(params: {
-  outgoingStateSize: number;
-  incomingLayout: PersistedLayout;
-}): ProjectSwitchPhaseResult {
-  const totalStart = performance.now();
+export function countUnreachableSwitchPhases(params: {
+  outgoingTerminalCount: number;
+  incomingPanelCount: number;
+  worktreeCount: number;
+}): UnreachableSwitchPhases {
   let checksum = 0;
 
-  // Phase 1: Serialize outgoing state (JSON.stringify — dominant cost)
-  const serializeStart = performance.now();
-  const outgoingState = {
-    activeWorktreeId: "wt-1",
-    sidebarWidth: 280,
-    terminals: Array.from({ length: params.outgoingStateSize }, (_, index) => ({
-      id: `term-${index}`,
-      cwd: `/repo/switch/${index}`,
-      title: `Terminal ${index}`,
-      scrollback: `line-data-${index}-${"x".repeat(64)}`,
-    })),
-  };
-  const payload = JSON.stringify(outgoingState);
-  checksum += payload.length;
-  const serializeMs = Math.max(0, performance.now() - serializeStart);
-
-  // Phase 2: PTY hibernate (object mapping)
-  const ptyHibernateStart = performance.now();
+  // Phase: PTY hibernate (object mapping)
   const hibernated = new Map<string, { id: string; cwd: string }>();
-  for (const term of outgoingState.terminals) {
-    hibernated.set(term.id, { id: term.id, cwd: term.cwd });
+  for (let index = 0; index < params.outgoingTerminalCount; index += 1) {
+    hibernated.set(`term-${index}`, { id: `term-${index}`, cwd: `/repo/switch/${index}` });
   }
   checksum += hibernated.size;
-  const ptyHibernateMs = Math.max(0, performance.now() - ptyHibernateStart);
 
-  // Phase 3: Store reset (clear maps + arrays)
-  const storeResetStart = performance.now();
+  // Phase: store reset (clear maps + arrays)
   const stores = Array.from({ length: 17 }, () => new Map<string, unknown>());
   for (const store of stores) {
-    for (let i = 0; i < params.outgoingStateSize; i++) {
+    for (let i = 0; i < params.outgoingTerminalCount; i++) {
       store.set(`key-${i}`, { value: i });
     }
     store.clear();
   }
   checksum += stores.length;
-  const storeResetMs = Math.max(0, performance.now() - storeResetStart);
 
-  // Phase 4: Project load (JSON.parse + index build)
-  const projectLoadStart = performance.now();
-  const projectData = JSON.parse(JSON.stringify(params.incomingLayout));
-  const panelIndex = new Map<string, PanelState>();
-  for (const panel of projectData.panels as PanelState[]) {
-    panelIndex.set(panel.id, panel);
-  }
-  checksum += panelIndex.size;
-  const projectLoadMs = Math.max(0, performance.now() - projectLoadStart);
-
-  // Phase 5: Terminal restore (hydration + tab group rebuild)
-  const terminalRestoreStart = performance.now();
-  const hydrated = simulateLayoutHydration(params.incomingLayout);
-  checksum += hydrated.checksum;
-  const terminalRestoreMs = Math.max(0, performance.now() - terminalRestoreStart);
-
-  // Phase 6: PTY warmup (descriptor allocation)
-  const ptyWarmupStart = performance.now();
-  const descriptors = new Array(params.incomingLayout.panels.length);
+  // Phase: PTY warmup (descriptor allocation)
+  const descriptors = new Array(params.incomingPanelCount);
   for (let i = 0; i < descriptors.length; i++) {
     descriptors[i] = { fd: i, pid: 1000 + i };
   }
   checksum += descriptors.length;
-  const ptyWarmupMs = Math.max(0, performance.now() - ptyWarmupStart);
 
-  // Phase 7: Git status fetch (file status aggregation)
-  const gitFetchStart = performance.now();
+  // Phase: git status fetch (file status aggregation)
   const fileStatuses = new Map<string, string>();
-  for (const wt of params.incomingLayout.worktrees) {
+  for (let w = 0; w < params.worktreeCount; w += 1) {
     for (let j = 0; j < 10; j++) {
-      fileStatuses.set(`${wt}/file-${j}.ts`, j % 3 === 0 ? "modified" : "clean");
+      fileStatuses.set(`wt-${w}/file-${j}.ts`, j % 3 === 0 ? "modified" : "clean");
     }
   }
   checksum += fileStatuses.size;
-  const gitFetchMs = Math.max(0, performance.now() - gitFetchStart);
-
-  const totalMs = Math.max(0, performance.now() - totalStart);
-  const visibleMs = serializeMs + ptyHibernateMs + storeResetMs + projectLoadMs;
 
   return {
     checksum,
-    phases: {
-      serializeMs,
-      ptyHibernateMs,
-      storeResetMs,
-      projectLoadMs,
-      terminalRestoreMs,
-      ptyWarmupMs,
-      gitFetchMs,
-      totalMs,
-      visibleMs,
-      hydrateMs: totalMs,
-    },
+    hibernatedTerminals: hibernated.size,
+    resetStores: stores.length,
+    ptyDescriptors: descriptors.length,
+    fileStatuses: fileStatuses.size,
   };
 }
 
-export function createDevPreviewLogFrames(frameCount: number, noisy = false): DevPreviewLogFrame[] {
-  const frames: DevPreviewLogFrame[] = [];
-
-  for (let i = 0; i < frameCount; i += 1) {
-    const hasUrl = i === Math.floor(frameCount * 0.6);
-    if (hasUrl) {
-      frames.push({
-        message: `server ready in ${1200 + i}ms\nLocal: http://localhost:${3000 + (i % 20)}`,
-        hasUrl: true,
-      });
-      continue;
-    }
-
-    const noise = noisy
-      ? `webpack chunk=${i} hash=${Math.random().toString(36).slice(2)} elapsed=${i * 13}ms`
-      : `build step ${i}`;
-
-    frames.push({
-      message: `${noise}\n`,
-      hasUrl: false,
-    });
-  }
-
-  return frames;
+/**
+ * One term per simulated phase, derived from the sizes each was asked for.
+ *
+ * These phases report no duration at all, so the counts are the only evidence
+ * they ran — a phase reduced to a no-op is invisible without them.
+ */
+export function unreachablePhaseMisses(
+  expected: { outgoingTerminalCount: number; incomingPanelCount: number; worktreeCount: number },
+  result: UnreachableSwitchPhases
+): {
+  hibernateMisses: number;
+  storeResetMisses: number;
+  ptyWarmupMisses: number;
+  gitFetchMisses: number;
+} {
+  return {
+    hibernateMisses: Math.abs(expected.outgoingTerminalCount - result.hibernatedTerminals),
+    storeResetMisses: result.resetStores > 0 ? 0 : 1,
+    ptyWarmupMisses: Math.abs(expected.incomingPanelCount - result.ptyDescriptors),
+    gitFetchMisses: Math.abs(expected.worktreeCount * 10 - result.fileStatuses),
+  };
 }
 
-export function detectLatestLocalhostUrl(frames: readonly DevPreviewLogFrame[]): string | null {
-  let lastUrl: string | null = null;
-  const regex = /https?:\/\/localhost:\d{2,5}(?:\/[^\s]*)?/gi;
-
-  for (const frame of frames) {
-    const matches = frame.message.match(regex);
-    if (matches && matches.length > 0) {
-      lastUrl = matches[matches.length - 1];
-    }
-  }
-
-  return lastUrl;
+export interface TerminalOutputPassResult {
+  renderedBytes: number;
+  retainedBytes: number;
+  checksum: number;
+  /** Chunks the pass actually walked. */
+  consumedChunks: number;
+  /** Lines left in the scrollback ring once the pass finished. */
+  retainedLineCount: number;
 }
 
 export function simulateTerminalOutputPass(
   chunks: readonly string[],
   retainedLines: number
-): {
-  renderedBytes: number;
-  retainedBytes: number;
-  checksum: number;
-} {
+): TerminalOutputPassResult {
   const ring: string[] = [];
   let renderedBytes = 0;
   let checksum = 0;
+  let consumedChunks = 0;
 
   for (const chunk of chunks) {
     renderedBytes += chunk.length;
     checksum += chunk.charCodeAt(0) ?? 0;
+    consumedChunks += 1;
 
     const lines = chunk.split("\n");
     for (const line of lines) {
@@ -367,23 +255,87 @@ export function simulateTerminalOutputPass(
   const retainedBytes = ring.reduce((sum, line) => sum + line.length, 0);
   checksum += retainedBytes;
 
-  return { renderedBytes, retainedBytes, checksum };
+  return {
+    renderedBytes,
+    retainedBytes,
+    checksum,
+    consumedChunks,
+    retainedLineCount: ring.length,
+  };
 }
 
-export function makeTerminalChunks(count: number, avgLength = 120): string[] {
+/**
+ * Generated chunks carrying their own byte total.
+ *
+ * The total is the oracle's half of the comparison, so it comes from the
+ * generator — the one thing in the picture that is not the subject — and is
+ * accumulated as the chunks are built rather than re-summed afterwards.
+ */
+export interface TerminalChunkStream {
+  chunks: string[];
+  totalBytes: number;
+}
+
+/**
+ * Post-conditions of an output pass, checked against the stream it was handed.
+ *
+ * A pass reduced to `return { renderedBytes: 0 }` is instant and reports the
+ * best `renderedBytes`/`checksum` the harness would ever record; it scores every
+ * term here. The expected byte total rides in on the stream, and the ring depth
+ * is the scrollback rule applied independently of the ring —
+ * `makeTerminalStream` puts exactly one line in each chunk, which is what makes
+ * the expected depth `min(chunks, cap)`.
+ *
+ * Every term is O(1): the scenarios wall-clock the whole `run()`, so an oracle
+ * that walked the chunks again — to re-`split()` them or merely to re-sum their
+ * lengths — would report its own traversal as terminal throughput.
+ */
+export function terminalOutputPassMisses(
+  stream: TerminalChunkStream,
+  retainedLines: number,
+  result: TerminalOutputPassResult
+): number {
+  const chunkCount = stream.chunks.length;
+  return (
+    Math.abs(chunkCount - result.consumedChunks) +
+    (stream.totalBytes === result.renderedBytes ? 0 : 1) +
+    Math.abs(Math.min(chunkCount, retainedLines) - result.retainedLineCount)
+  );
+}
+
+export function makeTerminalStream(count: number, avgLength = 120): TerminalChunkStream {
   const rng = createRng(424242 + count + avgLength);
   const chunks: string[] = [];
+  let totalBytes = 0;
 
   for (let i = 0; i < count; i += 1) {
     const len = Math.max(24, Math.floor(avgLength * (0.7 + rng() * 0.6)));
-    const payload = randomToken(rng, len);
-    chunks.push(`${payload}\n`);
+    const chunk = `${randomToken(rng, len)}\n`;
+    chunks.push(chunk);
+    totalBytes += chunk.length;
   }
 
-  return chunks;
+  return { chunks, totalBytes };
 }
 
-export function createLargeStateSnapshot(scale: number): Record<string, unknown> {
+export function makeTerminalChunks(count: number, avgLength = 120): string[] {
+  return makeTerminalStream(count, avgLength).chunks;
+}
+
+export interface LargeStateSnapshot {
+  appState: {
+    activeWorktreeId: string | null;
+    sidebarWidth: number;
+    focusMode: boolean;
+    panelGridConfig: { columns: number; rows: number };
+    terminals: PanelState[];
+  };
+  worktreeState: Array<{ id: string; branch: string; path: string; status: string }>;
+  tabGroups: PersistedLayout["tabGroups"];
+  diagnostics: { logs: Array<{ level: string; message: string; timestamp: number }> };
+}
+
+export function createLargeStateSnapshot(scale: number): LargeStateSnapshot {
   const panelCount = Math.max(20, scale);
   const layout = createPersistedLayout(
     panelCount,
@@ -419,11 +371,15 @@ export function createLargeStateSnapshot(scale: number): Record<string, unknown>
   };
 }
 
-export async function spinEventLoop(ms: number): Promise<void> {
+/** Returns the microtask turns actually spun, so callers can prove the load ran. */
+export async function spinEventLoop(ms: number): Promise<number> {
   const end = performance.now() + ms;
+  let turns = 0;
   while (performance.now() < end) {
     await Promise.resolve();
+    turns += 1;
   }
+  return turns;
 }
 
 export interface HeadlessTerminalConfig {

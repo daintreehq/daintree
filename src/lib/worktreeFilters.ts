@@ -561,9 +561,12 @@ const DEFAULT_DERIVED_META: DerivedWorktreeMeta = {
   chipState: null,
 };
 
-function withoutGroup<K extends keyof FilterState>(filters: FilterState, group: K): FilterState {
-  return { ...filters, [group]: new Set() };
-}
+const STATUS_FACET = 1 << 0;
+const TYPE_FACET = 1 << 1;
+const PR_ISSUE_FACET = 1 << 2;
+const SESSION_FACET = 1 << 3;
+const ACTIVITY_FACET = 1 << 4;
+const DEV_SERVER_FACET = 1 << 5;
 
 export function computeChipCounts(
   worktrees: readonly (Worktree | WorktreeState)[],
@@ -574,70 +577,128 @@ export function computeChipCounts(
 ): ChipCounts {
   const counts = emptyChipCounts();
   const now = Date.now();
+  const hasQuery = filters.query.length > 0;
+  const exactQuery = hasQuery ? parseExactNumber(filters.query) : null;
 
-  const baseIsActive = (w: (typeof worktrees)[number]) => w.id === activeWorktreeId;
-  const getDerived = (id: string) => derivedMetaMap.get(id) ?? DEFAULT_DERIVED_META;
-  const matchesGroup = (w: (typeof worktrees)[number], groupFilters: FilterState) =>
-    matchesFilters(w, groupFilters, getDerived(w.id), baseIsActive(w), sessionsByWorktreeId);
-
-  // Build base set per group — filtered by all OTHER groups + query. The
-  // group-excluded filter variants depend only on `filters`, so hoist them out
-  // of the per-worktree callbacks.
-  const statusVariant = withoutGroup(filters, "statusFilters");
-  const typeVariant = withoutGroup(filters, "typeFilters");
-  const prIssueVariant = withoutGroup(filters, "prIssueFilters");
-  const sessionsVariant = withoutGroup(filters, "sessionFilters");
-  const activityVariant = withoutGroup(filters, "activityFilters");
-  const devServerVariant = withoutGroup(filters, "devServerFilters");
-
-  const statusBase = worktrees.filter((w) => matchesGroup(w, statusVariant));
-  const typeBase = worktrees.filter((w) => matchesGroup(w, typeVariant));
-  const prIssueBase = worktrees.filter((w) => matchesGroup(w, prIssueVariant));
-  const sessionsBase = worktrees.filter((w) => matchesGroup(w, sessionsVariant));
-  const activityBase = worktrees.filter((w) => matchesGroup(w, activityVariant));
-  const devServerBase = worktrees.filter((w) => matchesGroup(w, devServerVariant));
-
-  for (const w of statusBase) {
-    const statuses = computeStatus(w, baseIsActive(w));
-    for (const status of statuses) counts.status[status]++;
-  }
-
-  for (const w of typeBase) {
-    counts.branchType[getWorktreeType(w)]++;
-  }
-
-  for (const w of prIssueBase) {
-    if (w.issueNumber) counts.prIssue.hasIssue++;
-    if (w.linked?.pr) counts.prIssue.hasPR++;
-    if (w.linked?.pr?.state === "open") counts.prIssue.prOpen++;
-    if (w.linked?.pr?.state === "merged") counts.prIssue.prMerged++;
-    if (w.linked?.pr?.state === "closed" || w.linked?.pr?.state === "declined")
-      counts.prIssue.prClosed++;
-  }
-
-  for (const w of sessionsBase) {
-    const meta = getDerived(w.id);
-    if (meta.terminalCount > 0) counts.sessions.hasTerminals++;
-    if (meta.hasWorkingAgent) counts.sessions.working++;
-    if (meta.hasWaitingAgent) counts.sessions.waiting++;
-    if (meta.hasCompletedAgent) counts.sessions.completed++;
-    if (meta.hasExitedAgent) counts.sessions.exited++;
-  }
-
-  for (const w of activityBase) {
-    const lastActivity = w.lastActivityTimestamp;
-    if (!isValidPastTimestamp(lastActivity, now)) continue;
-    const elapsed = now - lastActivity;
-    for (const key of ACTIVITY_KEYS) {
-      if (elapsed < ACTIVITY_WINDOW_MS[key]) counts.activity[key]++;
+  for (const worktree of worktrees) {
+    if (hasQuery) {
+      const matchesQuery =
+        exactQuery === null
+          ? scoreWorktree(worktree, filters.query) > 0
+          : worktree.issueNumber === exactQuery || worktree.linked?.pr?.ref.number === exactQuery;
+      if (!matchesQuery) continue;
     }
-  }
 
-  for (const w of devServerBase) {
-    const session = sessionsByWorktreeId?.[w.id];
-    if (!session) continue;
-    for (const key of DEV_SERVER_KEYS) {
-      if (matchesDevServerFilter(key, session)) counts.devServer[key]++;
+    const isActive = worktree.id === activeWorktreeId;
+    const derived = derivedMetaMap.get(worktree.id) ?? DEFAULT_DERIVED_META;
+    const session = sessionsByWorktreeId?.[worktree.id];
+    const lastActivity = worktree.lastActivityTimestamp;
+    const activityElapsed = isValidPastTimestamp(lastActivity, now) ? now - lastActivity : null;
+    let statuses: StatusFilter[] | undefined;
+    let type: WorktreeTypeId | undefined;
+    let failedFacets = 0;
+
+    // A row contributes to a facet when every other active facet passed. One
+    // failure therefore admits it only to that facet; multiple failures admit
+    // it to none. This preserves the six disjunctive bases without six sweeps.
+    if (filters.statusFilters.size > 0) {
+      statuses = computeStatus(worktree, isActive);
+      if (!statuses.some((status) => filters.statusFilters.has(status))) {
+        failedFacets |= STATUS_FACET;
+      }
+    }
+
+    if (filters.typeFilters.size > 0) {
+      type = getWorktreeType(worktree);
+      if (!filters.typeFilters.has(type)) failedFacets |= TYPE_FACET;
+    }
+
+    if (filters.prIssueFilters.size > 0) {
+      const prState = worktree.linked?.pr?.state;
+      const matchesPrIssue =
+        (filters.prIssueFilters.has("hasIssue") && Boolean(worktree.issueNumber)) ||
+        (filters.prIssueFilters.has("hasPR") && Boolean(worktree.linked?.pr)) ||
+        (filters.prIssueFilters.has("prOpen") && prState === "open") ||
+        (filters.prIssueFilters.has("prMerged") && prState === "merged") ||
+        (filters.prIssueFilters.has("prClosed") &&
+          (prState === "closed" || prState === "declined"));
+      if (!matchesPrIssue) failedFacets |= PR_ISSUE_FACET;
+    }
+
+    if (filters.sessionFilters.size > 0) {
+      const matchesSession =
+        (filters.sessionFilters.has("hasTerminals") && derived.terminalCount > 0) ||
+        (filters.sessionFilters.has("working") && derived.hasWorkingAgent) ||
+        (filters.sessionFilters.has("waiting") && derived.hasWaitingAgent) ||
+        (filters.sessionFilters.has("completed") && derived.hasCompletedAgent) ||
+        (filters.sessionFilters.has("exited") && derived.hasExitedAgent);
+      if (!matchesSession) failedFacets |= SESSION_FACET;
+    }
+
+    if (filters.activityFilters.size > 0) {
+      let matchesActivity = false;
+      if (activityElapsed !== null) {
+        for (const key of filters.activityFilters) {
+          if (activityElapsed < ACTIVITY_WINDOW_MS[key]) {
+            matchesActivity = true;
+            break;
+          }
+        }
+      }
+      if (!matchesActivity) failedFacets |= ACTIVITY_FACET;
+    }
+
+    if (filters.devServerFilters.size > 0) {
+      let matchesDevServer = false;
+      for (const key of filters.devServerFilters) {
+        if (matchesDevServerFilter(key, session)) {
+          matchesDevServer = true;
+          break;
+        }
+      }
+      if (!matchesDevServer) failedFacets |= DEV_SERVER_FACET;
+    }
+
+    if (failedFacets === 0 || failedFacets === STATUS_FACET) {
+      statuses ??= computeStatus(worktree, isActive);
+      for (const status of statuses) counts.status[status]++;
+    }
+
+    if (failedFacets === 0 || failedFacets === TYPE_FACET) {
+      type ??= getWorktreeType(worktree);
+      counts.branchType[type]++;
+    }
+
+    if (failedFacets === 0 || failedFacets === PR_ISSUE_FACET) {
+      if (worktree.issueNumber) counts.prIssue.hasIssue++;
+      if (worktree.linked?.pr) counts.prIssue.hasPR++;
+      if (worktree.linked?.pr?.state === "open") counts.prIssue.prOpen++;
+      if (worktree.linked?.pr?.state === "merged") counts.prIssue.prMerged++;
+      if (worktree.linked?.pr?.state === "closed" || worktree.linked?.pr?.state === "declined") {
+        counts.prIssue.prClosed++;
+      }
+    }
+
+    if (failedFacets === 0 || failedFacets === SESSION_FACET) {
+      if (derived.terminalCount > 0) counts.sessions.hasTerminals++;
+      if (derived.hasWorkingAgent) counts.sessions.working++;
+      if (derived.hasWaitingAgent) counts.sessions.waiting++;
+      if (derived.hasCompletedAgent) counts.sessions.completed++;
+      if (derived.hasExitedAgent) counts.sessions.exited++;
+    }
+
+    if (failedFacets === 0 || failedFacets === ACTIVITY_FACET) {
+      if (activityElapsed !== null) {
+        for (const key of ACTIVITY_KEYS) {
+          if (activityElapsed < ACTIVITY_WINDOW_MS[key]) counts.activity[key]++;
+        }
+      }
+    }
+
+    if ((failedFacets === 0 || failedFacets === DEV_SERVER_FACET) && session) {
+      for (const key of DEV_SERVER_KEYS) {
+        if (matchesDevServerFilter(key, session)) counts.devServer[key]++;
+      }
     }
   }
 

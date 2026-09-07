@@ -661,6 +661,46 @@ describe("IdentityWatcher", () => {
       expect(state.detectionCalls).toHaveLength(0);
     });
 
+    it("clears shell evidence when the POSIX shell regains foreground with a lingering descendant", async () => {
+      const inject = vi.fn();
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: inject,
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["claude", "FAKE_CLAUDE_READY"],
+        cursorLine: "FAKE_CLAUDE_READY",
+        ptyDescendantCount: 2,
+        foreground: { shellPgid: 123, foregroundPgid: 456 },
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("claude");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      // The interactive agent exited and the shell owns the PTY again, but a
+      // background helper still appears below the shell in the process tree.
+      // The prompt output races ahead of the foreground-PGID refresh, while
+      // stale alternate-screen text remains in the semantic buffer.
+      watcher.observeOutput("runner@host:/repo$ ");
+      state.visibleLines = [
+        "Quick safety check: Is this a project you created or one you trust?",
+        " ❯ 1. Yes, I trust this folder",
+        "Enter to confirm · Esc to cancel",
+        "FAKE_CLAUDE_EXIT",
+      ];
+      state.cursorLine = "";
+      state.ptyDescendantCount = 1;
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      expect(state.detectionCalls).toHaveLength(0);
+    });
+
     it("clears shell evidence on non-POSIX child exit even when no prompt text is visible", async () => {
       const inject = vi.fn();
       const clear = vi.fn();

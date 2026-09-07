@@ -9,7 +9,11 @@ import { getHelpFolderPath } from "./HelpService.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { probeMcpServer, probeMcpSseServer } from "./mcp-server/readinessProbe.js";
-import { getAssistantWiredAgentIds } from "../../shared/config/agentRegistry.js";
+import {
+  getAssistantWiredAgentIds,
+  getEffectiveAgentConfig,
+  hasAssistantMcpImplementation,
+} from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -19,6 +23,16 @@ import type {
   PendingHelpHibernation,
   PendingHelpHibernationStore,
 } from "./PendingHelpHibernationStore.js";
+import {
+  ASSISTANT_LANE_CONFIG_DIR,
+  ASSISTANT_SLOTS,
+  assistantLaneMcpConfigName,
+  assistantSessionDirName,
+  assistantSlotKey,
+  isAssistantSessionDirName,
+  isValidAssistantSlot,
+  sessionIdFromLaneMcpConfigName,
+} from "../../shared/config/assistantSlots.js";
 
 // Narrow type so the test suite (and any future caller) can satisfy this
 // dependency without instantiating a full PtyClient. `kill` is the original
@@ -35,6 +49,9 @@ const SESSION_TOKEN_BYTES = 32;
 // in 64 bits of project-path-derived entropy are not a real concern for a
 // machine-local set of projects.
 const PROJECT_HASH_LEN = 16;
+// Copilot substitutes this from PTY env at spawn rather than baking a literal
+// bearer into `.mcp.json`, so the stale-entry sweep has to recognize it.
+const COPILOT_BEARER_PLACEHOLDER = "$DAINTREE_MCP_TOKEN";
 // Stamp file written into the per-project session dir after a successful
 // `fs.cp` of the bundled help template. Lives inside the session dir (not
 // inside `helpFolder`), so it's never part of the source being hashed and
@@ -45,12 +62,16 @@ const TEMPLATE_HASH_FILE = ".template-hash";
 
 // `action` is the deliberate default tier for assistant sessions, including the
 // headless Daintree Assistant CLI (#10640): it covers orchestration, terminal
-// driving, branch setup, recipes, and reads, while leaving irreversible
-// mutations (git.push, worktree.delete) above the floor so they require a
-// human-approved scoped grant rather than running unattended. What that tier
-// permits vs. withholds is locked by the policy guard in
-// `mcp-server/__tests__/tierAuth.test.ts`; this constant selects it as the
-// provisioning default.
+// driving, branch setup, recipes, reads, and — since #12116 — the confirm-gated
+// worktree cleanup that follows them, while leaving git and forge writes above
+// the floor. What the promotion rests on is that admission and approval are
+// separate gates: a `danger: "confirm"` tool admitted here still goes to the
+// renderer for a native ConfirmDialog, so the tier hands the agent nothing it
+// could not have asked a human for. (An explicit native automation grant does
+// pre-authorise that modal, but issuing one is itself a user decision and was
+// never tier-gated.) What the tier permits vs. withholds is locked by the
+// policy guard in `mcp-server/__tests__/tierAuth.test.ts`; this constant
+// selects it as the provisioning default.
 const DEFAULT_TIER: HelpAssistantTier = "action";
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
@@ -82,6 +103,14 @@ interface ProvisionInput {
   windowId: number;
   projectViewWebContentsId: number;
   /**
+   * Which assistant lane this session occupies (#12108). Optional on the way
+   * in so pre-slot callers and fixtures still mean slot 0, but an explicitly
+   * supplied out-of-range slot is rejected by `validateProvisionInput` rather
+   * than clamped — silently landing in a neighbouring lane would displace a
+   * session the caller never named.
+   */
+  slot?: number;
+  /**
    * Snapshot of the renderer's `ActionContext` captured synchronously when
    * the user launched the assistant, before any `await`. Bound to the MCP
    * session at handshake and replayed as `contextOverride` on every tool
@@ -107,6 +136,14 @@ interface HelpSessionRecord {
   windowId: number;
   projectViewWebContentsId: number;
   projectId: string;
+  /**
+   * The assistant lane this record owns (#12108). Required — every internal
+   * lookup that used to key on `projectId` alone now keys on
+   * `assistantSlotKey(projectId, slot)`, and a record whose lane were unknown
+   * could neither be displaced by its successor nor protected from its
+   * siblings.
+   */
+  slot: number;
   projectPath: string;
   sessionPath: string;
   agentId: string;
@@ -137,6 +174,15 @@ interface HelpSessionRecord {
   codexLaunchArgs?: string[];
   /** Computed at provision for copilot sessions; consumed by lifecycle.ts. */
   copilotLaunchArgs?: string[];
+  /**
+   * Claude sessions only: the per-lane `--mcp-config` file holding this lane's
+   * literal bearer. Lives inside the shared session directory under
+   * `ASSISTANT_LANE_CONFIG_DIR`, is removed on revoke, and is what lets three
+   * lanes share one cwd without sharing one `.mcp.json`.
+   */
+  laneMcpConfigPath?: string;
+  /** Computed at provision for claude sessions; consumed by lifecycle.ts. */
+  claudeLaunchArgs?: string[];
   /**
    * Per-session scratch directory under
    * `userData/assistant-scratch/<instanceId>/<sessionId>/`. Cleared on every
@@ -247,9 +293,20 @@ async function readTemplateHashStamp(sessionPath: string): Promise<string | null
  * state unprovable) or a stale managed skill could not be removed. Launching
  * anyway would run the session with outdated or unowned skill instructions,
  * so provisioning fails closed and the renderer shows a retryable error.
+ *
+ * `UNSUPPORTED_ASSISTANT_AGENT` is a refusal rather than a failure: the agent
+ * declares an `mcpInjection` mode Daintree has no implementation for, so a
+ * session provisioned under it would launch with no MCP wiring at all. The
+ * renderer has no dedicated copy for it yet and degrades to the generic
+ * spawn-failed shape.
  */
 export type HelpSessionErrorCode =
-  "MCP_NOT_READY" | "MCP_SERVER_NOT_STARTED" | "MCP_PROBE_FAILED" | "USER_CONTENT_SYNC_FAILED";
+  | "MCP_NOT_READY"
+  | "MCP_SERVER_NOT_STARTED"
+  | "MCP_PROBE_FAILED"
+  | "USER_CONTENT_SYNC_FAILED"
+  | "MIXED_AGENT_LANES"
+  | "UNSUPPORTED_ASSISTANT_AGENT";
 
 export class HelpSessionError extends Error {
   readonly code: HelpSessionErrorCode;
@@ -268,25 +325,33 @@ export class HelpSessionService {
   // otherwise race the .mcp.json overwrite, producing a Claude instance
   // authenticating with the wrong session record.
   private readonly provisionLocks = new Map<string, Promise<void>>();
-  // Single-backend invariant (#7509): at most one assistant PTY per project
-  // at any given time. The renderer's cooperative cleanup paths (removePanel,
-  // gracefulKill on hibernate, visibilitychange tearDown) are fire-and-forget
-  // and can drop the kill IPC, leaving an orphan PTY that keeps dispatching
-  // MCP tool calls under a still-valid bearer. These maps let the main process
-  // displace prior backends regardless of what the renderer did.
-  private readonly activeHelpTerminalByProjectId = new Map<string, string>();
+  // Single-backend invariant (#7509), scoped to a lane since #12108: at most
+  // one assistant PTY per (project, slot) at any given time. The renderer's
+  // cooperative cleanup paths (removePanel, gracefulKill on hibernate,
+  // visibilitychange tearDown) are fire-and-forget and can drop the kill IPC,
+  // leaving an orphan PTY that keeps dispatching MCP tool calls under a
+  // still-valid bearer. These maps let the main process displace prior
+  // backends regardless of what the renderer did.
+  //
+  // Narrowing the key from project to lane does not weaken the property: the
+  // decisive step is removing the record from `sessionsByToken` BEFORE the
+  // fire-and-forget kill, so a lost kill IPC still leaves an orphan whose
+  // bearer no longer validates. What changes is only which sessions count as
+  // priors — a sibling in another lane is a live session the user asked for,
+  // not an orphan.
+  private readonly activeHelpTerminalBySlotKey = new Map<string, string>();
   private readonly terminalBySessionId = new Map<string, string>();
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
-  // #9639: tracks the in-flight capture owner per project (projectId →
+  // #9639: tracks the in-flight capture owner per lane (slot key →
   // sessionId) while `gracefulKill` is outstanding. A placeholder
   // pending-hibernation entry is written synchronously before the kill so a
   // racing project switch-back resumes instead of fresh-launching; this map
   // decides who is allowed to overwrite/clear that placeholder afterwards so a
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
-  private readonly pendingCapturesByProject = new Map<string, string>();
+  private readonly pendingCapturesBySlotKey = new Map<string, string>();
   // #11477: the entry most recently handed out by `takePendingHibernation`, per
   // project, so a taker whose launch aborts can put it back verbatim via
   // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
@@ -303,7 +368,7 @@ export class HelpSessionService {
   //
   // In-memory only, one deep per project: a take that is never answered is
   // dropped, and a later take supersedes the stash outright.
-  private readonly lastTakenByProject = new Map<
+  private readonly lastTakenBySlotKey = new Map<
     string,
     { entry: PendingHelpHibernation; claimId: string; ownerWebContentsId: number | null }
   >();
@@ -432,19 +497,30 @@ export class HelpSessionService {
    * here too. This is the second line of defense behind the displacement in
    * `doProvision`: covers the renderer race where a new spawn arrives before
    * a prior provision's terminal binding was recorded.
+   *
+   * `expectedAgentId` is the cross-agent token-reuse check. Claude, Codex and
+   * Copilot each get it for free from their launch-arg getters, which return
+   * `null` when the token belongs to another agent's session; an `env-only`
+   * agent has no such getter, so without this a token minted for one env-only
+   * session could bind a terminal running a different one (#12262).
    */
-  markTerminalForToken(token: string, terminalId: string): boolean {
+  markTerminalForToken(token: string, terminalId: string, expectedAgentId?: string): boolean {
     if (!token || !terminalId) return false;
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
+    if (expectedAgentId !== undefined && record.agentId !== expectedAgentId) return false;
 
-    const existingTerminal = this.activeHelpTerminalByProjectId.get(record.projectId);
+    // The lane comes from the authenticated record, never from the caller — a
+    // renderer-supplied slot here could evict a sibling lane's PTY using a
+    // bearer that was only ever issued for its own.
+    const slotKey = assistantSlotKey(record.projectId, record.slot);
+    const existingTerminal = this.activeHelpTerminalBySlotKey.get(slotKey);
     if (existingTerminal && existingTerminal !== terminalId) {
       this.killTerminal(existingTerminal, "help-session-displaced");
       this.removeTerminalFromMaps(existingTerminal);
     }
 
-    this.activeHelpTerminalByProjectId.set(record.projectId, terminalId);
+    this.activeHelpTerminalBySlotKey.set(slotKey, terminalId);
     this.terminalBySessionId.set(record.sessionId, terminalId);
     return true;
   }
@@ -461,8 +537,27 @@ export class HelpSessionService {
   }
 
   /**
+   * The lane `terminalId` currently serves, or null when it serves none.
+   *
+   * Null is the meaningful answer for a displaced backend whose kill has not
+   * landed yet: `displacePriorSessions` drops the record synchronously, so a
+   * corpse resolves to no lane while its live successor resolves to one. That
+   * is what lets project status rank concurrent assistants by attention
+   * without a mid-kill corpse outranking them (see `projectAgentCounts`).
+   */
+  getSlotForTerminal(terminalId: string): number | null {
+    if (!terminalId) return null;
+    for (const [sessionId, boundId] of this.terminalBySessionId.entries()) {
+      if (boundId !== terminalId) continue;
+      const record = this.sessionsById.get(sessionId);
+      if (record && !record.revoked) return record.slot;
+    }
+    return null;
+  }
+
+  /**
    * Reports whether `terminalId` is currently the active help-session PTY
-   * for any project. The PtyEventRouter's `terminal-pid` callback uses this
+   * for any lane. The PtyEventRouter's `terminal-pid` callback uses this
    * to filter help-session terminals into the Windows Job Object so the OS
    * reaps the agent tree on a hard Daintree crash (#7526). Returns false
    * once the binding is dropped (revoke / displace / unbind) — a late PID
@@ -470,16 +565,22 @@ export class HelpSessionService {
    */
   isHelpTerminal(terminalId: string): boolean {
     if (!terminalId) return false;
-    for (const boundId of this.activeHelpTerminalByProjectId.values()) {
+    for (const boundId of this.activeHelpTerminalBySlotKey.values()) {
       if (boundId === terminalId) return true;
     }
     return false;
   }
 
   /**
-   * The assistant backend bound to `projectId` — its PTY and the WebContents
-   * the session pinned at provision time — or null when the project has no
-   * unrevoked help session with a spawned terminal.
+   * Every assistant backend bound to `projectId` — each one's PTY, the
+   * WebContents the session pinned at provision time, and its lane — in slot
+   * order. Empty when the project has no unrevoked help session with a spawned
+   * terminal.
+   *
+   * Returns all lanes rather than a single winner (#12108) because callers use
+   * this as a floor: with concurrent sessions a lane whose PTY has exited must
+   * not mask a live sibling, or reclaiming the project would kill the sibling
+   * — the #11807 regression in a new shape.
    *
    * ProjectViewManager's eviction policy reads this synchronously to keep the
    * view hosting a running assistant out of the routine LRU candidate pool
@@ -501,21 +602,28 @@ export class HelpSessionService {
    * must cross-check `terminalId` against a registry that tracks PTY exits, or
    * an assistant the user quit would pin its view forever.
    */
-  getAssistantBackend(projectId: string): { terminalId: string; webContentsId: number } | null {
-    if (!projectId) return null;
-    const terminalId = this.activeHelpTerminalByProjectId.get(projectId);
-    if (!terminalId) return null;
-    for (const record of this.sessionsById.values()) {
-      if (record.revoked) continue;
-      // Match on the project too, not just the terminal id: nothing enforces
-      // terminal-id uniqueness across projects, and picking up another
-      // project's record would return the wrong pin — which reads as "this view
-      // isn't the pinned one" and hands the running assistant back to the LRU.
-      if (record.projectId !== projectId) continue;
-      if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
-      return { terminalId, webContentsId: record.projectViewWebContentsId };
+  getAssistantBackends(
+    projectId: string
+  ): Array<{ terminalId: string; webContentsId: number; slot: number }> {
+    if (!projectId) return [];
+    const backends: Array<{ terminalId: string; webContentsId: number; slot: number }> = [];
+    for (const slot of ASSISTANT_SLOTS) {
+      const terminalId = this.activeHelpTerminalBySlotKey.get(assistantSlotKey(projectId, slot));
+      if (!terminalId) continue;
+      for (const record of this.sessionsById.values()) {
+        if (record.revoked) continue;
+        // Match on the project and lane too, not just the terminal id: nothing
+        // enforces terminal-id uniqueness across projects, and picking up
+        // another project's record would return the wrong pin — which reads as
+        // "this view isn't the pinned one" and hands the running assistant
+        // back to the LRU.
+        if (record.projectId !== projectId || record.slot !== slot) continue;
+        if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
+        backends.push({ terminalId, webContentsId: record.projectViewWebContentsId, slot });
+        break;
+      }
     }
-    return null;
+    return backends;
   }
 
   /**
@@ -612,10 +720,13 @@ export class HelpSessionService {
    * launches so Claude Code's per-folder workspace-trust prompt only fires
    * once per project; the .mcp.json bearer is rotated on every provision.
    *
-   * On every call:
+   * One directory serves every lane of the project. On every call:
    *   1. Copy the bundled help/ template into the dir (overwrites — picks up
    *      bundled-asset updates without losing the trust acceptance).
-   *   2. Overwrite .mcp.json with a fresh literal-token Authorization header.
+   *   2. Write this lane's MCP wiring: for Claude, a per-lane `--mcp-config`
+   *      file under `.lanes/` carrying the fresh literal bearer, with the
+   *      shared `.mcp.json` left empty; for Copilot, the shared `.mcp.json`
+   *      with an env placeholder; nothing on disk for Codex.
    *   3. Overlay .claude/settings.json with current `helpAssistant` settings.
    *   4. Stamp meta.json with the project identity for GC.
    */
@@ -629,16 +740,27 @@ export class HelpSessionService {
       return null;
     }
 
+    // Lock on the LANE ITSELF — `(projectId, slot)` — because that is the
+    // identity the single-backend invariant is stated in. A path-derived key
+    // would not serialize two callers that spell the same project differently
+    // (`/work/p` vs `/work/p/`): they would hash apart, both run
+    // `displacePriorSessions` before either registered its record, and both
+    // end up live in one lane. Different lanes and different projects still
+    // provision in parallel here; the shared session DIRECTORY they write into
+    // is serialized separately, inside `doProvision`.
     const pathHash = projectPathHash(input.projectPath);
-    const previous = this.provisionLocks.get(pathHash);
+    const lockKey = assistantSlotKey(input.projectId, input.slot ?? 0);
+    const previous = this.provisionLocks.get(lockKey);
     let resolveLock!: () => void;
     const next = new Promise<void>((resolve) => {
       resolveLock = resolve;
     });
-    this.provisionLocks.set(
-      pathHash,
-      (previous ?? Promise.resolve()).then(() => next)
-    );
+    // Keep the CHAINED promise, which is what actually lands in the map — the
+    // cleanup below compares against it to decide whether this call is still
+    // the tail of the queue. Comparing against `next` never matched, so the
+    // entry was never dropped and the map grew for the life of the process.
+    const tail = (previous ?? Promise.resolve()).then(() => next);
+    this.provisionLocks.set(lockKey, tail);
     if (previous) await previous;
 
     try {
@@ -647,8 +769,8 @@ export class HelpSessionService {
       resolveLock();
       // Drop the lock entry once it resolves so the map doesn't grow without
       // bound. Anyone awaiting `previous` already has the resolved promise.
-      if (this.provisionLocks.get(pathHash) === next) {
-        this.provisionLocks.delete(pathHash);
+      if (this.provisionLocks.get(lockKey) === tail) {
+        this.provisionLocks.delete(lockKey);
       }
     }
   }
@@ -662,16 +784,21 @@ export class HelpSessionService {
     // Every help agent — the Daintree Assistant included — provisions at the
     // tier the user configured. Agent identity never widens the MCP surface,
     // which restores the #10640/#10647 safety model: `action` is the default
-    // floor, where irreversible mutations (git.push, worktree.delete) sit above
-    // the line and need a human-approved scoped grant, while `workbench` and
-    // `system` stay explicit user choices. An identity override here would make
-    // the Settings tier selector lie about the surface it hands out (#11907).
-    // What each tier permits is locked in `mcp-server/__tests__/tierAuth.test.ts`.
+    // floor, git and forge writes sit above it and need a human-approved scoped
+    // grant, and `workbench` / `system` stay explicit user choices. An identity
+    // override here would make the Settings tier selector lie about the surface
+    // it hands out (#11907). What each tier permits is locked in
+    // `mcp-server/__tests__/tierAuth.test.ts`.
     const tier: HelpAssistantTier = settings.tier;
+    const slot = input.slot ?? 0;
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();
-    const sessionPath = path.join(sessionsRoot, pathHash);
+    // One directory per PROJECT, shared by every lane. Claude's workspace-trust
+    // and `.mcp.json` approval prompts are both per folder, so this is what
+    // makes them fire once per project rather than once per lane. Anything a
+    // lane must not share — its MCP bearer — lives in a per-lane file below.
+    const sessionPath = path.join(sessionsRoot, assistantSessionDirName(pathHash));
 
     if (settings.daintreeControl) {
       try {
@@ -690,135 +817,184 @@ export class HelpSessionService {
       }
     }
 
+    // One agent per project's lanes. The shared directory holds files that are
+    // agent-shaped as well as lane-shaped: the user-content mirror writes each
+    // agent's skills and removes the other's, Copilot needs the shared
+    // `.mcp.json` that a Claude provision empties, and the settings overlay is
+    // Claude's. Serializing the writes keeps them whole; it does not make two
+    // agents' versions of them coexist. The renderer already keeps lanes on one
+    // preferred agent, so this only ever fires for an explicit `help.launch` of
+    // a different agent while a sibling is live, and it fails closed with a
+    // reason rather than letting that lane quietly clobber its sibling's setup.
+    //
+    // Runs BEFORE the displacement below, or the refusal would be paid for with
+    // the caller's own lane: displacement revokes and kills this slot's prior
+    // session, so a rejected launch would leave the user with a dead lane AND
+    // an error. The predicate only matches `record.slot !== slot`, which
+    // displacement never touches, so the order is behaviour-preserving.
+    const liveSibling = [...this.sessionsByToken.values()].find(
+      (record) =>
+        !record.revoked &&
+        record.projectId === input.projectId &&
+        record.slot !== slot &&
+        record.agentId !== input.agentId
+    );
+    if (liveSibling) {
+      throw new HelpSessionError(
+        "MIXED_AGENT_LANES",
+        `Another session in this project is running ${liveSibling.agentId}; sessions of one project share a folder and have to use the same agent. Stop it first, or open the new session with ${liveSibling.agentId}.`
+      );
+    }
+
     // Single-backend invariant (#7509): displace any prior unrevoked record
-    // for this project BEFORE writing a fresh `.mcp.json`. The bearer is
+    // for this LANE BEFORE writing a fresh `.mcp.json`. The bearer is
     // marked revoked first so any in-flight MCP call from the orphan 401s
     // before the kill IPC reaches the PTY host. Runs inside `provisionLocks`
-    // (per pathHash), so concurrent provisions for the same project see this
-    // as an atomic step. The renderer still calls `revokeHelpSession` from
-    // its cooperative cleanup paths — this enforcement is defense-in-depth
+    // (per lane directory), so concurrent provisions for the same lane see
+    // this as an atomic step. The renderer still calls `revokeHelpSession`
+    // from its cooperative cleanup paths — this enforcement is defense-in-depth
     // for when those paths drop the kill or never fire (crash, project
     // switch, hibernate race).
-    this.displacePriorSessions(input.projectId);
+    this.displacePriorSessions(input.projectId, slot);
 
-    await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
-    await fs.chmod(sessionsRoot, 0o700).catch(() => {});
-    // Hash-gate the template overwrite (#7525). `fs.cp` is non-atomic — a
-    // crash mid-copy would leave a torn session dir whose template files
-    // are a mix of old and new. Most launches see an unchanged template
-    // (same app version since last open), so we skip the copy entirely
-    // when the on-disk stamp matches the bundled hash. The stamp is only
-    // written AFTER `fs.cp` resolves, so a failed copy never marks itself
-    // as valid: next launch sees the mismatch and re-runs the copy.
-    //
-    // The `.mcp.json`, `.claude/settings.json`, and `meta.json` writes
-    // below stay unconditional — those carry per-session secrets (rotated
-    // bearer, current user settings) and are not template content.
-    const sourceHash = await computeTemplateHash(helpFolder);
-    const existingHash = await readTemplateHashStamp(sessionPath);
-    if (existingHash !== sourceHash) {
-      // `force: true` is the default — overwrites existing files in the dir
-      // with the bundled template, picking up any updates to CLAUDE.md /
-      // settings baseline / etc. without losing Claude Code's per-folder trust
-      // acceptance (which lives in ~/.claude.json, not here).
-      await fs.cp(helpFolder, sessionPath, { recursive: true });
-      await resilientAtomicWriteFile(
-        path.join(sessionPath, TEMPLATE_HASH_FILE),
-        sourceHash + "\n",
-        "utf-8",
-        { mode: 0o600 }
-      );
-    }
-    await fs.chmod(sessionPath, 0o700).catch(() => {});
+    // Every lane of a project provisions into ONE directory, so the file work
+    // below is serialized per directory as well as per lane. The lane lock
+    // above guards the single-backend invariant; this one guards the template
+    // copy and its hash stamp, the user-content mirror and its manifest, the
+    // markdown scratch addendum and the shared `.mcp.json` — all of which two
+    // lanes provisioning at once would otherwise write over each other.
+    const { scratchPath, port, laneMcpConfigPath } = await this.withDirectoryLock(
+      pathHash,
+      async () => {
+        await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
+        await fs.chmod(sessionsRoot, 0o700).catch(() => {});
+        // Hash-gate the template overwrite (#7525). `fs.cp` is non-atomic — a
+        // crash mid-copy would leave a torn session dir whose template files
+        // are a mix of old and new. Most launches see an unchanged template
+        // (same app version since last open), so we skip the copy entirely
+        // when the on-disk stamp matches the bundled hash. The stamp is only
+        // written AFTER `fs.cp` resolves, so a failed copy never marks itself
+        // as valid: next launch sees the mismatch and re-runs the copy.
+        //
+        // The `.mcp.json`, `.claude/settings.json`, and `meta.json` writes
+        // below stay unconditional — those carry per-session secrets (rotated
+        // bearer, current user settings) and are not template content.
+        const sourceHash = await computeTemplateHash(helpFolder);
+        const existingHash = await readTemplateHashStamp(sessionPath);
+        if (existingHash !== sourceHash) {
+          // `force: true` is the default — overwrites existing files in the dir
+          // with the bundled template, picking up any updates to CLAUDE.md /
+          // settings baseline / etc. without losing Claude Code's per-folder trust
+          // acceptance (which lives in ~/.claude.json, not here).
+          await fs.cp(helpFolder, sessionPath, { recursive: true });
+          await resilientAtomicWriteFile(
+            path.join(sessionPath, TEMPLATE_HASH_FILE),
+            sourceHash + "\n",
+            "utf-8",
+            { mode: 0o600 }
+          );
+        }
+        await fs.chmod(sessionPath, 0o700).catch(() => {});
 
-    // Mirror user-authored commands/skills from ~/.daintree/assistant and
-    // <project>/.daintree/assistant into the session dir so the launched CLI
-    // discovers them through its native cwd-scoped mechanisms. Runs after the
-    // template copy and unconditionally — the template hash gate doesn't
-    // cover user content, which changes independently of app version.
-    //
-    // Failure policy: invalid or unwritable NEW content is safely omitted (the
-    // assistant just launches without it), but content that would run STALE —
-    // an unreadable source (desired state unprovable) or a managed skill that
-    // should be gone yet is still on disk — fails the provision closed. A
-    // session quietly running deleted or superseded skill instructions is
-    // worse than a retryable launch error.
-    let syncResult;
-    try {
-      syncResult = await syncAssistantContent({
-        sessionPath,
-        projectPath: input.projectPath,
-        agentId: input.agentId,
-      });
-    } catch (err) {
-      const reason = formatErrorMessage(err, "couldn't read the assistant content folders");
-      throw new HelpSessionError(
-        "USER_CONTENT_SYNC_FAILED",
-        `Couldn't refresh the project's assistant commands and skills: ${reason}`
-      );
-    }
-    if (syncResult) {
-      if (syncResult.omittedSkills.length > 0 || syncResult.failedCopies.length > 0) {
-        console.warn(
-          "[HelpSessionService] Assistant content partially mirrored; launching without:",
-          {
+        // Mirror user-authored commands/skills from ~/.daintree/assistant and
+        // <project>/.daintree/assistant into the session dir so the launched CLI
+        // discovers them through its native cwd-scoped mechanisms. Runs after the
+        // template copy and unconditionally — the template hash gate doesn't
+        // cover user content, which changes independently of app version.
+        //
+        // Failure policy: invalid or unwritable NEW content is safely omitted (the
+        // assistant just launches without it), but content that would run STALE —
+        // an unreadable source (desired state unprovable) or a managed skill that
+        // should be gone yet is still on disk — fails the provision closed. A
+        // session quietly running deleted or superseded skill instructions is
+        // worse than a retryable launch error.
+        let syncResult;
+        try {
+          syncResult = await syncAssistantContent({
             sessionPath,
-            omittedSkills: syncResult.omittedSkills,
-            failedCopies: syncResult.failedCopies,
+            projectPath: input.projectPath,
+            agentId: input.agentId,
+          });
+        } catch (err) {
+          const reason = formatErrorMessage(err, "couldn't read the assistant content folders");
+          throw new HelpSessionError(
+            "USER_CONTENT_SYNC_FAILED",
+            `Couldn't refresh the project's assistant commands and skills: ${reason}`
+          );
+        }
+        if (syncResult) {
+          if (syncResult.omittedSkills.length > 0 || syncResult.failedCopies.length > 0) {
+            console.warn(
+              "[HelpSessionService] Assistant content partially mirrored; launching without:",
+              {
+                sessionPath,
+                omittedSkills: syncResult.omittedSkills,
+                failedCopies: syncResult.failedCopies,
+              }
+            );
           }
-        );
+          if (syncResult.staleFailures.length > 0) {
+            // Name the session dir: a stale file that survives removal (symlinked
+            // chain, or a directory where a managed file belongs) fails every
+            // retry identically, so clearing that path by hand is the only fix.
+            console.warn(
+              "[HelpSessionService] Assistant content sync left stale managed files; clear this session directory to recover:",
+              { sessionPath, staleFailures: syncResult.staleFailures }
+            );
+            throw new HelpSessionError(
+              "USER_CONTENT_SYNC_FAILED",
+              `Couldn't refresh the project's assistant commands and skills — outdated copies still present in the session directory ${sessionPath}: ${syncResult.staleFailures.join(", ")}`
+            );
+          }
+        }
+
+        // Per-session scratch dir under `userData/assistant-scratch/<instanceId>/`.
+        // Cleared on every app start by `AssistantScratchService`. Created
+        // unconditionally outside the template hash gate so the path is always
+        // valid for this provision — agents won't see a missing dir behind the
+        // `DAINTREE_ASSISTANT_SCRATCH_DIR` env var. Failure to create propagates
+        // (rather than being swallowed) because launching with a stale or missing
+        // scratch path is worse than a clean provision failure.
+        const scratchPath = getScratchDirForSession(sessionId);
+        await fs.mkdir(scratchPath, { recursive: true, mode: 0o700 });
+        await fs.chmod(scratchPath, 0o700).catch(() => {});
+
+        // Write the scratch-path addendum to each per-agent markdown file in the
+        // session dir. Unconditional — must run even when the template hash gate
+        // above skips `fs.cp`, otherwise a stale path from a prior session would
+        // persist (`scratchPath` changes every provision because `sessionId` does).
+        // Uses managed markers so re-provision replaces the block in place instead
+        // of accumulating duplicate stanzas.
+        await this.writeScratchAddendum(sessionPath, scratchPath);
+
+        const port = await this.getMcpPort(settings.daintreeControl);
+        let laneMcpConfigPath: string | undefined;
+        if (input.agentId === "claude") {
+          laneMcpConfigPath = await this.writeClaudeMcpConfig(
+            sessionPath,
+            slot,
+            sessionId,
+            settings,
+            port,
+            token
+          );
+          await this.writeClaudeSettings(sessionPath, helpFolder, settings);
+        } else if (input.agentId === "copilot") {
+          await this.writeCopilotMcpConfig(sessionPath, settings, port);
+        } else {
+          // Codex and any other agent skip `writeMcpConfig`, so when the
+          // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
+          // prior Claude provision for this same project keeps its stale
+          // `daintree` Bearer in cwd. The bearer is already revoked in-memory
+          // (single-backend invariant), but before the gate, `fs.cp` would
+          // have restored the bundled `.mcp.json` and wiped the entry. Strip
+          // it now to preserve that hygiene — no-op when the entry is absent
+          // or its bearer is still live.
+          await this.stripStaleDaintreeMcpEntry(sessionPath);
+        }
+        return { scratchPath, port, laneMcpConfigPath };
       }
-      if (syncResult.staleFailures.length > 0) {
-        // Name the session dir: a stale file that survives removal (symlinked
-        // chain, or a directory where a managed file belongs) fails every
-        // retry identically, so clearing that path by hand is the only fix.
-        console.warn(
-          "[HelpSessionService] Assistant content sync left stale managed files; clear this session directory to recover:",
-          { sessionPath, staleFailures: syncResult.staleFailures }
-        );
-        throw new HelpSessionError(
-          "USER_CONTENT_SYNC_FAILED",
-          `Couldn't refresh the project's assistant commands and skills — outdated copies still present in the session directory ${sessionPath}: ${syncResult.staleFailures.join(", ")}`
-        );
-      }
-    }
-
-    // Per-session scratch dir under `userData/assistant-scratch/<instanceId>/`.
-    // Cleared on every app start by `AssistantScratchService`. Created
-    // unconditionally outside the template hash gate so the path is always
-    // valid for this provision — agents won't see a missing dir behind the
-    // `DAINTREE_ASSISTANT_SCRATCH_DIR` env var. Failure to create propagates
-    // (rather than being swallowed) because launching with a stale or missing
-    // scratch path is worse than a clean provision failure.
-    const scratchPath = getScratchDirForSession(sessionId);
-    await fs.mkdir(scratchPath, { recursive: true, mode: 0o700 });
-    await fs.chmod(scratchPath, 0o700).catch(() => {});
-
-    // Write the scratch-path addendum to each per-agent markdown file in the
-    // session dir. Unconditional — must run even when the template hash gate
-    // above skips `fs.cp`, otherwise a stale path from a prior session would
-    // persist (`scratchPath` changes every provision because `sessionId` does).
-    // Uses managed markers so re-provision replaces the block in place instead
-    // of accumulating duplicate stanzas.
-    await this.writeScratchAddendum(sessionPath, scratchPath);
-
-    const port = await this.getMcpPort(settings.daintreeControl);
-    if (input.agentId === "claude") {
-      await this.writeMcpConfig(sessionPath, settings, port, token);
-      await this.writeClaudeSettings(sessionPath, helpFolder, settings);
-    } else if (input.agentId === "copilot") {
-      await this.writeCopilotMcpConfig(sessionPath, settings, port);
-    } else {
-      // Codex and any other agent skip `writeMcpConfig`, so when the
-      // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
-      // prior Claude provision for this same project keeps its stale
-      // `daintree` Bearer in cwd. The bearer is already revoked in-memory
-      // (single-backend invariant), but before the gate, `fs.cp` would
-      // have restored the bundled `.mcp.json` and wiped the entry. Strip
-      // it now to preserve that hygiene — no-op when the entry is absent
-      // or its bearer is still live.
-      await this.stripStaleDaintreeMcpEntry(sessionPath);
-    }
+    );
     // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
     // its only mechanism for overriding the global config is the `-c key=value`
     // CLI flag (verified against codex-cli 0.129.0). MCP servers are appended
@@ -835,6 +1011,9 @@ export class HelpSessionService {
         : undefined;
     const copilotLaunchArgs =
       input.agentId === "copilot" ? this.buildCopilotLaunchArgs() : undefined;
+    // Claude reads its MCP wiring from the per-lane file rather than the
+    // shared cwd `.mcp.json`; the flag is the only way that file reaches it.
+    const claudeLaunchArgs = laneMcpConfigPath ? ["--mcp-config", laneMcpConfigPath] : undefined;
 
     const now = Date.now();
     const record: HelpSessionRecord = {
@@ -843,6 +1022,7 @@ export class HelpSessionService {
       windowId: input.windowId,
       projectViewWebContentsId: input.projectViewWebContentsId,
       projectId: input.projectId,
+      slot,
       projectPath: input.projectPath,
       sessionPath,
       agentId: input.agentId,
@@ -854,6 +1034,8 @@ export class HelpSessionService {
       actionContext: input.actionContext,
       codexLaunchArgs,
       copilotLaunchArgs,
+      laneMcpConfigPath,
+      claudeLaunchArgs,
       scratchPath,
     };
 
@@ -870,8 +1052,8 @@ export class HelpSessionService {
       try {
         if (input.agentId === "claude") {
           // Claude Code reads SSE at /sse with a literal bearer baked into
-          // `.mcp.json`. Both probes warm the same in-memory MCP token
-          // map, so neither leaks across agents.
+          // its lane's `--mcp-config` file. Both probes warm the same
+          // in-memory MCP token map, so neither leaks across agents.
           await probeMcpSseServer(port, token);
         } else {
           // Codex and Copilot both speak Streamable HTTP at /mcp. Codex
@@ -886,6 +1068,9 @@ export class HelpSessionService {
         this.sessionsById.delete(sessionId);
         if (input.agentId === "claude" || input.agentId === "copilot") {
           await this.stripStaleDaintreeMcpEntry(sessionPath);
+          // The lane file was written moments ago with the bearer the probe just
+          // proved dead; a failed provision must not leave it behind.
+          await this.removeLaneMcpConfig(laneMcpConfigPath);
         }
         const reason = formatErrorMessage(err, "assistant MCP session isn't ready");
         await this.recordMcpNotReady(sessionId, reason);
@@ -992,11 +1177,11 @@ export class HelpSessionService {
    * Invalidates the in-memory bearer for this session. The on-disk dir is
    * intentionally preserved across launches so the user's one-time Claude
    * Code workspace-trust acceptance for this project carries over to the
-   * next assistant open — but the literal bearer is stripped from
-   * `.mcp.json` so a `claude` started outside the help-panel flow (e.g. a
-   * stray terminal `cd`-ed into the session dir) can't keep authenticating
-   * against the now-revoked record. The next provision rewrites a fresh
-   * entry into the same file.
+   * next assistant open — but this lane's `--mcp-config` file is removed and
+   * any literal bearer is stripped from the shared `.mcp.json`, so a `claude`
+   * started outside the help-panel flow (e.g. a stray terminal `cd`-ed into
+   * the session dir) can't keep authenticating against the now-revoked
+   * record. The next provision writes a fresh lane file.
    *
    * Pass `{ captureHibernation: true }` for the eviction / window-close
    * paths: instead of a hard kill, the bound PTY is graceful-killed so the
@@ -1011,6 +1196,7 @@ export class HelpSessionService {
     if (!record || record.revoked) return;
 
     const terminalId = this.terminalBySessionId.get(sessionId);
+    const slotKey = assistantSlotKey(record.projectId, record.slot);
 
     // Capture FIRST (while the session record is still valid for token
     // lookups by the agent process). gracefulKill resolves with the agent's
@@ -1021,6 +1207,15 @@ export class HelpSessionService {
     // resume entry. A best-effort capture is strictly an improvement over
     // the previous behaviour of always losing the conversation.
     let capturedAgentSessionId: string | null = null;
+    // Whether THIS call claimed the lane's capture below. `revoked` is only set
+    // after the gracefulKill await, so a concurrent revoke of the same session —
+    // the renderer's no-capture `handleTerminalPanelMissing` path, which now
+    // races us whenever the project view outlives the kill (project sleep and
+    // close+kill both keep it alive) — passes the guard at the top and reaches
+    // the finalize block below. Without this flag it would release OUR ownership
+    // and the real resume id would be dropped for the empty-sentinel placeholder,
+    // silently demoting the resume to latest-conversation.
+    let ownsCapture = false;
     if (opts?.captureHibernation && terminalId && this.ptyClient) {
       // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
       // via `set`) before the gracefulKill round-trip. The eviction path that
@@ -1032,10 +1227,11 @@ export class HelpSessionService {
       // resume-latest path instead; once gracefulKill returns we overwrite the
       // placeholder with the agent's real resume ID (below).
       if (this.pendingHibernationStore) {
-        this.pendingCapturesByProject.set(record.projectId, sessionId);
+        this.pendingCapturesBySlotKey.set(slotKey, sessionId);
+        ownsCapture = true;
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
-          .set(record.projectId, {
+          .set(slotKey, {
             agentId: record.agentId,
             agentSessionId: "",
             cwd: record.sessionPath,
@@ -1084,11 +1280,8 @@ export class HelpSessionService {
       this.terminalBySessionId.delete(sessionId);
       // If displaced, the new provision already cleared the active slot (and
       // may have set it to a new terminal id) — never touch it here.
-      if (
-        !displacedDuringCapture &&
-        this.activeHelpTerminalByProjectId.get(record.projectId) === terminalId
-      ) {
-        this.activeHelpTerminalByProjectId.delete(record.projectId);
+      if (!displacedDuringCapture && this.activeHelpTerminalBySlotKey.get(slotKey) === terminalId) {
+        this.activeHelpTerminalBySlotKey.delete(slotKey);
       }
       if (!capturedAgentSessionId) {
         this.killTerminal(terminalId, "help-session-revoked");
@@ -1113,20 +1306,21 @@ export class HelpSessionService {
     }
 
     // #9639: finalize the placeholder written before gracefulKill. Only act if
-    // we still own the capture — a same-project re-provision that ran
+    // we still own the capture — a same-lane re-provision that ran
     // `displacePriorSessions` during the await clears our ownership and the
     // placeholder, so the old resume ID can't shadow the fresh session that
-    // took the slot. When we still own it: overwrite with the real resume ID
+    // took the lane. When we still own it: overwrite with the real resume ID
     // if gracefulKill yielded one, otherwise leave the empty-sentinel in place
     // (resume-latest beats a fresh launch). Then release ownership.
     if (
+      ownsCapture &&
       this.pendingHibernationStore &&
-      this.pendingCapturesByProject.get(record.projectId) === sessionId
+      this.pendingCapturesBySlotKey.get(slotKey) === sessionId
     ) {
       if (capturedAgentSessionId) {
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
-          .set(record.projectId, {
+          .set(slotKey, {
             agentId: record.agentId,
             agentSessionId: capturedAgentSessionId,
             cwd: record.sessionPath,
@@ -1141,15 +1335,20 @@ export class HelpSessionService {
             );
           });
       }
-      this.pendingCapturesByProject.delete(record.projectId);
+      this.pendingCapturesBySlotKey.delete(slotKey);
     }
 
-    // Claude bakes a literal session bearer into `.mcp.json`; Copilot
-    // references the same file with `$DAINTREE_MCP_TOKEN` substitution.
-    // Both need the daintree entry stripped on revoke so a stray agent
-    // started outside the help-panel flow in that cwd can't keep talking
-    // to the now-revoked MCP route. Codex stores nothing on disk (uses
-    // `-c` flags), so no file-strip is needed.
+    // Claude's literal session bearer lives in this lane's own `--mcp-config`
+    // file: remove it, so nothing on disk names a route that no longer
+    // answers. The shared `.mcp.json` is also stripped for both Claude and
+    // Copilot (Copilot references it with `$DAINTREE_MCP_TOKEN` substitution,
+    // and a pre-shared-directory install may still have a literal Claude
+    // bearer in it) so a stray agent started outside the help-panel flow in
+    // that cwd can't keep talking to the revoked route. Codex stores nothing
+    // on disk (uses `-c` flags), so no file work is needed.
+    if (record.agentId === "claude") {
+      await this.removeLaneMcpConfig(record.laneMcpConfigPath);
+    }
     if (record.agentId === "claude" || record.agentId === "copilot") {
       await this.stripStaleDaintreeMcpEntry(record.sessionPath);
     }
@@ -1163,14 +1362,17 @@ export class HelpSessionService {
    * before the user commits to a launch. The actual resume still goes through
    * `takePendingHibernation` (atomic take) inside the launch flow.
    */
-  peekPendingHibernation(projectId: string): {
+  peekPendingHibernation(
+    projectId: string,
+    slot: number
+  ): {
     agentId: string;
     agentSessionId: string;
     cwd: string;
     panelWasOpen: boolean;
   } | null {
     if (!this.pendingHibernationStore) return null;
-    const entry = this.pendingHibernationStore.get(projectId);
+    const entry = this.pendingHibernationStore.get(assistantSlotKey(projectId, slot));
     if (!entry) return null;
     return {
       agentId: entry.agentId,
@@ -1197,6 +1399,7 @@ export class HelpSessionService {
    */
   async takePendingHibernation(
     projectId: string,
+    slot: number,
     ownerWebContentsId?: number
   ): Promise<{
     agentId: string;
@@ -1205,25 +1408,30 @@ export class HelpSessionService {
     claimId: string;
   } | null> {
     if (!this.pendingHibernationStore) return null;
-    const entry = this.pendingHibernationStore.get(projectId);
+    const slotKey = assistantSlotKey(projectId, slot);
+    const entry = this.pendingHibernationStore.get(slotKey);
     if (!entry) return null;
     // #10048: invalidate the in-flight capture owner before the await so the
     // post-gracefulKill finalize block's ownership guard fails and the
     // already-killed agent's (now-stale) resume ID cannot overwrite the
     // placeholder the renderer just claimed. Mirrors displacePriorSessions.
-    this.pendingCapturesByProject.delete(projectId);
+    this.pendingCapturesBySlotKey.delete(slotKey);
     // Stash the exact entry (original `capturedAt` and all) so a taker that
     // aborts can hand it back via `restorePendingHibernation` (#11477).
-    // Overwrites any prior stash: only the most recent take is restorable, and
-    // an earlier taker's put-back must not resurrect a superseded entry.
+    // Overwrites any prior stash for this lane: only the most recent take is
+    // restorable, and an earlier taker's put-back must not resurrect a
+    // superseded entry. Stashes are per lane, so one view holding claims on
+    // several lanes keeps them independent — the CAS identity is
+    // (slotKey, claimId, ownerWebContentsId), and the same owner appearing in
+    // more than one bucket is expected rather than ambiguous.
     const { panelWasOpen: _panelWasOpen, ...restorable } = entry;
     const claimId = randomUUID();
-    this.lastTakenByProject.set(projectId, {
+    this.lastTakenBySlotKey.set(slotKey, {
       entry: restorable,
       claimId,
       ownerWebContentsId: ownerWebContentsId ?? null,
     });
-    await this.pendingHibernationStore.clear(projectId);
+    await this.pendingHibernationStore.clear(slotKey);
     return {
       agentId: entry.agentId,
       agentSessionId: entry.agentSessionId,
@@ -1268,11 +1476,13 @@ export class HelpSessionService {
    */
   async restorePendingHibernation(
     projectId: string,
+    slot: number,
     claimId: string,
     ownerWebContentsId?: number
   ): Promise<boolean> {
     if (!this.pendingHibernationStore) return false;
-    const stashed = this.lastTakenByProject.get(projectId);
+    const slotKey = assistantSlotKey(projectId, slot);
+    const stashed = this.lastTakenBySlotKey.get(slotKey);
     if (!stashed) return false;
     // Compare-and-swap on the specific take. A release quoting a superseded
     // claim (a later take replaced the stash) or arriving from a view other
@@ -1288,16 +1498,46 @@ export class HelpSessionService {
     }
     // One-shot from here: the claim is now spent either way, so a duplicate
     // release can't re-resurrect an entry a subsequent take consumed.
-    this.lastTakenByProject.delete(projectId);
-    if (this.pendingHibernationStore.get(projectId)) return false;
-    if (this.pendingCapturesByProject.has(projectId)) return false;
-    await this.pendingHibernationStore.set(projectId, stashed.entry);
+    this.lastTakenBySlotKey.delete(slotKey);
+    if (this.pendingHibernationStore.get(slotKey)) return false;
+    if (this.pendingCapturesBySlotKey.has(slotKey)) return false;
+    await this.pendingHibernationStore.set(slotKey, stashed.entry);
     return true;
   }
 
-  private displacePriorSessions(projectId: string): void {
+  /**
+   * Which lanes of `projectId` hold an eviction-captured resume entry.
+   *
+   * A cold renderer knows nothing about lanes 1+ — the ephemeral per-slot
+   * state is gone and only the persisted entries survive — so without this the
+   * tabs for those lanes would never be recreated and their captured
+   * conversations would be unreachable despite still being on disk. Returns
+   * lanes in slot order.
+   */
+  listPendingHibernationSlots(projectId: string): number[] {
+    if (!this.pendingHibernationStore || !projectId) return [];
+    return ASSISTANT_SLOTS.filter((slot) =>
+      Boolean(this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot)))
+    );
+  }
+
+  /**
+   * Revoke every prior session occupying `(projectId, slot)`.
+   *
+   * Scoped to the lane since #12108. The #7509 property is unchanged and lives
+   * in the ORDER below, not in the breadth of the filter: the record leaves
+   * `sessionsByToken` before the fire-and-forget PTY kill, so even a dropped
+   * kill IPC leaves an orphan whose bearer no longer validates. Narrowing the
+   * filter only stops us killing sessions in other lanes, which are live
+   * sessions the user asked for rather than orphans.
+   *
+   * This is why `record.slot` is required rather than optional: a record whose
+   * lane were unknown would be displaced by nobody and would protect nobody.
+   */
+  private displacePriorSessions(projectId: string, slot: number): void {
+    const slotKey = assistantSlotKey(projectId, slot);
     const priors = [...this.sessionsById.values()].filter(
-      (record) => record.projectId === projectId && !record.revoked
+      (record) => record.projectId === projectId && record.slot === slot && !record.revoked
     );
     for (const prior of priors) {
       prior.revoked = true;
@@ -1305,10 +1545,10 @@ export class HelpSessionService {
       this.sessionsById.delete(prior.sessionId);
       // #9639: if this displaced session owns an in-flight capture placeholder,
       // drop it (and release ownership) so the old, soon-to-be-stale resume ID
-      // can't shadow the fresh session now taking the project's slot.
-      if (this.pendingCapturesByProject.get(projectId) === prior.sessionId) {
-        this.pendingCapturesByProject.delete(projectId);
-        void this.pendingHibernationStore?.clear(projectId).catch((err) => {
+      // can't shadow the fresh session now taking this lane.
+      if (this.pendingCapturesBySlotKey.get(slotKey) === prior.sessionId) {
+        this.pendingCapturesBySlotKey.delete(slotKey);
+        void this.pendingHibernationStore?.clear(slotKey).catch((err) => {
           console.warn(
             "[HelpSessionService] Failed to clear displaced pending hibernation:",
             projectId,
@@ -1322,7 +1562,7 @@ export class HelpSessionService {
         this.killTerminal(terminalId, "help-session-displaced");
       }
       // Tear down the displaced session's live MCP transport too (#9151).
-      // Displacement is just a same-project re-provision flavour of revoke —
+      // Displacement is just a same-lane re-provision flavour of revoke —
       // without this the old bearer keeps its tier/grants/pin until the
       // 30-minute idle reaper, exactly the stale state this issue closes on
       // the `revokeSession` path.
@@ -1337,10 +1577,10 @@ export class HelpSessionService {
       }
     }
     // Also clear any stale active-terminal binding the renderer never
-    // confirmed via `markTerminalForToken` — leaving it would leak the
-    // project's slot and cause the next `markTerminalForToken` to kill
+    // confirmed via `markTerminalForToken` — leaving it would leak this
+    // lane's binding and cause the next `markTerminalForToken` to kill
     // the wrong PTY.
-    this.activeHelpTerminalByProjectId.delete(projectId);
+    this.activeHelpTerminalBySlotKey.delete(slotKey);
   }
 
   private killTerminal(terminalId: string, reason: string): void {
@@ -1358,8 +1598,8 @@ export class HelpSessionService {
   }
 
   private removeTerminalFromMaps(terminalId: string): void {
-    for (const [pid, tid] of this.activeHelpTerminalByProjectId.entries()) {
-      if (tid === terminalId) this.activeHelpTerminalByProjectId.delete(pid);
+    for (const [pid, tid] of this.activeHelpTerminalBySlotKey.entries()) {
+      if (tid === terminalId) this.activeHelpTerminalBySlotKey.delete(pid);
     }
     for (const [sid, tid] of this.terminalBySessionId.entries()) {
       if (tid === terminalId) this.terminalBySessionId.delete(sid);
@@ -1391,19 +1631,24 @@ export class HelpSessionService {
   }
 
   /**
-   * Idle-background auto-close (#10830): the sweep capture-revokes a project's
-   * help sessions before reclaiming it — the same conversation-preserving path
-   * as LRU eviction, so the next open resumes where the user left off. The
-   * renderer's own hibernate timer can't do this itself, because a parked
-   * project view freezes timers (the #10739 class).
+   * Three entry points capture-revoke a project's help sessions ahead of a
+   * project-wide teardown: the idle-background auto-close sweep (#10830),
+   * `project:sleep`, and `project:close` with `killTerminals` (#12181). All
+   * three take the same conversation-preserving path as LRU eviction, so the
+   * next open resumes where the user left off. The renderer's own hibernate
+   * timer can't do this itself, because a parked project view freezes timers
+   * (the #10739 class).
    *
-   * A LIVE assistant no longer reaches here: since #11807 the sweep treats one
-   * as a hard floor and skips the project entirely, because nothing tells main
+   * The sweep never hands us a LIVE assistant: since #11807 it treats one as a
+   * hard floor and skips the project entirely, because nothing tells main
    * whether an idle-looking assistant is merely at its prompt or sitting on a
-   * scheduled wakeup. So the records this settles are the non-live ones — a
-   * terminal that exited under its own steam (nothing drops that binding), or
-   * a session provisioned but never bound. Only the former has a conversation
-   * to capture; an unbound record writes no pending-hibernation entry.
+   * scheduled wakeup. Its records are the non-live ones — a terminal that
+   * exited under its own steam (nothing drops that binding), or a session
+   * provisioned but never bound. Sleep and close are the opposite: the user
+   * asked for the teardown, so a live assistant behind a still-live project
+   * view is the normal case and the capture path really runs. That is what
+   * makes the renderer's own no-capture revoke of the same session racing us
+   * reachable, and why `revokeSession` finalizes only under the ownership flag.
    */
   async revokeByProjectId(projectId: string): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
@@ -1423,7 +1668,7 @@ export class HelpSessionService {
     // Take-side stashes are launch-scoped and hold a resume id; nothing can
     // release one across a restart, so drop them rather than carry them to
     // shutdown. The persisted entries themselves are untouched (#11477).
-    this.lastTakenByProject.clear();
+    this.lastTakenBySlotKey.clear();
   }
 
   /**
@@ -1455,8 +1700,13 @@ export class HelpSessionService {
         const entryPath = path.join(sessionsRoot, entry);
         if (this.isProjectHashDirName(entry)) {
           await this.stripStaleDaintreeMcpEntry(entryPath);
+          await this.sweepStaleLaneConfigs(entryPath);
           return;
         }
+        // Everything else goes: per-launch UUID directories from the oldest
+        // model, and the `<hash>-sN` per-lane directories that preceded the
+        // shared one. Neither can be resumed from — their agents' resume ids
+        // were captured against a cwd nothing launches in any more.
         await this.removeSessionDir(entryPath);
       })
     );
@@ -1508,8 +1758,55 @@ export class HelpSessionService {
     void this.revokeAll();
   }
 
+  /**
+   * Whether `name` is a session directory we own and must keep.
+   *
+   * Load-bearing: `gcStaleSessions` recursively DELETES every directory this
+   * rejects. Only the bare project hash passes — every lane of a project shares
+   * it — so both legacy shapes are collected: per-launch UUID directories from
+   * the oldest model, and the `<hash>-sN` per-lane directories that preceded the
+   * shared one. See `isAssistantSessionDirName` for why neither is worth keeping.
+   */
   private isProjectHashDirName(name: string): boolean {
-    return name.length === PROJECT_HASH_LEN && /^[0-9a-f]+$/.test(name);
+    return isAssistantSessionDirName(name, PROJECT_HASH_LEN);
+  }
+
+  /**
+   * The MCP server module, imported lazily (it is a cycle at load time) and
+   * exactly once. Two lanes provisioning at the same moment used to issue two
+   * concurrent `import()`s of it, which is one more than the module system
+   * guarantees to resolve identically — under vitest the second escaped the
+   * module mock and loaded the real service. One shared promise, one import.
+   */
+  private mcpServerModule: Promise<typeof import("./McpServerService.js")> | null = null;
+
+  private loadMcpServerModule(): Promise<typeof import("./McpServerService.js")> {
+    this.mcpServerModule ??= import("./McpServerService.js");
+    return this.mcpServerModule;
+  }
+
+  /** Serializes filesystem work on one project's shared session directory. */
+  private readonly directoryLocks = new Map<string, Promise<void>>();
+
+  private async withDirectoryLock<T>(pathHash: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.directoryLocks.get(pathHash);
+    let release!: () => void;
+    const next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Same shape as `provisionLocks`: chain, remember the chained promise, and
+    // only drop the entry if this call is still the tail.
+    const tail = (previous ?? Promise.resolve()).then(() => next);
+    this.directoryLocks.set(pathHash, tail);
+    if (previous) await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.directoryLocks.get(pathHash) === tail) {
+        this.directoryLocks.delete(pathHash);
+      }
+    }
   }
 
   private validateProvisionInput(input: ProvisionInput): void {
@@ -1521,6 +1818,15 @@ export class HelpSessionService {
     }
     if (typeof input.projectPath !== "string" || !input.projectPath.trim()) {
       throw new Error("projectPath is required");
+    }
+    // Absent means slot 0 (pre-slot callers and fixtures). Present but invalid
+    // is a caller bug: clamping it would silently displace whichever lane the
+    // clamp landed on, which is exactly the cross-lane kill the slot key
+    // exists to prevent.
+    if (input.slot !== undefined && !isValidAssistantSlot(input.slot)) {
+      throw new Error(
+        `slot must be an integer in [0, ${ASSISTANT_SLOTS.length}) — got ${String(input.slot)}`
+      );
     }
     if (!path.isAbsolute(input.projectPath)) {
       throw new Error("projectPath must be absolute");
@@ -1539,6 +1845,20 @@ export class HelpSessionService {
     // list) keeps it hidden until promoted. Deprecated-tier agents (e.g.
     // gemini) are excluded here and cannot provision a help session.
     if (!getAssistantWiredAgentIds().includes(input.agentId)) {
+      // Separate the two refusals. A tier or registration miss is a
+      // configuration choice, but an agent whose declared injection mode has no
+      // implementation used to clear this gate and then match none of the
+      // literal-id branches below — provisioning a real session dir, bearer and
+      // probed port for an agent that would launch entirely unwired (#12262).
+      // Both messages keep the "not assistant-supported" wording the renderer
+      // and existing callers already match on.
+      const supports = getEffectiveAgentConfig(input.agentId)?.supports;
+      if (supports && !hasAssistantMcpImplementation(input.agentId)) {
+        throw new HelpSessionError(
+          "UNSUPPORTED_ASSISTANT_AGENT",
+          `agentId "${input.agentId}" is not assistant-supported: Daintree implements no "${supports.mcpInjection}" MCP wiring for it`
+        );
+      }
       throw new Error(`agentId "${input.agentId}" is not assistant-supported`);
     }
   }
@@ -1652,7 +1972,7 @@ export class HelpSessionService {
     if (!this.mcpRegistry) {
       throw new Error("MCP registry not yet wired (app still initializing)");
     }
-    const { mcpServerService } = await import("./McpServerService.js");
+    const { mcpServerService } = await this.loadMcpServerModule();
     mcpServerService.setHelpTokenValidator((token) => this.validateToken(token));
     mcpServerService.setHelpSessionWebContentsResolver((token) =>
       this.getWebContentsIdForToken(token)
@@ -1706,7 +2026,7 @@ export class HelpSessionService {
    */
   private async recordMcpNotReady(sessionId: string | null, detail: string): Promise<void> {
     try {
-      const { mcpServerService } = await import("./McpServerService.js");
+      const { mcpServerService } = await this.loadMcpServerModule();
       mcpServerService.recordTurnOutcome({
         outcome: "mcp-not-ready",
         sessionId,
@@ -1720,19 +2040,34 @@ export class HelpSessionService {
   private async getMcpPort(daintreeControl: boolean): Promise<number | null> {
     if (!daintreeControl) return null;
     try {
-      const { mcpServerService } = await import("./McpServerService.js");
+      const { mcpServerService } = await this.loadMcpServerModule();
       return mcpServerService.currentPort;
     } catch {
       return null;
     }
   }
 
-  private async writeMcpConfig(
+  /**
+   * Writes a Claude lane's MCP wiring, and returns the path of the per-lane
+   * `--mcp-config` file that carries it.
+   *
+   * Two files, deliberately. The shared `<sessionPath>/.mcp.json` is written
+   * EMPTY: it is one file for every lane of the project, so nothing lane-
+   * specific can live in it, and a project-scoped `.mcp.json` with servers in
+   * it is also what raises Claude's per-folder approval prompt. Everything —
+   * the docs server and the daintree control server with this lane's literal
+   * bearer — goes into `<sessionPath>/.lanes/slot-N.mcp.json` instead, handed
+   * to the CLI with `--mcp-config`. Servers supplied that way are caller input
+   * and raise no approval prompt, and they merge with the (empty) project file.
+   */
+  private async writeClaudeMcpConfig(
     sessionPath: string,
+    slot: number,
+    sessionId: string,
     settings: { daintreeControl: boolean; docSearch: boolean },
     port: number | null,
     token: string
-  ): Promise<void> {
+  ): Promise<string> {
     const mcpServers: Record<string, unknown> = {};
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
@@ -1761,22 +2096,98 @@ export class HelpSessionService {
         headers: { Authorization: `Bearer ${token}` },
       };
     }
-    const target = path.join(sessionPath, ".mcp.json");
+    const laneDir = path.join(sessionPath, ASSISTANT_LANE_CONFIG_DIR);
+    await fs.mkdir(laneDir, { recursive: true, mode: 0o700 });
+    await fs.chmod(laneDir, 0o700).catch(() => {});
+    const lanePath = path.join(laneDir, assistantLaneMcpConfigName(slot, sessionId));
     await resilientAtomicWriteFile(
-      target,
+      lanePath,
       JSON.stringify({ mcpServers }, null, 2) + "\n",
       "utf-8",
       { mode: 0o600 }
     );
+    // The shared project file. The bundled template ships one with the docs
+    // server in it; that is what the approval prompt was for, so it is
+    // overwritten with nothing rather than left to prompt.
+    await resilientAtomicWriteFile(
+      path.join(sessionPath, ".mcp.json"),
+      JSON.stringify({ mcpServers: {} }, null, 2) + "\n",
+      "utf-8",
+      { mode: 0o600 }
+    );
+    return lanePath;
   }
 
   /**
-   * Writes `<sessionPath>/.mcp.json` for a Copilot help session. Copilot's
-   * MCP discovery is CWD-only and the file shape is `{ mcpServers: { name: {
-   * type: "http", url, headers } } }`. Auth uses Copilot's native env-var
-   * substitution (`$VAR`, single-dollar form) so the literal session token
-   * never lands on disk — the bearer is delivered through
-   * `DAINTREE_MCP_TOKEN` in PTY spawn env.
+   * Returns the cached `--mcp-config` flag pair for a Claude help session.
+   * lifecycle.ts appends it to the spawn command after the help token
+   * validates. Returns null for unknown / revoked tokens or non-Claude
+   * sessions, so the spawn handler never injects the flag for the wrong agent.
+   */
+  getClaudeLaunchArgs(token: string): string[] | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return null;
+    if (record.agentId !== "claude") return null;
+    return record.claudeLaunchArgs ?? [];
+  }
+
+  /**
+   * Removes the per-lane `--mcp-config` file, if any. Called on revoke — the
+   * bearer in it is dead the moment its session is — and from GC for lane
+   * files whose bearer is no longer in `sessionsByToken`.
+   */
+  private async removeLaneMcpConfig(lanePath: string | undefined): Promise<void> {
+    if (!lanePath) return;
+    try {
+      await fs.rm(lanePath, { force: true });
+    } catch (err) {
+      console.warn("[HelpSessionService] Failed to remove lane MCP config:", lanePath, err);
+    }
+  }
+
+  /**
+   * Sweeps `<sessionPath>/.lanes/` of every file whose session isn't live.
+   * Keyed on the session id in the file NAME, so a docs-only file with no
+   * bearer in it is judged the same way as one with, and nothing has to parse
+   * a credential out of a file to decide its fate. Sessions never rehydrate
+   * across restarts, so after a boot every lane file on disk is dead until its
+   * lane re-provisions and writes a new one. Anything in the directory that is
+   * not a lane file at all is removed too — nothing else is supposed to be there.
+   */
+  private async sweepStaleLaneConfigs(sessionPath: string): Promise<void> {
+    const laneDir = path.join(sessionPath, ASSISTANT_LANE_CONFIG_DIR);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(laneDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      console.warn("[HelpSessionService] Failed to read lane config dir for GC:", laneDir, err);
+      return;
+    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        const sessionId = sessionIdFromLaneMcpConfigName(entry);
+        const live = sessionId ? this.sessionsById.get(sessionId) : undefined;
+        if (live && !live.revoked) return;
+        await this.removeLaneMcpConfig(path.join(laneDir, entry));
+      })
+    );
+  }
+
+  /**
+   * Writes `<sessionPath>/.mcp.json` for a Copilot help session. Daintree wires
+   * Copilot through discovery in the managed session directory it already sets
+   * as cwd, so the file shape is `{ mcpServers: { name: { type: "http", url,
+   * headers } } }`. Auth uses Copilot's native env-var substitution (`$VAR`,
+   * single-dollar form) so the literal session token never lands on disk — the
+   * bearer is delivered through `DAINTREE_MCP_TOKEN` in PTY spawn env.
+   *
+   * Recent Copilot CLIs also accept a session-scoped `--additional-mcp-config`
+   * flag, so cwd discovery is Daintree's choice rather than the CLI's only
+   * option; the previous "discovery is CWD-only" note here was wrong about that.
+   * Switching would mean re-verifying the flag against the pinned CLI and
+   * moving the bearer into argv, so it stays as-is.
    */
   private async writeCopilotMcpConfig(
     sessionPath: string,
@@ -1794,7 +2205,7 @@ export class HelpSessionService {
       mcpServers["daintree"] = {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
-        headers: { Authorization: "Bearer $DAINTREE_MCP_TOKEN" },
+        headers: { Authorization: `Bearer ${COPILOT_BEARER_PLACEHOLDER}` },
       };
     }
     const target = path.join(sessionPath, ".mcp.json");
@@ -1928,13 +2339,16 @@ export class HelpSessionService {
     );
   }
 
-  private buildScratchAddendum(scratchPath: string): string {
+  private buildScratchAddendum(_scratchPath: string): string {
+    // No literal path. This block lives in the CLAUDE.md / AGENTS.md that every
+    // lane of the project shares, while the scratch folder is per session — so a
+    // literal path here is whichever lane provisioned last, and the other lanes
+    // would be told to write into a folder that is not theirs. The env var is
+    // set per PTY and is always this lane's own.
     return [
       "## Assistant Scratch Folder",
       "",
-      `You have a dedicated scratch folder for any temporary or working files you need to create: \`${scratchPath}\`.`,
-      "",
-      `The same path is available in the environment variable \`${ASSISTANT_SCRATCH_ENV_VAR}\` for use in shell commands.`,
+      `You have a dedicated scratch folder for any temporary or working files you need to create. Its path is in the environment variable \`${ASSISTANT_SCRATCH_ENV_VAR}\`; read that variable rather than assuming a location.`,
       "",
       "Use this folder — not the project workspace, not the system temp dir — for any notes, drafts, intermediate output, or other scratch work. The folder is cleared on every Daintree launch, so don't put anything you want to keep there.",
       "",
@@ -2024,7 +2438,30 @@ export class HelpSessionService {
     const auth = entry.headers?.Authorization ?? "";
     const match = /^Bearer\s+(.+)$/.exec(auth);
     const token = match?.[1]?.trim();
-    if (token && this.sessionsByToken.has(token)) return;
+    // Copilot never writes a literal bearer — `writeCopilotMcpConfig` emits the
+    // `$DAINTREE_MCP_TOKEN` placeholder, which is substituted from PTY env at
+    // spawn. Matching it against the token map always misses, so an unrevoked
+    // Copilot session owning this exact directory would have its own live
+    // config stripped out from under it.
+    // Narrowed to Copilot: a Claude session owning the directory does not make
+    // a leftover Copilot entry legitimate, and keeping one would leave Claude
+    // with a stale server it cannot authenticate against.
+    const ownedByLiveCopilot = [...this.sessionsByToken.values()].some(
+      (record) =>
+        !record.revoked && record.agentId === "copilot" && record.sessionPath === sessionPath
+    );
+    if (token === COPILOT_BEARER_PLACEHOLDER && ownedByLiveCopilot) return;
+
+    // Otherwise a token is only live FOR THIS DIRECTORY. Lanes share their
+    // project's directory, so a live bearer here belongs to one of this
+    // project's lanes; one belonging to another project is misplaced, not live
+    // — keeping it would leave a working credential in a directory its session
+    // never owned, which is the stray-`claude`-in-cwd hole this strip exists to
+    // close. Claude's own bearers no longer land in this file at all (they ride
+    // in per-lane `--mcp-config` files), so the only literal ones left to find
+    // are from installs that predate that.
+    const live = token ? this.sessionsByToken.get(token) : undefined;
+    if (live && live.sessionPath === sessionPath) return;
 
     delete servers["daintree"];
     try {

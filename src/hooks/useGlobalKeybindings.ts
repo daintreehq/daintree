@@ -11,6 +11,7 @@ import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "../store";
+import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 /**
  * Canonical first-step combo of every chord (they all begin `Cmd+K`). Opening
@@ -297,7 +298,12 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
               source: "keybinding",
             })
             .then((dispatchResult) => {
-              if (!dispatchResult.ok) {
+              // `terminal.kill`/`restart`/`restartAll` are bound by default and
+              // park a confirmation when an agent is mid-work. That now reports
+              // CONFIRMATION_REQUIRED instead of a silent ok (#12120), but the
+              // shortcut did exactly what it should — the dialog is up — so it
+              // must not be logged as a failure.
+              if (!dispatchResult.ok && !isStagedConfirmation(dispatchResult.error)) {
                 logError(
                   `[GlobalKeybinding] Action "${result.match!.actionId}" failed`,
                   undefined,

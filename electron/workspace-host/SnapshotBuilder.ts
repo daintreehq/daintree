@@ -2,6 +2,7 @@ import type {
   Worktree,
   WorktreeMood,
   WorktreeLifecycleStatus,
+  WorktreeSetupStatus,
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
@@ -40,6 +41,7 @@ export interface SnapshotBuilderHost {
   readonly issueLastUpdatedAt: number | undefined;
   readonly worktreeChanges: WorktreeChanges | null;
   readonly lifecycleStatus: WorktreeLifecycleStatus | undefined;
+  readonly setupStatus: WorktreeSetupStatus | undefined;
   readonly lifecyclePhaseResults: readonly WorktreeLifecyclePhaseResult[];
   readonly resourceStatus: WorktreeResourceStatus | undefined;
   readonly resourceConnectCommand: string | undefined;
@@ -64,6 +66,7 @@ export interface SnapshotBuilderHost {
   readonly lastFetchedAt: number | null;
   readonly lastGitStatusCheckedAt: number;
   readonly workingTreeChangedAt: number;
+  readonly workingTreeChangedDirs: readonly string[] | null | undefined;
   readonly fetchAuthFailed: boolean;
   readonly fetchNetworkFailed: boolean;
   readonly isFetchInFlight: boolean;
@@ -146,6 +149,7 @@ export class SnapshotBuilder {
       worktreeId: this.host.id,
       timestamp: Date.now(),
       lifecycleStatus: this.host.lifecycleStatus,
+      setupStatus: this.host.setupStatus,
       lifecyclePhaseResults:
         this.host.lifecyclePhaseResults.length > 0
           ? [...this.host.lifecyclePhaseResults]
@@ -174,6 +178,14 @@ export class SnapshotBuilder {
       // 0 → undefined so a worktree that has never seen a raw fs write serializes
       // lean; the store side map treats absent as "no signal yet".
       workingTreeChangedAt: this.host.workingTreeChangedAt || undefined,
+      // Passed through verbatim, never `|| undefined`: `null` ("the burst could
+      // not be described — re-read everything") and `[]` ("a real burst that
+      // touched no directory") are distinct answers, and both differ from
+      // absent ("no burst has been described at all"). Suppressed only when
+      // there is no stamp for them to belong to (#12244).
+      workingTreeChangedDirs: this.host.workingTreeChangedAt
+        ? this.host.workingTreeChangedDirs
+        : undefined,
       fetchAuthFailed: this.host.fetchAuthFailed || undefined,
       fetchNetworkFailed: this.host.fetchNetworkFailed || undefined,
       // Read in-flight state authoritatively at snapshot time (lesson #1700)

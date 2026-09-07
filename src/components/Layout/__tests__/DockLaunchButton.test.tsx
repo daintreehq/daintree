@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import {
   getPanelKindIds,
   getPanelKindConfig,
+  registerPanelKind,
+  unregisterPanelKind,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 
@@ -62,8 +64,8 @@ vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
 
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: Object.assign(
-    (selector: (s: { recipes: typeof mockRecipes }) => unknown) =>
-      selector({ recipes: mockRecipes }),
+    (selector: (s: { recipes: typeof mockRecipes; currentProjectId: string | null }) => unknown) =>
+      selector({ recipes: mockRecipes, currentProjectId: mockCurrentProjectId }),
     {
       getState: () => ({ runRecipeWithResults: runRecipeWithResultsMock }),
     }
@@ -124,6 +126,9 @@ let mockToolbarLayout: {
 } = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
 const setAgentPinnedMock = vi.fn();
 const setPanelButtonOnToolbarMock = vi.fn();
+const setLauncherItemOnToolbarMock = vi.fn();
+// Drives `recipeToolbarSourceId`: a project-scoped recipe's pin id carries it.
+let mockCurrentProjectId: string | null = null;
 const positionAgentButtonMock = vi.fn();
 const toggleButtonVisibilityMock = vi.fn();
 
@@ -228,6 +233,7 @@ vi.mock("@/store/toolbarPreferencesStore", () => {
   const getState = () => ({
     layout: mockToolbarLayout,
     setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
+    setLauncherItemOnToolbar: setLauncherItemOnToolbarMock,
     positionAgentButton: positionAgentButtonMock,
     toggleButtonVisibility: toggleButtonVisibilityMock,
   });
@@ -367,6 +373,8 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 });
 
 import { DockLaunchButton } from "../DockLaunchButton";
+import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
+import { SlidersHorizontal } from "lucide-react";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 
 const AGENTS: DockLaunchAgent[] = [
@@ -492,6 +500,8 @@ beforeEach(() => {
   refreshAvailabilityMock.mockClear();
   mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
   setAgentPinnedMock.mockReset();
+  setLauncherItemOnToolbarMock.mockReset();
+  mockCurrentProjectId = null;
   setPanelButtonOnToolbarMock.mockReset();
   positionAgentButtonMock.mockReset();
   toggleButtonVisibilityMock.mockReset();
@@ -1417,6 +1427,91 @@ describe("DockLaunchButton", () => {
     );
   });
 
+  it("footers the More band with both action cues under one heading", () => {
+    const { container, getAllByTestId } = renderButton();
+
+    // Walk the listbox in DOM order and file each option under the heading
+    // above it. Counting headings alone would not do: a row that drifted into
+    // another band leaves exactly one "More" behind and still renders its label
+    // somewhere on screen, which is all a `getByText` pair can see.
+    const under = new Map<string, string[]>();
+    let heading = "";
+    for (const node of listbox(container).querySelectorAll<HTMLElement>(
+      '[data-testid="dock-launcher-band"], [role="option"]'
+    )) {
+      if (node.getAttribute("data-testid") === "dock-launcher-band") {
+        heading = node.textContent ?? "";
+        continue;
+      }
+      under.set(heading, [...(under.get(heading) ?? []), node.textContent ?? ""]);
+    }
+
+    expect(
+      getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More")
+    ).toHaveLength(1);
+    const more = under.get("More") ?? [];
+    expect(more).toHaveLength(2);
+    expect(more[0]).toContain("Manage agents");
+    expect(more[1]).toContain(TOOLBAR_CUSTOMIZE_LABEL);
+  });
+
+  it("draws the Customize toolbar cue with a glyph of its own", () => {
+    // Compared against a live render of the icon rather than Lucide's class
+    // string, which is the package's business and not a contract. Without this
+    // the row could regress to the `Workflow` the old cue ternary fell through
+    // to, or to the `Settings2` the row directly above it already carries, and
+    // every other assertion here would stay green.
+    const { container } = renderButton();
+    const glyphOf = (label: string) => {
+      const row = options(container).find((option) => option.textContent?.includes(label));
+      if (!row) throw new Error(`no option row for ${label}`);
+      return row.querySelector("svg")!.innerHTML;
+    };
+    const slidersGlyph = render(<SlidersHorizontal />).container.querySelector("svg")!.innerHTML;
+
+    expect(glyphOf(TOOLBAR_CUSTOMIZE_LABEL)).toBe(slidersGlyph);
+    expect(glyphOf(TOOLBAR_CUSTOMIZE_LABEL)).not.toBe(glyphOf("Manage agents"));
+  });
+
+  it("leaves the action cues out of search results", () => {
+    // Fuse is built from `searchItems` — agents, panels and recipes — and the
+    // placeholder promises exactly those. A cue that leaked into the ranked list
+    // would be an action offered where the user is picking something to launch.
+    const { container, queryByText } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "customize" } });
+
+    expect(queryByText(TOOLBAR_CUSTOMIZE_LABEL)).toBeNull();
+    expect(queryByText("Manage agents")).toBeNull();
+  });
+
+  it("opens the toolbar settings tab from the Customize toolbar cue", () => {
+    const { getByText } = renderButton();
+
+    fireEvent.click(getByText(TOOLBAR_CUSTOMIZE_LABEL));
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "toolbar" },
+      { source: "menu" }
+    );
+  });
+
+  it("lands on the Customize toolbar cue at the end of the browse list", () => {
+    // The footer is the last thing End can reach, so this is also the assertion
+    // that the row took an index in the flat navigation space at all.
+    const { container } = renderButton();
+    const input = searchInput(container);
+
+    fireEvent.keyDown(input, { key: "End" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "toolbar" },
+      { source: "menu" }
+    );
+  });
+
   it("does not render the Create a recipe cue when recipes exist", () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
     const { queryByText, getByText } = renderButton({ activeWorktreeId: "wt-1" });
@@ -1887,16 +1982,129 @@ describe("DockLaunchButton", () => {
       expect(pinControl(rowFor(container, "Dev Preview"))).toBeTruthy();
     });
 
-    it("withholds the pin from rows with nothing to pin to", () => {
+    it("offers a pin on every row the toolbar used to have no id for (#12217)", () => {
+      // The three classes the issue names. Each was launchable from here and
+      // could not reach the toolbar from anywhere.
       mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
       const { container } = renderButton({
         agents: [{ id: "my-plugin-agent", name: "Plugin agent", availability: "ready" }],
       });
 
-      expect(pinControl(rowFor(container, "My recipe"))).toBeNull();
-      expect(pinControl(rowFor(container, "Review"))).toBeNull();
-      // Not a built-in agent, so there is no toolbar button id to write.
-      expect(pinControl(rowFor(container, "Plugin agent"))).toBeNull();
+      expect(pinControl(rowFor(container, "My recipe"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "Review"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "Plugin agent"))).toBeTruthy();
+    });
+
+    it("leaves every launcher row pinnable, so none is reachable but unreachable", () => {
+      // The exhaustiveness check the issue asks for: "if a row is in the list,
+      // it should be pinnable". Only the cue rows, which launch nothing, may
+      // carry no pin.
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton({
+        agents: [{ id: "my-plugin-agent", name: "Plugin agent", availability: "ready" }],
+      });
+
+      // Classified by `data-row-kind`, not by matching display text: deriving
+      // the exceptions from labels lets a cue that wrongly GAINED a pin pass
+      // silently, because it would just drop out of the unpinnable list.
+      const byKind = new Map<string, { withPin: number; withoutPin: number }>();
+      for (const row of options(container)) {
+        const kind = row.getAttribute("data-row-kind") ?? "unknown";
+        const tally = byKind.get(kind) ?? { withPin: 0, withoutPin: 0 };
+        if (pinControl(row)) tally.withPin += 1;
+        else tally.withoutPin += 1;
+        byKind.set(kind, tally);
+      }
+
+      // Both directions, per kind, with non-zero representatives — so neither
+      // half can pass by the rows simply not being rendered.
+      expect(byKind.get("item")?.withoutPin).toBe(0);
+      expect(byKind.get("item")?.withPin).toBeGreaterThan(0);
+      expect(byKind.get("cue")?.withPin).toBe(0);
+      expect(byKind.get("cue")?.withoutPin).toBeGreaterThan(0);
+    });
+
+    it("scopes a project-owned recipe's pin id to its project (#12217)", () => {
+      // `.daintree/recipes/*.json` is tracked in git and a legacy file carries
+      // no id, so `ProjectIdentityFiles` derives `inrepo-<filename>` — two
+      // projects each holding a `dev.json` produce the same string. Without the
+      // project in the key, pinning one project's recipe shows and launches the
+      // other project's.
+      mockCurrentProjectId = "project-a";
+      mockRecipes = [
+        { id: "inrepo-dev", name: "Dev", worktreeId: undefined, projectId: "project-a" },
+      ];
+      const { container } = renderButton();
+
+      fireEvent.click(pinControl(rowFor(container, "Dev"))!);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith(
+        "launcher:recipe:project-a:inrepo-dev",
+        true
+      );
+    });
+
+    it("leaves a genuinely global recipe's pin id unscoped", () => {
+      // A global recipe is meant to be reachable from every project; qualifying
+      // it would strand its pin on the next project switch.
+      mockCurrentProjectId = "project-a";
+      mockRecipes = [{ id: "g-1", name: "Global recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+
+      fireEvent.click(pinControl(rowFor(container, "Global recipe"))!);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:g-1", true);
+    });
+
+    it("writes a launcher-item pin through its own setter, not the panel one", () => {
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "My recipe"))!;
+      expect(pin.getAttribute("data-pinned")).toBe("false");
+
+      fireEvent.click(pin);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:r-1", true);
+      expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+    });
+
+    it("reads a launcher item's pin from the explicit true alone", () => {
+      // No default slot to fall through to, so a position without the flag is
+      // not a pin — unlike the four fixed panel buttons.
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      mockToolbarLayout = {
+        pinnedButtons: {},
+        leftButtons: ["launcher:recipe:r-1"],
+        rightButtons: [],
+      };
+      const { container } = renderButton();
+      expect(pinControl(rowFor(container, "My recipe"))?.getAttribute("data-pinned")).toBe("false");
+
+      mockToolbarLayout = {
+        pinnedButtons: { "launcher:recipe:r-1": true },
+        leftButtons: [],
+        rightButtons: [],
+      };
+      const second = renderButton();
+      expect(pinControl(rowFor(second.container, "My recipe"))?.getAttribute("data-pinned")).toBe(
+        "true"
+      );
+    });
+
+    it("keeps a plugin agent off the built-in agent store", () => {
+      // Its id is not a `BuiltInAgentId`, so `dispatchToolbarVisibility` has no
+      // entry to write and a pin routed there would silently do nothing.
+      const { container } = renderButton({
+        agents: [{ id: "my-plugin-agent", name: "Plugin agent", availability: "ready" }],
+      });
+
+      fireEvent.click(pinControl(rowFor(container, "Plugin agent"))!);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith(
+        "launcher:agent:my-plugin-agent",
+        true
+      );
+      expect(setAgentPinnedMock).not.toHaveBeenCalled();
     });
 
     it("withholds the pin from the create-recipe cue", () => {
@@ -2054,13 +2262,24 @@ describe("DockLaunchButton", () => {
     });
 
     it("leaves the pin phrase off rows that cannot be pinned", () => {
-      // The phrase is a promise about a key that works — a recipe row has no
-      // pin target, so announcing Alt+P there would send the user nowhere.
+      // The phrase is a promise about a key that works. Since #12217 every
+      // launchable row can take it, so the rows it must stay off are the cues —
+      // which navigate rather than launching and have nothing to pin.
+      mockRecipes = [];
+      const { container } = renderButton();
+      const cue = rowFor(container, "Create a recipe");
+
+      expect(cue.getAttribute("aria-label")).not.toContain("Alt+P");
+      expect(cue.getAttribute("aria-keyshortcuts")).toBeNull();
+    });
+
+    it("announces Alt+P on a recipe row now that it goes somewhere (#12217)", () => {
       mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
       const { container } = renderButton();
+      const row = rowFor(container, "My recipe");
 
-      expect(rowFor(container, "My recipe").getAttribute("aria-label")).not.toContain("Alt+P");
-      expect(rowFor(container, "My recipe").getAttribute("aria-keyshortcuts")).toBeNull();
+      expect(row.getAttribute("aria-label")).toContain("Press Alt+P to pin to toolbar");
+      expect(row.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
     });
 
     it("leaves the unavailable-agent warning to the description, not the name", () => {
@@ -2208,11 +2427,12 @@ describe("DockLaunchButton", () => {
         expect([band, signatures.size]).toEqual([band, 1]);
       }
 
-      // The rows that can hold a control still reserve both, so revealing one on
-      // hover moves nothing; the recipe band keeps only its disclosure column.
+      // Every launchable row reserves both, so revealing one on hover moves
+      // nothing. The recipe band joined them in #12217 — it now carries a pin,
+      // and withholding the slot would leave that control nowhere to appear.
       expect(slotsOf(rowFor(container, "Claude"))).toBe("disclosure,shortcut,pin");
-      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure");
-      expect(pinControl(rowFor(container, "My recipe"))).toBeNull();
+      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure,shortcut,pin");
+      expect(pinControl(rowFor(container, "My recipe"))).toBeTruthy();
     });
 
     it("activates from the row itself, not only from an inner control", () => {
@@ -2314,7 +2534,10 @@ describe("DockLaunchButton", () => {
         expect(setAgentPinnedMock).not.toHaveBeenCalled();
       });
 
-      it("does nothing when the selected row has nothing to pin", () => {
+      it("pins the selected recipe through the launcher-item setter (#12217)", () => {
+        // This row used to be the "nothing to pin" case. Asserting only that the
+        // agent and panel setters stayed idle would now pass while the recipe
+        // was in fact being pinned, so the assertion is positive.
         mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
         const { container } = renderButton();
         const input = searchInput(container);
@@ -2322,8 +2545,24 @@ describe("DockLaunchButton", () => {
 
         fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true });
 
+        expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:r-1", true);
         expect(setAgentPinnedMock).not.toHaveBeenCalled();
         expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+      });
+
+      it("does nothing when the selected row has nothing to pin", () => {
+        // A cue navigates rather than launching, so it is the only kind of row
+        // left with no pin target at all.
+        mockRecipes = [];
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "create a recipe" } });
+
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true });
+
+        expect(setAgentPinnedMock).not.toHaveBeenCalled();
+        expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+        expect(setLauncherItemOnToolbarMock).not.toHaveBeenCalled();
       });
     });
   });
@@ -2773,5 +3012,127 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       // One launcher, two placements, same inventory — the issue's end state.
       expect(new Set(toolbar)).toEqual(new Set(dock));
     });
+  });
+});
+
+describe("panel origin marker", () => {
+  const GLOBAL_KIND = "acme.dashboard.overview";
+  const PROJECT_KIND = "project:proj-1/acme.notes/scratch";
+
+  function registerKind(id: string, name: string, over: Partial<PanelKindConfig> = {}) {
+    registerPanelKind({
+      id,
+      name,
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      dockable: false,
+      extensionId: "acme.dashboard",
+      ...over,
+    });
+  }
+
+  afterEach(() => {
+    unregisterPanelKind(GLOBAL_KIND);
+    unregisterPanelKind(PROJECT_KIND);
+  });
+
+  /** The row for a named item, found the way a screen reader would place it. */
+  function rowNamed(container: HTMLElement, name: string): HTMLElement {
+    const row = options(container).find((el) =>
+      (el.getAttribute("aria-label") ?? "").startsWith(`${name},`)
+    );
+    if (!row) throw new Error(`no row named ${name}`);
+    return row;
+  }
+
+  it("marks both plugin tiers in browse and leaves built-ins unmarked", () => {
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Plugin");
+    expect(qualifierTextOf(rowNamed(container, "Scratch"))).toBe("Project plugin");
+    // The rule this follows: provenance earns a marker only where it differs
+    // from the default, so the majority of rows stay exactly as they were.
+    expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("");
+  });
+
+  it("stacks origin behind the category in search rather than displacing it", () => {
+    // Search is the one mode where the row has to say what it IS — a query can
+    // return a recipe and a panel with the same name — so the category keeps
+    // the front of the slot.
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Dashnotes", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "dash" } });
+
+    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Panel · Plugin");
+    expect(qualifierTextOf(rowNamed(container, "Dashnotes"))).toBe("Panel · Project plugin");
+  });
+
+  it("keeps a built-in row's search qualifier at the bare category", () => {
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "review" } });
+
+    expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("Panel");
+  });
+
+  it("speaks both tiers while searching, not just in browse", () => {
+    // `rowNamed` only needs the name prefix, so the visual-qualifier cases
+    // above would still pass if search dropped origin from the spoken name.
+    registerKind(GLOBAL_KIND, "Dashboard");
+    registerKind(PROJECT_KIND, "Dashnotes", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "dash" } });
+
+    expect(rowNamed(container, "Dashboard").getAttribute("aria-label")).toContain("Plugin");
+    expect(rowNamed(container, "Dashnotes").getAttribute("aria-label")).toContain("Project plugin");
+  });
+
+  it("speaks a global plugin's tier in browse too", () => {
+    registerKind(GLOBAL_KIND, "Dashboard");
+    const { container } = renderButton();
+
+    const label = rowNamed(container, "Dashboard").getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Dashboard, Grid")).toBe(true);
+    expect(label).toContain("Plugin");
+    expect(label).not.toContain("Project plugin");
+  });
+
+  it("speaks the origin without disturbing the accessible-name prefix", () => {
+    // `e2e/helpers/panels.ts` matches rows by `[aria-label^="Name,"]`, and a
+    // listener has no trailing span to read — so origin is appended as its own
+    // clause after the destination rather than folded into it.
+    registerKind(PROJECT_KIND, "Scratch", { projectId: "proj-1" });
+    const { container } = renderButton();
+
+    const label = rowNamed(container, "Scratch").getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Scratch, Grid")).toBe(true);
+    expect(label).toContain("Project plugin");
+  });
+
+  it("adds nothing to a built-in row's accessible name", () => {
+    const { container } = renderButton();
+
+    // Case-insensitive: `toContain("Plugin")` alone would let a stray
+    // "Project plugin" through on the row that is meant to carry neither.
+    const label = rowNamed(container, "Review").getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Review, Grid")).toBe(true);
+    expect(label).not.toMatch(/plugin|built-in/i);
+  });
+
+  it("keeps a disabled reason ahead of the panel branch in the slot", () => {
+    // State changes what Enter does; provenance does not. Guards the branch
+    // ordering: a panel branch inserted above the disabled one would blank this
+    // row's reason, and only a panel can reach either.
+    const { container } = renderButton({ hasProject: false });
+
+    expect(qualifierTextOf(rowNamed(container, "Dev Preview"))).toBe("Needs a project");
   });
 });

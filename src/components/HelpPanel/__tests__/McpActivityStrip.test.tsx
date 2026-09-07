@@ -37,6 +37,7 @@ vi.mock("@/components/ui/popover", async () => {
 import { McpActivityStrip } from "../McpActivityStrip";
 import { groupCallsByTurn } from "../RecentCallsPopover";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
+import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
 
 function makeRecord(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
   return {
@@ -74,6 +75,9 @@ function makeActivity(overrides: Partial<McpToolActivityState> = {}): McpToolAct
 const getAuditRecords = vi.fn();
 
 beforeEach(() => {
+  // #12108: controllers live in a per-view registry, not component
+  // state, so they outlive a render and must be reset between tests.
+  __resetHelpSessionControllersForTests();
   getAuditRecords.mockReset();
   getAuditRecords.mockResolvedValue([]);
   Object.defineProperty(globalThis, "window", {

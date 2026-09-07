@@ -8,15 +8,15 @@ import { isPathInside } from "../../shared/utils/path.js";
 /**
  * A change signal for paths no git watcher covers.
  *
- * Worktrees get their liveness from `GitFileWatcher`'s recursive
- * `@parcel/watcher` subscription in the workspace-host subprocess. A scratch
+ * Worktrees get their liveness from `GitFileWatcher`'s recursive platform
+ * watcher in the workspace-host subprocess. A scratch
  * folder, a worktree-less project and a file picked from anywhere else on disk
  * have no host and no watcher, so the file surfaces that render them had no
  * tick to subscribe to at all (#11590).
  *
  * Rather than start a second native watcher — in Main, where a persistent
  * FSEvents/inotify thread is an app-quit teardown hazard and every existing
- * `@parcel/watcher` call site deliberately lives in a subprocess — this reduces
+ * recursive watcher call site deliberately lives in a subprocess — this reduces
  * each watched path to a cheap fingerprint the renderer polls and diffs. The
  * poll IS the reconcile, so the two failure modes a watcher would bring with it
  * (silently dropped overflow events, and a subscription that cannot report the

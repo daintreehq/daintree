@@ -1031,6 +1031,35 @@ describe("createHost — showToast", () => {
     });
   });
 
+  it("prefixes with the manifest displayName rather than the raw plugin id", async () => {
+    // A project plugin's id is an instance key, so the raw prefix read
+    // `project__b67…: Synced 12 videos` in the UI (#12211). The prefix stays —
+    // it is unspoofable provenance — but it names the plugin, not the key.
+    await writePlugin("toast-named", {
+      name: "acme.toast-named",
+      version: "1.0.0",
+      displayName: "Video Manager",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-named"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Synced 12 videos", type: "success" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "success",
+      message: "Video Manager: Synced 12 videos",
+      duration: undefined,
+      // The bucket key stays the raw id: never rendered, and two plugins may
+      // share a display name.
+      rateLimitKey: "plugin:acme.toast-named:success",
+    });
+  });
+
   it("defaults type to info when omitted", async () => {
     await writePlugin("toast-default", { name: "acme.toast-default", version: "1.0.0" });
     const service = new PluginService(tmpDir);

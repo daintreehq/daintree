@@ -30,6 +30,10 @@ export type {
   Worktree,
   WorktreeState,
   WorktreeListResult,
+  WorktreeCreateResult,
+  WorktreeSetupStatus,
+  WorktreeSetupState,
+  WorktreeSetupStage,
   WslGitEligibility,
 } from "./worktree.js";
 

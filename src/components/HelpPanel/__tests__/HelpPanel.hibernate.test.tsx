@@ -11,6 +11,7 @@ const {
   mockPeekPendingHibernation,
   mockTakePendingHibernation,
   mockRestorePendingHibernation,
+  mockListPendingHibernationSlots,
   mockReportPanelOpen,
   mockProvisionSession,
   mockRevokeSession,
@@ -44,6 +45,7 @@ const {
   mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
   mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
   mockRestorePendingHibernation: vi.fn().mockResolvedValue(false),
+  mockListPendingHibernationSlots: vi.fn().mockResolvedValue([]),
   mockReportPanelOpen: vi.fn().mockResolvedValue(undefined),
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
@@ -75,6 +77,17 @@ const {
     wake: [] as Array<(sleepDurationMs: number) => void>,
   },
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    ensureSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -253,6 +266,15 @@ vi.mock("@/store/helpPanelStore", () => {
   store.getState = () => helpPanelState;
   return {
     useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
     HELP_PANEL_MIN_WIDTH: 320,
     HELP_PANEL_MAX_WIDTH: 800,
   };
@@ -387,6 +409,8 @@ vi.mock("@/types", () => ({
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
+import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
+import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
 
 // Drain the full async chain (pull-on-mount peek → setState → re-render →
 // fire-effect → async launch) by yielding to a macrotask: setTimeout(0) runs
@@ -471,6 +495,9 @@ function resetState() {
   mockTakePendingHibernation.mockResolvedValue(null);
   mockRestorePendingHibernation.mockReset();
   mockRestorePendingHibernation.mockResolvedValue(false);
+  mockListPendingHibernationSlots.mockReset();
+  mockListPendingHibernationSlots.mockResolvedValue([]);
+  helpPanelState.ensureSlot = vi.fn();
   mockReportPanelOpen.mockReset();
   mockReportPanelOpen.mockResolvedValue(undefined);
   focusStoreState.gestureAssistantHidden = false;
@@ -508,6 +535,9 @@ function resetState() {
 }
 
 beforeEach(() => {
+  // #12108: controllers live in a per-view registry, not component
+  // state, so they outlive a render and must be reset between tests.
+  __resetHelpSessionControllersForTests();
   vi.clearAllMocks();
   resetState();
 
@@ -546,6 +576,7 @@ beforeEach(() => {
           peekPendingHibernation: mockPeekPendingHibernation,
           takePendingHibernation: mockTakePendingHibernation,
           restorePendingHibernation: mockRestorePendingHibernation,
+          listPendingHibernationSlots: mockListPendingHibernationSlots,
           reportPanelOpen: mockReportPanelOpen,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
@@ -598,7 +629,7 @@ describe("HelpPanel — resume from hibernated session", () => {
   it("auto-launch resumes via addPanel when hibernateSessions has a matching project + agent entry", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -632,8 +663,9 @@ describe("HelpPanel — resume from hibernated session", () => {
       expect.anything(),
       expect.anything()
     );
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       "resumed-term-1",
       "claude",
       "fresh-session"
@@ -646,7 +678,7 @@ describe("HelpPanel — resume from hibernated session", () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -665,7 +697,7 @@ describe("HelpPanel — resume from hibernated session", () => {
   it("renders the resume banner after a successful resume", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -701,7 +733,7 @@ describe("HelpPanel — resume from hibernated session", () => {
   it("does not resume when the hibernated entry is for a different agent", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "gemini" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "gemini" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -730,7 +762,7 @@ describe("HelpPanel — resume from hibernated session", () => {
   it("does not resume when no hibernated entry exists for the current project", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "other-proj": { sessionId: "xyz", cwd: "/tmp/help/other", agentId: "claude" },
+      [slotKey("other-proj", 0)]: { sessionId: "xyz", cwd: "/tmp/help/other", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -758,7 +790,7 @@ describe("HelpPanel — resume from hibernated session", () => {
   it("falls through to agent.launch when buildResumeCommand returns undefined", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -777,7 +809,7 @@ describe("HelpPanel — resume from hibernated session", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({ agentId: "claude" }),
@@ -788,7 +820,7 @@ describe("HelpPanel — resume from hibernated session", () => {
   it("falls through to agent.launch when the resumed addPanel returns no id", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -806,7 +838,7 @@ describe("HelpPanel — resume from hibernated session", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({ agentId: "claude" }),
@@ -837,7 +869,7 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
     expect(await findByTestId("help-resume-assistant")).toBeTruthy();
     // The Resume CTA replaces the fresh-start primary in the empty state.
     expect(queryByTestId("help-start-assistant")).toBeNull();
-    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1", 0);
   });
 
   it("clicking Resume resumes the captured session WITHOUT recording consent (#10699)", async () => {
@@ -846,7 +878,7 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
     // reads (setHibernateSession is mocked, so we pre-seed what _seedHibernateFromMain
     // would have written) — this proves the click actually resumes, not just launches.
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -1058,7 +1090,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     // Seed what _seedHibernateFromMain would have written so the launch actually
     // resumes (mirrors the click-to-resume test).
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -1125,7 +1157,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       cwd: "/tmp/help/proj-1",
       agentId: "codex",
     };
-    helpPanelState.hibernateSessions = { "proj-1": preExisting };
+    helpPanelState.hibernateSessions = { [slotKey("proj-1", 0)]: preExisting };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
     mockPeekPendingHibernation.mockResolvedValue({
@@ -1147,9 +1179,9 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     });
     await flushAsyncWork();
 
-    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-mismatch");
-    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1");
-    expect(helpPanelState.hibernateSessions["proj-1"]).toEqual(preExisting);
+    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-mismatch", 0);
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1", 0);
+    expect(helpPanelState.hibernateSessions[slotKey("proj-1", 0)]).toEqual(preExisting);
   });
 
   it("does NOT launch when a live session already exists (DevTools reload guard)", async () => {
@@ -1189,7 +1221,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -1249,12 +1281,16 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {};
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
-        helpPanelState.hibernateSessions[projectId] = entry;
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
+        helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
-    helpPanelState.clearHibernateSession = vi.fn((projectId: string) => {
-      delete helpPanelState.hibernateSessions[projectId];
+    helpPanelState.clearHibernateSession = vi.fn((projectId: string, slot: number) => {
+      delete helpPanelState.hibernateSessions[slotKey(projectId, slot)];
     });
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -1289,8 +1325,8 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
 
     // The peek targets the in-view project, and the launch consumes the entry
     // via the atomic take.
-    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1");
-    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1", 0);
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1", 0);
     // The session is RESUMED (addPanel with the --resume command)...
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ command: "claude --resume abc-123", launchAgentId: "claude" })
@@ -1315,8 +1351,12 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {};
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
-        helpPanelState.hibernateSessions[projectId] = entry;
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
+        helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
@@ -1341,15 +1381,15 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     });
     await flushAsyncWork();
 
-    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1", 0);
     // Quoting the claim main handed out, so the put-back acts on THIS take and
     // not on whatever the project's slot happens to hold by then.
-    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-1");
+    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-1", 0);
     // The renderer's local mirror goes with it: seedFromMain wrote the taken
     // entry into hibernateSessions, and leaving that behind while main hands
     // the entry to another window would let two windows resume one
     // conversation — the single-winner invariant the atomic take holds.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
   });
 
   // #11068: the same cold-resume handoff, but the active workspace is a scratch
@@ -1361,12 +1401,16 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {};
     helpPanelState.setHibernateSession = vi.fn(
-      (workspaceId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
-        helpPanelState.hibernateSessions[workspaceId] = entry;
+      (
+        workspaceId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
+        helpPanelState.hibernateSessions[slotKey(workspaceId, slot)] = entry;
       }
     );
-    helpPanelState.clearHibernateSession = vi.fn((workspaceId: string) => {
-      delete helpPanelState.hibernateSessions[workspaceId];
+    helpPanelState.clearHibernateSession = vi.fn((workspaceId: string, slot: number) => {
+      delete helpPanelState.hibernateSessions[slotKey(workspaceId, slot)];
     });
     projectStoreState.currentProject = null;
     scratchStoreState.currentScratch = { id: "scratch-1", path: "/scratches/scratch-1" };
@@ -1398,8 +1442,8 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     });
     await flushAsyncWork();
 
-    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("scratch-1");
-    expect(mockTakePendingHibernation).toHaveBeenCalledWith("scratch-1");
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("scratch-1", 0);
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("scratch-1", 0);
     expect(mockReportPanelOpen).toHaveBeenCalledWith(
       "scratch-1",
       expect.any(Boolean),
@@ -1500,7 +1544,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     await flushAsyncWork();
 
     // The losing window armed and attempted the take...
-    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1", 0);
     // ...but nothing is resumed and nothing is fresh-launched.
     expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     expect(mockDispatch).not.toHaveBeenCalledWith(
@@ -1526,7 +1570,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -1571,7 +1615,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     });
     await flushAsyncWork();
 
-    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
     expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
@@ -1620,7 +1664,7 @@ describe("HelpPanel — resume preserves user-configured launch flags", () => {
   it("threads customArgs into both buildResumeCommand and addPanel.agentLaunchFlags", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {
-      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
     };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -1750,7 +1794,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(mockGracefulKill).toHaveBeenCalledWith("t1");
-      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("proj-1", {
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("proj-1", 0, {
         sessionId: "resume-token-xyz",
         cwd: "/help",
         agentId: "claude",
@@ -1798,7 +1842,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(mockGracefulKill).toHaveBeenCalledWith("t1");
-      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", {
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", 0, {
         sessionId: "resume-token-scratch",
         cwd: "/scratches/scratch-1",
         agentId: "claude",
@@ -1860,7 +1904,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(mockGracefulKill).toHaveBeenCalledWith("t1");
-      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", {
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", 0, {
         sessionId: "resume-token-scratch",
         cwd: "/scratches/scratch-1",
         agentId: "claude",
@@ -1960,7 +2004,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       helpPanelState.agentId = "claude";
       // Pre-existing entry from a previous successful hibernate cycle.
       helpPanelState.hibernateSessions = {
-        "proj-1": { sessionId: "old", cwd: "/help", agentId: "claude" },
+        [slotKey("proj-1", 0)]: { sessionId: "old", cwd: "/help", agentId: "claude" },
       };
       panelStoreState.panelsById = {
         t1: {
@@ -1987,7 +2031,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(helpPanelState.setHibernateSession).not.toHaveBeenCalled();
-      expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+      expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     } finally {
       vi.useRealTimers();
     }
@@ -1998,6 +2042,19 @@ describe("HelpPanel — assistant header state indicator", () => {
   function setupTerminalWithState(state: string) {
     helpPanelState.terminalId = "live-term";
     helpPanelState.agentId = "claude";
+    // The strip reads each lane's terminal off `sessions[slot]`, not the flat fields
+    // the rest of this fixture projects as the active lane — so the lane has to exist
+    // there for its marker to render at all.
+    helpPanelState.sessions = {
+      0: {
+        terminalId: "live-term",
+        agentId: "claude",
+        sessionId: null,
+        conversationTouched: false,
+        figures: [],
+        activeFigureNumber: null,
+      },
+    };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     panelStoreState.panelsById = {
       "live-term": {
@@ -2013,50 +2070,71 @@ describe("HelpPanel — assistant header state indicator", () => {
     };
   }
 
-  it("renders the working indicator when the assistant terminal is working", () => {
+  // The header no longer DRAWS the active lane's state — the session strip does, and
+  // drawing it in both put two identical glyphs one row apart for the same lane. What
+  // the header keeps is the announcement, because the strip reaches assistive tech
+  // through `aria-describedby`, which is read when a tab takes focus and not when the
+  // state changes underneath it.
+
+  it("announces the working state without drawing a second marker for it", () => {
     setupTerminalWithState("working");
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-    const indicator = getByTestId("assistant-header-state-indicator");
-    expect(indicator.getAttribute("data-agent-state")).toBe("working");
-    expect(indicator.getAttribute("aria-label")).toBe("Assistant is working");
+    const { getByTestId, container } = render(<HelpPanel width={380} />);
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.getAttribute("data-agent-state")).toBe("working");
+    expect(announcer.getAttribute("role")).toBe("status");
+    expect(announcer.textContent).toBe("Assistant is working");
+    // Exactly one working marker on screen, and it belongs to a tab — not zero (the
+    // state would be invisible) and not two (the header would be drawing it again).
+    const markers = container.querySelectorAll("svg.animate-spin-slow");
+    expect(markers).toHaveLength(1);
+    expect(markers[0]!.closest('[role="tab"]')).not.toBeNull();
   });
 
-  it("renders the waiting indicator when the assistant terminal is waiting", () => {
+  it("announces the waiting state", () => {
     setupTerminalWithState("waiting");
 
     const { getByTestId } = render(<HelpPanel width={380} />);
-    const indicator = getByTestId("assistant-header-state-indicator");
-    expect(indicator.getAttribute("data-agent-state")).toBe("waiting");
-    expect(indicator.getAttribute("aria-label")).toBe("Assistant is waiting");
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.getAttribute("data-agent-state")).toBe("waiting");
+    expect(announcer.textContent).toBe("Assistant is waiting");
   });
 
-  it("renders the directing indicator when the assistant terminal is directing", () => {
+  it("announces the directing state", () => {
     setupTerminalWithState("directing");
 
     const { getByTestId } = render(<HelpPanel width={380} />);
-    const indicator = getByTestId("assistant-header-state-indicator");
-    expect(indicator.getAttribute("data-agent-state")).toBe("directing");
-    expect(indicator.getAttribute("aria-label")).toBe("Assistant is directing");
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.getAttribute("data-agent-state")).toBe("directing");
+    expect(announcer.textContent).toBe("Assistant is directing");
   });
 
-  it("does not render an indicator for idle, completed, or exited states", () => {
+  it("announces nothing for idle, completed, or exited states", () => {
     for (const state of ["idle", "completed", "exited"]) {
       setupTerminalWithState(state);
-      const { queryByTestId, unmount } = render(<HelpPanel width={380} />);
-      expect(queryByTestId("assistant-header-state-indicator")).toBeNull();
+      const { getByTestId, unmount } = render(<HelpPanel width={380} />);
+      expect(getByTestId("assistant-header-state-announcer").textContent).toBe("");
       unmount();
     }
   });
 
-  it("does not render an indicator before any assistant terminal exists", () => {
+  it("announces nothing before any assistant terminal exists", () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     panelStoreState.panelsById = {};
 
-    const { queryByTestId } = render(<HelpPanel width={380} />);
-    expect(queryByTestId("assistant-header-state-indicator")).toBeNull();
+    const { getByTestId } = render(<HelpPanel width={380} />);
+    expect(getByTestId("assistant-header-state-announcer").textContent).toBe("");
+  });
+
+  it("keeps the live region mounted so a transition is announced rather than inserted", () => {
+    // A `role="status"` that only appears once there is something to say is added to the
+    // DOM at the same moment its content is, and a live region added and populated in one
+    // pass is not reliably announced. It has to be there first, empty.
+    setupTerminalWithState("idle");
+    const { getByTestId } = render(<HelpPanel width={380} />);
+    expect(getByTestId("assistant-header-state-announcer")).not.toBeNull();
   });
 });
 
@@ -2090,13 +2168,55 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
 
     const { container } = render(<HelpPanel width={380} />);
 
-    const newSessionBtn = container.querySelector('button[aria-label="Start new session"]')!;
-    expect(newSessionBtn).toBeTruthy();
+    // The restart control moved from a header "+" into the overflow menu, where it is
+    // named for the conversation it discards.
+    const restartBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Restart conversation")
+    )!;
+    expect(restartBtn).toBeTruthy();
 
     await act(async () => {
-      fireEvent.click(newSessionBtn);
+      fireEvent.click(restartBtn);
     });
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+  });
+});
+
+describe("HelpPanel — cold-view lane restore (#12108)", () => {
+  it("recreates a tab for every lane holding an eviction-captured conversation", async () => {
+    // A cold view knows only slot 0, so lanes 1+ would have no tab to reach
+    // their captured conversations from even though the entries are on disk.
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockListPendingHibernationSlots.mockResolvedValue([0, 2]);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockListPendingHibernationSlots).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(0);
+    expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+    // Recreating a background lane must not start (or bill) it — the restored
+    // tab lands on its own Resume CTA and waits for the user. (Slot 0 is the
+    // visible lane and follows the ordinary auto-launch consent path.)
+    expect(mockProvisionSession).not.toHaveBeenCalledWith(expect.objectContaining({ slot: 2 }));
+  });
+
+  it("does not recreate lanes for a view that already holds a live session", async () => {
+    helpPanelState.terminalId = "term-live";
+    helpPanelState.agentId = "claude";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockListPendingHibernationSlots.mockResolvedValue([1]);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+    expect(helpPanelState.ensureSlot).not.toHaveBeenCalled();
   });
 });

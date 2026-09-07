@@ -314,6 +314,72 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("hands the content a recovery reader that reads the CURRENT accepted state (#12278)", async () => {
+    // Recovery must not cost the user the work the view persisted since the
+    // panel opened. `initialArgs` is frozen at mount by design, so restoring it
+    // on a backend restart would silently roll the panel back to the bag it was
+    // opened with — the reader is what closes that gap, and it has to read at
+    // call time rather than capture at render time.
+    //
+    // The content layer is stubbed rather than the lazy view: `readRecoveryState`
+    // is a prop the host hands the CONTENT, and the content never forwards it to
+    // the plugin's own view (a plugin has no business reading panel persistence).
+    // Typed at the capture site rather than asserted off an `unknown` bag, so
+    // this stays inside the repo's no-unsafe-type-assertion budget.
+    type RecoveryReader = () => { state?: Record<string, unknown>; version?: number } | null;
+    let capturedReader: RecoveryReader | undefined;
+    vi.doMock("@/components/Plugin/PluginViewContent", () => ({
+      makePluginViewContent: () =>
+        function CapturingContent({ readRecoveryState }: { readRecoveryState?: RecoveryReader }) {
+          capturedReader = readRecoveryState;
+          return <div data-testid="plugin-content" />;
+        },
+    }));
+
+    try {
+      const { setPanelStoreAccessor } = await import("@/store/storeAccessors");
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      const panel: { extensionState: Record<string, unknown> } = {
+        extensionState: { tab: "overview" },
+      };
+      // Only the one panel the reader looks up is needed, so the carrier type is
+      // borrowed from the accessor's own signature rather than reconstructed —
+      // a full `PanelInstance` here would be scaffolding this suite never reads.
+      type Snapshot = Parameters<typeof setPanelStoreAccessor>[0] extends () => infer S ? S : never;
+      type Carrier = Snapshot["panelsById"][string];
+      const carriers: Record<string, Carrier> = Object.create(null);
+      Object.defineProperty(carriers, "panel-recover", { value: panel, enumerable: true });
+      setPanelStoreAccessor(() => ({
+        panelsById: carriers,
+        panelIds: ["panel-recover"],
+        tabGroups: new Map(),
+      }));
+
+      render(
+        <Host
+          id="panel-recover"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+          extensionState={{ tab: "overview" }}
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-content")).toBeTruthy());
+      expect(capturedReader).toBeTypeOf("function");
+
+      // The view persisted after mounting. The reader must see THAT, not the
+      // bag the host rendered with.
+      panel.extensionState = { tab: "logs" };
+      expect(capturedReader?.()?.state).toEqual({ tab: "logs" });
+    } finally {
+      vi.doUnmock("@/components/Plugin/PluginViewContent");
+    }
+  });
+
   it("passes the panel's own worktreeId to the mounted view (#11297)", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
     vi.doMock("react", async () => {

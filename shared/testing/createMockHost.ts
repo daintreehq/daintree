@@ -9,6 +9,11 @@
  * method this mock doesn't implement.
  */
 
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "../types/plugin.js";
+import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
   ActionDispatchResult,
   ActionId,
@@ -28,6 +33,7 @@ import type {
   PluginChannelSchema,
   PluginConfirmOptions,
   PluginHostApi,
+  PluginIdentity,
   PluginInputBoxOptions,
   PluginIpcHandler,
   PluginProcessHandle,
@@ -39,13 +45,16 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginHostCallOptions,
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
+  PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
+  PluginSystemWakeEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
   SettingDefinition,
@@ -208,6 +217,13 @@ export interface MockHostState {
   simulatePanelLifecycleChange(event: PluginPanelLifecycleEvent): void;
 
   /**
+   * Push a machine wake to every `onDidWake` subscriber (#12175). Use it to
+   * prove a plugin re-validates state it cached before a sleep, rather than
+   * waiting for a window to regain focus.
+   */
+  simulateSystemWake(event: PluginSystemWakeEvent): void;
+
+  /**
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
    * the default in-memory routing (which resolves the registered handler).
    */
@@ -242,17 +258,46 @@ export interface MockHostState {
   simulateQuickPickResponse(result: PluginQuickPickItem | PluginQuickPickItem[] | undefined): void;
   /** Configure what `showInputBox` resolves to (default `undefined` = dismissed). */
   simulateInputBoxResponse(result: string | undefined): void;
+  /**
+   * Force what `getWorktreesResult()` answers, or pass `null` to go back to the
+   * `ok` result derived from the mock's current worktrees.
+   */
+  simulateWorktreesResult(result: PluginWorktreesResult | null): void;
   /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
   simulateConfirmResponse(result: boolean): void;
 }
 
 export interface CreateMockHostOptions {
   pluginId?: string;
+  /**
+   * Project root for a project-owned `pluginId` (one shaped
+   * `project__{projectId}__{manifestId}`). Defaults to a synthetic path; ignored
+   * for an app-global plugin, which has no project.
+   */
+  projectRoot?: string;
   activeWorktree?: PluginWorktreeSnapshot | null;
   worktrees?: PluginWorktreeSnapshot[];
+  /**
+   * Seed `getWorktreesResult()` with a specific outcome (#12174) — an
+   * `unavailable` reason, or an `ok` result naming a particular project. Omit
+   * it and the mock derives `{ status: "ok", projectId: "test-project" }` from
+   * `worktrees`, so an author who only cares about the happy path gets the
+   * authoritative answer for free. Override it with
+   * {@link MockHostState.simulateWorktreesResult} to exercise the guards a
+   * plugin should have around an unavailable read.
+   *
+   * While an override is set the legacy `getWorktrees()` / `getActiveWorktree()`
+   * project from it too — the real host derives all three from one read, so a
+   * mock that answered `unavailable` here while still handing back a populated
+   * list there would let a plugin's fallback pass a test it cannot pass in
+   * production.
+   */
+  worktreesResult?: PluginWorktreesResult;
   settings?: {
     user?: Record<string, unknown>;
     project?: Record<string, unknown>;
+    /** Per-project, per-machine scope — a flat map here, like the other two. */
+    local?: Record<string, unknown>;
   };
   /**
    * Opt-in `contributes.settings` declarations (`id` + `scope` are what matter)
@@ -301,7 +346,12 @@ export interface CreateMockHostOptions {
  * production constants are the source of truth. If the production regex or
  * sets change, mirror the change here.
  */
-const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+// The `_` in the leading segment is load-bearing and was missing here until
+// #12215: a project plugin's ids are instance-qualified
+// (`project__{projectId}__{publisher}.{name}.{action}`), so without it this
+// mock rejected every `registerAction` a project plugin makes — the one kind of
+// plugin the agent brief tells authors to write — while production accepted it.
+const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
 
@@ -452,6 +502,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const pluginId = options.pluginId ?? "test.mock";
   let activeWorktree: PluginWorktreeSnapshot | null = options.activeWorktree ?? null;
   let worktrees: PluginWorktreeSnapshot[] = options.worktrees ?? [];
+  let worktreesResult: PluginWorktreesResult | null = options.worktreesResult ?? null;
 
   const registeredActions: RegisteredActionRecord[] = [];
   const registeredHandlers: RegisteredHandlerRecord[] = [];
@@ -483,6 +534,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
   const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
+  const systemWakeSubs = new Set<(event: PluginSystemWakeEvent) => void>();
 
   // Capability gating + active-agent presence for the agent APIs (#10617).
   // Default permissive so manifest-free tests are unaffected; restrict to assert
@@ -499,11 +551,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const settingsStore: Record<PluginSettingsScope, Map<string, unknown>> = {
     user: new Map(Object.entries(options.settings?.user ?? {})),
     project: new Map(Object.entries(options.settings?.project ?? {})),
+    local: new Map(Object.entries(options.settings?.local ?? {})),
   };
 
   const settingsSubs: Record<PluginSettingsScope, Map<string, Set<(value: unknown) => void>>> = {
     user: new Map(),
     project: new Map(),
+    local: new Map(),
   };
 
   // `user`/`project` scopes are flat maps; `worktree` scope is isolated per
@@ -701,8 +755,41 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
   };
 
+  // Identity mirrors the real host: derived from the id via the canonical
+  // parser, so a mock built with a project instance key answers exactly as
+  // production does.
+  const mockManifestId = pluginManifestIdFromInstanceKey(pluginId);
+  const mockProjectId = projectIdFromPluginInstanceKey(pluginId);
+  // `projectRoot` is null iff `projectId` is — a mock that claimed a project
+  // with no root would hand plugin authors a shape production never produces.
+  const mockProjectRoot =
+    mockProjectId === null ? null : (options.projectRoot ?? `/projects/${mockProjectId}`);
+  const pluginInfo: PluginIdentity = Object.freeze({
+    instanceId: pluginId,
+    manifestId: mockManifestId,
+    origin: mockProjectId === null ? ("global" as const) : ("project" as const),
+    projectId: mockProjectId,
+    projectRoot: mockProjectRoot,
+  });
+
   const host: PluginHostApi & MockHostState = {
     pluginId,
+    pluginInfo,
+    panelKindId(bareId: string) {
+      if (typeof bareId !== "string" || bareId.length === 0) {
+        throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
+      }
+      const qualified = toRuntimePanelKindId(
+        { origin: pluginInfo.origin, pluginId: mockManifestId, kindId: bareId },
+        mockProjectId
+      );
+      if (qualified === null) {
+        throw new Error(
+          `Plugin "${pluginId}" panelKindId: cannot qualify panel kind "${bareId}" for this plugin`
+        );
+      }
+      return qualified;
+    },
     registerAction(descriptor, handler) {
       // Mirrors PluginService.createHost L1577-L1631. Validation order matches
       // production: non-object descriptor, non-function handler, non-empty
@@ -830,10 +917,25 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return Promise.resolve();
     },
     async getActiveWorktree() {
+      if (worktreesResult) {
+        return worktreesResult.status === "ok"
+          ? (worktreesResult.worktrees.find((w) => w.isCurrent) ?? null)
+          : null;
+      }
       return activeWorktree;
     },
     async getWorktrees() {
+      // Projected from the override when one is set: the real host derives all
+      // three getters from a single read, so a mock that let `getWorktrees()`
+      // stay populated while the result says `unavailable` would bless a
+      // fallback that cannot work in production.
+      if (worktreesResult) {
+        return worktreesResult.status === "ok" ? worktreesResult.worktrees : [];
+      }
       return worktrees;
+    },
+    async getWorktreesResult() {
+      return worktreesResult ?? { status: "ok", projectId: "test-project", worktrees };
     },
     async getWorktreeStatus(path, options) {
       options?.signal?.throwIfAborted();
@@ -913,6 +1015,18 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (disposed) return;
         disposed = true;
         panelLifecycleSubs.delete(callback);
+      };
+      return Promise.resolve(dispose);
+    },
+    onDidWake(callback) {
+      // No capability gate and no replay, matching production: a wake is a
+      // one-shot pulse, so tests drive it explicitly via `simulateSystemWake`.
+      systemWakeSubs.add(callback);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        systemWakeSubs.delete(callback);
       };
       return Promise.resolve(dispose);
     },
@@ -1079,19 +1193,29 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     // production parity, records the call for assertions, then resolves the
     // configured `simulate*Response` value (default = the user-cancel dismiss
     // value). A shape the real host rejects now fails the mock too.
-    showQuickPick: (async (items: PluginQuickPickItem[], options?: PluginQuickPickOptions) => {
+    // An already-aborted signal dismisses without recording a call, matching
+    // production — a plugin test must not get a configured answer to a question
+    // the real host would never have asked (#12279).
+    showQuickPick: (async (
+      items: PluginQuickPickItem[],
+      options?: PluginQuickPickOptions,
+      callOptions?: PluginHostCallOptions
+    ) => {
       const validItems = validateQuickPickItems(items);
+      if (callOptions?.signal?.aborted) return undefined;
       showQuickPickCalls.push({ items: validItems, options });
       return quickPickResponse;
     }) as PluginHostApi["showQuickPick"],
-    async showInputBox(options) {
+    async showInputBox(options, callOptions) {
+      if (callOptions?.signal?.aborted) return undefined;
       showInputBoxCalls.push({ options });
       return inputBoxResponse;
     },
-    async showConfirm(options) {
+    async showConfirm(options, callOptions) {
       if (!options || typeof options !== "object" || typeof options.title !== "string") {
         throw new Error("showConfirm: options.title must be a string");
       }
+      if (callOptions?.signal?.aborted) return false;
       showConfirmCalls.push({ options });
       return confirmResponse;
     },
@@ -1156,6 +1280,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         }
         return v;
       },
+      async readFileBytes(filePath, options) {
+        options?.signal?.throwIfAborted();
+        const v = fsFiles.get(filePath);
+        if (v === undefined) {
+          throw new Error(`ENOENT: mock fs has no file "${filePath}"`);
+        }
+        // The mock stores text, so bytes are the UTF-8 encoding of it — enough
+        // to exercise a plugin's byte path without modelling binary storage.
+        return new TextEncoder().encode(v);
+      },
       async writeFile(filePath, contents) {
         fsFiles.set(filePath, contents);
         fsWriteCalls.push({ path: filePath, contents });
@@ -1180,12 +1314,28 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
             isDir.set(rest.slice(0, slash), true);
           }
         }
-        return [...isDir.entries()].map(([name, directory]) => ({
+        const entries = [...isDir.entries()].map(([name, directory]) => ({
           name,
           isDirectory: directory,
           isFile: !directory,
           isSymbolicLink: false,
+          // A detailed read promises size and mtime, so the mock supplies them
+          // rather than letting a plugin that reads `entry.size` pass here and
+          // fail against the real host. Written files have a real byte length;
+          // directories carry no size, matching the production listing. There
+          // are no symlinks to classify in an in-memory filesystem.
+          ...(options?.detail === true &&
+            !directory && { size: fsFiles.get(`${prefix}${name}`)?.length ?? 0 }),
+          ...(options?.detail === true && { mtimeMs: 0 }),
         }));
+        if (options?.detail !== true) return entries;
+        // Same ordering the production listing applies: directories first, then
+        // a numeric-aware name collation.
+        const collator = new Intl.Collator(undefined, { numeric: true });
+        return entries.sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+          return collator.compare(a.name, b.name);
+        });
       },
       async stat(targetPath, options) {
         options?.signal?.throwIfAborted();
@@ -1318,6 +1468,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       worktrees = snapshots;
       for (const cb of worktreesSubs) cb(snapshots);
     },
+    simulateWorktreesResult(result) {
+      worktreesResult = result;
+    },
     simulateAgentStateChange(snapshot) {
       lastAgentSnapshot = snapshot;
       for (const cb of agentStateSubs) cb(snapshot);
@@ -1327,6 +1480,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       // fails in tests rather than in the wild.
       const frozen = Object.freeze({ ...event });
       for (const cb of [...panelLifecycleSubs]) cb(frozen);
+    },
+    simulateSystemWake(event) {
+      // Frozen like production delivery, for the same reason.
+      const frozen = Object.freeze({ ...event });
+      for (const cb of [...systemWakeSubs]) cb(frozen);
     },
     setDispatchResult(actionId, result) {
       dispatchOverrides.set(actionId, result);

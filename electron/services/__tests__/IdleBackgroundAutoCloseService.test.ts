@@ -103,13 +103,20 @@ const liveTerminalIds = vi.hoisted(() => new Set<string>());
 
 const helpSessionServiceMock = vi.hoisted(() => ({
   revokeByProjectId: vi.fn(async (_projectId: string) => {}),
-  getAssistantBackend: vi.fn((projectId: string) => {
+  getAssistantBackends: vi.fn((projectId: string) => {
     const terminalId = assistantBackends.get(projectId);
-    return terminalId ? { terminalId, webContentsId: 42 } : null;
+    return terminalId ? [{ terminalId, webContentsId: 42, slot: 0 }] : [];
   }),
 }));
 
 vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionServiceMock }));
+
+// Mocked rather than exercised: the real seam dynamically imports the whole
+// PluginService module graph, which this sweep test has no business loading.
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
 import { IdleBackgroundAutoCloseService } from "../IdleBackgroundAutoCloseService.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -268,6 +275,44 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
     });
 
+    it("unloads the reclaimed project's plugins (#12216)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      await runCheck(service);
+
+      // The whole point of the sweep is reclaiming memory; leaving the plugin
+      // workers, timers and spawned children resident defeats it. Before
+      // #12216 nothing ran the unload cascade on this path.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+
+      // Order is load-bearing, not cosmetic: the status write is the commit
+      // point, so close intent must not be published before the row carries it.
+      expect(projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+        pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("notifies once per parked project, not once per sweep", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      // A single-close fixture cannot tell "per successful project" apart from
+      // "once per sweep" — a regression that hoisted the call out of the loop
+      // would pass it. Two closes is the smallest fixture that can.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(2);
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed.mock.calls.map(([id]) => id)).toEqual([
+        "proj-1",
+        "proj-2",
+      ]);
+    });
+
     it("skips a project that still has a terminal", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
@@ -276,6 +321,8 @@ describe("IdleBackgroundAutoCloseService", () => {
       await runCheck(service);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      // A project the sweep declined to close keeps its plugins.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("a live assistant blocks the reclaim, and is never capture-revoked (#11807)", async () => {
@@ -370,6 +417,11 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
       expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalledWith("proj-1");
 
+      // Per successfully parked project, not per candidate and not once per
+      // sweep: proj-1 never closed, so its plugins must still be running.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-2");
+
       const skipLogs = logInfoMock.mock.calls.filter(
         ([event]) => event === "idle-background-auto-close-skip-live-assistant"
       );
@@ -430,9 +482,9 @@ describe("IdleBackgroundAutoCloseService", () => {
       // re-check ran, so the second look finds one. Queued per-call rather than
       // via a persistent mockImplementation, which `clearAllMocks` would not
       // undo and would poison later tests.
-      helpSessionServiceMock.getAssistantBackend
-        .mockReturnValueOnce(null)
-        .mockReturnValueOnce({ terminalId: "t-help-late", webContentsId: 42 });
+      helpSessionServiceMock.getAssistantBackends
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce([{ terminalId: "t-help-late", webContentsId: 42, slot: 0 }]);
       const service = makeService();
       await runCheck(service);
 
@@ -481,6 +533,9 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(evictProjectRendererMock).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      // Representative LATE bail: the notification hangs off the status write,
+      // so a project that bails after the revoke keeps its plugins.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("a failed capture-revoke of a dead session degrades gracefully and never blocks the reclaim", async () => {

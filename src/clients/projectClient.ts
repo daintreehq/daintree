@@ -15,7 +15,13 @@ import type {
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
-import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+import type {
+  ProjectSwitchOutgoingState,
+  ProjectSwitchPayload,
+  ProjectSwitchTrace,
+} from "@shared/types/ipc/project";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
 import type { IdArrayFieldEdit } from "@shared/utils/layoutMerge";
 import type {
   GitInitOptions,
@@ -70,8 +76,17 @@ export function invalidateProjectSettingsCache(projectId?: string): void {
 function ensureSubscribed(): void {
   if (subscribed) return;
   subscribed = true;
-  window.electron.project.onSwitch(() => {
+  window.electron.project.onSwitch((payload) => {
     invalidateCurrentCache();
+    // This view is now the incoming side of `switchId`: adopt the trace so its
+    // own marks (port ready, repaint passes) join main's. Guarded because test
+    // doubles fire the listener bare.
+    if (!payload?.switchId) return;
+    setActiveSwitchTrace({ switchId: payload.switchId, entryPoint: payload.entryPoint });
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_ON_SWITCH_RECEIVED, {
+      cacheHit: payload.cacheHit,
+      targetProjectId: payload.project?.id,
+    });
   });
 }
 
@@ -130,7 +145,10 @@ export const projectClient = {
   switch: (
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
+    options?: {
+      focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent;
+      trace?: ProjectSwitchTrace;
+    }
   ): Promise<Project> => {
     invalidateCurrentCache();
     return window.electron.project.switch(projectId, outgoingState, options);
@@ -166,14 +184,7 @@ export const projectClient = {
     return window.electron.projectRelocation.apply(request);
   },
 
-  onSwitch: (
-    callback: (payload: {
-      project: Project;
-      switchId: string;
-      worktreeLoadError?: string;
-      hydrateResult?: import("@shared/types/ipc/app").HydrateResult;
-    }) => void
-  ): (() => void) => {
+  onSwitch: (callback: (payload: ProjectSwitchPayload) => void): (() => void) => {
     return window.electron.project.onSwitch(callback);
   },
 
@@ -238,9 +249,13 @@ export const projectClient = {
     return window.electron.project.sleepProject(projectId);
   },
 
-  reopen: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {
+  reopen: (
+    projectId: string,
+    outgoingState?: ProjectSwitchOutgoingState,
+    options?: { trace?: ProjectSwitchTrace }
+  ): Promise<Project> => {
     invalidateCurrentCache();
-    return window.electron.project.reopen(projectId, outgoingState);
+    return window.electron.project.reopen(projectId, outgoingState, options);
   },
 
   getStats: (projectId: string): Promise<ProjectStats> => {

@@ -5,6 +5,7 @@ import path from "path";
 
 const copyMock = vi.hoisted(() => vi.fn());
 const configCreateMock = vi.hoisted(() => vi.fn());
+const configSetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("copytree", () => ({
   copy: copyMock,
@@ -25,7 +26,7 @@ describe("CopyTreeService", () => {
     // that stubs a config failure would otherwise inherit a previous test's
     // successful load (or leak its own failure forward).
     _resetConfigCacheForTests();
-    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
+    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true, set: configSetMock });
     copyMock.mockResolvedValue({
       output: "<context />",
       outputFormatVersion: "copytree-xml@1",
@@ -358,12 +359,18 @@ describe("CopyTreeService", () => {
     );
 
     it("proceeds when the defaults did load", async () => {
-      configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
+      configCreateMock.mockResolvedValue({ isDefaultsLoaded: true, set: configSetMock });
 
       const result = await copyTreeService.generate(tempDir);
 
       expect(copyMock).toHaveBeenCalledTimes(1);
       expect(result.error).toBeUndefined();
+    });
+
+    it("enables bounded parallel discovery on the shared SDK config", async () => {
+      await copyTreeService.generate(tempDir);
+
+      expect(configSetMock).toHaveBeenCalledWith("copytree.discovery.parallelEnabled", true);
     });
   });
 

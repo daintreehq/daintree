@@ -10,6 +10,31 @@ Each section below documents a contribution point, its schema, an example, and c
 - **Planned** — design locked, implementation in progress
 - **Future** — not yet committed
 
+## Project scope
+
+A plugin that declares `"scope": "project"` lives in a project's own repository and loads only while that project is open — see [Project-local plugins](./project-local.md). Not every contribution point can be narrowed to one project yet, so the manifest gate refuses the ones that cannot. This table is the per-point status; the sections below describe each point in its app-wide form, which is what an installed or builtin plugin always gets.
+
+| Contribution | Under `scope: "project"` |
+| --- | --- |
+| `panels` | Available — registered against the project, visible only in its views |
+| `views` | Available — served and mounted only in the owning project's renderer |
+| `commands` | Available — in that project's palette, dispatched into that project's renderer |
+| `toolbarButtons` | Available — only in the owning project's toolbar |
+| `contextMenus` | Available — only in the owning project's views |
+| `keybindings` | Available — renderer-level, so they resolve within the focused project |
+| `settings` | Available — `scope: "project"` values resolve from the bound project root, not the focused one |
+| `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
+| `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
+| `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
+| `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load` |
+| `recipes` | Rejected — the plugin recipe registry is broadcast to every renderer unfiltered |
+| `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
+| `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
+| `mcpServers` | Rejected — contributed servers are reachable app-globally, where a session carries no project binding to check |
+| `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
+
+Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
+
 ## Commands — _Shipped_
 
 Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items. Declare them in `plugin.json` so the command shows up in the palette before your plugin activates, or register them at runtime via `host.registerAction()` for dynamic cases. See [Host API → registerAction](./host-api.md#registeraction) for the full signature.
@@ -69,7 +94,7 @@ Three things it does _not_ do. It grants no access: host APIs still gate on `man
 
 **Handler binding — two ways:**
 
-_Filesystem convention (manifest-declared, lazy import):_ a command with id `plan-from-issue` looks for `src/plan-from-issue.{js,mjs}` (probed in that order) under your plugin directory. Its default export is the handler. The module is **not** imported until the command is first dispatched — twenty manifest commands cost zero activation time. The handler must be shipped as JavaScript: `.ts`/`.tsx` files are not probed (a `.ts` handler appears to work under Node's type-stripping but throws at first dispatch on any non-erasable syntax, and `.tsx` never runs) — author in TypeScript and compile to `src/{id}.js`, or register the command imperatively.
+_Filesystem convention (manifest-declared, lazy import):_ a command with id `plan-from-issue` looks for `src/plan-from-issue.{js,mjs}` (probed in that order) under your plugin directory. Its default export is the handler. The module is **not** imported until the command is first dispatched — twenty manifest commands cost zero activation time. It is imported and run inside your plugin's worker, like every other surface you contribute, so a command handler needs no `main` entry to exist: a plugin that declares commands and ships nothing but their handler modules gets a worker on first dispatch. The handler must be shipped as JavaScript: `.ts`/`.tsx` files are not probed (a `.ts` handler appears to work under Node's type-stripping but throws at first dispatch on any non-erasable syntax, and `.tsx` never runs) — author in TypeScript and compile to `src/{id}.js`, or register the command imperatively.
 
 ```js
 // src/plan-from-issue.js
@@ -141,11 +166,13 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Display label in the panel header and palette. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`. An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
-| `color` | yes | HSL string used for the panel tab accent. |
+| `color` | yes | Any CSS colour, applied raw to the panel's icon on the palette and launcher surfaces — not to the active-tab indicator, which is a fixed accent. The convention for plugin panels is a theme category token, `var(--theme-category-orange)`, so it follows the active theme; every fixture in the repo uses that form. |
 | `hasPty` | no | `false` (default) for UI-only panels. `true` is reserved for PTY-backed panels, not available to plugins in v1. |
 | `canRestart` | no | Show a "restart" control in the panel header. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
+| `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
+| `stateVersion` | no | Integer &ge; 1 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
@@ -153,11 +180,19 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 `shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
+**Panel state versioning** — `persistState` writes an opaque bag that survives restarts, so a change to its shape meets bags written by every version of your plugin the user has ever run. `stateVersion` is how you tell those apart.
+
+Declare it, and the host stamps that number onto the panel record every time your view persists — the value comes from the manifest, never from your patch, so the bag can never claim a version it is not. On the next mount the view reads `PanelViewProps.stateVersion` and migrates forward from whatever it says: `0` means the bag predates versioning, an absent value means you never declared one. Persisting the migrated result re-stamps it at your current version.
+
+You never have to handle a version _above_ the one you declare. That only happens on a downgrade — the user ran a newer build of your plugin, then went back — and the host refuses the bag rather than let it be misread and overwritten, showing the user an error naming both versions. The state stays on disk, so reinstalling the newer build brings it back intact.
+
+Bump `stateVersion` when the shape changes incompatibly, never for an additive key your view can already tolerate missing.
+
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
 ## Views — _Shipped (panel surface)_
 
-Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` before the 1.0 freeze — the old key is still accepted as a deprecated alias that logs a warning; the shape below is the frozen contract).
+Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning).
 
 ```json
 {
@@ -193,7 +228,7 @@ The view schema is strict and carries no `name` or `description`: the matching p
 
 **Component contract:**
 
-> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
+> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
 
 ```tsx
 // src/dashboard.tsx
@@ -252,7 +287,8 @@ export default function Dashboard(props) {
 | `pluginId` | `string` | The plugin's manifest `name`. Stable for the lifetime of the host — useful for namespacing storage keys and log lines. |
 | `disposeSignal` | `AbortSignal` | Lifetime of **this mounted view attempt**. Aborts on unmount, on "Try again", and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. A **temporary** unmount aborts it too — maximizing a sibling pane, leaving a dock tab, or caching a background project view. Tie only view-scoped work to it. |
 | `panelRemovedSignal` | `AbortSignal` | Lifetime of **the panel record**. The same object is handed to every mount of a given `panelId`, so it survives remounts, retries, trash-then-restore, and plugin upgrades. Aborts exactly once, when the panel is permanently removed. |
-| `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path). It rides the panel's save/restore-surviving extension state, so a restored panel sees the same args it was spawned with. `undefined` when the panel was opened without args. |
+| `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path) — merged with whatever the view has since persisted through `persistState`. It rides the panel's save/restore-surviving extension state, so a restored panel comes back the way the user left it. A snapshot taken at mount, not a live value: it does not update while the view is mounted, including in response to your own `persistState` calls. `undefined` when the panel was opened without args and has persisted nothing. |
+| `persistState` | `(patch: Record<string, unknown>) => boolean` \| `undefined` | Writes view state back onto the panel record, so the next mount sees it in `initialArgs`. The two are one bag: spawn seeds it, this updates it, `initialArgs` reads it back — which is what lets a view survive the teardowns a panel routinely outlives (maximizing a sibling pane, leaving a dock tab, a cached project view, a restart) without forgetting where the user was. The patch is **merged**, so independent parts of a view can each persist their own key; a key set to `undefined` is removed. An unchanged write is free — it neither churns the store nor schedules a save — so calling it from a render-derived effect is fine. Keep it small: the host refuses an update whose serialized form exceeds 64KB, and anything larger, not JSON round-trippable, or that should outlive the panel belongs in `host.storage`. Returns `true` when the stored state now matches what you asked for (applied, or already identical) and `false` when the host rejected the write — the merged bag would exceed 64KB, or it is not JSON-serializable (a cyclic value, a `BigInt`, a throwing `toJSON`). `true` means accepted and scheduled, not flushed: the layout save is debounced. |
 
 The view is wrapped in an error boundary by the host. An unhandled render error shows a diagnostics pane with "Try again" — which produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise — alongside "Close panel", "Copy diagnostics", and "View logs".
 
@@ -271,9 +307,9 @@ These are two different reloads, and a plugin author debugging "my change didn't
 - **Worker reload** replaces the plugin's _backend_ Realm. `activate()` runs again against a fresh module graph, so edits to your main entry take effect on the next reload.
 - **View-module replacement** is the _renderer_ half. Chromium caches ESM module records by URL with no eviction API, so re-importing the same `plugin://` specifier returns the module already in memory no matter how thoroughly the panel remounts.
 
-Daintree bridges the gap by stamping a per-load generation into the view URL — `plugin://<id>/__dtv-<n>/dist/view.js`. Every time the plugin is **loaded** — an install, a replacement install, an enable, or an app start — it mints a new `<n>`, which is a specifier the renderer has never imported, so the new bundle is genuinely fetched and evaluated. Open panels remount onto it automatically; no Force Reload, and no need to hand-version your bundle filename each release.
+Daintree bridges the gap by stamping a per-load generation into the view URL — `plugin://<authority>/__dtv-<n>/dist/view.js`. The authority is an opaque per-load token (`pi-` plus 32 hex characters). The host also seeds the plugin's **host-side id** into the same resolver map as an alias, which is what keeps a hand-written `plugin://<pluginId>/…` URL working — including the example above. That id is your manifest id for an installed plugin, but for a project-local plugin it is the instance key (`project__{projectId}__{manifestId}`), so use the `pluginId` you were handed in `PanelViewProps` rather than hardcoding your manifest name. Both keys are dropped on unload. Every time the plugin is **loaded** — an install, a replacement install, an enable, or an app start — it mints a new `<n>`, which is a specifier the renderer has never imported, so the new bundle is genuinely fetched and evaluated. Open panels remount onto it automatically; no Force Reload, and no need to hand-version your bundle filename each release.
 
-The `daintree-plugin dev` hot-reload path is the exception: it respawns the plugin's **worker** without re-registering contributions, so your backend changes take effect but the generation does not advance and open views keep the module already in memory. Reopen the plugin (disable/enable, or reinstall) — or Force Reload the window — to pick up view changes during a dev session.
+A `daintree-plugin dev` rebuild is a full load like any other (#12277): once the artifact settles the host re-enters the same load path, re-registering every contribution and minting a new `__dtv-<n>`, so an open panel imports a specifier the renderer has never seen and picks up view edits along with the backend they shipped with. No disable/enable, reinstall, or Force Reload is needed mid-session.
 
 Two consequences worth knowing. Relative imports inside your entry module inherit the generation namespace (they resolve against the entry's URL), so multi-chunk bundles refresh as a unit — but an **absolute** `plugin://` import you write by hand does not, and will keep resolving to the first version imported in that session. And because each generation is a distinct module record, a long dev session with many reloads accumulates them in the renderer's memory; that is bounded by how many times you reloaded, and a window reload clears it.
 
@@ -466,7 +502,7 @@ Context menus follow the same `actionId` dispatch pattern as menu items, but a `
 
 ## MCP servers — _Shipped_
 
-Declares Model Context Protocol servers the plugin ships. The manifest key is `mcpServers` (it was `experimental_mcpServers` before the 1.0 freeze — the old key is still accepted as a deprecated alias that logs a warning). The runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The manifest key is `mcpServers` (it was `experimental_mcpServers` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). The runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {
@@ -590,6 +626,47 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 **Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
+
+## Surfaces — _Shipped (project scope only)_
+
+`contributes.surfaces` lets a **project-local** plugin replace one of Daintree's own surfaces for its own project, so a project can present as a purpose-built application rather than as the host with one extra panel. It is the only contribution point that replaces something the host already draws.
+
+Available to `"scope": "project"` plugins alone. An installed plugin is bound to no project, so there would be nothing to scope the claim to and no project registry to arbitrate a second claimant against; a manifest without `"scope": "project"` that declares any surface is rejected at validation.
+
+```json
+{
+  "scope": "project",
+  "contributes": {
+    "panels": [
+      {
+        "id": "overview",
+        "name": "Overview",
+        "iconId": "gauge",
+        "color": "var(--theme-category-orange)"
+      }
+    ],
+    "views": [{ "id": "overview", "componentPath": "dist/panel.js", "location": "panel" }],
+    "surfaces": {
+      "emptyCanvas": { "viewId": "overview" }
+    }
+  }
+}
+```
+
+| Slot | Replaces |
+| --- | --- |
+| `emptyCanvas` | What the content grid draws when the project has no panels open — the region the stock launcher lives in |
+
+`emptyCanvas` is the only slot the schema accepts today.
+
+Rules:
+
+- **Slot-replacing, never removing.** Surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay where they are. The host wraps the region in a frame that always offers a control back to the stock launcher, so a broken or half-finished surface cannot strand the user.
+- **`viewId` must name a declared `contributes.views` entry**, cross-checked at validation like any other dangling reference (`surface_view_ref_unknown`). It must not name a panel with `hasPty: true` (`surface_view_ref_pty`) — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
+- **At most one plugin per slot per project.** First claim wins; a second is refused and logged with both plugin names, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the incumbent later unloads.
+- The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
+
+`projectHome` (a persistent project-owned entry in the primary navigation) and `defaultLayout` (the arrangement opened on a cold first open) appear in this feature's design notes and are **not implemented** — the schema rejects them. There is no per-project routing a persistent home surface could live at yet, and a recipe is launched against a worktree rather than against a project cold open.
 
 ## Themes — _Future_
 

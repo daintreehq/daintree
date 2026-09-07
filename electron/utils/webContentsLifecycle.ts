@@ -97,27 +97,32 @@ export function unthrottleCpuWebContents(wc: Electron.WebContents): Promise<void
 }
 
 /**
- * Purge a cached renderer's reclaimable memory, main-side over CDP (works
- * even when the renderer is CPU-throttled — the renderer-side `window.gc()`
- * idle callback cannot make that guarantee). The critical pressure
- * notification is the same `NotifyMemoryPressure(CRITICAL)` Blink's own
- * MemoryPurgeManager fires after backgrounding/freeze: it drops Blink
- * discardable caches (fonts, decoded images, backing stores) and triggers a
- * V8 memory-pressure GC. `HeapProfiler.collectGarbage` (the DevTools
- * "collect garbage" button) then compacts and returns the freed pages.
- * Do NOT add `Memory.forciblyPurgeJavaScriptMemory`: it reproducibly
+ * Collect a cached renderer's JavaScript garbage, main-side over CDP (works
+ * even when the renderer is CPU-throttled or frozen — the renderer-side
+ * `window.gc()` idle callback cannot make that guarantee). Target-scoped,
+ * but not an active-view guarantee: activation only clears the *next* timer,
+ * so a sequence already in flight can land on a view that just went active.
+ *
+ * Do NOT re-add `Memory.simulatePressureNotification`. Despite riding a page
+ * target's debugger session it never reached this renderer: on Chromium 148
+ * it raises pressure in the browser process, which forwards it off-Android
+ * only to the GPU and network processes, and the GPU path purges the shared
+ * Ganesh context every view rasterises its DOM text through. So it never
+ * bought the Blink font/image cache drop #10981 added it for, and on a 60 s
+ * per-cached-view timer it is the leading — not trace-confirmed — suspect
+ * for the wrong-glyph file-tree text after a warm switch back.
+ *
+ * Do NOT add `Memory.forciblyPurgeJavaScriptMemory` either: it reproducibly
  * SIGSEGVs a CPU-throttled hidden WebContentsView on Electron 42/Chromium
- * 148 (exit code 11 ~instantly; isolated in an A/B probe — the pressure
- * notification alone is stable). Per-target, so the active view is
- * untouched. Shares the Windows-CI e2e opt-out with the CPU throttle: both
- * ride the same debugger session Playwright owns there.
+ * 148 (exit code 11 ~instantly; isolated in an A/B probe). Shares the
+ * Windows-CI e2e opt-out with the CPU throttle: both ride the same debugger
+ * session Playwright owns there.
  */
 export async function purgeMemoryWebContents(wc: Electron.WebContents): Promise<void> {
   if (getIsE2EDisableCachedViewCpuThrottle()) return;
   if (wc.isDestroyed()) return;
   try {
     ensureAttached(wc);
-    await wc.debugger.sendCommand("Memory.simulatePressureNotification", { level: "critical" });
     await wc.debugger.sendCommand("HeapProfiler.enable");
     await wc.debugger.sendCommand("HeapProfiler.collectGarbage");
     await wc.debugger.sendCommand("HeapProfiler.disable");

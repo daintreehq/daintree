@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // module in ahead of its own mock.
 import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
-// FileBrowserViewer is the read-only preview beside the tree. #11319 adds a
-// Source/Rendered toggle for markdown, mirroring FilePane. Mock the heavy leaf
-// viewers so only FileBrowserViewer's own toolbar + mode wiring renders, and
-// capture the viewMode handed to MarkdownViewer — the seam the toggle drives.
+// FileBrowserViewer is the read-only preview beside the tree. #11319 added a
+// Source/Rendered toggle for markdown and #12205 extended it to HTML, mirroring
+// FilePane. Mock the heavy leaf viewers so only FileBrowserViewer's own toolbar
+// + mode wiring renders, and capture the viewMode handed to MarkdownViewer —
+// the seam the toggle drives for markdown. HTML has no such prop (HtmlViewer is
+// rendered-only), so there the mode shows up as which mock is on screen.
 const { readMock } = vi.hoisted(() => ({ readMock: vi.fn() }));
 vi.mock("@/clients/filesClient", () => ({
   filesClient: { read: readMock },
@@ -27,19 +29,52 @@ vi.mock("@/services/ActionService", () => ({
 // observable — without it the mode plumbing could be deleted and stay green.
 // cacheBust rides along for the same reason (#11587).
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust">) => (
+  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust" | "fontSize">) => (
     <div
       data-testid="markdown-viewer-mock"
       data-view-mode={props.viewMode}
       data-cache-bust={props.cacheBust ?? ""}
+      data-font-size={props.fontSize ?? ""}
     />
   ),
 }));
+// The reading size is one app-level preference shared with the file panel; this
+// suite owns the toolbar gate and the forwarding, not the store's persistence.
+const { setMarkdownFontSizeMock } = vi.hoisted(() => ({
+  setMarkdownFontSizeMock: vi.fn(),
+}));
+vi.mock("@/store/preferencesStore", () => ({
+  usePreferencesStore: (selector: (state: unknown) => unknown) =>
+    selector({ markdownFontSize: "xl", setMarkdownFontSize: setMarkdownFontSizeMock }),
+}));
+// A Popover, whose open/close choreography jsdom does not drive. Its own
+// behaviour is covered in MarkdownTextSizeControl.test.tsx.
+vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
+  MarkdownTextSizeControl: (props: { value: string; onValueChange: (next: string) => void }) => (
+    <button
+      type="button"
+      data-testid="markdown-text-size-mock"
+      data-value={props.value}
+      onClick={() => props.onValueChange("2xl")}
+    />
+  ),
+}));
+// Both leaves surface the props the branch hands them: which mock renders only
+// proves the routing, and an HTML source branch wired to empty content or the
+// wrong path would satisfy that while showing the reader nothing (#12205).
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
-  CodeViewer: () => <div data-testid="code-viewer-mock" />,
+  CodeViewer: (props: { content: string; filePath: string }) => (
+    <div
+      data-testid="code-viewer-mock"
+      data-content={props.content}
+      data-file-path={props.filePath}
+    />
+  ),
 }));
 vi.mock("@/components/Html/HtmlViewer", () => ({
-  HtmlViewer: () => <div data-testid="html-viewer-mock" />,
+  HtmlViewer: (props: { previewUrl: string | null }) => (
+    <div data-testid="html-viewer-mock" data-preview-url={props.previewUrl ?? ""} />
+  ),
 }));
 
 // Surfaces the `active` prop instead of letting the real component apply its
@@ -156,6 +191,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
+import { ClientAppError } from "@/utils/clientAppError";
+import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import type {
   FileBrowserSortOrder,
   FileEntryLike,
@@ -165,10 +203,18 @@ import type {
 import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
+  panelId?: string;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   revision?: string;
   surfaceRefreshNonce?: number;
+  /**
+   * Defaulted independently of `surfaceRefreshNonce`, never derived from it: the
+   * two are split precisely so a reveal can move one without the other (#12165),
+   * and a test that could not tell them apart would go green on the merge.
+   */
+  mediaReloadNonce?: number;
+  onMediaPlayingChange?: (playing: boolean) => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
   /**
@@ -215,12 +261,15 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
   return (
     <TooltipProvider>
       <FileBrowserViewer
+        panelId={opts.panelId ?? "panel-1"}
         filePath={filePath}
         rootPath="/repo"
         fileName={fileName}
         relativePath={filePath ? fileName : null}
         revision={opts.revision ?? "r1"}
         surfaceRefreshNonce={opts.surfaceRefreshNonce ?? 0}
+        mediaReloadNonce={opts.mediaReloadNonce ?? 0}
+        onMediaPlayingChange={opts.onMediaPlayingChange ?? vi.fn()}
         onRefresh={opts.onRefresh ?? vi.fn()}
         isRefreshing={opts.isRefreshing ?? false}
         sidebarCollapsed={opts.sidebarCollapsed ?? false}
@@ -262,6 +311,23 @@ async function clickMode(label: "Source" | "Rendered") {
   });
 }
 
+// An HTML read as the pane really gets it: raw markup plus the sandboxed
+// preview URL main minted for it.
+const HTML_READ = { content: "<h1>hi</h1>\n", htmlPreviewUrl: "daintree-html://preview/1" };
+
+// Answers each path with its own bytes. Handing every read the same content
+// would let a viewer that never re-read on a file change pass the navigation
+// tests on the first file's stale state.
+function readByPath() {
+  readMock.mockImplementation(({ path }: { path: string }) =>
+    Promise.resolve(isHtmlPath(path) ? HTML_READ : { content: `# ${path}` })
+  );
+}
+
+function isHtmlPath(path: string): boolean {
+  return path.endsWith(".html");
+}
+
 function currentViewMode(): string | null {
   return screen.getByTestId("markdown-viewer-mock").getAttribute("data-view-mode");
 }
@@ -270,9 +336,14 @@ function currentCacheBust(): string | null {
   return screen.getByTestId("markdown-viewer-mock").getAttribute("data-cache-bust");
 }
 
+function currentFontSize(): string | null {
+  return screen.getByTestId("markdown-viewer-mock").getAttribute("data-font-size");
+}
+
 beforeEach(() => {
   readMock.mockReset();
   readMock.mockResolvedValue({ content: "# hello" });
+  setMarkdownFontSizeMock.mockReset();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
   // SegmentedToggle's motion hook (and InlineStatusBanner) read matchMedia at
@@ -295,7 +366,7 @@ beforeEach(() => {
   }
 });
 
-describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
+describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
   it("shows the toggle and defaults to the rendered view for a markdown file", async () => {
     renderViewer("/repo/docs/spec.md");
     // Default preserves the pane's long-standing rendered-first behaviour.
@@ -327,10 +398,11 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     await waitFor(() => expect(currentViewMode()).toBe("source"));
   });
 
-  it("drops the toggle and its stale source choice when switching to a non-markdown file", async () => {
+  it("drops the toggle and its stale source choice when switching to a non-renderable file", async () => {
     // Start on markdown in Source, then navigate to a .txt in the same viewer —
-    // the tree's real usage. Proves the markdown-only toggle disappears and the
-    // sticky "source" choice can't leak into the CodeViewer (non-markdown) branch.
+    // the tree's real usage. Proves the toggle disappears for a file with no
+    // rendered form, and the sticky "source" choice can't leak into the
+    // CodeViewer (non-renderable) branch.
     const { rerender } = renderViewer("/repo/docs/a.md");
     await waitFor(() => expect(currentViewMode()).toBe("rendered"));
     await clickMode("Source");
@@ -341,6 +413,159 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+
+  it("shows the toggle and defaults an HTML file to source (#12205)", async () => {
+    readByPath();
+    renderViewer("/repo/page.html");
+
+    // The markup, not the sandboxed page: HTML in a repo is code you opened to
+    // read, and a page that renders near-blank reads as a broken file. Assert
+    // the bytes, not just the branch — a CodeViewer handed nothing would show
+    // the reader an empty pane while still satisfying the routing.
+    const source = await screen.findByTestId("code-viewer-mock");
+    expect(source.getAttribute("data-content")).toBe(HTML_READ.content);
+    expect(source.getAttribute("data-file-path")).toBe("/repo/page.html");
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+    // The segment the reader sees selected has to agree with what is on screen.
+    expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(screen.getByRole("button", { name: "Rendered" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
+  });
+
+  it("switches HTML between source and rendered without a second read", async () => {
+    readMock.mockResolvedValue(HTML_READ);
+    renderViewer("/repo/page.html");
+    await screen.findByTestId("code-viewer-mock");
+
+    await clickMode("Rendered");
+    const rendered = await screen.findByTestId("html-viewer-mock");
+    // The preview URL main minted, not a null that would strand HtmlViewer on
+    // its "can't render this file" fallback.
+    expect(rendered.getAttribute("data-preview-url")).toBe(HTML_READ.htmlPreviewUrl);
+    expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+
+    await clickMode("Source");
+    await screen.findByTestId("code-viewer-mock");
+
+    // Both surfaces come off the one read — the preview call already returned
+    // the raw markup, so toggling must never go back to the main process.
+    expect(readMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies each file type's own default until a mode is explicitly chosen", async () => {
+    readByPath();
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    // Untouched, the toggle is not carrying a choice around: each type opens on
+    // what suits it, so an HTML file lands on source even after rendered markdown.
+    rerender(viewerJsx("/repo/page.html"));
+    const source = await screen.findByTestId("code-viewer-mock");
+    // The HTML file's own bytes: a viewer that never re-read would still be
+    // holding the markdown text, and that renders through CodeViewer too.
+    expect(source.getAttribute("data-content")).toBe(HTML_READ.content);
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+
+    rerender(viewerJsx("/repo/docs/spec.md"));
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+  });
+
+  it("shares the last explicit mode between markdown and HTML", async () => {
+    readByPath();
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    await clickMode("Source");
+    await waitFor(() => expect(currentViewMode()).toBe("source"));
+
+    // The explicit choice overrides HTML's source default only in the sense
+    // that it is the same value here; the load-bearing half is the return trip.
+    rerender(viewerJsx("/repo/page.html"));
+    await screen.findByTestId("code-viewer-mock");
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
+
+    // One toggle position for the viewer, not one per file type: choosing
+    // Rendered on the HTML file is what markdown shows on the way back.
+    rerender(viewerJsx("/repo/docs/spec.md"));
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+  });
+
+  it("keeps the explicit mode across a file with no rendered form", async () => {
+    readByPath();
+    const { rerender } = renderViewer("/repo/page.html");
+    await screen.findByTestId("code-viewer-mock");
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
+
+    // The toggle is hidden where it can't be honoured, but the choice behind it
+    // is only suspended, not discarded — the reader picked it once.
+    rerender(viewerJsx("/repo/src/notes.txt"));
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+
+    rerender(viewerJsx(null));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull());
+
+    rerender(viewerJsx("/repo/page.html"));
+    await screen.findByTestId("html-viewer-mock");
+  });
+
+  it("does not carry one panel's mode into the next panel's first file", async () => {
+    // A tab group renders one unkeyed viewer for whichever file browser is
+    // active, so a panel switch is a prop change, not a remount. Without the
+    // panel-id guard the choice made here would decide how panel two's HTML
+    // opens — landing it on the rendered page this issue is about.
+    readByPath();
+    const { rerender } = renderViewer("/repo/docs/spec.md", { panelId: "panel-1" });
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    await clickMode("Rendered");
+
+    rerender(viewerJsx("/repo/page.html", { panelId: "panel-2" }));
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+});
+
+describe("FileBrowserViewer rendered-markdown text size (#12134)", () => {
+  it("offers the control and carries the shared size into the rendered document", async () => {
+    renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    const control = await screen.findByTestId("markdown-text-size-mock");
+    // The same global value the file panel reads — a document is the size the
+    // reader last chose, whichever surface they opened it in.
+    expect(control.getAttribute("data-value")).toBe("xl");
+    expect(currentFontSize()).toBe("xl");
+
+    // And the choice reaches the shared preference, not a local no-op.
+    await act(async () => {
+      control.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(setMarkdownFontSizeMock).toHaveBeenCalledWith("2xl");
+  });
+
+  it("withdraws it in Source, where the scale reaches nothing", async () => {
+    renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    await clickMode("Source");
+    await waitFor(() => expect(currentViewMode()).toBe("source"));
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+    // The rung must not follow the mode switch into CodeMirror.
+    expect(currentFontSize()).toBe("");
+  });
+
+  it("withdraws it for a non-markdown file, which has no prose to tune", async () => {
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await screen.findByTestId("markdown-text-size-mock");
+
+    rerender(viewerJsx("/repo/src/notes.txt"));
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
   });
 });
 
@@ -434,10 +659,11 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     const { container } = renderViewer("/repo/media/demo.webm");
 
     await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
-    // The bytes come from the protocol handler via fetch; the text-read IPC
-    // path (whose 500 KB cap produced the misleading error) must never run.
+    // The size probe goes to daintree-file://, the bytes stream from
+    // daintree-media://; the text-read IPC path (whose 500 KB cap produced the
+    // misleading error) must never run.
     expect(String(videoFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
-    expect(container.querySelector("video")?.getAttribute("src")).toMatch(/^blob:/);
+    expect(container.querySelector("video")?.getAttribute("src")).toMatch(/^daintree-media:\/\//);
     expect(readMock).not.toHaveBeenCalled();
   });
 
@@ -460,6 +686,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     const { container, rerender } = renderViewer("/repo/media/demo.webm", {
       revision: "r1",
       surfaceRefreshNonce: 0,
+      mediaReloadNonce: 0,
     });
     await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
     const firstNode = container.querySelector("video");
@@ -467,7 +694,13 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     expect(videoFetchMock).toHaveBeenCalledTimes(1);
 
     // A worktree write elsewhere: the player must be left completely alone.
-    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 0 }));
+    rerender(
+      viewerJsx("/repo/media/demo.webm", {
+        revision: "r2",
+        surfaceRefreshNonce: 0,
+        mediaReloadNonce: 0,
+      })
+    );
     await act(async () => {});
     expect(container.querySelector("video")).toBe(firstNode);
     expect(container.querySelector("video")?.getAttribute("src")).toBe(firstSrc);
@@ -475,7 +708,13 @@ describe("FileBrowserViewer video preview (#11382)", () => {
 
     // Refresh pressed: exactly one more request, aimed at a different URL —
     // proof the nonce reached it, without pinning the leaf's `v=` spelling.
-    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 1 }));
+    rerender(
+      viewerJsx("/repo/media/demo.webm", {
+        revision: "r2",
+        surfaceRefreshNonce: 1,
+        mediaReloadNonce: 1,
+      })
+    );
     await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
     expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
       String(videoFetchMock.mock.calls[0]?.[0])
@@ -515,7 +754,7 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
 
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     expect(String(audioFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
-    expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^blob:/);
+    expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^daintree-media:\/\//);
     expect(readMock).not.toHaveBeenCalled();
   });
 
@@ -559,13 +798,14 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
 
     const { container, rerender } = renderViewer("/repo/media/track.mp3", {
       surfaceRefreshNonce: 0,
+      mediaReloadNonce: 0,
     });
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     const firstNode = container.querySelector("audio");
     const firstSrc = firstNode?.getAttribute("src");
     expect(audioFetchMock).toHaveBeenCalledTimes(1);
 
-    rerender(viewerJsx("/repo/media/track.mp3", { surfaceRefreshNonce: 1 }));
+    rerender(viewerJsx("/repo/media/track.mp3", { surfaceRefreshNonce: 1, mediaReloadNonce: 1 }));
     await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
 
     // A different URL, so the nonce genuinely reached the request rather than
@@ -598,17 +838,113 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     const { container, rerender } = renderViewer("/repo/media/track.mp3", {
       revision: "0:0",
       surfaceRefreshNonce: 0,
+      mediaReloadNonce: 0,
     });
     await screen.findByText("This audio file couldn't be played");
     expect(container.querySelector("audio")).toBeNull();
 
-    // Exactly what the pane emits for one Refresh press: both values move.
-    rerender(viewerJsx("/repo/media/track.mp3", { revision: "0:1", surfaceRefreshNonce: 1 }));
+    // Exactly what the pane emits for one Refresh press: all three values move.
+    rerender(
+      viewerJsx("/repo/media/track.mp3", {
+        revision: "0:1",
+        surfaceRefreshNonce: 1,
+        mediaReloadNonce: 1,
+      })
+    );
 
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     expect(screen.queryByText("This audio file couldn't be played")).toBeNull();
     expect(audioFetchMock).toHaveBeenCalledTimes(2);
   });
+});
+
+// #12165: a reveal that finds a player running holds the media nonce still
+// while `revision` and `surfaceRefreshNonce` move on for the text re-read and
+// the PDF frame. Both branches, because they are wired separately — pointing
+// either one back at `surfaceRefreshNonce` recreates the bug for that kind.
+describe("FileBrowserViewer media rides its own nonce (#12165)", () => {
+  const mediaFetchMock = vi.fn();
+  // Restored one global at a time rather than through `vi.unstubAllGlobals()`:
+  // vitest.setup.ts installs ResizeObserver and rAF once at module load, so a
+  // blanket unstub here would strip them from every test that runs after this
+  // block. `unstubAllGlobals` would not restore the two URL methods anyway —
+  // they are assigned directly, not stubbed.
+  const realFetch = globalThis.fetch;
+  const realCreateObjectURL = URL.createObjectURL;
+  const realRevokeObjectURL = URL.revokeObjectURL;
+  beforeEach(() => {
+    let objectUrlSequence = 0;
+    mediaFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", mediaFetchMock);
+    // Unique per call: a constant would let a silent remount read as continuity.
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/split-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    mediaFetchMock.mockReset();
+    vi.stubGlobal("fetch", realFetch);
+    URL.createObjectURL = realCreateObjectURL;
+    URL.revokeObjectURL = realRevokeObjectURL;
+  });
+
+  for (const kind of [
+    { tag: "video" as const, path: "/repo/media/demo.webm" },
+    { tag: "audio" as const, path: "/repo/media/track.mp3" },
+  ]) {
+    it(`keeps the ${kind.tag} mounted when only the surface nonce advances`, async () => {
+      const { container, rerender } = renderViewer(kind.path, {
+        revision: "0:0",
+        surfaceRefreshNonce: 0,
+        mediaReloadNonce: 0,
+      });
+      await waitFor(() => expect(container.querySelector(kind.tag)).not.toBeNull());
+      const firstNode = container.querySelector(kind.tag);
+      const firstSrc = firstNode?.getAttribute("src");
+      expect(mediaFetchMock).toHaveBeenCalledTimes(1);
+
+      rerender(
+        viewerJsx(kind.path, { revision: "0:1", surfaceRefreshNonce: 1, mediaReloadNonce: 0 })
+      );
+      await act(async () => {});
+
+      expect(mediaFetchMock).toHaveBeenCalledTimes(1);
+      expect(container.querySelector(kind.tag)).toBe(firstNode);
+      expect(container.querySelector(kind.tag)?.getAttribute("src")).toBe(firstSrc);
+    });
+
+    it(`re-fetches the ${kind.tag} when the media nonce alone advances`, async () => {
+      // The other direction, so "keeps it mounted" above can't be satisfied by a
+      // branch that simply ignores both nonces.
+      const { container, rerender } = renderViewer(kind.path, {
+        revision: "0:0",
+        surfaceRefreshNonce: 0,
+        mediaReloadNonce: 0,
+      });
+      await waitFor(() => expect(container.querySelector(kind.tag)).not.toBeNull());
+      const firstNode = container.querySelector(kind.tag);
+      const firstSrc = firstNode?.getAttribute("src");
+      expect(mediaFetchMock).toHaveBeenCalledTimes(1);
+
+      rerender(
+        viewerJsx(kind.path, { revision: "0:0", surfaceRefreshNonce: 0, mediaReloadNonce: 1 })
+      );
+
+      await waitFor(() => expect(mediaFetchMock).toHaveBeenCalledTimes(2));
+      // Both halves in one waitFor: the hook nulls its object URL while
+      // refetching, so a bare src comparison would pass on the empty gap.
+      await waitFor(() => {
+        const refreshed = container.querySelector(kind.tag);
+        expect(refreshed).not.toBeNull();
+        expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+        expect(refreshed).not.toBe(firstNode);
+      });
+    });
+  }
 });
 
 describe("FileBrowserViewer PDF preview (#11427)", () => {
@@ -921,5 +1257,167 @@ describe("view options ownership (#11620, consolidated)", () => {
     renderViewer("/repo/src/notes.txt", { sidebarCollapsed: true });
     await screen.findByTestId("code-viewer-mock");
     expect(screen.getByTestId("file-browser-view-options")).toBeTruthy();
+  });
+});
+
+describe("FileBrowserViewer copy file contents (#12136)", () => {
+  const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+  const copyButton = () => screen.queryByRole("button", { name: "Copy file contents" });
+
+  beforeEach(() => {
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  });
+
+  it("copies the raw source of a text file", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;\n" });
+    renderViewer("/repo/src/notes.txt");
+
+    const button = await screen.findByRole("button", { name: "Copy file contents" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("const a = 1;\n"));
+  });
+
+  it("copies markdown source while the rendered view is showing", async () => {
+    readMock.mockResolvedValue({ content: "# hello\n\nbody\n" });
+    renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+
+    // The raw markdown, not the HTML the renderer produced from it — the whole
+    // point of the control is that the view mode doesn't change what it yields.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("# hello\n\nbody\n"));
+  });
+
+  it("copies HTML source rather than the sandboxed preview", async () => {
+    readMock.mockResolvedValue({
+      content: "<h1>hi</h1>\n",
+      htmlPreviewUrl: "daintree-html://preview/1",
+    });
+    renderViewer("/repo/page.html");
+
+    // HTML opens on source now (#12205), so switch to the preview first —
+    // copying while the iframe is showing is what this case is here to prove.
+    await screen.findByTestId("code-viewer-mock");
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("<h1>hi</h1>\n"));
+  });
+
+  it("withholds the control until the read settles", async () => {
+    readMock.mockReturnValue(new Promise(() => {}));
+    renderViewer("/repo/src/notes.txt");
+    await act(async () => {});
+
+    // `loading` carries no content; offering the button here would copy nothing.
+    expect(copyButton()).toBeNull();
+  });
+
+  it("offers the control for an empty file and copies the empty string", async () => {
+    readMock.mockResolvedValue({ content: "" });
+    renderViewer("/repo/src/empty.ts");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+
+    // A `content || null` gate would hide the button here while the toolbar's
+    // own unit test stayed green.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(""));
+  });
+
+  // Video and audio fetch their bytes into a blob URL; without the stub the
+  // element never mounts and the absence assertions below would pass for the
+  // wrong reason. Restored one global at a time rather than through
+  // `vi.unstubAllGlobals()`: vitest.setup.ts installs ResizeObserver and rAF
+  // once at module load, so a blanket unstub here would strip them from every
+  // test that runs after this block.
+  describe("non-text previews", () => {
+    const realFetch = globalThis.fetch;
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          blob: () => Promise.resolve(new Blob(["x"])),
+        })
+      );
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      URL.revokeObjectURL = vi.fn();
+    });
+
+    afterEach(() => {
+      vi.stubGlobal("fetch", realFetch);
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    it.each([
+      ["an image", "/repo/logo.png", "img"],
+      ["a video", "/repo/media/demo.webm", "video"],
+      ["audio", "/repo/media/track.mp3", "audio"],
+      ["a PDF", "/repo/docs/spec.pdf", "iframe"],
+    ])("withholds the control for %s", async (_case, filePath, selector) => {
+      const { container } = renderViewer(filePath);
+
+      await waitFor(() => expect(container.querySelector(selector)).not.toBeNull());
+      expect(copyButton()).toBeNull();
+    });
+
+    it("withholds the control for an SVG, whose raw source the viewer discards", async () => {
+      // Valid SVG on purpose: this suite's shared default read is `# hello`,
+      // which the sanitizer rejects — so without real markup this would assert
+      // absence from the error state rather than the svg state it means to cover.
+      readMock.mockResolvedValue({
+        content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+      });
+      const { container } = renderViewer("/repo/icon.svg");
+
+      // `[role="img"]` and not `"svg"`: every lucide icon in the toolbar is an
+      // <svg>, so the loose selector would match one of those and pass without
+      // the SVG branch ever rendering. FileImagePreview paints that role only
+      // when it has sanitized markup, which is exactly the state under test.
+      await waitFor(() => expect(container.querySelector('[role="img"]')).not.toBeNull());
+      // Read as text, but only the sanitized markup is kept — there is no raw
+      // source left to hand back.
+      expect(copyButton()).toBeNull();
+    });
+  });
+
+  it.each(["BINARY_FILE", "FILE_TOO_LARGE", "LFS_POINTER"] as const)(
+    "withholds the control when the read failed with %s",
+    async (code) => {
+      // A real ClientAppError, not `Object.assign(new Error(), { code })`:
+      // `isClientAppError` keys off `name === "AppError"`, so a plain Error
+      // falls into the generic branch and never exercises this mapping.
+      readMock.mockRejectedValue(new ClientAppError(code, code));
+      renderViewer("/repo/src/blob.bin");
+
+      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      expect(copyButton()).toBeNull();
+    }
+  );
+
+  it("sits ahead of Reveal and Open in editor, the same suffix FilePane renders", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByRole("button", { name: "Copy file contents" });
+
+    const buttons = Array.from(screen.getByRole("toolbar").querySelectorAll("button")).map((b) =>
+      b.getAttribute("aria-label")
+    );
+    // The exact tail, not index arithmetic: a difference of 2 also holds with an
+    // unrelated control wedged between them. FilePane's suite asserts the
+    // identical suffix — that parity is what #12136 asked for.
+    expect(buttons.slice(-3)).toEqual(["Copy file contents", revealCopy().label, "Open in editor"]);
   });
 });

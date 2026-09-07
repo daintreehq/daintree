@@ -43,11 +43,13 @@ const projectViewDestroyListeners = new Map<
   { webContents: WebContents; listener: () => void }
 >();
 
-// Cached (deactivated) project views. High-frequency, replayable streams (log
-// batches) skip these renderers — a CPU-throttled/frozen renderer has no
-// backpressure, so pushed messages pile up in its task queue. State broadcasts
-// (project added/updated/removed, etc.) must NOT consult this set: cached views
-// have no replay path on warm reactivation (#9490).
+// Cached (deactivated) project views. Two kinds of send skip these renderers:
+// high-frequency replayable streams (log batches), because a CPU-throttled/
+// frozen renderer has no backpressure and pushed messages pile up in its task
+// queue; and visibility-scoped effects (sound triggers), where a cached view
+// playing along is the bug itself (#12177). State broadcasts and cleanup
+// commands must NOT consult this set: cached views have no replay path on warm
+// reactivation (#9490).
 const cachedViewWebContents = new Set<number>();
 
 // Memoized getAllAppWebContents() result. broadcastToRenderer() calls it on

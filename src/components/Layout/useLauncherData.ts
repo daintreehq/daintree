@@ -47,6 +47,7 @@ export function useLauncherData(): LauncherData {
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
+  const pinnedButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.pinnedButtons));
   const { worktrees } = useWorktrees();
 
   const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
@@ -110,7 +111,8 @@ export function useLauncherData(): LauncherData {
       launchable,
       leftButtons,
       agentSettings,
-      rightButtons
+      rightButtons,
+      pinnedButtons
     );
     return {
       agents: [...sorted, ...notLaunchable],
@@ -119,7 +121,14 @@ export function useLauncherData(): LauncherData {
         ? "loading"
         : "installed") as DockLaunchInventoryState,
     };
-  }, [agentAvailability, agentSettings, isAvailabilityLoading, leftButtons, rightButtons]);
+  }, [
+    agentAvailability,
+    agentSettings,
+    isAvailabilityLoading,
+    leftButtons,
+    rightButtons,
+    pinnedButtons,
+  ]);
 
   const recipeContext = useMemo(
     () =>

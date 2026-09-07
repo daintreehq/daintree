@@ -871,7 +871,7 @@ describe("McpServerService", () => {
         title: "Create Worktree with Recipe",
         description: "Create worktree, optionally check out a PR, optionally run a recipe",
       }),
-      // System-only tools — irreversible or externally-visible mutations.
+      // System-only tools — mutations the action tier must not reach.
       createManifestEntry({
         id: "git.commit" as ActionId,
         title: "Commit",
@@ -883,14 +883,31 @@ describe("McpServerService", () => {
         description: "Push commits to a remote",
       }),
       createManifestEntry({
+        id: "git.fetch" as ActionId,
+        title: "Fetch",
+        description: "Update remote-tracking refs from the remote",
+      }),
+      // Action-tier since #12116. `danger` mirrors the real registry so the
+      // fixture doesn't quietly describe these as safe; the registry values
+      // themselves are guarded by `EXPECTED_CONFIRM_DANGER`.
+      createManifestEntry({
         id: "worktree.delete" as ActionId,
         title: "Delete Worktree",
         description: "Permanently remove a worktree",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "worktree.deleteOwned" as ActionId,
         title: "Delete Owned Worktree",
         description: "Remove a worktree this MCP session created",
+        danger: "confirm",
+      }),
+      // Action-tier since #12214: re-running project plugin discovery restarts
+      // running code, so a read-only workbench session must not reach it.
+      createManifestEntry({
+        id: "plugin.reloadProject" as ActionId,
+        title: "Reload Project Plugins",
+        description: "Re-scan the open project's committed plugins",
       }),
       createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
@@ -916,6 +933,11 @@ describe("McpServerService", () => {
         id: "terminal.kill" as ActionId,
         title: "Kill Terminal",
         description: "Permanently remove a terminal",
+      }),
+      createManifestEntry({
+        id: "terminal.killBatch" as ActionId,
+        title: "Kill terminals",
+        description: "Permanently remove several named terminals in one call",
       }),
       createManifestEntry({
         id: "terminal.killAll" as ActionId,
@@ -1272,7 +1294,8 @@ describe("McpServerService", () => {
         title: "Toggle Dev Dashboard",
         description: "Show or hide the portal dev dashboard",
       }),
-      // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
+      // Action-tier since #12116; the rest of this block backfills
+      // SYSTEM_TIER_ADDONS coverage.
       createManifestEntry({
         id: "worktree.resource.teardown" as ActionId,
         title: "Teardown Resource",
@@ -1333,6 +1356,7 @@ describe("McpServerService", () => {
         id: "forge.createIssue" as ActionId,
         title: "Create Issue (Forge)",
         description: "Create an issue via the forge provider",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "forge.closeIssue" as ActionId,
@@ -1343,6 +1367,7 @@ describe("McpServerService", () => {
         id: "forge.reopenIssue" as ActionId,
         title: "Reopen Issue (Forge)",
         description: "Reopen an issue via the forge provider",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "forge.editIssue" as ActionId,
@@ -1353,6 +1378,7 @@ describe("McpServerService", () => {
         id: "forge.addIssueComment" as ActionId,
         title: "Add Issue Comment (Forge)",
         description: "Add a comment to an issue via the forge provider",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "forge.addIssueLabel" as ActionId,
@@ -1542,7 +1568,7 @@ describe("McpServerService", () => {
       }
     });
 
-    it("action tier adds full in-app orchestration, but excludes filesystem-destructive, git, and externally-visible writes", async () => {
+    it("action tier adds full in-app orchestration and confirm-gated worktree cleanup, but excludes git and externally-visible writes", async () => {
       paneTokenTiers.set("token-action", "action");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
@@ -1589,6 +1615,47 @@ describe("McpServerService", () => {
       }
       for (const id of NEVER_EXPOSED_VIA_MCP) {
         expect(ids).not.toContain(id);
+      }
+    });
+
+    it("system tier advertises the retractable-write split on the wire (#12118)", async () => {
+      paneTokenTiers.set("token-sys-hints", "system");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-sys-hints",
+      });
+      transports.push(transport);
+
+      const byName = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
+
+      // Three system-tier writes an agent must clear a host confirm for:
+      // createIssue and addIssueComment publish a record nobody can retract,
+      // and reopenIssue is a publicly visible state transition whose inverse
+      // (closeIssue) has been `confirm` since #10653. This asserts the
+      // classification survives all the way to the wire — the fixture defaults
+      // an unspecified entry to "safe", so a manifest that drifted back would
+      // read as green everywhere else.
+      for (const id of ["forge.createIssue", "forge.addIssueComment", "forge.reopenIssue"]) {
+        expect(byName.get(id)?.annotations?.destructiveHint).toBe(true);
+      }
+
+      // The rest of the cohort #12118 classified stays deliberately unattended:
+      // each is an idempotent state-set with an exact inverse, or a local index
+      // /commit write that only `git.push` can publish.
+      for (const id of [
+        "forge.assignIssue",
+        "forge.unassignIssue",
+        "forge.addIssueLabel",
+        "forge.removeIssueLabel",
+        "git.commit",
+        "git.stageFile",
+        "git.unstageFile",
+        "git.stageAll",
+        "git.unstageAll",
+      ]) {
+        expect(byName.get(id)?.annotations?.destructiveHint).toBe(false);
       }
     });
 
@@ -1686,7 +1753,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("rejects clipboard writes, git mutations, and worktree deletes at the action tier", async () => {
+    it("rejects clipboard writes and git mutations at the action tier", async () => {
       paneTokenTiers.set("token-action", "action");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
@@ -1703,11 +1770,15 @@ describe("McpServerService", () => {
       });
       transports.push(transport);
 
+      // Deliberately no `worktree.delete` here since #12116 — it is admitted at
+      // this tier now, and what bounds it is the confirm gate rather than the
+      // floor. Its action-tier admission is asserted in `tierAuth.test.ts`, and
+      // the surviving entries are the shared-state writes that genuinely still
+      // need `system`.
       const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [
         { name: "copyTree.generateAndCopyFile", arguments: {} },
         { name: "git.commit", arguments: { message: "x" } },
         { name: "git.push", arguments: {} },
-        { name: "worktree.delete", arguments: {} },
       ];
 
       for (const call of calls) {

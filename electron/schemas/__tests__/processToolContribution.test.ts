@@ -4,7 +4,7 @@ import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processTool
 import { AGENT_CLI_NAMES } from "../../services/ProcessDetector/registries.js";
 
 function parseProcessTools(processTools: unknown) {
-  return getPluginManifestSchema(false).safeParse({
+  return getPluginManifestSchema("user").safeParse({
     name: "acme.process-tools",
     version: "1.0.0",
     contributes: { processTools },
@@ -35,7 +35,7 @@ describe("contributes.processTools (#11613)", () => {
   });
 
   it("defaults to an empty array when the manifest declares none", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       name: "acme.process-tools",
       version: "1.0.0",
     });

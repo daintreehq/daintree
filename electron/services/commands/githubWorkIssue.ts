@@ -466,12 +466,12 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     // Create worktree (using rootPath and detected fromRemote flag)
     let worktreeId: string;
     try {
-      worktreeId = await workspaceClient.createWorktree(rootPath, {
+      ({ worktreeId } = await workspaceClient.createWorktree(rootPath, {
         baseBranch,
         newBranch: finalBranchName,
         path: worktreePath,
         fromRemote,
-      });
+      }));
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to create worktree");
       return {

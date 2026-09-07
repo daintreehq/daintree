@@ -128,18 +128,19 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await window.locator(SEL.github.searchIssues).fill("e2e");
     await expect(window.locator(SEL.github.item(101))).toBeVisible({ timeout: T_LONG });
 
-    // The bulk helpers follow selection mode rather than a non-empty query —
-    // typing used to grow the stacked header and shove the list down on the
-    // first keystroke. Entering selection is the deliberate act, so do it:
-    // the cursor moves to the first row and Shift+Space takes it.
-    await window.keyboard.press("ArrowDown");
-    await window.keyboard.press("Shift+Space");
+    // Bulk presets moved behind the fixed-size selection trigger so typing no
+    // longer grows the header. Open that popover before choosing the preset.
+    await window.getByRole("button", { name: "Select issues" }).click();
 
     const selectAll = window
       .locator(SEL.github.selectionActions)
       .getByRole("button", { name: /Select all/ });
     await expect(selectAll).toBeVisible();
-    await selectAll.click();
+    // The provider can finish resolving while Radix's popover is animating,
+    // remounting the content before Playwright's pointer-stability gate clears.
+    // Keyboard activation is the same supported button path and is not tied to
+    // the transient popover geometry.
+    await selectAll.press("Enter");
 
     await expect(window.locator(SEL.github.bulkActionBar)).toBeVisible();
     await window.locator(SEL.github.bulkCreateButton).click();

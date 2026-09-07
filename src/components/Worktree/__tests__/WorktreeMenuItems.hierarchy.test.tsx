@@ -18,6 +18,7 @@ import {
   rootSeparatorCount,
   zeroCounts,
 } from "./worktreeMenuHarness";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
@@ -25,6 +26,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 afterEach(() => {
   cleanup();
   dispatch.mockClear();
+  _resetPluginRuntimeStoreForTest();
 });
 
 /** Every optional group present: the widest root the menu can produce. */
@@ -37,11 +39,27 @@ function fullyPopulated(): Parameters<typeof renderWorktreeMenu>[0] {
         pr: { ref: { number: 7 }, url: "https://example.test/pr/7" },
       } as WorktreeState["linked"],
       worktreeMode: "local",
+      aheadCount: 2,
+      behindCount: 0,
+      // A completed status pass with a tracking branch — without it the Git
+      // rows have no upstream to speak of and the group is not "fully
+      // populated" at all.
+      worktreeChanges: {
+        worktreeId: "wt-1",
+        rootPath: "/repo/wt-1",
+        changes: [],
+        changedFileCount: 0,
+        tracking: "origin/feature",
+      },
     }),
     counts: { grid: 2, dock: 1, active: 3, completed: 0, all: 3, waiting: 1, working: 2 },
     recipes: [{ id: "r1", name: "Two agents" }],
     onSaveLayout: vi.fn(),
     onOpenReviewHub: vi.fn(),
+    onGitPullRebase: vi.fn(),
+    onGitPush: vi.fn(),
+    onGitForcePush: vi.fn(),
+    canForcePush: true,
     onOpenChanges: vi.fn(),
     onCompareDiff: vi.fn(),
     onOpenFileBrowser: vi.fn(),
@@ -71,13 +89,14 @@ function fullyPopulated(): Parameters<typeof renderWorktreeMenu>[0] {
 }
 
 describe("WorktreeMenuItems — root hierarchy", () => {
-  it("renders the eleven intent groups in the specified order", () => {
+  it("renders the twelve intent groups in the specified order", () => {
     const { container } = renderWorktreeMenu(fullyPopulated());
 
     expect(rootRowLabels(container)).toEqual([
       "Launch",
       "Open",
       "Review",
+      "Git",
       "Sessions",
       "Recipes",
       "Runtime",
@@ -114,6 +133,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
       "Launch",
       "Open",
       "Review",
+      "Git",
       "Sessions",
       "Copy",
       "Organize",
@@ -202,6 +222,61 @@ describe("WorktreeMenuItems — Launch", () => {
     fireEvent.click(screen.getByText("More agents and panels…"));
 
     expect(onOpenPanelPalette).toHaveBeenCalledWith("menu");
+  });
+});
+
+describe("WorktreeMenuItems — Git", () => {
+  it("leads with Fetch and Fetch and prune, then the base-integration rows", () => {
+    const { container } = renderWorktreeMenu({});
+
+    const git = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
+      (sub) => sub.firstElementChild?.textContent?.trim() === "Git"
+    );
+    const rows = Array.from(git?.querySelectorAll("[data-menu-item]") ?? []).map((n) =>
+      n.textContent?.trim()
+    );
+    expect(rows).toEqual([
+      "Fetch",
+      "Fetch and prune",
+      "Rebase onto base branch…No base branch",
+      "Merge base branch in…No base branch",
+    ]);
+  });
+
+  it("dispatches git.fetch without prune from the plain row", () => {
+    renderWorktreeMenu({ worktree: makeWorktree({ id: "/wt/a" }) }, "context-menu");
+
+    fireEvent.click(screen.getByText("Fetch"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "git.fetch",
+      { worktreeId: "/wt/a" },
+      { source: "context-menu" }
+    );
+  });
+
+  it("dispatches git.fetch with prune from the prune row", () => {
+    renderWorktreeMenu({ worktree: makeWorktree({ id: "/wt/a" }) }, "menu");
+
+    fireEvent.click(screen.getByText("Fetch and prune"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "git.fetch",
+      { worktreeId: "/wt/a", prune: true },
+      { source: "menu" }
+    );
+  });
+
+  it("targets the row's own worktree, not whichever card happens to be focused", () => {
+    renderWorktreeMenu({ worktree: makeWorktree({ id: "/wt/other" }) });
+
+    fireEvent.click(screen.getByText("Fetch"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "git.fetch",
+      { worktreeId: "/wt/other" },
+      expect.anything()
+    );
   });
 });
 
@@ -508,6 +583,41 @@ describe("WorktreeMenuItems — Extensions", () => {
       (el) => el.textContent
     );
     expect(labels).toEqual(["acme", "zeta"]);
+  });
+
+  it("labels a group with the plugin's display name, never its instance key", () => {
+    // A contribution's `pluginId` is the host's instance key, so a project-owned
+    // plugin's raw id carries a machine-local project id (#12211).
+    const instanceKey = "project__b6700c7a__gregpriday.video-manager";
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([[instanceKey, { devMode: false, displayName: "Video Manager" }]]),
+    });
+
+    const { container } = renderWorktreeMenu({
+      pluginItems: [
+        item(instanceKey, "Do the thing", "vm.go"),
+        item("zeta", "Zeta thing", "zeta.go"),
+      ],
+    });
+
+    const labels = Array.from(container.querySelectorAll("[data-menu-label]")).map(
+      (el) => el.textContent
+    );
+    expect(labels).toEqual(["Video Manager", "zeta"]);
+  });
+
+  it("labels a group with the manifest id before the runtime snapshot lands", () => {
+    const { container } = renderWorktreeMenu({
+      pluginItems: [
+        item("project__b6700c7a__gregpriday.video-manager", "Do the thing", "vm.go"),
+        item("zeta", "Zeta thing", "zeta.go"),
+      ],
+    });
+
+    const labels = Array.from(container.querySelectorAll("[data-menu-label]")).map(
+      (el) => el.textContent
+    );
+    expect(labels).toEqual(["gregpriday.video-manager", "zeta"]);
   });
 
   it("dispatches the plugin's own action id with the surface source", () => {

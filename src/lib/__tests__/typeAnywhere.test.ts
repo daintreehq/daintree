@@ -7,6 +7,7 @@ import {
   hasBlockingOverlay,
   hasUsefulFocus,
   isRescuableKeystroke,
+  isRescueTargetRoutable,
   resolveRescueTarget,
   type RescueContext,
 } from "../typeAnywhere";
@@ -337,5 +338,57 @@ describe("resolveRescueTarget", () => {
   it("refuses when a stale target id is no longer present", () => {
     const ctx = makeContext([agentPanel("a1")], { lastTypedTerminalId: "gone" });
     expect(resolveRescueTarget(ctx)).toBeNull();
+  });
+});
+
+/**
+ * The per-panel half of the contract, now shared verbatim with the file-row
+ * menu's insert gate (#12207). Tested directly as well as through
+ * `resolveRescueTarget` so the two callers cannot drift on what "available"
+ * means without a test saying so.
+ */
+describe("isRescueTargetRoutable", () => {
+  const routable = (panel: PtyPanelData, voiceSubmitting: string[] = []): boolean =>
+    isRescueTargetRoutable(
+      { panelsById: { [panel.id]: panel }, voiceSubmittingIds: new Set(voiceSubmitting) },
+      panel.id
+    );
+
+  it("accepts a live agent in the grid", () => {
+    expect(routable(agentPanel("t-1"))).toBe(true);
+  });
+
+  it.each([
+    ["a locked editor", { isInputLocked: true }],
+    ["a restarting agent", { isRestarting: true }],
+    ["an exited agent", { runtimeStatus: "exited" as const }],
+    ["an errored agent", { runtimeStatus: "error" as const }],
+    ["a docked agent", { location: "dock" as const }],
+    ["a pty-less agent", { hasPty: false }],
+    ["a raw shell", { launchAgentId: undefined }],
+  ])("refuses %s", (_label, overrides) => {
+    expect(routable(agentPanel("t-1", overrides))).toBe(false);
+  });
+
+  it("refuses a panel mid-voice-submit", () => {
+    expect(routable(agentPanel("t-1"), ["t-1"])).toBe(false);
+  });
+
+  /**
+   * `isAgentFleetActionEligible` resolves a BUILT-IN runtime agent id, so a
+   * plugin- or user-contributed agent is not routable here even when it is
+   * live and in the grid. Pinned rather than left implicit: the module's own
+   * `isAgentTerminalFleetEligible` exists for the broader case (#11637), and
+   * whether routing should widen to match it is a decision about the rescue
+   * contract, not something to change by accident from the file menu.
+   */
+  it("refuses an agent with no built-in runtime id, such as a plugin agent", () => {
+    expect(routable(agentPanel("t-1", { launchAgentId: "some-plugin-agent" }))).toBe(false);
+  });
+
+  it("refuses an id with no panel behind it", () => {
+    expect(isRescueTargetRoutable({ panelsById: {}, voiceSubmittingIds: new Set() }, "gone")).toBe(
+      false
+    );
   });
 });

@@ -30,8 +30,13 @@
 
   /* Document scale: prose sizes are em-based, so one font-size tunes the
      whole hierarchy to the app's 14px reading surfaces. The measure caps
-     line length for comfortable reading in maximized panels and dialogs. */
-  font-size: var(--text-sm);
+     line length for comfortable reading in maximized panels and dialogs.
+
+     Set per-surface by the reading text-size control, which declares
+     `--markdown-font-size` on this element as a rung of the shared type scale
+     (#12134). The fallback is what every surface rendered before it existed,
+     so a document mounted without the prop is unchanged. */
+  font-size: var(--markdown-font-size, var(--text-sm));
   max-width: 48rem;
   margin-inline: auto;
 }

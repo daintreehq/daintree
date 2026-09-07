@@ -6,6 +6,8 @@ import { getHibernationService } from "../../services/HibernationService.js";
 import { logError } from "../../utils/logger.js";
 import { writeHibernatedMarker } from "../../services/pty/terminalSessionPersistence.js";
 import { gracefulTeardownAndJournalProject } from "../../services/pty/projectSessionJournal.js";
+import { helpSessionService } from "../../services/HelpSessionService.js";
+import { notifyProjectPluginsClosed } from "../../window/projectPluginLifecycle.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -67,6 +69,23 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
           }
 
           try {
+            // Capture the assistant's session BEFORE the project-wide teardown,
+            // the same order the idle-background sweep uses: `revokeSession`
+            // needs the assistant's PTY still alive to read its resume id, and
+            // the generic kill below would already have taken it. Deliberately
+            // ahead of the `confirmed` gate too — an unconfirmed teardown leaves
+            // the row open, and a captured pending entry is what lets a panel
+            // that reopens there resume rather than start cold (#12181).
+            //
+            // Best-effort: losing the resume entry must not fail the sleep, and
+            // an uncaught rejection here would surface as an INTERNAL error from
+            // the catch below.
+            try {
+              await helpSessionService.revokeByProjectId(projectId);
+            } catch (revokeError) {
+              logError("project-sleep-help-revoke-failed", revokeError, { projectId });
+            }
+
             // Graceful, session-preserving kill + snapshot writeback + journal, in
             // that order — the same three steps a quit performs per project, via
             // the shared helper rather than a fourth copy of them.
@@ -133,6 +152,17 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
             // Keep the project in the list as `closed` WITHOUT clearProjectState,
             // so its panel/terminal layout survives for a non-destructive reopen.
             projectStore.updateProjectStatus(projectId, "closed");
+
+            // Sleep is a close as far as plugins are concerned, so it owes them
+            // the same unload cascade `project:close` runs — workers, startup
+            // timers, spawned children and the native watcher all go now. The
+            // call belongs here rather than inside `updateProjectStatus`: that
+            // is storage plumbing reached by relocation, adoption and deletion
+            // too, and the lifecycle seam is sourced from where the intent
+            // lives. Fire-and-forget and self-logging, so it cannot fail this
+            // already-committed teardown; the controller's next-switch sweep
+            // stays as defence in depth (a duplicate close is a no-op).
+            notifyProjectPluginsClosed(projectId);
 
             // Read the pointer fresh rather than from a snapshot taken before the
             // awaits above: another window can switch projects while the kill is

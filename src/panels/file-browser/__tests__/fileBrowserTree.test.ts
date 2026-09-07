@@ -428,6 +428,112 @@ describe("refreshTargets", () => {
       refreshTargets(listings, new Set([".cache", ".cache/inner", "src"]), "", isVisible)
     ).toEqual(["", "src"]);
   });
+
+  // ---- Scoped targets (#12244) ----
+
+  const scopedListings = () =>
+    listingsOf({
+      "": [dir("a"), dir("b"), file("top.txt")],
+      a: [dir("a/deep"), file("a/one.ts")],
+      "a/deep": [file("a/deep/two.ts")],
+      b: [file("b/three.ts")],
+    });
+  const scopedExpanded = new Set(["a", "a/deep", "b"]);
+
+  it("emits only the affected directory, and does not add the root for free", () => {
+    expect(
+      refreshTargets(scopedListings(), scopedExpanded, "", undefined, null, new Set(["a/deep"]))
+    ).toEqual(["a/deep"]);
+  });
+
+  it("emits the root exactly when a top-level entry changed", () => {
+    // The affected set names PARENTS, so "" appears in it precisely when
+    // something directly inside the root moved.
+    expect(
+      refreshTargets(scopedListings(), scopedExpanded, "", undefined, null, new Set([""]))
+    ).toEqual([""]);
+  });
+
+  it("reaches an affected descendant through unaffected ancestors", () => {
+    // `a` is not in the set and must not be re-read, but the walk still has to
+    // pass through it to establish that `a/deep` is reachable at all.
+    expect(
+      refreshTargets(scopedListings(), scopedExpanded, "", undefined, null, new Set(["a/deep"]))
+    ).toEqual(["a/deep"]);
+  });
+
+  it("still refuses an affected directory that is unreachable or hidden", () => {
+    const isVisible = createVisibilityFilter({ hideDotfiles: true, alwaysHiddenPatterns: [] });
+    const listings = listingsOf({
+      "": [dir(".cache"), dir("src")],
+      ".cache": [dir(".cache/inner")],
+      src: [file("src/a.ts")],
+    });
+
+    // Affected, expanded, and still not a target: it renders no row, and a
+    // scoped refresh narrows the full answer rather than bypassing it.
+    expect(
+      refreshTargets(
+        listings,
+        new Set([".cache", ".cache/inner", "src"]),
+        "",
+        isVisible,
+        null,
+        new Set([".cache/inner"])
+      )
+    ).toEqual([]);
+    // Same for a directory nothing has a row for at all.
+    expect(
+      refreshTargets(
+        scopedListings(),
+        scopedExpanded,
+        "",
+        undefined,
+        null,
+        new Set(["never/listed"])
+      )
+    ).toEqual([]);
+  });
+
+  it("returns nothing for a burst that resolved to no directory", () => {
+    expect(
+      refreshTargets(scopedListings(), scopedExpanded, "", undefined, null, new Set())
+    ).toEqual([]);
+  });
+
+  it("takes the full answer for a null scope, exactly as omitting it does", () => {
+    const full = refreshTargets(scopedListings(), scopedExpanded);
+    expect(refreshTargets(scopedListings(), scopedExpanded, "", undefined, null, null)).toEqual(
+      full
+    );
+    expect(full).toEqual(["", "a", "a/deep", "b"]);
+  });
+
+  it("re-reads the viewer's collapsed folder only when the change landed in it", () => {
+    const listings = scopedListings();
+    // `b` is listed for the viewer but collapsed out of the tree (#11620).
+    const expanded = new Set(["a", "a/deep"]);
+
+    expect(refreshTargets(listings, expanded, "", undefined, "b", new Set(["b"]))).toEqual(["b"]);
+    expect(refreshTargets(listings, expanded, "", undefined, "b", new Set(["a/deep"]))).toEqual([
+      "a/deep",
+    ]);
+  });
+
+  it("scopes against a browse root without re-listing it unasked", () => {
+    const listings = listingsOf({
+      "": [dir("src")],
+      src: [dir("src/lib"), file("src/a.ts")],
+      "src/lib": [file("src/lib/util.ts")],
+    });
+
+    expect(
+      refreshTargets(listings, new Set(["src/lib"]), "src", undefined, null, new Set(["src/lib"]))
+    ).toEqual(["src/lib"]);
+    expect(
+      refreshTargets(listings, new Set(["src/lib"]), "src", undefined, null, new Set(["src"]))
+    ).toEqual(["src"]);
+  });
 });
 
 describe("createVisibilityFilter", () => {

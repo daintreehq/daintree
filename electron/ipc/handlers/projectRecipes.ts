@@ -233,6 +233,13 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
         assertNoSecretEnvValues(recipe.terminals);
       }
     }
+    // Same forward-compatibility pre-flight as the enable path: this writer is
+    // unchecked by design, so without it an automation-driven sync would strip
+    // newer content out of the tracked files (#12261).
+    await projectStore.assertInRepoRecipesForwardCompatible(
+      project.path,
+      recipes.map((recipe) => recipe.name)
+    );
     for (const recipe of recipes) {
       await projectStore.writeInRepoRecipe(project.path, recipe);
     }

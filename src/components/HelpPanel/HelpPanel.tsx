@@ -3,6 +3,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -26,6 +27,12 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
+import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
+import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
+import {
+  acquireHelpSessionController,
+  releaseHelpSessionController,
+} from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
@@ -35,9 +42,12 @@ import { TurnOutcomePip } from "./TurnOutcomePip";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
+  selectSlot,
+  selectOpenSlots,
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
 } from "@/store/helpPanelStore";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import {
   usePanelStore,
   getTerminalRefreshTier,
@@ -65,7 +75,6 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
-import { HelpSessionController } from "@/controllers/HelpSessionController";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -177,18 +186,25 @@ export function HelpPanel({
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
+  // The lane a tab's close button is waiting on confirmation for (#12108).
+  // Null means no close is pending — closing is destructive (the conversation
+  // is discarded, not paused), so it takes the same gate the Stop control uses.
+  const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
   // Tracks the last preferredAgentId the switch effect acted on so a single
   // preference change drives at most one switch attempt (the effect re-runs
   // on unrelated dep changes while the async launch settles).
   const prevPreferredAgentIdRef = useRef<string | null>(null);
   const [visibilityEpoch, setVisibilityEpoch] = useState(0);
 
-  // useState lazy initializer guarantees a single instantiation across
-  // renders and StrictMode double-mount, and unlike a ref it doesn't trip
-  // React Compiler's "no ref access during render" rule. The constructor is
-  // pure; side effects live in `start()` which fires from the lifecycle
-  // effect below.
-  const [controller] = useState(() => new HelpSessionController());
+  // The lane this panel body is showing, and its controller (#12108).
+  //
+  // The controller comes from the per-view registry rather than `useState`:
+  // switching tabs must hand this component a DIFFERENT controller while
+  // leaving the previous lane's instance running, and a lane that scrolls off
+  // screen keeps its launch phase, banners and IPC subscriptions intact. A
+  // `useState` instance would be per-component and would die on tab switch.
+  const activeSlot = useHelpPanelStore((s) => s.activeSlot);
+  const controller = acquireHelpSessionController(activeSlot);
 
   const session = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
 
@@ -215,16 +231,16 @@ export function HelpPanel({
     useShallow((s) => ({
       isOpen: s.isOpen,
       width: s.width,
-      terminalId: s.terminalId,
-      sessionId: s.sessionId,
-      agentId: s.agentId,
+      terminalId: selectSlot(s, s.activeSlot).terminalId,
+      sessionId: selectSlot(s, s.activeSlot).sessionId,
+      agentId: selectSlot(s, s.activeSlot).agentId,
       preferredAgentId: s.preferredAgentId,
       autoLaunchEnabled: s.autoLaunchEnabled,
       droppedPreferredAgentId: s.droppedPreferredAgentId,
       introDismissed: s.introDismissed,
-      conversationTouched: s.conversationTouched,
+      conversationTouched: selectSlot(s, s.activeSlot).conversationTouched,
       focusRequest: s.focusRequest,
-      figures: s.figures,
+      figures: selectSlot(s, s.activeSlot).figures,
       markConversationStarted: s.markConversationStarted,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
@@ -388,7 +404,7 @@ export function HelpPanel({
     }
     // Optional-chained like the `onViewRevealed` subscription below: a missing
     // binding degrades to the normal "Start assistant" CTA rather than throwing.
-    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId);
+    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId, activeSlot);
     if (!peek) {
       setResumablePending(null);
       return;
@@ -423,6 +439,7 @@ export function HelpPanel({
     isOpen,
     terminalId,
     activeWorkspaceId,
+    activeSlot,
     supportedInstalledAgentIdsKey,
     supportedInstalledAgentIds,
   ]);
@@ -486,7 +503,7 @@ export function HelpPanel({
   useEffect(() => {
     if (!activeWorkspaceId || terminalId || !isReadyToLaunch) return;
     if (coldResumeArmedRef.current === activeWorkspaceId) return;
-    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId);
+    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId, activeSlot);
     if (!peek) return;
     let cancelled = false;
     void peek
@@ -503,7 +520,7 @@ export function HelpPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, terminalId, isReadyToLaunch, setOpen]);
+  }, [activeWorkspaceId, activeSlot, terminalId, isReadyToLaunch, setOpen]);
 
   // Fire the captured resume once the panel has opened. The `!terminalId` guard
   // covers two cases: a DevTools reload that still holds a live session, and the
@@ -526,42 +543,13 @@ export function HelpPanel({
     setAutoResumeAgentId(null);
   }, [autoResumeAgentId, isOpen, terminalId, controller]);
 
-  // Lifecycle — arms IPC subscriptions on mount, clears all timers on
-  // unmount. `start()` is idempotent across StrictMode's double-mount.
-  useEffect(() => {
-    controller.start();
-    return () => controller.stop();
-  }, [controller]);
-
-  // Sync the controller's inputs whenever the upstream state changes. The
-  // controller decides what to do (clear version block, arm hibernate,
-  // attempt auto-launch). Centralizing the inputs means the controller can
-  // reason about transitions (e.g. preferredAgentId changing mid-launch)
-  // without scattering effects across the component.
-  useEffect(() => {
-    controller.syncInputs({
-      isOpen,
-      isReadyToLaunch,
-      // Legacy field name — carries the active workspace, project or scratch.
-      currentProject: activeWorkspace,
-      terminalId,
-      preferredAgentId,
-      supportedInstalledAgentIds,
-      autoLaunchEnabled,
-      visibilityEpoch,
-    });
-  }, [
-    controller,
-    isOpen,
-    isReadyToLaunch,
-    activeWorkspace,
-    terminalId,
-    preferredAgentId,
-    supportedInstalledAgentIdsKey,
-    supportedInstalledAgentIds,
-    autoLaunchEnabled,
-    visibilityEpoch,
-  ]);
+  // Lifecycle is NOT driven from here (#12108). Every open lane — the active
+  // one included — is armed by its own `HelpSessionLaneRuntime` below.
+  //
+  // Keying an arm/disarm effect on `controller` would tear the OUTGOING lane
+  // down on every tab switch, and `stop()` is not a neutral pause: it bumps
+  // `_launchGen`, which makes an in-flight launch bail at its next checkpoint.
+  // Switching tabs mid-launch would silently abandon that launch.
 
   // The renderer being hidden is NOT a teardown signal. A hidden renderer
   // means one of: project-switch cached, project-switch about-to-be-evicted,
@@ -617,8 +605,8 @@ export function HelpPanel({
   useEffect(() => {
     if (terminalId && terminalPty?.agentState !== undefined && terminalPty.agentState !== "idle") {
       const store = useHelpPanelStore.getState();
-      if (store.terminalId === terminalId) {
-        markConversationStarted();
+      if (selectSlot(store, store.activeSlot).terminalId === terminalId) {
+        markConversationStarted(store.activeSlot);
       }
     }
   }, [terminalId, terminalPty?.agentState, markConversationStarted]);
@@ -736,7 +724,7 @@ export function HelpPanel({
         // The panel can close, or rebind to a different session, between this
         // effect and the frame that runs it. A frame already dequeued when
         // cleanup ran can't be cancelled, so re-read both.
-        if (!state.isOpen || state.terminalId !== terminalId) return;
+        if (!state.isOpen || selectSlot(state, state.activeSlot).terminalId !== terminalId) return;
 
         // Ownership is re-checked here, on the final deferred frame, rather
         // than in the effect body — focus can move during the frame boundary,
@@ -1035,6 +1023,152 @@ export function HelpPanel({
       CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
     conversationTouched;
 
+  // --- Parallel lanes (#12108) -------------------------------------------
+  // One base for the whole tablist/tabpanel relationship. Both ends have to name
+  // the same ids and neither can hold a ref to the other, so the panel owns the
+  // base and both sides derive from it.
+  const tabIdBase = useId();
+  const sessionBodyId = `${tabIdBase}-body`;
+  const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
+  const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
+
+  const laneAgentStates = usePanelStore(
+    useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
+      openSlots.map((slot) => {
+        const laneTerminalId = useHelpPanelStore.getState().sessions[slot]?.terminalId;
+        if (!laneTerminalId) return undefined;
+        const panel = s.panelsById[laneTerminalId];
+        return panel && isPtyPanel(panel) ? panel.agentState : undefined;
+      })
+    )
+  );
+
+  const sessionTabs = useMemo<HelpSessionTab[]>(
+    () =>
+      openSlots.map((slot, index) => ({
+        slot,
+        // Numbered by SLOT, which is the lane's durable identity, rather than by
+        // position in the strip. Position renumbers: closing the first of three
+        // lanes used to rename the two behind it, so a conversation the user had
+        // been calling "Session 3" silently became "Session 2" and the name they
+        // navigated back to belonged to a different session. A gap at 2 is a much
+        // smaller cost than a label that lies, and the gap closes on its own —
+        // `openSlot` always takes the lowest free slot.
+        label: `Session ${slot + 1}`,
+        agentState: laneAgentStates[index],
+      })),
+    [openSlots, laneAgentStates]
+  );
+
+  // Bring back the tabs for lanes whose conversations an eviction or crash
+  // captured (#12108). A cold view starts at slot 0 alone, so lanes 1+ — whose
+  // resume entries survived on disk — would have no tab to reach them from and
+  // their conversations would be stranded despite still being there. The
+  // listing is non-consuming, like the peeks: a recreated lane simply lands on
+  // its own "Resume assistant" empty state, and nothing launches (or bills)
+  // until the user asks. Background lanes report `isOpen: false` to their
+  // controller, so auto-launch can't fire behind the tab strip either.
+  //
+  // One-shot per workspace, and only while the view is genuinely cold — a
+  // single, unbound lane — so it can never fight the user's own tab edits.
+  const restoredLaneWorkspaceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeWorkspaceId || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
+    if (openSlots.length > 1 || terminalId) return;
+    // Optional-chained like the hibernation peeks: a missing binding degrades
+    // to the pre-lane behaviour rather than throwing.
+    const listing = window.electron.help.listPendingHibernationSlots?.(activeWorkspaceId);
+    if (!listing) return;
+    let cancelled = false;
+    void listing
+      .then((slots) => {
+        if (cancelled || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
+        restoredLaneWorkspaceRef.current = activeWorkspaceId;
+        const store = useHelpPanelStore.getState();
+        for (const slot of slots) store.ensureSlot(slot);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to list pending hibernation lanes", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, openSlots.length, terminalId]);
+
+  const handleOpenParallelSession = useCallback(() => {
+    const slot = useHelpPanelStore.getState().openSlot();
+    if (slot === null) return;
+    useHelpPanelStore.getState().setOpen(true);
+    useHelpPanelStore.getState().requestFocus();
+  }, []);
+
+  const handleSelectSlot = useCallback((slot: number) => {
+    useHelpPanelStore.getState().setActiveSlot(slot);
+    // A lane's xterm was hidden while it was in the background, so it has no
+    // trustworthy geometry until it is measured on screen. `requestFocus`
+    // drives HelpPanel's existing reveal path, which fits and repaints before
+    // handing it the caret — the same treatment a panel reveal gets.
+    useHelpPanelStore.getState().requestFocus();
+  }, []);
+
+  const closeSlotNow = useCallback((slot: number) => {
+    const state = useHelpPanelStore.getState();
+    const lane = state.sessions[slot];
+    // Revoke and kill BEFORE dropping the lane. `stop()` only disarms
+    // listeners — it deliberately does not end the session — so releasing the
+    // controller first would strand a live agent with nothing to shut it down.
+    if (lane?.terminalId || lane?.sessionId) {
+      // Whether the panel slides out is the controller's call, made in one
+      // place for every stop path: it stays on screen while any other lane is
+      // open, and closes only for the last one — where the close is
+      // load-bearing, because `closeSlot` recreates an empty slot 0 whose fresh
+      // controller would auto-launch straight back into a session the user just
+      // ended if the panel stayed open.
+      acquireHelpSessionController(slot).endSession();
+    }
+    releaseHelpSessionController(slot);
+    state.closeSlot(slot);
+  }, []);
+
+  // Same "something to lose" gate the Stop control uses, but evaluated against
+  // the lane BEING CLOSED rather than the one on screen — a background lane is
+  // exactly where a working agent goes unnoticed.
+  const laneNeedsCloseConfirm = useCallback((slot: number) => {
+    const lane = useHelpPanelStore.getState().sessions[slot];
+    if (!lane) return false;
+    if (lane.conversationTouched) return true;
+    if (!lane.terminalId) return false;
+    const panel = usePanelStore.getState().panelsById[lane.terminalId];
+    const agentState = panel && isPtyPanel(panel) ? panel.agentState : undefined;
+    return agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(agentState);
+  }, []);
+
+  const handleCloseSlot = useCallback(
+    (slot: number) => {
+      if (laneNeedsCloseConfirm(slot)) {
+        setPendingCloseSlot(slot);
+        return;
+      }
+      closeSlotNow(slot);
+    },
+    [laneNeedsCloseConfirm, closeSlotNow]
+  );
+
+  const handleConfirmCloseSlot = useCallback(() => {
+    const slot = pendingCloseSlot;
+    setPendingCloseSlot(null);
+    if (slot !== null) closeSlotNow(slot);
+  }, [pendingCloseSlot, closeSlotNow]);
+
+  const handleCancelCloseSlot = useCallback(() => {
+    setPendingCloseSlot(null);
+  }, []);
+
+  const pendingCloseLabel =
+    pendingCloseSlot === null
+      ? null
+      : (sessionTabs.find((tab) => tab.slot === pendingCloseSlot)?.label ?? "this session");
+
   const handleNewSession = useCallback(() => {
     if (!terminalId || !agentId) return;
     if (shouldConfirmNewSession) {
@@ -1297,17 +1431,63 @@ export function HelpPanel({
 
       <HelpPanelHeader
         agentState={terminalPty?.agentState}
-        canStartNewSession={Boolean(terminalId && agentId)}
+        canRestartConversation={Boolean(terminalId && agentId)}
         canEndSession={Boolean(terminalId && agentId)}
-        onNewSession={handleNewSession}
+        onRestartConversation={handleNewSession}
         onEndSession={handleEndSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
       />
 
-      {/* Content */}
-      <div className="flex-1 flex flex-col min-h-0 relative">
+      <HelpSessionTabs
+        tabs={sessionTabs}
+        activeSlot={activeSlot}
+        onSelect={handleSelectSlot}
+        onClose={handleCloseSlot}
+        // The strip is the only home for this action now. It used to live in the
+        // header's overflow menu as well, which put the one findable route to a
+        // second session two clicks behind an ellipsis.
+        canOpenSession={canOpenParallelSession}
+        onOpenSession={handleOpenParallelSession}
+        idBase={tabIdBase}
+        panelId={sessionBodyId}
+      />
+
+      {/* One runtime per open lane. Background lanes need theirs so a session
+          the user has tabbed away from still surfaces approvals and still
+          hibernates when idle; the ACTIVE lane needs one too, so that switching
+          tabs never disarms a live lane (see the lifecycle note above). */}
+      {openSlots.map((slot) => (
+        <HelpSessionLaneRuntime
+          key={slot}
+          slot={slot}
+          isActive={slot === activeSlot}
+          isOpen={isOpen}
+          isReadyToLaunch={isReadyToLaunch}
+          currentProject={activeWorkspace}
+          preferredAgentId={preferredAgentId}
+          supportedInstalledAgentIds={supportedInstalledAgentIds}
+          autoLaunchEnabled={autoLaunchEnabled}
+          visibilityEpoch={visibilityEpoch}
+        />
+      ))}
+
+      {/* Content — the strip's `tabpanel`. Named by whichever tab is selected, so the
+          relationship the tablist claims through `aria-controls` actually resolves.
+
+          No `tabIndex` of its own. The pattern asks for one only on a panel with nothing
+          focusable inside it, and every state this body settles into has something: the
+          terminal's textarea, the empty state's starter prompts, a banner's recovery
+          action. The launching skeleton is the one exception, and giving the body a
+          permanent tab stop to cover a state that lasts under a second would cost every
+          keyboard user an extra stop on the way past the terminal, forever. */}
+      <div
+        id={sessionBodyId}
+        role="tabpanel"
+        aria-labelledby={helpSessionTabId(tabIdBase, activeSlot)}
+        className="flex-1 flex flex-col min-h-0 relative"
+      >
         {/* Banners render above every content state — the launch-error banner
             must stay visible in the empty state a failed launch falls back to.
             The other banners are null unless a session is live, so this mount
@@ -1461,7 +1641,7 @@ export function HelpPanel({
                       switch-away, but the conversation can be picked back up.
                       Does not record auto-launch consent (#10699), unlike "Start
                       assistant". This is the single load-bearing accent here.
-                      Starting a fresh session is the header's "+ New session". */}
+                      Starting fresh is the overflow menu's "Restart conversation". */}
                   <Button
                     type="button"
                     onClick={handleResumeAssistant}
@@ -1547,7 +1727,7 @@ export function HelpPanel({
               // with no live grid target is no longer a failure to shout about:
               // tool calls re-resolve at dispatch time and the dock-hosted chat
               // keeps working, so it stays a quiet neutral indicator. The
-              // recovery path lives on the header's "Start new session" button
+              // recovery path is the overflow menu's "Restart conversation"
               // (#10792).
               (isPinnedWorktreeDiverged ? (
                 <button
@@ -1631,9 +1811,12 @@ export function HelpPanel({
       )}
       <ConfirmDialog
         isOpen={showNewSessionConfirm}
-        title="Start a new session?"
+        // Matches the overflow item that opens it. The old wording ("Start a new
+        // session?") described the outcome as a gain when the thing being confirmed
+        // is a loss, and it collided with the strip's own new-session control.
+        title="Restart this conversation?"
         description="The current agent will stop and the conversation will be discarded"
-        confirmLabel="Start new session"
+        confirmLabel="Restart conversation"
         onConfirm={handleConfirmNewSession}
         onClose={handleCancelNewSession}
         variant="destructive"
@@ -1646,6 +1829,23 @@ export function HelpPanel({
         onConfirm={handleConfirmEndSession}
         onClose={handleCancelEndSession}
         variant="destructive"
+      />
+      <ConfirmDialog
+        isOpen={pendingCloseSlot !== null}
+        title={`Close ${pendingCloseLabel ?? "this session"}?`}
+        description="The assistant will stop and the conversation will be discarded"
+        confirmLabel="Close session"
+        onConfirm={handleConfirmCloseSlot}
+        onClose={handleCancelCloseSlot}
+        variant="destructive"
+        // Where focus goes once the tab this was opened from no longer exists. The
+        // strip has already moved its single tab stop to the lane that took over,
+        // so asking for "the tab that currently holds the stop" lands on the same
+        // element the strip chose, without this dialog needing to know which one.
+        // On cancel the trigger still exists and the dialog restores to it directly.
+        restoreFocusTo={() =>
+          panelRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ?? null
+        }
       />
       <ConfirmDialog
         isOpen={showAgentSwitchConfirm}

@@ -28,6 +28,11 @@ const PROJECT_COUNT = 6;
 const CACHE_LIMIT = 2;
 const WARMUP_SWEEPS = 2;
 const MEASURED_SWEEPS = 5;
+// A Windows hosted runner takes roughly 80-95 seconds per measured sweep while
+// repeatedly cold-starting and evicting WebContentsViews. The default nightly
+// budget expires during the final sweep even though switching is still making
+// progress, so give that slower CI path enough time to reach the assertions.
+const TEST_TIMEOUT_MS = process.env.CI && process.platform === "win32" ? 900_000 : 600_000;
 // Main-process heap should be flat across switches — renderers are separate
 // processes that are destroyed on eviction, so churn must not grow main's heap.
 // A real per-switch leak over MEASURED_SWEEPS*PROJECT_COUNT (30) switches would
@@ -148,7 +153,7 @@ test.describe.serial("Nightly: Multi-project switching memory leak", () => {
   });
 
   test("main-process memory and view residency stay bounded across many switches", async () => {
-    test.setTimeout(600_000);
+    test.setTimeout(TEST_TIMEOUT_MS);
     const { app } = ctx;
 
     // Preconditions — a leak spec must fail loudly if its instruments are

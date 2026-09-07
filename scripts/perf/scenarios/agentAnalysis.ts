@@ -1,5 +1,36 @@
 import type { PerfScenario } from "../types";
-import { runAgentAnalysisSim, DEFAULT_PHASES } from "../lib/agentAnalysisSim";
+import {
+  runAgentAnalysisSim,
+  DEFAULT_PHASES,
+  type AgentAnalysisSimResult,
+} from "../lib/agentAnalysisSim";
+
+/** Fleet sizes the scenario asks for — and therefore what it expects back. */
+const SINGLE_AGENT = 1;
+const TEN_AGENTS = 10;
+const THIRTY_AGENTS = 30;
+
+/**
+ * What a sweep of `expectedAgents` agents must have produced.
+ *
+ * The expectation is the fleet size the scenario ASKED for, never the size the
+ * sweep reports: a sim replaced by a constant returns zero agents alongside
+ * zero flips and agrees with itself, taking every rate metric here to its
+ * best-ever value while raising nothing. Every reading below comes off the
+ * `agent:state-changed` stream or the feed loop, not off the bytes handed in.
+ */
+export function analysisSweepMisses(expectedAgents: number, sweep: AgentAnalysisSimResult): number {
+  return (
+    Math.abs(expectedAgents - sweep.agents) +
+    Math.abs(expectedAgents - sweep.agentsWithWaitFlip) +
+    Math.abs(expectedAgents - sweep.agentsWithResumeFlip) +
+    // The record stream has to carry both canonical flips for every agent.
+    (sweep.stateChangeRecords >= expectedAgents * 2 ? 0 : 1) +
+    // The rate metrics divide by fedBytes, so a workload that shrank would
+    // report a lower tax rather than a shorter run.
+    (sweep.scriptedBytes > 0 && sweep.fedBytes === sweep.scriptedBytes ? 0 : 1)
+  );
+}
 
 // PERF-035: agent-output analysis pipeline (AgentStateService / FSM / pattern
 // detection). Every output chunk of every streaming agent terminal runs
@@ -31,10 +62,16 @@ export const agentAnalysisScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["analysisMisses"],
     async run() {
-      const single = await runAgentAnalysisSim({ agents: 1, phases: DEFAULT_PHASES });
-      const ten = await runAgentAnalysisSim({ agents: 10, phases: DEFAULT_PHASES });
-      const thirty = await runAgentAnalysisSim({ agents: 30, phases: DEFAULT_PHASES });
+      const single = await runAgentAnalysisSim({ agents: SINGLE_AGENT, phases: DEFAULT_PHASES });
+      const ten = await runAgentAnalysisSim({ agents: TEN_AGENTS, phases: DEFAULT_PHASES });
+      const thirty = await runAgentAnalysisSim({ agents: THIRTY_AGENTS, phases: DEFAULT_PHASES });
+
+      const analysisMisses =
+        analysisSweepMisses(SINGLE_AGENT, single) +
+        analysisSweepMisses(TEN_AGENTS, ten) +
+        analysisSweepMisses(THIRTY_AGENTS, thirty);
 
       return {
         // Wall-clock fallback: the whole simulated fleet sweep is awaited, so
@@ -48,6 +85,7 @@ export const agentAnalysisScenarios: PerfScenario[] = [
           fleetCpuMs30: thirty.cpuMs,
           waitFlipLatencyMs: thirty.waitFlipLatencyMs,
           resumeFlipLatencyMs: thirty.resumeFlipLatencyMs,
+          analysisMisses,
         },
       };
     },

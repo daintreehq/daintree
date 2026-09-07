@@ -6,9 +6,9 @@ This is the Daintree-side half of a standard shared with the assistant CLI. The 
 
 ## Why it exists
 
-The tool region is the largest single part of an MCP request, it is re-sent on every round including tool-continuation rounds where nothing the user typed changed, and clients cap what they will accept — Cursor silently truncates past its cap, Copilot hard-errors at 128 tools. #11585 already cut the external surface from 100 tools to 26 for exactly this reason. That cut attacked tool _count_; this standard attacks _bytes per tool_, which is the axis left over.
+The tool region is the largest single part of an MCP request, it is re-sent on every round including tool-continuation rounds where nothing the user typed changed, and clients cap what they will accept — Cursor silently truncates past its cap, Copilot hard-errors at 128 tools. #11585 already cut the external surface from 100 tools to the high twenties for exactly this reason. That cut attacked tool _count_; this standard attacks _bytes per tool_, which is the axis left over.
 
-Measured against the live registry, the wire surface is roughly 42 KB for a third-party client (26 tools) and 184 KB for the full in-app surface (152 tools).
+The two surfaces differ by an order of magnitude: a third-party client sees only the external roster ([`shared/config/mcpExternalTierAllowlist.ts`](../../shared/config/mcpExternalTierAllowlist.ts)), while the in-app assistant's cumulative `system` tier is several times larger. Take the current byte figures from the ratchets below rather than from prose, which drifts the moment a tool lands.
 
 ## The idempotency contract
 
@@ -87,16 +87,18 @@ One clause: what the value means, and its unit. Not its type, not its presence r
 
 Enforced by [`src/services/actions/__tests__/mcpWireBudget.test.ts`](../../src/services/actions/__tests__/mcpWireBudget.test.ts), measured from the live registry rather than a fixture, so a captured copy cannot drift while the gates keep passing.
 
-|                                  | budget    | kind                                             |
-| -------------------------------- | --------- | ------------------------------------------------ |
-| Tool description                 | 400 B     | hard ceiling                                     |
-| Tool description                 | 120 B     | hard floor (`actionDefinitions.quality.test.ts`) |
-| Field description                | 160 B     | target, ratcheted by count                       |
-| Field description                | 320 B     | hard ceiling                                     |
-| Tool `parameters`                | 1,500 B   | hard ceiling, justified allowlist                |
-| External wire surface            | 43,000 B  | aggregate ratchet                                |
-| Full in-app wire surface         | 190,000 B | aggregate ratchet                                |
-| Value-range keywords on the wire | zero      | hard                                             |
+| Constant | Governs | Kind |
+| --- | --- | --- |
+| `MAX_TOOL_DESCRIPTION_BYTES` (400 B) | one tool description | hard ceiling |
+| `MIN_DESCRIPTION_BYTES` (120 B) | one tool description | hard floor (`actionDefinitions.quality.test.ts`) |
+| `PROPERTY_DESCRIPTION_TARGET_BYTES` (160 B) | one field description | target, ratcheted by count (`MAX_PROPERTIES_OVER_TARGET`) and by total excess (`MAX_EXCESS_PROPERTY_BYTES`) |
+| `MAX_PROPERTY_DESCRIPTION_BYTES` (320 B) | one field description | hard ceiling |
+| `MAX_TOOL_PARAMS_BYTES` (1,500 B) | one tool's `parameters` | hard ceiling, justified allowlist |
+| `MAX_EXTERNAL_PAYLOAD_BYTES` | the whole external wire surface | aggregate ratchet |
+| `MAX_COHORT_PAYLOAD_BYTES` | the whole in-app wire surface | aggregate ratchet |
+| — | value-range keywords on the wire | hard: zero |
+
+The two aggregate ratchets are the ones that move. Read their current values from `mcpWireBudget.test.ts`, where each raise sits beside the comment justifying it — that comment history is the record of what the surface has been allowed to spend, and why.
 
 The aggregate ratchets bound the description-and-schema payload — the part authors control and the part that moves. They are deliberately not the full serialized `tools/list` byte count, which also carries tool names, annotations, `_meta.examples` and JSON framing that this standard does not govern.
 

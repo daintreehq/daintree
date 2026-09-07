@@ -547,7 +547,10 @@ export function useDevServer({
   // reset when phaseLabel toggles (Tier 3 at 45s must still fire).
   useEffect(() => {
     if (phaseLabel === "Compiling") {
-      setStuckTier((prev) => (prev >= 2 ? 1 : prev));
+      // Only Tier 2 downgrades. Tier 3 means the server has been starting for
+      // 45s, which a compile signal explains but does not excuse — collapsing
+      // it to Tier 1 here erased the warning the main effect had just raised.
+      setStuckTier((prev) => (prev === 2 ? 1 : prev));
     }
   }, [phaseLabel]);
 

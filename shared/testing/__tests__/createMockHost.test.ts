@@ -332,6 +332,51 @@ describe("createMockHost", () => {
     expect(await host.getWorktrees()).toEqual([sampleSnapshot]);
   });
 
+  it("derives an authoritative worktrees result from the seeded snapshots", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [sampleSnapshot],
+    });
+  });
+
+  it("can be driven to an unavailable result without disturbing the legacy getters", async () => {
+    const host = createMockHost({
+      // Both seeded, so the assertions below fail if the override stops driving
+      // the legacy getters rather than passing on an already-null default.
+      activeWorktree: sampleSnapshot,
+      worktrees: [sampleSnapshot],
+      worktreesResult: { status: "unavailable", reason: "scope-unresolved" },
+    });
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "scope-unresolved",
+    });
+    // Coupled, as production is: one unavailable read cannot leave the legacy
+    // getters handing back a list the real host would have flattened to [].
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getActiveWorktree()).toBeNull();
+
+    host.simulateWorktreesResult(null);
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [sampleSnapshot],
+    });
+    expect(await host.getWorktrees()).toEqual([sampleSnapshot]);
+  });
+
+  it("keeps the derived result in step with simulateWorktreesChange", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    host.simulateWorktreesChange([]);
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [],
+    });
+  });
+
   it("delivers active-worktree updates and supports idempotent disposal", async () => {
     const host = createMockHost();
     const cb = vi.fn();
@@ -376,6 +421,32 @@ describe("createMockHost", () => {
     dispose(); // no-op
     host.simulateAgentStateChange({ ...snapshot, state: "idle", running: false });
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("pushes a frozen wake to onDidWake subscribers and stops on dispose (#12175)", async () => {
+    const host = createMockHost();
+    const cb = vi.fn();
+    const dispose = await host.onDidWake(cb);
+
+    host.simulateSystemWake({ sleepDuration: 42_000, timestamp: 1234 });
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({ sleepDuration: 42_000, timestamp: 1234 });
+    expect(Object.isFrozen(cb.mock.calls[0]?.[0])).toBe(true);
+
+    dispose();
+    dispose(); // no-op
+    host.simulateSystemWake({ sleepDuration: 1, timestamp: 2 });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay an earlier wake to a later onDidWake subscriber", async () => {
+    const host = createMockHost();
+    host.simulateSystemWake({ sleepDuration: 42_000, timestamp: 1234 });
+
+    const cb = vi.fn();
+    await host.onDidWake(cb);
+
+    expect(cb).not.toHaveBeenCalled();
   });
 
   it("registers forge providers and unregisters via disposer", async () => {

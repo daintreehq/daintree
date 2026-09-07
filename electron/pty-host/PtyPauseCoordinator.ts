@@ -30,15 +30,14 @@ export class PtyPauseCoordinator {
     }
   }
 
-  resume(token: PauseToken): void {
-    if (!this.holds.delete(token)) return;
-    if (this.holds.size === 0) {
-      try {
-        this.raw.resume();
-      } catch {
-        // PTY process may already be dead
-      }
+  resume(token: PauseToken): boolean {
+    if (!this.holds.delete(token) || this.holds.size !== 0) return false;
+    try {
+      this.raw.resume();
+    } catch {
+      // PTY process may already be dead
     }
+    return true;
   }
 
   forceReleaseAll(): void {

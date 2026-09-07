@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { McpRuntimeSnapshot } from "../../../shared/types/ipc/mcpServer.js";
+import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
+import {
+  setUserRegistry,
+  type AgentConfig,
+  type AssistantSupports,
+} from "../../../shared/config/agentRegistry.js";
 
 const {
   mockUserDataDir,
@@ -21,8 +27,12 @@ const {
     currentPort: 45454 as number | null,
     currentApiKey: "test-api-key" as string | null,
     enabled: true,
+    // By name, not `this`: two lanes provisioning at once reach this through
+    // concurrent dynamic imports of the mocked module, and the second call
+    // arrives with `this` unbound. The real service is a class instance and has
+    // no such problem; only the fixture did.
     isEnabled() {
-      return this.enabled;
+      return mockMcpServerService.enabled;
     },
     start: vi.fn().mockResolvedValue(undefined),
     setEnabled: vi.fn().mockResolvedValue(undefined),
@@ -229,6 +239,29 @@ describe("HelpSessionService", () => {
     };
   }
 
+  type McpFile = {
+    mcpServers: Record<
+      string,
+      { type?: string; url?: string; headers?: { Authorization?: string } }
+    >;
+  };
+
+  type Provisioned = { sessionPath: string; sessionId: string };
+
+  /** The per-provision `--mcp-config` file a Claude session was handed. */
+  function laneFile(result: Provisioned, slot = 0): string {
+    return path.join(result.sessionPath, ".lanes", `slot-${slot}-${result.sessionId}.mcp.json`);
+  }
+
+  /** Claude's MCP wiring: the per-lane `--mcp-config` file, not the shared `.mcp.json`. */
+  async function readLaneConfig(result: Provisioned, slot = 0): Promise<McpFile> {
+    return JSON.parse(await fs.readFile(laneFile(result, slot), "utf-8")) as McpFile;
+  }
+
+  async function readSharedMcp(sessionPath: string): Promise<McpFile> {
+    return JSON.parse(await fs.readFile(path.join(sessionPath, ".mcp.json"), "utf-8")) as McpFile;
+  }
+
   it("returns mcpUrl and windowId on the provision result when MCP is enabled", async () => {
     const result = await service.provisionSession(provisionInput());
     expect(result).not.toBeNull();
@@ -322,25 +355,29 @@ describe("HelpSessionService", () => {
     expect(maxInFlight).toBe(1);
   });
 
-  it("creates a session dir with a .mcp.json that bakes the literal session token into the Authorization header", async () => {
+  it("writes the lane's --mcp-config file with the literal session token, and leaves the shared .mcp.json empty", async () => {
     // Claude Code's `${VAR}` substitution in `headers` is still broken as of
     // v2.1.83 through v2.1.133 (anthropics/claude-code#6204) and `mcp
     // add/remove` rewrite it to a literal env value, leaking the bearer to disk
     // (#18692, #57131) — must bake the literal token. Same reason as
-    // McpPaneConfigService.ts.
+    // McpPaneConfigService.ts. It goes in the per-lane file because the cwd
+    // `.mcp.json` is one file for every lane of the project.
     const result = await service.provisionSession(provisionInput());
     expect(result).not.toBeNull();
     if (!result) throw new Error("expected result");
 
-    const mcpRaw = await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8");
-    const mcp = JSON.parse(mcpRaw);
-    expect(mcp.mcpServers.daintree).toEqual({
+    const lane = await readLaneConfig(result);
+    expect(lane.mcpServers.daintree).toEqual({
       type: "sse",
       url: "http://127.0.0.1:45454/sse",
       headers: { Authorization: `Bearer ${result.token}` },
     });
-    expect(mcp.mcpServers.daintree.headers.Authorization).not.toContain("${");
-    expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    expect(lane.mcpServers.daintree?.headers?.Authorization).not.toContain("${");
+    expect(lane.mcpServers["daintree-docs"]).toBeDefined();
+
+    // A project `.mcp.json` with servers in it is what raises Claude's per-folder
+    // approval prompt, so the shared one is written with none.
+    expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
   });
 
   it("sets enableAllProjectMcpServers in .claude/settings.json so Claude auto-trusts the bundled servers", async () => {
@@ -563,9 +600,9 @@ describe("HelpSessionService", () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    const mcp = JSON.parse(await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8"));
-    expect(mcp.mcpServers.daintree).toBeUndefined();
-    expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    const lane = await readLaneConfig(result);
+    expect(lane.mcpServers.daintree).toBeUndefined();
+    expect(lane.mcpServers["daintree-docs"]).toBeDefined();
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -689,18 +726,44 @@ describe("HelpSessionService", () => {
     await fs.access(result.sessionPath);
   });
 
-  it("strips the daintree entry from .mcp.json on revoke so a stray claude in that cwd can't auth with the dead token", async () => {
+  it("removes the lane's --mcp-config file on revoke so a stray claude can't auth with the dead token", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    const target = path.join(result.sessionPath, ".mcp.json");
-    const before = JSON.parse(await fs.readFile(target, "utf-8"));
-    expect(before.mcpServers.daintree).toBeDefined();
-    expect(before.mcpServers["daintree-docs"]).toBeDefined();
+    await fs.access(laneFile(result));
+    expect((await readLaneConfig(result)).mcpServers.daintree).toBeDefined();
 
     await service.revokeSession(result.sessionId);
 
-    const after = JSON.parse(await fs.readFile(target, "utf-8"));
+    await expect(fs.access(laneFile(result))).rejects.toThrow();
+    // The shared file never held the bearer, and stays as it was.
+    expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
+  });
+
+  it("still strips a pre-shared-directory literal bearer from .mcp.json on revoke", async () => {
+    // An install that predates the per-lane files can have a literal Claude
+    // bearer in the shared file. Revoking the session that owns it must still
+    // take it out, or a stray `claude` in that cwd keeps a working credential.
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    const target = path.join(result.sessionPath, ".mcp.json");
+    await fs.writeFile(
+      target,
+      JSON.stringify({
+        mcpServers: {
+          "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" },
+          daintree: {
+            type: "sse",
+            url: "http://127.0.0.1:45454/sse",
+            headers: { Authorization: `Bearer ${result.token}` },
+          },
+        },
+      })
+    );
+
+    await service.revokeSession(result.sessionId);
+
+    const after = await readSharedMcp(result.sessionPath);
     expect(after.mcpServers.daintree).toBeUndefined();
     // daintree-docs entry must remain — it doesn't depend on a live session.
     expect(after.mcpServers["daintree-docs"]).toBeDefined();
@@ -779,8 +842,8 @@ describe("HelpSessionService", () => {
     expect(second.sessionPath).toBe(first.sessionPath);
     expect(second.token).not.toBe(first.token);
 
-    const mcp = JSON.parse(await fs.readFile(path.join(second.sessionPath, ".mcp.json"), "utf-8"));
-    expect(mcp.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
+    const lane = await readLaneConfig(second);
+    expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
     expect(service.validateToken(first.token)).toBe(false);
     expect(service.validateToken(second.token)).toBe("action");
   });
@@ -846,16 +909,14 @@ describe("HelpSessionService", () => {
     expect(cleaned.mcpServers["daintree-docs"]).toBeDefined();
   });
 
-  it("gcStaleSessions leaves a live session's daintree entry untouched", async () => {
+  it("gcStaleSessions leaves a live session's lane file untouched", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
     await service.gcStaleSessions();
 
-    const after = JSON.parse(
-      await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8")
-    );
-    expect(after.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${result.token}`);
+    const lane = await readLaneConfig(result);
+    expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${result.token}`);
   });
 
   it("gcStaleSessions sweeps legacy UUID-named dirs from the old per-launch model and preserves per-project dirs", async () => {
@@ -890,6 +951,53 @@ describe("HelpSessionService", () => {
     }
 
     await fs.access(fresh.sessionPath);
+  });
+
+  it("gcStaleSessions keeps the shared project directory and sweeps legacy per-lane ones", async () => {
+    // Lanes used to get `<hash>-sN` directories of their own. They now share the
+    // bare-hash directory, so a leftover `-sN` is a legacy shape with nothing
+    // resumable in it — its agent's resume id was captured against a cwd that
+    // nothing launches in any more — and GC removes it like any other stranger.
+    const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+    const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+    if (!laneZero || !laneOne) throw new Error("expected both provisions");
+    expect(laneOne.sessionPath).toBe(laneZero.sessionPath);
+
+    const hash = path.basename(laneZero.sessionPath);
+    const sessionsRoot = path.join(userData, "help-sessions");
+    const legacyLane = path.join(sessionsRoot, `${hash}-s1`);
+    const outOfRange = path.join(sessionsRoot, `${hash}-s99`);
+    await fs.mkdir(legacyLane, { recursive: true });
+    await fs.mkdir(outOfRange, { recursive: true });
+
+    await service.gcStaleSessions();
+
+    await fs.access(laneZero.sessionPath);
+    for (const dir of [legacyLane, outOfRange]) {
+      await expect(fs.access(dir)).rejects.toThrow();
+    }
+  });
+
+  it("gcStaleSessions removes a lane's --mcp-config file once its bearer is dead", async () => {
+    // Tokens never rehydrate across a restart, so after a boot every lane file
+    // on disk names a bearer the server will 401. Revoking stands in for that.
+    const live = await service.provisionSession({ ...provisionInput(), slot: 0 });
+    const dead = await service.provisionSession({ ...provisionInput(), slot: 1 });
+    if (!live || !dead) throw new Error("expected both provisions");
+    await fs.access(laneFile(live, 0));
+    await fs.access(laneFile(dead, 1));
+    // A file that is not a lane file at all has no business in that directory.
+    const stray = path.join(live.sessionPath, ".lanes", "notes.txt");
+    await fs.writeFile(stray, "x");
+
+    // Revoke without the file cleanup the revoke path itself performs, by
+    // marking the record dead the way a restart leaves it.
+    service["sessionsByToken"].get(dead.token)!.revoked = true;
+    await service.gcStaleSessions();
+
+    await fs.access(laneFile(live, 0));
+    await expect(fs.access(laneFile(dead, 1))).rejects.toThrow();
+    await expect(fs.access(stray)).rejects.toThrow();
   });
 
   it("returns null when the bundled help folder is unavailable", async () => {
@@ -1016,11 +1124,11 @@ describe("HelpSessionService", () => {
     const sessionsRoot = path.join(userData, "help-sessions");
     const entries = await fs.readdir(sessionsRoot);
     expect(entries.length).toBe(1);
-    const mcp = JSON.parse(
-      await fs.readFile(path.join(sessionsRoot, entries[0]!, ".mcp.json"), "utf-8")
-    );
-    expect(mcp.mcpServers.daintree).toBeUndefined();
-    expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    const sessionPath = path.join(sessionsRoot, entries[0]!);
+    // Nothing on disk may name the bearer the probe just proved dead: not the
+    // shared file, and not the lane file written moments before the probe.
+    expect((await readSharedMcp(sessionPath)).mcpServers.daintree).toBeUndefined();
+    await expect(fs.readdir(path.join(sessionPath, ".lanes"))).resolves.toEqual([]);
   });
 
   describe("single-backend invariant (#7509)", () => {
@@ -1185,22 +1293,28 @@ describe("HelpSessionService", () => {
   // the pinned WebContents so only the view that would do the killing is
   // protected.
   describe("getAssistantBackend (#11157)", () => {
+    // These cases predate lanes (#12108) and all describe a project running a
+    // single assistant, so they read the first (only) backend. The multi-lane
+    // behaviour has its own describe block below.
+    const firstBackend = (projectId: string) => service.getAssistantBackends(projectId)[0] ?? null;
+
     it("resolves only once a terminal is bound, and only for the owning project", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
 
       // Provisioned but not spawned: the bearer exists, the backend does not.
-      expect(service.getAssistantBackend("proj-1")).toBeNull();
+      expect(firstBackend("proj-1")).toBeNull();
 
       expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
 
       // provisionInput() pins the session to WebContents 42.
-      expect(service.getAssistantBackend("proj-1")).toEqual({
+      expect(firstBackend("proj-1")).toEqual({
         terminalId: "term-1",
         webContentsId: 42,
+        slot: 0,
       });
-      expect(service.getAssistantBackend("proj-2")).toBeNull();
-      expect(service.getAssistantBackend("")).toBeNull();
+      expect(firstBackend("proj-2")).toBeNull();
+      expect(firstBackend("")).toBeNull();
     });
 
     it("follows the binding through displacement", async () => {
@@ -1211,7 +1325,7 @@ describe("HelpSessionService", () => {
 
       // The displaced PTY is dead; protecting the view on its behalf would pin
       // a project whose assistant is gone.
-      expect(service.getAssistantBackend("proj-1")?.terminalId).toBe("term-new");
+      expect(firstBackend("proj-1")?.terminalId).toBe("term-new");
     });
 
     it("clears on unbind", async () => {
@@ -1221,7 +1335,7 @@ describe("HelpSessionService", () => {
 
       service.unbindTerminal("term-1");
 
-      expect(service.getAssistantBackend("proj-1")).toBeNull();
+      expect(firstBackend("proj-1")).toBeNull();
     });
 
     it("clears on revoke", async () => {
@@ -1231,7 +1345,7 @@ describe("HelpSessionService", () => {
 
       await service.revokeSession(result.sessionId);
 
-      expect(service.getAssistantBackend("proj-1")).toBeNull();
+      expect(firstBackend("proj-1")).toBeNull();
     });
 
     it("returns the owning project's pin when two projects share a terminal id", async () => {
@@ -1254,8 +1368,276 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(one.token, "shared-term")).toBe(true);
       expect(service.markTerminalForToken(two.token, "shared-term")).toBe(true);
 
-      expect(service.getAssistantBackend("proj-1")?.webContentsId).toBe(42);
-      expect(service.getAssistantBackend("proj-2")?.webContentsId).toBe(77);
+      expect(firstBackend("proj-1")?.webContentsId).toBe(42);
+      expect(firstBackend("proj-2")?.webContentsId).toBe(77);
+    });
+  });
+
+  // #12108. The #7509 single-backend invariant above is NOT relaxed here — it
+  // is re-scoped. Every case in that describe block runs at the default lane
+  // and still passes unchanged; these add the orthogonal axis it never covered,
+  // namely that two DIFFERENT lanes of one project are independent.
+  describe("concurrent assistant lanes (#12108)", () => {
+    it("keeps both bearers valid and kills neither PTY across two lanes of one project", async () => {
+      const first = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!first) throw new Error("expected first provision");
+      expect(service.markTerminalForToken(first.token, "term-slot-0")).toBe(true);
+
+      const second = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!second) throw new Error("expected second provision");
+      expect(service.markTerminalForToken(second.token, "term-slot-1")).toBe(true);
+
+      // The whole point of the feature: neither session displaced the other.
+      expect(service.validateToken(first.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("action");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("still displaces within a lane while leaving the sibling lane untouched", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+      expect(service.markTerminalForToken(laneZero.token, "term-slot-0")).toBe(true);
+      expect(service.markTerminalForToken(laneOne.token, "term-slot-1")).toBe(true);
+
+      // Re-provisioning lane 0 must behave exactly as the pre-lane invariant
+      // did — revoke the old bearer, kill its PTY — and touch nothing else.
+      const replacement = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!replacement) throw new Error("expected replacement provision");
+
+      expect(service.validateToken(laneZero.token)).toBe(false);
+      expect(service.validateToken(replacement.token)).toBe("action");
+      expect(mockPtyKill).toHaveBeenCalledWith("term-slot-0", "help-session-displaced");
+      expect(mockPtyKill).not.toHaveBeenCalledWith("term-slot-1", "help-session-displaced");
+      // The sibling is still fully live.
+      expect(service.validateToken(laneOne.token)).toBe("action");
+    });
+
+    it("shares one session directory across lanes and keeps each bearer in its own lane file", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      // One cwd for the project, so Claude's per-folder trust prompt and its
+      // `.mcp.json` approval prompt each fire once per project, not per lane.
+      expect(laneOne.sessionPath).toBe(laneZero.sessionPath);
+      expect(path.basename(laneZero.sessionPath)).toMatch(/^[0-9a-f]{16}$/);
+
+      // What that directory used to isolate — the literal bearer — is in a
+      // per-lane `--mcp-config` file, so the second provision cannot overwrite
+      // the first session's credential.
+      const fileZero = await readLaneConfig(laneZero, 0);
+      const fileOne = await readLaneConfig(laneOne, 1);
+      expect(fileZero.mcpServers["daintree"]?.headers?.Authorization).toBe(
+        `Bearer ${laneZero.token}`
+      );
+      expect(fileOne.mcpServers["daintree"]?.headers?.Authorization).toBe(
+        `Bearer ${laneOne.token}`
+      );
+
+      // The shared project file carries nothing lane-specific — and nothing at
+      // all, since a project `.mcp.json` with servers in it is what prompts.
+      const shared = JSON.parse(
+        await fs.readFile(path.join(laneZero.sessionPath, ".mcp.json"), "utf-8")
+      ) as { mcpServers: Record<string, unknown> };
+      expect(shared.mcpServers).toEqual({});
+    });
+
+    it("hands Claude its lane file through --mcp-config, and refuses other agents", async () => {
+      const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      // A Codex session in ANOTHER project: same-project mixing is refused below.
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-2",
+        projectPath: "/tmp/project-2",
+        agentId: "codex",
+      });
+      if (!claude || !codex) throw new Error("expected both provisions");
+
+      expect(service.getClaudeLaunchArgs(claude.token)).toEqual([
+        "--mcp-config",
+        path.join(claude.sessionPath, ".lanes", `slot-0-${claude.sessionId}.mcp.json`),
+      ]);
+      // Cross-agent reuse of a valid token is the spawn handler's refusal signal.
+      expect(service.getClaudeLaunchArgs(codex.token)).toBeNull();
+      expect(service.getClaudeLaunchArgs("not-a-token")).toBeNull();
+    });
+
+    it("refuses a second agent in a project whose sibling lane is live", async () => {
+      // The shared directory holds agent-shaped files — the content mirror, the
+      // Copilot `.mcp.json`, Claude's settings overlay — and two agents' versions
+      // of them cannot coexist. Fail closed with a reason rather than let the
+      // newcomer quietly clobber the sibling's setup.
+      const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!claude) throw new Error("expected claude provision");
+
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
+      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
+      // The sibling is untouched.
+      expect(service.validateToken(claude.token)).toBe("action");
+
+      // Once the Claude lane is gone, the project can switch agents.
+      await service.revokeSession(claude.sessionId);
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 1,
+      });
+      expect(codex).not.toBeNull();
+    });
+
+    it("refuses a mixed-agent launch without displacing the caller's own lane", async () => {
+      // The guard has to run BEFORE displacement. Displacement revokes and
+      // kills whatever holds the slot being launched into, so a refusal
+      // ordered after it would charge the user their own live lane for an
+      // error they never get a session out of.
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+      expect(service.markTerminalForToken(laneZero.token, "term-slot-0")).toBe(true);
+      expect(service.markTerminalForToken(laneOne.token, "term-slot-1")).toBe(true);
+      mockPtyKill.mockClear();
+
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
+      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
+
+      // The lane the refused launch targeted is still the user's live session.
+      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect(service.validateToken(laneZero.token)).toBe("action");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("removes a lane's --mcp-config file on revoke without touching its sibling's", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      await service.revokeSession(laneOne.sessionId);
+
+      await fs.access(laneFile(laneZero, 0));
+      await expect(fs.access(laneFile(laneOne, 1))).rejects.toThrow();
+      expect(service.getClaudeLaunchArgs(laneOne.token)).toBeNull();
+    });
+
+    it("a late revoke of a replaced session cannot delete the replacement's lane file", async () => {
+      // The file is named per PROVISION. With a fixed per-slot name, the old
+      // session's revoke — which may still be waiting on its graceful kill when the
+      // same slot re-provisions — would remove the file the replacement just wrote.
+      const first = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!first) throw new Error("expected first provision");
+      const replacement = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!replacement) throw new Error("expected replacement provision");
+      expect(laneFile(replacement)).not.toBe(laneFile(first));
+
+      // The displaced session's own cleanup runs late.
+      await service.revokeSession(first.sessionId);
+
+      await fs.access(laneFile(replacement));
+      expect(service.getClaudeLaunchArgs(replacement.token)).toEqual([
+        "--mcp-config",
+        laneFile(replacement),
+      ]);
+    });
+
+    it("serializes two lanes' filesystem work on the shared directory", async () => {
+      // The lane lock deliberately lets different lanes provision in parallel —
+      // which, with one directory, would be two writers on the same template
+      // copy, hash stamp, content manifest and shared `.mcp.json`. The directory
+      // lock is what keeps them in turn; the in-flight counter is how the
+      // existing same-lane test proves serialization, reused here across lanes.
+      let inFlight = 0;
+      let maxInFlight = 0;
+      mockSyncAssistantContent.mockImplementation(async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight -= 1;
+        return cleanSyncResult();
+      });
+
+      // A first, sequential provision warms the lazily imported MCP module so the
+      // two below exercise the directory lock rather than the module loader. Its
+      // own sync call is discounted so the assertion is about the pair alone.
+      const warm = await service.provisionSession({ ...provisionInput(), slot: 2 });
+      if (!warm) throw new Error("expected warm-up provision");
+      mockSyncAssistantContent.mockClear();
+      inFlight = 0;
+      maxInFlight = 0;
+
+      const [laneZero, laneOne] = await Promise.all([
+        service.provisionSession({ ...provisionInput(), slot: 0 }),
+        service.provisionSession({ ...provisionInput(), slot: 1 }),
+      ]);
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      // Both reached the shared-directory section, and never at the same time.
+      expect(mockSyncAssistantContent).toHaveBeenCalledTimes(2);
+      expect(maxInFlight).toBe(1);
+      await fs.access(laneFile(laneZero, 0));
+      await fs.access(laneFile(laneOne, 1));
+      await fs.access(laneFile(warm, 2));
+      expect(service.validateToken(laneZero.token)).toBe("action");
+      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect((await readSharedMcp(laneZero.sessionPath)).mcpServers).toEqual({});
+    });
+
+    it("rejects an out-of-range lane instead of clamping it onto a neighbour", async () => {
+      // Clamping would displace whichever lane the clamp landed on — a session
+      // the caller never named.
+      await expect(service.provisionSession({ ...provisionInput(), slot: 99 })).rejects.toThrow(
+        /slot/
+      );
+      await expect(service.provisionSession({ ...provisionInput(), slot: -1 })).rejects.toThrow(
+        /slot/
+      );
+    });
+
+    it("reports every live lane so a dead one can't mask a live sibling", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+      service.markTerminalForToken(laneZero.token, "term-slot-0");
+      service.markTerminalForToken(laneOne.token, "term-slot-1");
+
+      expect(service.getAssistantBackends("proj-1")).toEqual([
+        { terminalId: "term-slot-0", webContentsId: 42, slot: 0 },
+        { terminalId: "term-slot-1", webContentsId: 42, slot: 1 },
+      ]);
+
+      // Lane 0 exits under its own steam. Reclaiming the project on the
+      // strength of that alone would kill lane 1 — the #11807 regression.
+      service.unbindTerminal("term-slot-0");
+      expect(service.getAssistantBackends("proj-1")).toEqual([
+        { terminalId: "term-slot-1", webContentsId: 42, slot: 1 },
+      ]);
+    });
+
+    it("resolves a terminal to its lane, and a displaced backend to none", async () => {
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneOne) throw new Error("expected provision");
+      service.markTerminalForToken(laneOne.token, "term-slot-1");
+
+      expect(service.getSlotForTerminal("term-slot-1")).toBe(1);
+      expect(service.getSlotForTerminal("not-a-terminal")).toBeNull();
+
+      // After displacement the record is gone synchronously, so the corpse
+      // reports no lane — which is what stops it outranking a live sibling in
+      // the project-status ranking.
+      await service.provisionSession({ ...provisionInput(), slot: 1 });
+      expect(service.getSlotForTerminal("term-slot-1")).toBeNull();
+    });
+
+    it("revokeByProjectId still tears down every lane", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      await service.revokeByProjectId("proj-1");
+
+      expect(service.validateToken(laneZero.token)).toBe(false);
+      expect(service.validateToken(laneOne.token)).toBe(false);
     });
   });
 
@@ -1380,7 +1762,9 @@ describe("HelpSessionService", () => {
       // #9639: an empty-sentinel placeholder is written SYNCHRONOUSLY before
       // gracefulKill so a racing switch-back resumes rather than fresh-launches;
       // the real resume ID overwrites it once gracefulKill resolves.
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-evicted");
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-evicted", 0)
+      );
       expect(setCalls[0][1].agentSessionId).toBe("");
       expect(setCalls[setCalls.length - 1][1]).toEqual(
         expect.objectContaining({
@@ -1410,7 +1794,9 @@ describe("HelpSessionService", () => {
       // #9639: with no real resume ID, the empty-sentinel placeholder stays —
       // resume-latest on next open beats a fresh launch. Exactly one write
       // (the placeholder), never overwritten.
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-no-resume");
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-no-resume", 0)
+      );
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0][1].agentSessionId).toBe("");
     });
@@ -1443,7 +1829,7 @@ describe("HelpSessionService", () => {
 
       expect(mockPtyGracefulKill).toHaveBeenCalledWith("term-win");
       expect(hibernationStore.set).toHaveBeenCalledWith(
-        "proj-1",
+        slotKey("proj-1", 0),
         expect.objectContaining({ agentSessionId: "win-close-resume-id" })
       );
     });
@@ -1472,7 +1858,7 @@ describe("HelpSessionService", () => {
       expect(mockPtyGracefulKill).toHaveBeenCalledWith("term-reclaimed");
       expect(mockPtyGracefulKill).not.toHaveBeenCalledWith("term-untouched");
       expect(hibernationStore.set).toHaveBeenCalledWith(
-        "proj-reclaimed",
+        slotKey("proj-reclaimed", 0),
         expect.objectContaining({ agentSessionId: "auto-close-resume-id" })
       );
       // …and the other project's session survives with a live bearer
@@ -1503,7 +1889,7 @@ describe("HelpSessionService", () => {
         capturedAt: Date.now(),
       });
 
-      const taken = await service.takePendingHibernation("proj-A");
+      const taken = await service.takePendingHibernation("proj-A", 0, 0);
 
       expect(taken).toEqual({
         agentId: "claude",
@@ -1514,7 +1900,7 @@ describe("HelpSessionService", () => {
         claimId: expect.any(String),
       });
       expect(taken!.claimId).not.toBe("");
-      expect(hibernationStore.clear).toHaveBeenCalledWith("proj-A");
+      expect(hibernationStore.clear).toHaveBeenCalledWith(slotKey("proj-A", 0));
     });
 
     it("issues a distinct claim per take, so a stale release can be told apart", async () => {
@@ -1525,8 +1911,8 @@ describe("HelpSessionService", () => {
         capturedAt: Date.now(),
       });
 
-      const first = await service.takePendingHibernation("proj-A");
-      const second = await service.takePendingHibernation("proj-A");
+      const first = await service.takePendingHibernation("proj-A", 0, 0);
+      const second = await service.takePendingHibernation("proj-A", 0, 0);
 
       expect(first!.claimId).not.toBe(second!.claimId);
     });
@@ -1534,7 +1920,7 @@ describe("HelpSessionService", () => {
     it("takePendingHibernation returns null and does not clear when no entry exists", async () => {
       hibernationStore.get.mockReturnValueOnce(null);
 
-      const taken = await service.takePendingHibernation("proj-empty");
+      const taken = await service.takePendingHibernation("proj-empty", 0, 0);
 
       expect(taken).toBeNull();
       expect(hibernationStore.clear).not.toHaveBeenCalled();
@@ -1551,11 +1937,11 @@ describe("HelpSessionService", () => {
 
       it("puts back exactly what was taken, minus panelWasOpen", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         // The slot is empty again after the take — nothing newer has landed.
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           true
         );
 
@@ -1563,7 +1949,7 @@ describe("HelpSessionService", () => {
         // refresh an entry past the store's 14-day staleness cutoff. And
         // panelWasOpen is dropped, so a put-back entry is offered for an
         // explicit resume but never auto-resumes on cold switch-back (#10815).
-        expect(hibernationStore.set).toHaveBeenCalledWith("proj-A", {
+        expect(hibernationStore.set).toHaveBeenCalledWith(slotKey("proj-A", 0), {
           agentId: "claude",
           agentSessionId: "pulled-id",
           cwd: "/help/dir",
@@ -1573,7 +1959,7 @@ describe("HelpSessionService", () => {
 
       it("refuses when a newer capture already occupies the slot", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         hibernationStore.set.mockClear();
         // A fresh eviction captured a later conversation while we were aborting.
         hibernationStore.get.mockReturnValue({
@@ -1583,7 +1969,7 @@ describe("HelpSessionService", () => {
           capturedAt: Date.now(),
         });
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1597,7 +1983,7 @@ describe("HelpSessionService", () => {
 
         // A prior taker is holding a stashed entry...
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-1");
+        const taken = await service.takePendingHibernation("proj-1", 0, 0);
 
         // ...and a capture-revoke starts and parks on gracefulKill, claiming
         // ownership of the slot via its synchronous placeholder write (#9646).
@@ -1606,7 +1992,7 @@ describe("HelpSessionService", () => {
         hibernationStore.set.mockClear();
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-1", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-1", 0, taken!.claimId)).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1614,15 +2000,15 @@ describe("HelpSessionService", () => {
 
       it("answers a take at most once, so a duplicate release cannot resurrect a consumed entry", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           true
         );
         hibernationStore.set.mockClear();
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1634,26 +2020,26 @@ describe("HelpSessionService", () => {
         // from A arrives. Without a per-take claim that second release restores
         // B's stash out from under B.
         hibernationStore.get.mockReturnValueOnce(captured);
-        const takenByA = await service.takePendingHibernation("proj-A", 11);
+        const takenByA = await service.takePendingHibernation("proj-A", 0, 11);
         hibernationStore.get.mockReturnValue(null);
         await expect(
-          service.restorePendingHibernation("proj-A", takenByA!.claimId, 11)
+          service.restorePendingHibernation("proj-A", 0, takenByA!.claimId, 11)
         ).resolves.toBe(true);
 
         hibernationStore.get.mockReturnValueOnce(captured);
-        const takenByB = await service.takePendingHibernation("proj-A", 22);
+        const takenByB = await service.takePendingHibernation("proj-A", 0, 22);
         expect(takenByB!.claimId).not.toBe(takenByA!.claimId);
         hibernationStore.get.mockReturnValue(null);
         hibernationStore.set.mockClear();
 
         // A's stale release is refused...
         await expect(
-          service.restorePendingHibernation("proj-A", takenByA!.claimId, 11)
+          service.restorePendingHibernation("proj-A", 0, takenByA!.claimId, 11)
         ).resolves.toBe(false);
         expect(hibernationStore.set).not.toHaveBeenCalled();
         // ...and, crucially, did not consume B's claim.
         await expect(
-          service.restorePendingHibernation("proj-A", takenByB!.claimId, 22)
+          service.restorePendingHibernation("proj-A", 0, takenByB!.claimId, 22)
         ).resolves.toBe(true);
       });
 
@@ -1661,19 +2047,19 @@ describe("HelpSessionService", () => {
         // The owner comes from the IPC context, not the renderer, so a second
         // window cannot release a claim it does not hold even by guessing.
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A", 11);
+        const taken = await service.takePendingHibernation("proj-A", 0, 11);
         hibernationStore.get.mockReturnValue(null);
         hibernationStore.set.mockClear();
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId, 22)).resolves.toBe(
-          false
-        );
+        await expect(
+          service.restorePendingHibernation("proj-A", 0, taken!.claimId, 22)
+        ).resolves.toBe(false);
         expect(hibernationStore.set).not.toHaveBeenCalled();
 
         // The rightful owner can still put it back.
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId, 11)).resolves.toBe(
-          true
-        );
+        await expect(
+          service.restorePendingHibernation("proj-A", 0, taken!.claimId, 11)
+        ).resolves.toBe(true);
       });
 
       it("restores the empty-string resume-latest sentinel unchanged (#9639)", async () => {
@@ -1681,21 +2067,21 @@ describe("HelpSessionService", () => {
         // put-back that normalized or dropped it would silently downgrade an
         // in-flight capture's placeholder into "no resume available".
         hibernationStore.get.mockReturnValueOnce({ ...captured, agentSessionId: "" });
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         expect(taken!.agentSessionId).toBe("");
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           true
         );
         expect(hibernationStore.set).toHaveBeenCalledWith(
-          "proj-A",
+          slotKey("proj-A", 0),
           expect.objectContaining({ agentSessionId: "" })
         );
       });
 
       it("is a no-op for a project that never took anything", async () => {
-        await expect(service.restorePendingHibernation("proj-untouched", "any")).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-untouched", 0, "any")).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1710,7 +2096,7 @@ describe("HelpSessionService", () => {
         capturedAt: Date.now(),
       });
 
-      const peeked = service.peekPendingHibernation("proj-A");
+      const peeked = service.peekPendingHibernation("proj-A", 0);
 
       expect(peeked).toEqual({
         agentId: "claude",
@@ -1728,7 +2114,7 @@ describe("HelpSessionService", () => {
     it("peekPendingHibernation returns null when no entry exists", () => {
       hibernationStore.get.mockReturnValueOnce(null);
 
-      expect(service.peekPendingHibernation("proj-empty")).toBeNull();
+      expect(service.peekPendingHibernation("proj-empty", 0)).toBeNull();
       expect(hibernationStore.clear).not.toHaveBeenCalled();
     });
 
@@ -1744,7 +2130,7 @@ describe("HelpSessionService", () => {
         panelWasOpen: true,
       });
 
-      expect(service.peekPendingHibernation("proj-A")?.panelWasOpen).toBe(true);
+      expect(service.peekPendingHibernation("proj-A", 0)?.panelWasOpen).toBe(true);
     });
 
     it("stamps panelWasOpen:true on the captured entry when the panel was reported open (#10815)", async () => {
@@ -1765,7 +2151,9 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(99);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-open");
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-open", 0)
+      );
       // Both the synchronous placeholder and the real-resume-id overwrite carry
       // the open flag so a switch-back at any point auto-resumes.
       expect(setCalls[0][1].panelWasOpen).toBe(true);
@@ -1792,7 +2180,9 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(98);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-closed");
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-closed", 0)
+      );
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
@@ -1814,7 +2204,9 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(97);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-toggle");
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-toggle", 0)
+      );
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
@@ -1875,14 +2267,14 @@ describe("HelpSessionService", () => {
       const revokePromise = service.revokeByWebContentsId(60);
 
       // Renderer peeks mid-flight — pure read, no consumption.
-      const peeked = service.peekPendingHibernation("proj-peek-race");
+      const peeked = service.peekPendingHibernation("proj-peek-race", 0);
       expect(peeked).toEqual({
         agentId: "claude",
         agentSessionId: "",
         cwd: "/help/peek-race",
         panelWasOpen: false,
       });
-      expect(hibernationStore.clear).not.toHaveBeenCalledWith("proj-peek-race");
+      expect(hibernationStore.clear).not.toHaveBeenCalledWith(slotKey("proj-peek-race", 0));
 
       // gracefulKill resolves with the real resume id; because peek left the
       // capture owner intact, finalize still overwrites the placeholder.
@@ -1891,7 +2283,7 @@ describe("HelpSessionService", () => {
       await Promise.resolve();
 
       expect(hibernationStore.set).toHaveBeenCalledWith(
-        "proj-peek-race",
+        slotKey("proj-peek-race", 0),
         expect.objectContaining({ agentSessionId: "real-resume-id" })
       );
     });
@@ -1946,10 +2338,10 @@ describe("HelpSessionService", () => {
       // #9639 placeholder was written synchronously, but displacement clears it
       // and releases ownership so the post-gracefulKill overwrite is skipped.
       expect(hibernationStore.set).not.toHaveBeenCalledWith(
-        "proj-race",
+        slotKey("proj-race", 0),
         expect.objectContaining({ agentSessionId: "stale-resume-id-from-displaced-session" })
       );
-      expect(hibernationStore.clear).toHaveBeenCalledWith("proj-race");
+      expect(hibernationStore.clear).toHaveBeenCalledWith(slotKey("proj-race", 0));
     });
 
     it("a gracefulKill rejection does not abort the eviction revoke — bearer still invalidated", async () => {
@@ -2024,7 +2416,7 @@ describe("HelpSessionService", () => {
       // Before gracefulKill resolves, the renderer's takePendingHibernation
       // sees the empty-sentinel placeholder — so it resumes instead of starting
       // a fresh session (the visible "restart" #9639 fixes).
-      const early = await service.takePendingHibernation("proj-visible");
+      const early = await service.takePendingHibernation("proj-visible", 0, 0);
       expect(early).toEqual(
         expect.objectContaining({ agentId: "claude", agentSessionId: "", cwd: result.sessionPath })
       );
@@ -2037,7 +2429,7 @@ describe("HelpSessionService", () => {
       await revokePromise;
       await Promise.resolve();
 
-      expect(backing.get("proj-visible")).toBeUndefined();
+      expect(backing.get(slotKey("proj-visible", 0))).toBeUndefined();
     });
 
     it("placeholder gets overwritten with the real id when no take happens (#9639 baseline — finalize-block still updates an untouched capture)", async () => {
@@ -2085,7 +2477,7 @@ describe("HelpSessionService", () => {
 
       // Sanity: the empty-sentinel placeholder is observable during the kill
       // window, exactly as #9639 promises.
-      expect(backing.get("proj-no-take")?.agentSessionId).toBe("");
+      expect(backing.get(slotKey("proj-no-take", 0))?.agentSessionId).toBe("");
 
       // No take happens; gracefulKill yields the real resume id and the
       // finalize block is still the legitimate writer.
@@ -2093,7 +2485,70 @@ describe("HelpSessionService", () => {
       await revokePromise;
       await Promise.resolve();
 
-      expect(backing.get("proj-no-take")?.agentSessionId).toBe("real-resume-id-abc");
+      expect(backing.get(slotKey("proj-no-take", 0))?.agentSessionId).toBe("real-resume-id-abc");
+    });
+
+    it("keeps the real resume id when a no-capture revoke of the same session races the capture (#12181)", async () => {
+      // A session is not marked revoked until AFTER gracefulKill resolves, so a
+      // second revoke of the same id passes the top guard and reaches the
+      // finalize block. Only the call that CLAIMED the capture may release it —
+      // otherwise the renderer's no-capture revoke (fired by
+      // `handleTerminalPanelMissing` when the assistant's PTY exits) hands
+      // ownership back mid-capture and the real resume id is dropped for the
+      // empty sentinel, silently demoting the resume to latest-conversation.
+      // Newly reachable via project sleep / close+kill, which keep the project
+      // view alive and observing while main tears the assistant down.
+      type PendingHelpHibernationLike = {
+        agentId: string;
+        agentSessionId: string;
+        cwd: string;
+        capturedAt: number;
+      };
+      const backing = new Map<string, PendingHelpHibernationLike>();
+      const statefulStore = {
+        get: vi.fn((projectId: string) => backing.get(projectId) ?? null),
+        set: vi.fn((projectId: string, entry: PendingHelpHibernationLike) => {
+          backing.set(projectId, entry);
+          return Promise.resolve();
+        }),
+        clear: vi.fn((projectId: string) => {
+          backing.delete(projectId);
+          return Promise.resolve();
+        }),
+      };
+      service.setPendingHibernationStore(statefulStore as never);
+
+      let resolveGraceful: (value: string | null) => void = () => {};
+      mockPtyGracefulKill.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveGraceful = resolve;
+          })
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 91,
+        projectId: "proj-double-revoke",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-double-revoke")).toBe(true);
+
+      // Main's capture-revoke parks on gracefulKill, holding the lane.
+      const capturePromise = service.revokeByProjectId("proj-double-revoke");
+      expect(backing.get(slotKey("proj-double-revoke", 0))?.agentSessionId).toBe("");
+
+      // The renderer revokes the SAME session with no capture flag while that
+      // await is still outstanding. It must not release main's ownership.
+      await service.revokeSession(result.sessionId);
+
+      resolveGraceful("real-resume-id-race");
+      await capturePromise;
+      await Promise.resolve();
+
+      expect(backing.get(slotKey("proj-double-revoke", 0))?.agentSessionId).toBe(
+        "real-resume-id-race"
+      );
     });
   });
 
@@ -2299,6 +2754,96 @@ describe("HelpSessionService", () => {
       await expect(
         service.provisionSession({ ...provisionInput(), agentId: "not-an-agent" })
       ).rejects.toThrow(/not assistant-supported/);
+    });
+  });
+
+  describe("unimplemented mcpInjection modes (#12262)", () => {
+    const baseSupports: AssistantSupports = {
+      mcpInjection: "env-only",
+      settingsOverlay: false,
+      permissionBypass: false,
+      trustDialog: false,
+      versionProbe: true,
+      tier: "stable",
+    };
+
+    function userAgent(supports: AssistantSupports): AgentConfig {
+      return {
+        id: "byo-agent",
+        name: "BYO Agent",
+        command: "byo",
+        color: "#FF8800",
+        iconId: "custom",
+        supportsContextInjection: true,
+        supports,
+      };
+    }
+
+    afterEach(() => {
+      setUserRegistry({});
+    });
+
+    it.each(["project-config", "cli-flags"] as const)(
+      "refuses a user-defined agent declaring %s before any side effect",
+      async (mcpInjection) => {
+        setUserRegistry({ "byo-agent": userAgent({ ...baseSupports, mcpInjection }) });
+        const before = await fs.readdir(userData, { recursive: true });
+
+        const rejection = service
+          .provisionSession({ ...provisionInput(), agentId: "byo-agent" })
+          .catch((err: unknown) => err);
+        const err = (await rejection) as Error & { code?: string };
+
+        // A plain Error carrying the same message would satisfy a message-only
+        // assertion, so pin the typed refusal the renderer decodes.
+        expect(err).toBeInstanceOf(Error);
+        expect(err.name).toBe("HelpSessionError");
+        expect(err.code).toBe("UNSUPPORTED_ASSISTANT_AGENT");
+        expect(err.message).toMatch(
+          new RegExp(`not assistant-supported.*no "${mcpInjection}" MCP wiring`)
+        );
+        // Refused at the gate, so nothing was written, minted or probed: before
+        // the fix this agent got a session dir, a bearer and a live probe, then
+        // matched no wiring branch and launched with nothing.
+        expect(await fs.readdir(userData, { recursive: true })).toEqual(before);
+        expect(mockProbeMcpServer).not.toHaveBeenCalled();
+        expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
+      }
+    );
+
+    it("admits a user-defined agent declaring env-only and gives it no provider wiring", async () => {
+      setUserRegistry({ "byo-agent": userAgent(baseSupports) });
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "byo-agent",
+      });
+      if (!result) throw new Error("expected result");
+      // Streamable HTTP at /mcp, the non-Claude route — the token and this URL
+      // are the entire contract an env-only agent gets.
+      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/mcp");
+      expect(service.validateToken(result.token)).not.toBe(false);
+      // No provider-specific files or flags: every literal-id getter reports
+      // the cross-agent mismatch rather than handing over another agent's args.
+      expect(service.getClaudeLaunchArgs(result.token)).toBeNull();
+      expect(service.getCodexLaunchArgs(result.token)).toBeNull();
+      expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
+      const shared = await readSharedMcp(result.sessionPath);
+      expect(shared.mcpServers.daintree).toBeUndefined();
+    });
+
+    it("markTerminalForToken refuses a token minted for a different agent", async () => {
+      setUserRegistry({ "byo-agent": userAgent(baseSupports) });
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "byo-agent",
+      });
+      if (!result) throw new Error("expected result");
+      // Claude/Codex/Copilot get this check from their launch-arg getters;
+      // env-only agents have none, so the binding itself has to enforce it.
+      expect(service.markTerminalForToken(result.token, "term-1", "some-other-agent")).toBe(false);
+      expect(service.markTerminalForToken(result.token, "term-1", "byo-agent")).toBe(true);
+      // Omitting the expected agent keeps the pre-existing call shape working.
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
     });
   });
 
@@ -2590,7 +3135,7 @@ describe("HelpSessionService", () => {
       expect(stripScratchAddendum(claude)).toBe("# Help");
     });
 
-    it("rewrites .mcp.json with a fresh bearer on every provision, even when the template copy is skipped", async () => {
+    it("rewrites the lane file with a fresh bearer on every provision, even when the template copy is skipped", async () => {
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected first provision");
       await service.revokeSession(first.sessionId);
@@ -2599,21 +3144,31 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
       expect(second.token).not.toBe(first.token);
 
-      const mcp = JSON.parse(
-        await fs.readFile(path.join(second.sessionPath, ".mcp.json"), "utf-8")
-      );
-      expect(mcp.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
+      const lane = await readLaneConfig(second);
+      expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
     });
 
     it("strips a prior Claude bearer from .mcp.json on Codex hash-skip switch (no stale Authorization in cwd)", async () => {
-      // Provision Claude first — writes `.mcp.json` with a literal Bearer.
+      // Provision Claude first — its literal Bearer lands in the lane file. Then
+      // plant one in the shared `.mcp.json` too, the way an install that
+      // predates the per-lane files would have left it.
       const claudeResult = await service.provisionSession(provisionInput());
       if (!claudeResult) throw new Error("expected claude provision");
-      const claudeMcp = JSON.parse(
-        await fs.readFile(path.join(claudeResult.sessionPath, ".mcp.json"), "utf-8")
-      );
-      expect(claudeMcp.mcpServers.daintree.headers.Authorization).toBe(
+      expect((await readLaneConfig(claudeResult)).mcpServers.daintree?.headers?.Authorization).toBe(
         `Bearer ${claudeResult.token}`
+      );
+      await fs.writeFile(
+        path.join(claudeResult.sessionPath, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" },
+            daintree: {
+              type: "sse",
+              url: "http://127.0.0.1:45454/sse",
+              headers: { Authorization: `Bearer ${claudeResult.token}` },
+            },
+          },
+        })
       );
 
       // Provision Codex for the same project. Template is unchanged →
@@ -2621,7 +3176,13 @@ describe("HelpSessionService", () => {
       // stale-strip in the codex branch, the dead Claude bearer would
       // remain on disk in cwd (regression vs pre-#7525 behavior, where
       // fs.cp would have restored the bundled `.mcp.json`).
+      // The gate must actually be what strips it: if the template were recopied
+      // here, the bundled docs-only `.mcp.json` would replace the planted file and
+      // this test would pass without the strip code doing anything.
+      const cpSpy = vi.spyOn(fs, "cp");
       const codexResult = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      expect(cpSpy).not.toHaveBeenCalled();
+      cpSpy.mockRestore();
       if (!codexResult) throw new Error("expected codex provision");
       expect(codexResult.sessionPath).toBe(claudeResult.sessionPath);
 
@@ -2797,7 +3358,10 @@ describe("HelpSessionService", () => {
         const content = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
         expect(content).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_START -->");
         expect(content).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_END -->");
-        expect(content).toContain(scratchDir);
+        // The file is shared by every lane of the project while the scratch folder
+        // is per session, so the addendum names the env var and never the path —
+        // a literal path here would be whichever lane provisioned last.
+        expect(content).not.toContain(scratchDir);
         expect(content).toContain("DAINTREE_ASSISTANT_SCRATCH_DIR");
       }
     });
@@ -2809,19 +3373,20 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected result");
 
       // The session dir is reused per-project, so both provisions write into
-      // the same CLAUDE.md. The marker block must appear exactly once and
-      // contain the second (current) scratch path — never the first.
+      // the same CLAUDE.md. The marker block must appear exactly once, and it
+      // names neither session's path: the folder is per session, the file is not.
       const claudeMd = await fs.readFile(path.join(second.sessionPath, "CLAUDE.md"), "utf-8");
       const startMatches = claudeMd.match(/<!-- DAINTREE_ASSISTANT_SCRATCH_START -->/g) ?? [];
       expect(startMatches).toHaveLength(1);
 
       const firstEnv = service.getAssistantScratchEnv(first.token);
       const secondEnv = service.getAssistantScratchEnv(second.token);
-      // First session was displaced (single-backend invariant) — its env
-      // getter returns null; the addendum should reference the live session.
+      // First session was displaced (single-backend invariant) — its env getter
+      // returns null. The live one still gets its own folder through the env var.
       expect(firstEnv).toBeNull();
       expect(secondEnv).not.toBeNull();
-      expect(claudeMd).toContain(secondEnv!.DAINTREE_ASSISTANT_SCRATCH_DIR);
+      expect(claudeMd).not.toContain(secondEnv!.DAINTREE_ASSISTANT_SCRATCH_DIR);
+      expect(claudeMd).toContain("DAINTREE_ASSISTANT_SCRATCH_DIR");
     });
   });
 });

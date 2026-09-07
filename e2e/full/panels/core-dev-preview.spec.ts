@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { createServer, type Server } from "http";
 import { writeFileSync } from "fs";
 import path from "path";
+import { buildDevPreviewProxyOrigin } from "../../../shared/utils/devPreviewProxy";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -71,17 +72,29 @@ test.describe.serial("Core: Dev Preview", () => {
       });
     });
 
-    test("address bar navigation updates display URL", async () => {
+    test("address bar navigation preserves the route on the panel proxy origin", async () => {
       const { window } = ctx;
 
       const addressBar = window.locator(SEL.browser.addressBar);
+      const panelId = await addressBar.evaluate((element) =>
+        element.closest("[data-panel-id]")?.getAttribute("data-panel-id")
+      );
+      const { project, proxyPort } = await window.evaluate(async () => ({
+        project: await window.electron.project.getCurrent(),
+        proxyPort: (await window.electron.devPreview.getProxyPort()).port,
+      }));
+      expect(panelId).toBeTruthy();
+      expect(project).toBeTruthy();
+      const proxyOrigin = buildDevPreviewProxyOrigin(proxyPort, project!.id, panelId!);
+      const route = "/preview/nested?mode=e2e#details";
+
       await addressBar.click();
-      await addressBar.fill(`http://127.0.0.1:${port}`);
+      await addressBar.fill(`http://127.0.0.1:${port}${route}`);
       await window.keyboard.press("Enter");
 
-      await expect
-        .poll(() => addressBar.inputValue(), { timeout: T_MEDIUM })
-        .toMatch(new RegExp(`127\\.0\\.0\\.1:${port}`));
+      await expect(addressBar).toHaveValue(`${new URL(proxyOrigin).host}${route}`, {
+        timeout: T_MEDIUM,
+      });
     });
 
     test("zoom in increases zoom level", async () => {

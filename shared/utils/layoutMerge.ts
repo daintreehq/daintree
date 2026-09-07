@@ -73,6 +73,24 @@ export interface IdArrayDelta {
   fieldEdits?: IdArrayFieldEdit[];
 }
 
+type CompactFieldEdit = readonly [currentIndex: number, fields: readonly string[]];
+
+/**
+ * Structured-clone representation used on project-switch IPC. Changed entries
+ * already exist in the accompanying current array, so their positions carry
+ * the same authority without repeating every id on the wire. Removals retain
+ * ids because the removed entries are necessarily absent from that array.
+ */
+export type IdArrayDeltaWire =
+  | IdArrayDelta
+  | readonly [
+      changedIndices: readonly number[],
+      removedIds: readonly string[],
+      fieldEdits?: readonly CompactFieldEdit[],
+    ];
+
+type CompactIdArrayDelta = IdArrayDelta & Exclude<IdArrayDeltaWire, IdArrayDelta>;
+
 function hasStringId(entry: unknown): entry is { id: string } {
   return (
     typeof entry === "object" &&
@@ -82,27 +100,142 @@ function hasStringId(entry: unknown): entry is { id: string } {
   );
 }
 
-/**
- * Recursively rewrite a value into the exact shape JSON serialization would
- * produce: `undefined`-valued object keys are dropped, `undefined`/hole array
- * elements and non-finite numbers become `null`, and object keys are sorted so
- * ordering never matters. Functions/symbols are dropped by JSON downstream.
- */
-function canonicalizeForJson(value: unknown): unknown {
-  if (value === null || typeof value !== "object") {
-    return value;
+function compactIdArrayDelta<T extends { id: string }>(
+  current: readonly T[],
+  changedIndices: number[],
+  removedIds: string[],
+  fieldEdits: CompactFieldEdit[]
+): CompactIdArrayDelta {
+  const wire: unknown[] =
+    fieldEdits.length > 0 ? [changedIndices, removedIds, fieldEdits] : [changedIndices, removedIds];
+  Object.defineProperties(wire, {
+    changedIds: {
+      get: () =>
+        changedIndices.flatMap((index) => {
+          const entry = current[index];
+          return hasStringId(entry) ? [entry.id] : [];
+        }),
+    },
+    removedIds: { get: () => removedIds },
+    fieldEdits: {
+      get: () =>
+        fieldEdits.length > 0
+          ? fieldEdits.map(([index, fields]) => ({ id: current[index]!.id, fields: [...fields] }))
+          : undefined,
+    },
+  });
+  return wire as unknown as CompactIdArrayDelta;
+}
+
+/** Expand either the compact switch wire shape or the legacy object shape. */
+export function decodeIdArrayDelta<T extends { id: string }>(
+  delta: IdArrayDeltaWire,
+  current: readonly T[]
+): IdArrayDelta {
+  if (!Array.isArray(delta)) return delta as IdArrayDelta;
+
+  const changedIndices = Array.isArray(delta[0]) ? delta[0] : [];
+  const removedIds = Array.isArray(delta[1])
+    ? delta[1].filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+  const changedIds = changedIndices.flatMap((index) => {
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return [];
+    const entry = current[index];
+    return hasStringId(entry) ? [entry.id] : [];
+  });
+  const rawFieldEdits = Array.isArray(delta[2]) ? delta[2] : [];
+  const fieldEdits = rawFieldEdits.flatMap((edit): IdArrayFieldEdit[] => {
+    if (!Array.isArray(edit)) return [];
+    const index = edit[0];
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return [];
+    const entry = current[index];
+    if (!hasStringId(entry) || !Array.isArray(edit[1])) return [];
+    const fields = edit[1].filter(
+      (field): field is string => typeof field === "string" && field.length > 0
+    );
+    return fields.length > 0 ? [{ id: entry.id, fields }] : [];
+  });
+
+  return fieldEdits.length > 0
+    ? { changedIds, removedIds, fieldEdits }
+    : { changedIds, removedIds };
+}
+
+const OMITTED_JSON_VALUE = Symbol("omitted-json-value");
+
+function normalizeJsonScalar(value: unknown, arraySlot: boolean): unknown {
+  if (typeof value === "bigint") throw new TypeError("BigInt is not JSON-serializable");
+  if (typeof value === "number" && !Number.isFinite(value)) return null;
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+    return arraySlot ? null : OMITTED_JSON_VALUE;
   }
-  if (Array.isArray(value)) {
-    return value.map((element) => (element === undefined ? null : canonicalizeForJson(element)));
+  return value;
+}
+
+function jsonObjectKeys(record: Record<string, unknown>): string[] {
+  return Object.keys(record).filter((key) => {
+    const value = record[key];
+    return value !== undefined && typeof value !== "function" && typeof value !== "symbol";
+  });
+}
+
+function jsonValuesEqual(
+  leftValue: unknown,
+  rightValue: unknown,
+  arraySlot: boolean,
+  activeLeft: Set<object>,
+  activeRight: Set<object>
+): boolean {
+  const left = normalizeJsonScalar(leftValue, arraySlot);
+  const right = normalizeJsonScalar(rightValue, arraySlot);
+  if (left === right && (left === null || typeof left !== "object")) return true;
+  if (left === OMITTED_JSON_VALUE || right === OMITTED_JSON_VALUE) return false;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
   }
-  const record = value as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(record).sort()) {
-    if (record[key] !== undefined) {
-      out[key] = canonicalizeForJson(record[key]);
+
+  const leftIsArray = Array.isArray(left);
+  if (leftIsArray !== Array.isArray(right)) return false;
+  if (activeLeft.has(left) || activeRight.has(right)) return false;
+  activeLeft.add(left);
+  activeRight.add(right);
+  try {
+    if (leftIsArray) {
+      const leftArray = left as unknown[];
+      const rightArray = right as unknown[];
+      if (leftArray.length !== rightArray.length) return false;
+      for (let index = 0; index < leftArray.length; index += 1) {
+        if (!jsonValuesEqual(leftArray[index], rightArray[index], true, activeLeft, activeRight)) {
+          return false;
+        }
+      }
+      return true;
     }
+
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = jsonObjectKeys(leftRecord);
+    const rightKeys = jsonObjectKeys(rightRecord);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of leftKeys) {
+      if (!Object.prototype.hasOwnProperty.call(rightRecord, key)) return false;
+      const rightEntry = rightRecord[key];
+      if (
+        rightEntry === undefined ||
+        typeof rightEntry === "function" ||
+        typeof rightEntry === "symbol"
+      ) {
+        return false;
+      }
+      if (!jsonValuesEqual(leftRecord[key], rightEntry, false, activeLeft, activeRight)) {
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    activeLeft.delete(left);
+    activeRight.delete(right);
   }
-  return out;
 }
 
 /**
@@ -118,7 +251,7 @@ function canonicalizeForJson(value: unknown): unknown {
 export function deepEqualIgnoringUndefined(left: unknown, right: unknown): boolean {
   if (left === right) return true;
   try {
-    return JSON.stringify(canonicalizeForJson(left)) === JSON.stringify(canonicalizeForJson(right));
+    return jsonValuesEqual(left, right, false, new Set(), new Set());
   } catch {
     // Non-serializable input (BigInt, circular): treat as changed so the entry
     // is sent rather than silently dropped from the delta.
@@ -150,34 +283,35 @@ export function computeIdArrayDelta<T extends { id: string }>(
   current: readonly T[],
   equals: (a: T, b: T) => boolean,
   trackedFields?: readonly (keyof T & string)[]
-): IdArrayDelta {
+): CompactIdArrayDelta {
   const baseById = new Map<string, T>();
   for (const entry of base) {
     if (hasStringId(entry)) baseById.set(entry.id, entry);
   }
 
-  const changedIds: string[] = [];
+  const changedIndices: number[] = [];
   const changedSeen = new Set<string>();
-  const fieldEdits: IdArrayFieldEdit[] = [];
+  const fieldEdits: CompactFieldEdit[] = [];
   const currentIds = new Set<string>();
-  for (const entry of current) {
+  for (let index = 0; index < current.length; index += 1) {
+    const entry = current[index];
     if (!hasStringId(entry)) continue;
     currentIds.add(entry.id);
     const prev = baseById.get(entry.id);
     if (prev === undefined || !equals(prev, entry)) {
       changedSeen.add(entry.id);
-      changedIds.push(entry.id);
+      changedIndices.push(index);
     }
     if (trackedFields === undefined || prev === undefined) continue;
     const edited = trackedFields.filter((field) => prev[field] !== entry[field]);
     if (edited.length === 0) continue;
-    fieldEdits.push({ id: entry.id, fields: [...edited] });
+    fieldEdits.push([index, [...edited]]);
     // A claim is only honoured for an entry the writer is allowed to touch, so
     // keep the two lists consistent even if a caller-supplied `equals` ignores
     // the tracked field.
     if (!changedSeen.has(entry.id)) {
       changedSeen.add(entry.id);
-      changedIds.push(entry.id);
+      changedIndices.push(index);
     }
   }
 
@@ -188,10 +322,7 @@ export function computeIdArrayDelta<T extends { id: string }>(
     }
   }
 
-  // Omitted when empty so the common delta keeps its historical shape.
-  return fieldEdits.length > 0
-    ? { changedIds, removedIds, fieldEdits }
-    : { changedIds, removedIds };
+  return compactIdArrayDelta(current, changedIndices, removedIds, fieldEdits);
 }
 
 export interface IdArrayMergeOptions<T> {

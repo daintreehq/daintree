@@ -33,9 +33,11 @@ import {
   ACTIONS_SEARCH_MAX_LIMIT,
   INTROSPECTION_TOOL_IDS,
   buildTargetPolicy,
+  buildUnavailableStub,
   MCP_TARGET_POLICY_VERSION,
   type TargetPolicySessionSnapshot,
 } from "../tierAuth.js";
+import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
@@ -349,6 +351,27 @@ describe("wire/validation schema split", () => {
     expect(findWireStrippedKeywords(wire)).toEqual([]);
   });
 
+  it("omits the redundant top-level schema dialect", () => {
+    const wire = buildToolInputSchema(
+      makeEntry({
+        inputSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: {},
+        },
+      })
+    );
+
+    expect(wire["$schema"]).toBeUndefined();
+  });
+
+  it("omits an empty properties map when the tool declares no arguments", () => {
+    expect(buildToolInputSchema(makeEntry({ inputSchema: undefined }))).toEqual({
+      type: "object",
+      additionalProperties: false,
+    });
+  });
+
   it("keeps every argument the schema declares, including keyword-named ones", () => {
     const wire = buildToolInputSchema(
       makeEntry({ inputSchema: structuredClone(CONSTRAINED_SCHEMA) as Record<string, unknown> })
@@ -597,8 +620,9 @@ describe("external tool surface budget (#11585)", () => {
     { id: "git.push", keptAt: "system" },
     { id: "git.commit", keptAt: "system" },
     { id: "git.getFileDiff", keptAt: "workbench" },
-    // D2 destructive, and not needed to drive work forward.
-    { id: "worktree.delete", keptAt: "system" },
+    // D2 destructive, and not needed to drive work forward — an external caller
+    // has its own shell. In-app it sits on the default floor since #12116.
+    { id: "worktree.delete", keptAt: "action" },
     // #11544's two CI-status routes. An external agent has `gh`; the in-app
     // assistant does not, so both stay at workbench.
     { id: "forge.getCIStatus", keptAt: "workbench" },
@@ -687,10 +711,39 @@ describe("forge tool exposure is help-assistant-only (#11585)", () => {
     const systemForgeTools = [...TIER_ALLOWLISTS.system].filter((id) => id.startsWith("forge."));
 
     expect(allForgeActions.length).toBeGreaterThan(0);
-    // No exemptions: every forge action in the registry is an MCP tool at the
-    // system tier. Carrying a placeholder exclusion here would blind the check
-    // the day an id matching it actually appears.
-    expect(new Set(systemForgeTools)).toEqual(new Set(allForgeActions));
+    // The one exemption is enumerated rather than pattern-matched, and the test
+    // below holds it to a stricter standard than membership — a placeholder
+    // exclusion would blind this check the day an id matching it appeared,
+    // which is why the original had none.
+    const reachable = allForgeActions.filter((id) => !FORGE_ACTIONS_OFF_EVERY_TIER.has(id));
+    expect(new Set(systemForgeTools)).toEqual(new Set(reachable));
+  });
+
+  /**
+   * Forge actions deliberately absent from EVERY tier, not merely from one.
+   *
+   * `forge.validateToken` takes a raw forge access token as an argument. A tool
+   * argument is model context by construction: whatever redaction the audit log
+   * and dispatch summaries apply afterwards, admitting the tool means the
+   * credential has to be composed in the model channel to be sent at all. Token
+   * entry stays a UI-owned flow — the provider settings tab dispatches it as
+   * `source: "user"`, which no tier gates.
+   */
+  const FORGE_ACTIONS_OFF_EVERY_TIER = new Set(["forge.validateToken"]);
+
+  it("keeps the exempted forge actions off every tier and out of every listing", () => {
+    // Membership alone would be a weak exemption: a tool can be off a tier and
+    // still be advertised, or hidden and still dispatchable. Both gates are
+    // asserted so the exemption above cannot decay into "we forgot to add it".
+    for (const id of FORGE_ACTIONS_OFF_EVERY_TIER) {
+      expect(BUILT_IN_ACTION_IDS).toContain(id);
+      for (const tier of ["workbench", "action", "system", "external"] as const) {
+        expect(isTierPermitted(tier, id)).toBe(false);
+        expect(shouldExposeTool(makeEntry({ id, kind: "query", danger: "safe" }), tier)).toBe(
+          false
+        );
+      }
+    }
   });
 
   // Sentinel for the read added in #11545: an agent that can post a comment must
@@ -770,16 +823,18 @@ describe("buildAnnotations", () => {
 // removed the identity override that used to pin the assistant to `system`).
 // So the assertions below lock the `action` tier that governs a default
 // session, plus the system/external boundaries above it.
-// The distinction is load-bearing: `action` leaves irreversible mutations
-// (git.push, worktree.delete) TIER_NOT_PERMITTED so a default session needs a
-// human-approved scoped grant, while `system` — the tier a user has to select
-// deliberately — permits them subject only to the confirm gate. `external` used
-// to permit them too — #11585
-// removed them from that surface entirely, so `system` is now the only tier that
-// reaches them. These assertions lock those invariants against allowlist drift
-// (e.g. someone promoting git.push into the action tier). They test the runtime
-// gate `isTierPermitted`, not the raw allowlist arrays, so they fail closed if
-// the tier wiring itself regresses.
+// #12116 sharpened what the line is NOT. It is not "irreversible vs. not", and
+// not "local vs. remote" — a worktree delete runs the project's own lifecycle
+// teardown, which can reach a cloud resource. It is whether the tier is the
+// only gate: cleanup carries `danger: "confirm"` and so is normally host-
+// confirmed per call, while `git.commit` and `forge.assignIssue` are
+// `danger: "safe"` and have nothing but the tier. `git.push` sits above the
+// floor for its own reason — it publishes to a shared remote.
+// `external` is a separately curated peer (#11585) that now reaches none of
+// them, and #12116 widened the in-app floor without re-opening that surface.
+// These assertions lock the invariants against allowlist drift (e.g. someone
+// promoting git.push into the action tier). They test `isTierPermitted`, not
+// the raw arrays, so they fail closed if the tier wiring itself regresses.
 describe("help-session tier policy (#10640)", () => {
   // The conductor's working tool set — orchestration, terminal driving, branch
   // setup, recipes, and reads — all resolve under `action`.
@@ -803,14 +858,18 @@ describe("help-session tier policy (#10640)", () => {
     "copyTree.generate",
   ];
 
-  // Irreversible / shared-state mutations the conductor must NOT be able to
-  // fire unattended at its default tier — they require explicit elevation.
-  const HIGH_BLAST_RADIUS_TOOLS = [
-    "git.commit",
-    "git.push",
+  // Mutations the conductor must NOT reach at its default tier: `git.commit` and
+  // `forge.assignIssue` are `danger: "safe"`, so the tier is their only gate.
+  const HIGH_BLAST_RADIUS_TOOLS = ["git.commit", "git.push", "forge.assignIssue"];
+
+  // Confirm-classified worktree cleanup, promoted to the default floor by
+  // #12116. Reachable at `action`, still refused at `workbench` — the boundary
+  // moved down one tier, it did not disappear.
+  const CONFIRM_GATED_CLEANUP_TOOLS = [
     "worktree.delete",
-    "forge.assignIssue",
-  ];
+    "worktree.deleteOwned",
+    "worktree.resource.teardown",
+  ] as const;
 
   it.each(ASSISTANT_REQUIRED_TOOLS)(
     "permits the assistant's required tool %s at the action tier",
@@ -829,17 +888,53 @@ describe("help-session tier policy (#10640)", () => {
     }
   );
 
-  it("withholds those same mutations from the external tier too (#11585)", () => {
-    // `external` used to auto-permit these, subject only to the confirm gate,
-    // which was the security contrast that motivated pinning the assistant to
-    // `action` in the first place. #11585 closed it from the other side: an
-    // api-key caller has its own shell git and does not need ours, so the
-    // mutations now live only where a human is in the loop. `system` remains the
-    // one tier that reaches them.
-    for (const toolId of ["git.push", "git.commit", "worktree.delete"]) {
+  it.each(CONFIRM_GATED_CLEANUP_TOOLS)(
+    "permits confirm-gated cleanup tool %s at the action tier but not below it (#12116)",
+    (toolId) => {
+      // Pin to ground truth first, so a rename turns this into a red test
+      // rather than a vacuous "unknown string is absent from a set".
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(toolId);
+
+      // The floor moved to `action`, so a default session reaches it without a
+      // grant. `workbench` still refuses it, which is what keeps this a
+      // boundary rather than a blanket promotion: a read-only session cannot
+      // delete a worktree by asking nicely.
+      //
+      // Discovery is asserted beside dispatch because the two gates are what an
+      // agent actually experiences, and `shouldExposeTool` has its own reasons
+      // to withhold a `danger: "confirm"` tool (see `isWithheldFromBoundSession`
+      // for the bound-external case). Neither of them fires here.
+      const entry = makeEntry({ id: toolId, danger: "confirm" });
+
+      expect(isTierPermitted("workbench", toolId)).toBe(false);
+      expect(shouldExposeTool(entry, "workbench")).toBe(false);
+
+      expect(isTierPermitted("action", toolId)).toBe(true);
+      expect(shouldExposeTool(entry, "action")).toBe(true);
+
+      expect(isTierPermitted("system", toolId)).toBe(true);
+      expect(shouldExposeTool(entry, "system")).toBe(true);
+    }
+  );
+
+  it("withholds the shared-state mutations from the external tier too (#11585)", () => {
+    // `external` used to auto-permit these — `git.commit` with no gate at all,
+    // `git.push` behind only its confirm dialog — which was the contrast that
+    // motivated pinning the assistant to `action` in the first place. #11585
+    // closed it from the other side: an api-key caller has its own shell git and
+    // does not need ours, so both now live at `system`.
+    for (const toolId of ["git.push", "git.commit"]) {
       expect(isTierPermitted("external", toolId)).toBe(false);
       expect(isTierPermitted("system", toolId)).toBe(true);
     }
+
+    // The two surfaces move independently, and #12116 is the case that proves
+    // it: promoting generic `worktree.delete` to the in-app `action` floor did
+    // not re-admit it externally. An api-key caller still gets only the
+    // ownership-scoped `worktree.deleteOwned`, which is the whole point of the
+    // #11585 cut — it has its own shell, so it does not need ours.
+    expect(isTierPermitted("external", "worktree.delete")).toBe(false);
+    expect(isTierPermitted("action", "worktree.delete")).toBe(true);
   });
 });
 
@@ -1276,11 +1371,18 @@ describe("filterIntrospectionResultForSession", () => {
       expect(payloadOf(filtered).ok).toBe(false);
     });
 
-    // NOT_FOUND rather than a tier error: a distinct code would confirm the id
-    // exists while offering no route to it, since grants are minted off a
-    // denied dispatch and never off a schema read.
+    // NOT_FOUND rather than a tier error, for every caller the existence
+    // catalog is closed to: a distinct code would confirm the id exists while
+    // offering no route to it, since grants are minted off a denied dispatch
+    // and never off a schema read. A renderer-owned session DOES have a route
+    // — the panel's own tier control — which is the whole of why #12117 carves
+    // it out; that case is covered under "first-party existence catalog".
     it("collapses a denied entry onto the existing NOT_FOUND data shape", () => {
-      const payload = payloadOf(lookup(makeEntry({ id: "git.push" })));
+      const payload = payloadOf(
+        lookup(makeEntry({ id: "git.push" }), {
+          policySnapshot: snapshot({ rendererOwnedOrigin: false }),
+        })
+      );
 
       expect(payload.ok).toBe(false);
       expect(payload.entry).toBeNull();
@@ -1389,6 +1491,27 @@ describe("filterIntrospectionResultForSession", () => {
         expect(perToolGranted.requiresConfirmation).toBe(true);
       });
 
+      it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
+        // `peekNativeGrant` refuses terminal.killAll, so a grant listing it
+        // buys no bypass. Reading the allowlist alone would advertise one the
+        // dispatch gate will not honour.
+        // System tier so the floor admits the call on its own — this isolates
+        // the confirmation axis instead of collapsing the whole record.
+        const policy = policyOf(
+          lookup(makeEntry({ id: "terminal.killAll", danger: "confirm" }), {
+            permittedActionIds: new Set([...permitted, "terminal.killAll"]),
+            policySnapshot: snapshot({
+              tier: "system",
+              nativeGrantedActionIds: new Set(["terminal.killAll"]),
+            }),
+          })
+        );
+
+        expect(policy.danger).toBe("confirm");
+        expect(policy.requiresConfirmation).toBe(true);
+        expect(policy.authorizedBy).toBe("tier");
+      });
+
       it("reports the flat external tier rather than a rung the caller cannot climb", () => {
         const policy = policyOf(
           lookup(makeEntry({ id: "terminal.list" }), {
@@ -1470,6 +1593,62 @@ describe("filterIntrospectionResultForSession", () => {
           )
         );
         expect(plain.confirmationMayEscalate).toBe(false);
+      });
+
+      // The shell-launch elevation (#12216) is scoped to `terminal.new` by id,
+      // so the record has to be too. `terminal.new` is statically `safe` and
+      // carries no `recipeId`: reading `recipeId` alone reported "no dialog" for
+      // the one target whose launch arguments always raise one.
+      it("flags terminal.new's launch arguments as escalating", () => {
+        // External tier: `terminal.new` sits on the flat external allowlist
+        // rather than a ladder rung, so that is the caller that can reach it —
+        // and the workspace-bound external session is the one this flag most
+        // has to be honest for.
+        const external = {
+          permittedActionIds: new Set([...permitted, "terminal.new"]),
+          policySnapshot: snapshot({ tier: "external", rendererOwnedOrigin: false }),
+        };
+
+        for (const properties of [{ command: { type: "string" } }, { cwd: { type: "string" } }]) {
+          const policy = policyOf(
+            lookup(
+              makeEntry({ id: "terminal.new", inputSchema: { type: "object", properties } }),
+              external
+            )
+          );
+          expect(policy.danger).toBe("safe");
+          expect(policy.confirmationMayEscalate).toBe(true);
+        }
+
+        // No launch arguments in the schema, so no dispatch of it can escalate.
+        const plainTerminalNew = policyOf(
+          lookup(
+            makeEntry({
+              id: "terminal.new",
+              inputSchema: { type: "object", properties: { focusPolicy: { type: "string" } } },
+            }),
+            external
+          )
+        );
+        expect(plainTerminalNew.confirmationMayEscalate).toBe(false);
+      });
+
+      // Scoped by id, not keyed on the field name: `command` is an ordinary
+      // argument that other safe actions take without running anything, and
+      // flagging every one of them would train clients to ignore the field.
+      it("does not flag a command argument on any other target", () => {
+        const policy = policyOf(
+          lookup(
+            makeEntry({
+              id: "terminal.list",
+              inputSchema: {
+                type: "object",
+                properties: { command: { type: "string" }, cwd: { type: "string" } },
+              },
+            })
+          )
+        );
+        expect(policy.confirmationMayEscalate).toBe(false);
       });
 
       it("never reports escalation for a target already declared confirm", () => {
@@ -1674,6 +1853,479 @@ describe("filterIntrospectionResultForSession", () => {
       expect(
         buildTargetPolicy(makeEntry({ id: "terminal.list", inputSchema: cyclic }), snap)
       ).toBeNull();
+    });
+  });
+
+  // #12117: an out-of-tier id used to be indistinguishable from a nonexistent
+  // one at every discovery surface, so the assistant reported capabilities the
+  // product ships as ones it lacks. A renderer-owned session now learns that
+  // the name exists and which tier would permit it — and nothing else.
+  describe("first-party existence catalog (#12117)", () => {
+    // `git.push` is system-tier; the session below is workbench, so it is
+    // out-of-tier for real rather than by fixture construction.
+    const OUT_OF_TIER = "git.push";
+
+    function firstParty(
+      overrides: Partial<TargetPolicySessionSnapshot> = {}
+    ): TargetPolicySessionSnapshot {
+      return {
+        tier: "workbench",
+        rendererOwnedOrigin: true,
+        perToolGrantedActionIds: new Set<string>(),
+        nativeGrantedActionIds: new Set<string>(),
+        ...overrides,
+      };
+    }
+
+    function listFor(
+      entries: ActionManifestEntry[],
+      policySnapshot: TargetPolicySessionSnapshot | undefined,
+      opts: { listPaging?: { offset: number; limit: number }; permit?: ReadonlySet<string> } = {}
+    ) {
+      return (
+        filterIntrospectionResultForSession(
+          "actions.list",
+          { ok: true as const, result: { actions: entries } },
+          opts.permit ?? permitted,
+          {
+            callerLimit: 20,
+            ...(opts.listPaging ? { listPaging: opts.listPaging } : {}),
+            ...(policySnapshot ? { policySnapshot } : {}),
+          }
+        ) as {
+          result: {
+            actions: unknown[];
+            total: number;
+            hasMore: boolean;
+            unavailable?: unknown[];
+            unavailableTotal?: number;
+            unavailableHasMore?: boolean;
+          };
+        }
+      ).result;
+    }
+
+    function searchFor(
+      entries: ActionManifestEntry[],
+      policySnapshot: TargetPolicySessionSnapshot | undefined,
+      callerLimit = 20
+    ) {
+      return (
+        filterIntrospectionResultForSession(
+          "actions.search",
+          { ok: true as const, result: { totalMatches: entries.length, results: entries } },
+          permitted,
+          { callerLimit, ...(policySnapshot ? { policySnapshot } : {}) }
+        ) as {
+          result: {
+            results: unknown[];
+            totalMatches: number;
+            unavailable?: unknown[];
+            unavailableTotalMatches?: number;
+          };
+        }
+      ).result;
+    }
+
+    /** Ids of whichever collection the caller names, for order-sensitive asserts. */
+    function stubIds(stubs: unknown[] | undefined): string[] {
+      return (stubs ?? []).map((s) => (s as { id: string }).id);
+    }
+
+    function schemaFor(
+      entry: ActionManifestEntry,
+      policySnapshot: TargetPolicySessionSnapshot | undefined
+    ) {
+      return (
+        filterIntrospectionResultForSession(
+          "actions.getSchema",
+          { ok: true as const, result: { ok: true, entry, policy: null, error: null } },
+          permitted,
+          {
+            callerLimit: 20,
+            requestedActionId: entry.id,
+            ...(policySnapshot ? { policySnapshot } : {}),
+          }
+        ) as {
+          result: {
+            ok: boolean;
+            entry: unknown;
+            policy: unknown;
+            unavailable?: unknown;
+            error: { code: string; message: string } | null;
+          };
+        }
+      ).result;
+    }
+
+    it("names an out-of-tier action, its band, and the tier that permits it", () => {
+      const stub = buildUnavailableStub(
+        makeEntry({ id: OUT_OF_TIER, title: "Push", category: "git", danger: "confirm" }),
+        firstParty()
+      );
+
+      expect(stub).toEqual({
+        id: OUT_OF_TIER,
+        title: "Push",
+        // BAND_OVERRIDES pins git.push to external-effect; deriving it here
+        // rather than reading `entry.band` is what keeps a renderer-attached
+        // value from crossing the tier boundary unvalidated.
+        band: "external-effect",
+        minimumTier: "system",
+        callable: false,
+      });
+      expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
+    });
+
+    // `git.push` above proves nothing about the derivation: BAND_OVERRIDES pins
+    // it, so a builder that passed a hard-coded `danger: "safe"` into
+    // `deriveBand` would still report it correctly. `terminal.arm` has no
+    // override and is `danger: "confirm"` in a non-open-world category, so its
+    // band can only be right if the entry's OWN danger reaches the derivation.
+    // (`worktree.delete`, the action #12117 was filed about, was the exemplar
+    // here until #12116 promoted it to the action tier.)
+    it("derives the band from the entry's own danger, not a fixed value", () => {
+      const destructive = buildUnavailableStub(
+        makeEntry({
+          id: "terminal.arm",
+          title: "Arm Terminal",
+          category: "terminal",
+          danger: "confirm",
+        }),
+        firstParty()
+      );
+      expect(destructive).toMatchObject({ band: "destructive-local", minimumTier: "system" });
+
+      const safe = buildUnavailableStub(
+        makeEntry({ id: "terminal.arm", category: "terminal", danger: "safe" }),
+        firstParty()
+      );
+      expect(safe).toMatchObject({ band: "reversible" });
+    });
+
+    it("carries no description, schemas, or policy across the tier boundary", () => {
+      const stub = buildUnavailableStub(
+        makeEntry({
+          id: OUT_OF_TIER,
+          description: "secret prose",
+          inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
+          outputSchema: { type: "object" },
+          disabledReason: "nope",
+        }),
+        firstParty()
+      );
+
+      expect(Object.keys(stub ?? {}).sort()).toEqual([
+        "band",
+        "callable",
+        "id",
+        "minimumTier",
+        "title",
+      ]);
+    });
+
+    it.each([
+      // The divergence `resolveTokenTier` makes reachable: an unrecognised
+      // bearer token resolves to a ladder tier while the origin still defaults
+      // to `external`. The ORIGIN decides, exactly as grant issuance does.
+      ["a ladder tier on a foreign origin", firstParty({ rendererOwnedOrigin: false })],
+      ["an external-tier caller", firstParty({ tier: "external", rendererOwnedOrigin: false })],
+      // Belt and braces on the other axis: `external` is a flat peer of the
+      // ladder, so there is no rung to name even for a first-party origin.
+      ["an external tier on a renderer-owned origin", firstParty({ tier: "external" })],
+      ["an absent snapshot", undefined],
+    ])("stays closed to %s", (_label, snap) => {
+      expect(buildUnavailableStub(makeEntry({ id: OUT_OF_TIER }), snap)).toBeNull();
+    });
+
+    // The rows above all name tiers that exist today, so they would stay green
+    // against a `tier !== "external"` check — the fail-OPEN shape. This is the
+    // one that would not: a second flat peer added to `McpTier` has no rung on
+    // the ladder and nothing honest to report, and must be refused until
+    // someone puts it on the ladder deliberately. Cast because the tier does
+    // not exist yet; that is exactly the future this guards.
+    it("stays closed to a tier that is not on the ladder at all", () => {
+      const futurePeer = firstParty({
+        tier: "partner" as unknown as TargetPolicySessionSnapshot["tier"],
+      });
+
+      expect(buildUnavailableStub(makeEntry({ id: OUT_OF_TIER }), futurePeer)).toBeNull();
+      expect(listFor([makeEntry({ id: OUT_OF_TIER })], futurePeer).unavailable).toBeUndefined();
+    });
+
+    it("refuses ceilings and unplaceable ids, which no elevation would reach", () => {
+      const unreachable: unknown[] = [
+        makeEntry({ id: OUT_OF_TIER, mcpVisibility: "hidden" }),
+        makeEntry({ id: OUT_OF_TIER, danger: "restricted" }),
+        // In no tier allowlist at all, so there is no tier to name.
+        makeEntry({ id: "actions.persistedStores" }),
+        // Already permitted at this session's own tier: reporting a tier it is
+        // already at would read as "elevate" when elevating changes nothing.
+        makeEntry({ id: "terminal.list" }),
+        null,
+        undefined,
+        { id: OUT_OF_TIER },
+        { ...makeEntry({ id: OUT_OF_TIER }), title: "" },
+        { ...makeEntry({ id: OUT_OF_TIER }), category: undefined },
+      ];
+
+      for (const entry of unreachable) {
+        expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+      }
+    });
+
+    it("reports out-of-tier ids beside the callable ones in actions.list", () => {
+      const payload = listFor(
+        [makeEntry({ id: "terminal.list" }), makeEntry({ id: OUT_OF_TIER })],
+        firstParty()
+      );
+
+      expect((payload.actions as ActionManifestEntry[]).map((e) => e.id)).toEqual([
+        "terminal.list",
+      ]);
+      expect(payload.total).toBe(1);
+      expect(payload.unavailable).toEqual([
+        expect.objectContaining({ id: OUT_OF_TIER, minimumTier: "system", callable: false }),
+      ]);
+      expect(payload.unavailableTotal).toBe(1);
+    });
+
+    it("reports them in actions.search too", () => {
+      const payload = searchFor(
+        [makeEntry({ id: "worktree.list" }), makeEntry({ id: OUT_OF_TIER })],
+        firstParty()
+      );
+
+      expect(payload.totalMatches).toBe(1);
+      expect(payload.unavailable).toEqual([expect.objectContaining({ id: OUT_OF_TIER })]);
+      expect(payload.unavailableTotalMatches).toBe(1);
+    });
+
+    // The key set, not just the values: an external client's payload has to
+    // stay byte-for-byte what it was, so the field is ABSENT rather than an
+    // empty array it might one day wonder about.
+    it("adds no key at all for a session the catalog is closed to", () => {
+      const entries = [makeEntry({ id: "terminal.list" }), makeEntry({ id: OUT_OF_TIER })];
+      const foreign = firstParty({ rendererOwnedOrigin: false });
+
+      expect(Object.keys(listFor(entries, foreign)).sort()).toEqual([
+        "actions",
+        "hasMore",
+        "limit",
+        "offset",
+        "total",
+      ]);
+      expect(Object.keys(searchFor(entries, foreign)).sort()).toEqual(["results", "totalMatches"]);
+      expect(schemaFor(makeEntry({ id: OUT_OF_TIER }), foreign)).toEqual({
+        ok: false,
+        entry: null,
+        policy: null,
+        error: { code: "NOT_FOUND", message: expect.stringContaining(OUT_OF_TIER) },
+      });
+    });
+
+    // Same window, two counters. Deliberately uneven — 2 callable against 3
+    // unavailable, paged 2 at a time — so a regression that shared one cursor,
+    // reported a page length as a total, or let one collection's size steer
+    // the other's slice cannot fit inside a single page and pass.
+    it("counts and pages the two collections independently", () => {
+      const entries = [
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "worktree.list" }),
+        makeEntry({ id: OUT_OF_TIER }),
+        makeEntry({ id: "git.commit" }),
+        makeEntry({ id: "git.stageAll" }),
+      ];
+
+      const first = listFor(entries, firstParty(), { listPaging: { offset: 0, limit: 2 } });
+      expect((first.actions as ActionManifestEntry[]).map((e) => e.id)).toEqual([
+        "terminal.list",
+        "worktree.list",
+      ]);
+      expect(first.total).toBe(2);
+      expect(stubIds(first.unavailable)).toEqual([OUT_OF_TIER, "git.commit"]);
+      expect(first.unavailableTotal).toBe(3);
+
+      // Second page: the callable set is exhausted, the catalog is not. Each
+      // collection advances on its own contents, not on the other's.
+      const second = listFor(entries, firstParty(), { listPaging: { offset: 2, limit: 2 } });
+      expect(second.actions).toEqual([]);
+      expect(second.total).toBe(2);
+      expect(stubIds(second.unavailable)).toEqual(["git.stageAll"]);
+      expect(second.unavailableTotal).toBe(3);
+    });
+
+    // The case a shared cursor gets wrong: the callable set is exhausted on
+    // page one while the catalog is not. `hasMore` keeps its callable-only
+    // meaning, so a client paging on it alone would stop with stubs unfetched
+    // and conclude the catalog was exhaustive — the exact wrong conclusion for
+    // a surface whose job is to prove a capability exists. That is what
+    // `unavailableHasMore` is for.
+    it("signals more catalog entries when hasMore has already gone false", () => {
+      const page = listFor(
+        [
+          makeEntry({ id: "terminal.list" }),
+          makeEntry({ id: OUT_OF_TIER }),
+          makeEntry({ id: "git.commit" }),
+        ],
+        firstParty(),
+        { listPaging: { offset: 0, limit: 1 } }
+      );
+
+      expect(page.hasMore).toBe(false);
+      expect(page.total).toBe(1);
+      expect(stubIds(page.unavailable)).toEqual([OUT_OF_TIER]);
+      expect(page.unavailableTotal).toBe(2);
+      expect(page.unavailableHasMore).toBe(true);
+
+      // And the continuation the flag promised actually resolves.
+      const next = listFor(
+        [
+          makeEntry({ id: "terminal.list" }),
+          makeEntry({ id: OUT_OF_TIER }),
+          makeEntry({ id: "git.commit" }),
+        ],
+        firstParty(),
+        { listPaging: { offset: 1, limit: 1 } }
+      );
+      expect(stubIds(next.unavailable)).toEqual(["git.commit"]);
+      expect(next.unavailableHasMore).toBe(false);
+    });
+
+    it("applies the caller's search limit to each collection on its own", () => {
+      const payload = searchFor(
+        [
+          makeEntry({ id: "terminal.list" }),
+          makeEntry({ id: OUT_OF_TIER }),
+          makeEntry({ id: "git.commit" }),
+        ],
+        firstParty(),
+        1
+      );
+
+      expect((payload.results as ActionManifestEntry[]).map((e) => e.id)).toEqual([
+        "terminal.list",
+      ]);
+      expect(stubIds(payload.unavailable)).toEqual([OUT_OF_TIER]);
+      // The count is of everything main saw, not of the page it returned.
+      expect(payload.unavailableTotalMatches).toBe(2);
+    });
+
+    // A grant widens `permittedActionIds`, so the id takes the callable branch
+    // and cannot also appear as a stub — the two collections are disjoint by
+    // construction rather than by a second membership check.
+    it("moves a granted id into the callable array rather than duplicating it", () => {
+      const entries = [makeEntry({ id: OUT_OF_TIER })];
+
+      const ungranted = listFor(entries, firstParty());
+      expect(ungranted.actions).toEqual([]);
+      expect(stubIds(ungranted.unavailable)).toEqual([OUT_OF_TIER]);
+
+      const granted = listFor(
+        entries,
+        firstParty({ perToolGrantedActionIds: new Set([OUT_OF_TIER]) }),
+        { permit: new Set([...permitted, OUT_OF_TIER]) }
+      );
+
+      expect((granted.actions as ActionManifestEntry[]).map((e) => e.id)).toEqual([OUT_OF_TIER]);
+      expect(granted.total).toBe(1);
+      expect(granted.unavailable).toEqual([]);
+      expect(granted.unavailableTotal).toBe(0);
+    });
+
+    it("answers actions.getSchema with the tier instead of an indistinguishable denial", () => {
+      const payload = schemaFor(makeEntry({ id: OUT_OF_TIER }), firstParty());
+
+      expect(payload.ok).toBe(false);
+      // Still a denial: no entry, no policy, no schemas.
+      expect(payload.entry).toBeNull();
+      expect(payload.policy).toBeNull();
+      expect(payload.error?.code).toBe("TIER_NOT_PERMITTED");
+      expect(payload.unavailable).toEqual(
+        expect.objectContaining({ id: OUT_OF_TIER, minimumTier: "system", callable: false })
+      );
+      expect(McpGetSchemaWireResultSchema.safeParse(payload).success).toBe(true);
+    });
+
+    // The two denial fields move together or the record lies. Strictness alone
+    // cannot say so — an optional key beside an enum admits both halves of a
+    // contradiction — so the correlation is asserted here rather than assumed.
+    it("rejects a denial whose code and stub disagree", () => {
+      const stub = buildUnavailableStub(makeEntry({ id: OUT_OF_TIER }), firstParty());
+      const denial = { ok: false as const, entry: null, policy: null };
+
+      // A tier denial that names no tier tells the model a capability exists
+      // and gives it nothing to say to the user.
+      expect(
+        McpGetSchemaWireResultSchema.safeParse({
+          ...denial,
+          error: { code: "TIER_NOT_PERMITTED", message: "x" },
+        }).success
+      ).toBe(false);
+
+      // And the reverse: a NOT_FOUND carrying a stub would confirm the id
+      // exists in the very shape that exists to be indistinguishable.
+      expect(
+        McpGetSchemaWireResultSchema.safeParse({
+          ...denial,
+          unavailable: stub,
+          error: { code: "NOT_FOUND", message: "x" },
+        }).success
+      ).toBe(false);
+    });
+
+    // The precondition `buildUnavailableStub` documents, enforced at the call
+    // site: an entry the session CAN reach right now — here through a live
+    // grant — must never fall through to the catalog when its policy fails to
+    // build. Reporting "needs system tier" for a tool the grant already admits
+    // would be a lie about access the caller has.
+    it("does not name a tier for a reachable target whose policy fails to build", () => {
+      const payload = (
+        filterIntrospectionResultForSession(
+          "actions.getSchema",
+          {
+            ok: true as const,
+            result: {
+              ok: true,
+              // `enabled` absent, so `buildTargetPolicy` fails closed.
+              entry: { ...makeEntry({ id: OUT_OF_TIER }), enabled: undefined },
+              policy: null,
+              error: null,
+            },
+          },
+          new Set([...permitted, OUT_OF_TIER]),
+          {
+            callerLimit: 20,
+            requestedActionId: OUT_OF_TIER,
+            policySnapshot: firstParty({ perToolGrantedActionIds: new Set([OUT_OF_TIER]) }),
+          }
+        ) as { result: { ok: boolean; unavailable?: unknown; error: { code: string } | null } }
+      ).result;
+
+      expect(payload.ok).toBe(false);
+      expect(payload.error?.code).toBe("NOT_FOUND");
+      expect(payload.unavailable).toBeUndefined();
+    });
+
+    it("keeps an unknown id indistinguishable even for a first-party session", () => {
+      // The renderer answers `ok: false` for an id it cannot find, so the
+      // catalog never sees an entry to describe — which is the point: an id
+      // that does not exist must not be confirmable by probing.
+      const payload = (
+        filterIntrospectionResultForSession(
+          "actions.getSchema",
+          {
+            ok: true as const,
+            result: { ok: false, entry: null, policy: null, error: { code: "NOT_FOUND" } },
+          },
+          permitted,
+          { callerLimit: 20, requestedActionId: "not.a.real.action", policySnapshot: firstParty() }
+        ) as { result: { ok: boolean; unavailable?: unknown; error: { code: string } | null } }
+      ).result;
+
+      expect(payload.ok).toBe(false);
+      expect(payload.error?.code).toBe("NOT_FOUND");
+      expect(payload.unavailable).toBeUndefined();
     });
   });
 });

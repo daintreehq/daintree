@@ -80,6 +80,14 @@ export const SIDEBAR_TRANSITION_MS = 250;
  */
 export const SIDEBAR_TOGGLE_LOCK_MS = SIDEBAR_TRANSITION_MS;
 
+/**
+ * Dead-man TTL for the resize-suppression lock armed when the diagnostics dock
+ * changes height (#12264). Pegged to the `.diagnostics-dock` height transition
+ * in index.css — keep the two in step, or the corrective resize pass lands
+ * mid-animation.
+ */
+export const DIAGNOSTICS_DOCK_TRANSITION_MS = 200;
+
 // ---------------------------------------------------------------------------
 // Measured-readability model
 //

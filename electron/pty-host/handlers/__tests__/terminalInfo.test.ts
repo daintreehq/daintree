@@ -81,6 +81,17 @@ function makeTerminal(overrides: Record<string, unknown> = {}) {
 }
 
 describe("mapTerminalInfo", () => {
+  it("reports the assistant stamp back to main", () => {
+    // #10927: a spawn-time field present in four of five layers still vanishes
+    // silently. Main's teardown and hydration paths only ever see the record
+    // through this mapper, so dropping it here would quietly restore #12183.
+    const ctx = createCtx();
+    expect(mapTerminalInfo(makeTerminal({ isAssistantTerminal: true }), ctx)).toMatchObject({
+      isAssistantTerminal: true,
+    });
+    expect(mapTerminalInfo(makeTerminal(), ctx).isAssistantTerminal).toBeUndefined();
+  });
+
   it("derives isTrashed from ptyManager.isInTrash, not the raw record", () => {
     // Lesson #4753: the in-memory TerminalInfo object never carries a
     // populated `isTrashed` field; trash status lives in PtyManager's

@@ -437,6 +437,7 @@ describe("CopytreeWorkerClient", () => {
       queueDepth: 0,
       eligibility: { trim: false, dispose: false, restart: false },
     });
+    expect(before.detail).toBeUndefined();
 
     const promise = client.generate("/root", {}, undefined, "op-1");
     expect(client.getGovernanceSnapshot()).toMatchObject({ alive: true, state: "running" });
@@ -446,6 +447,10 @@ describe("CopytreeWorkerClient", () => {
       result: { content: "", fileCount: 0 },
     });
     await promise;
+    expect(client.getGovernanceSnapshot().detail).toMatchObject({
+      lastCompletedAt: expect.any(Number),
+      workerGeneration: 1,
+    });
 
     worker.emit("exit", 1);
     expect(client.getGovernanceSnapshot()).toMatchObject({

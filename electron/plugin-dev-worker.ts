@@ -1,13 +1,17 @@
-// Entry module for the plugin dev-mode hot-reload worker (#9304), run inside a
-// `utilityProcess.fork` child. It imports the plugin's built bundle, calls
-// `activate(proxyHost)`, and relays every host-API call back to the main
-// process over the parent MessagePort. A reload kills this whole process and
-// forks a fresh one, so module-scope state never leaks across reloads (the
-// robust fix for Vite #14438).
+// Entry module for the plugin worker (#9304), run inside a `utilityProcess.fork`
+// child. It imports the plugin's built bundle, calls `activate(proxyHost)`, and
+// relays every host-API call back to the main process over the parent
+// MessagePort. A reload kills this whole process and forks a fresh one, so
+// module-scope state never leaks across reloads (the robust fix for Vite #14438).
+//
+// A plugin with no `main` gets a worker too (#12274): there is no bundle to
+// import, so the harness boots and reports activated, then imports each manifest
+// command's handler module on its first dispatch. That is the last surface that
+// used to run plugin code in Electron main.
 
 import { PluginDevWorkerHostProxy } from "./services/plugin/pluginDevWorkerHostProxy.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import type { PluginActivate } from "../shared/types/plugin.js";
+import type { PluginActivate, PluginIdentity } from "../shared/types/plugin.js";
 import type {
   PluginHostToWorkerMessage,
   PluginWorkerToHostMessage,
@@ -43,11 +47,28 @@ let proxy: PluginDevWorkerHostProxy | null = null;
 let cleanup: (() => void) | null = null;
 let started = false;
 
-async function start(bundleUrl: string, pluginId: string): Promise<void> {
+async function start(
+  bundleUrl: string | undefined,
+  pluginId: string,
+  identity: PluginIdentity
+): Promise<void> {
   if (started) return;
   started = true;
 
-  proxy = new PluginDevWorkerHostProxy(pluginId, post);
+  proxy = new PluginDevWorkerHostProxy(pluginId, post, identity);
+
+  if (!bundleUrl) {
+    // Commands-only plugin (#12274): no `main`, so there is no bundle and no
+    // `activate()` — the worker exists to import and run this plugin's manifest
+    // command handlers on dispatch. Report activated so the host's activation
+    // gate settles, then wait. Mirrors the no-`activate`-export branch below;
+    // the process-level error guards above are already installed either way, so
+    // a command import that throws asynchronously still exits observably rather
+    // than leaving a zombie worker.
+    proxy.revoke();
+    post({ type: "activated", hasCleanup: false });
+    return;
+  }
 
   let mod: { activate?: unknown };
   try {
@@ -111,7 +132,7 @@ port.on("message", (rawMsg: unknown) => {
 
   switch (msg.type) {
     case "start":
-      void start(msg.bundleUrl, msg.pluginId);
+      void start(msg.bundleUrl, msg.pluginId, msg.identity);
       return;
     case "dispose":
       disposeAndExit();

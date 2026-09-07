@@ -17,6 +17,7 @@ import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
 vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
+  restoreTerminalFocusOnReveal: () => false,
   wakeActiveWorktreeTerminals: vi.fn(() => Promise.resolve()),
 }));
 

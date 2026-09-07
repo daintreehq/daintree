@@ -24,7 +24,12 @@ function run(base: string) {
   });
 }
 
-function writeManifest(base: string, kind: "builtin" | "sample", name: string, manifest: unknown) {
+function writeManifest(
+  base: string,
+  kind: "builtin" | "sample" | "sample-project",
+  name: string,
+  manifest: unknown
+) {
   const dir = path.join(base, kind, name);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
@@ -76,11 +81,57 @@ describe("validate-plugin-manifests CLI", () => {
   });
 
   it("accepts a daintree.* sample name (validated as built-in, mirroring sideload)", async () => {
-    // Sample plugins are sideloaded with isBuiltin: true, so the reserved
-    // daintree.* namespace must pass — this guards the flag choice.
+    // Sample plugins are sideloaded on the builtin footing, so the reserved
+    // daintree.* namespace must pass — this guards the origin choice.
     writeManifest(base, "sample", "daintree-hello", { name: "daintree.hello", version: "0.1.0" });
     const { code } = await run(base);
     expect(code).toBe(0);
+  });
+
+  it("accepts a scope:project manifest under sample-project", async () => {
+    // The third root exists because a project plugin is never sideloaded, so it
+    // has no builtin footing to borrow — it is validated against the same
+    // project-origin schema a real `.daintree/plugins/` discovery uses.
+    writeManifest(base, "sample-project", "acme-tour", {
+      name: "acme.tour",
+      version: "0.1.0",
+      scope: "project",
+    });
+    const { code } = await run(base);
+    expect(code).toBe(0);
+  });
+
+  it("rejects a sample-project manifest that omits scope:project", async () => {
+    writeManifest(base, "sample-project", "acme-tour", { name: "acme.tour", version: "0.1.0" });
+    const { code, stderr } = await run(base);
+    expect(code).toBe(1);
+    expect(stderr).toContain("scope");
+  });
+
+  it("rejects the reserved daintree.* namespace under sample-project", async () => {
+    // Closed to project plugins: the namespace is a builtin-origin privilege,
+    // and this root is the only one validated as non-builtin.
+    writeManifest(base, "sample-project", "daintree-tour", {
+      name: "daintree.tour",
+      version: "0.1.0",
+      scope: "project",
+    });
+    const { code, stderr } = await run(base);
+    expect(code).toBe(1);
+    expect(stderr).toContain("daintree.*");
+  });
+
+  it("rejects a scope:project manifest placed under the sample root", async () => {
+    // The bidirectional guard, and the reason the canonical project sample does
+    // not live in `plugins/sample/`.
+    writeManifest(base, "sample", "acme-tour", {
+      name: "acme.tour",
+      version: "0.1.0",
+      scope: "project",
+    });
+    const { code, stderr } = await run(base);
+    expect(code).toBe(1);
+    expect(stderr).toContain("scope");
   });
 
   it("skips a directory that has no plugin.json", async () => {
@@ -109,7 +160,7 @@ describe("validatePluginManifests()", () => {
       path.join(dir, "evil", "plugin.json"),
       JSON.stringify({ name: "daintree.evil", version: "1.0.0" })
     );
-    const errors = validatePluginManifests([{ dir, isBuiltin: false }]);
+    const errors = validatePluginManifests([{ dir, origin: "user" }]);
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toContain("daintree.*");
   });

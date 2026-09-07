@@ -38,6 +38,8 @@ describe("WorktreeCreatePayloadSchema", () => {
       sourcePrUrl: "https://github.com/o/r/pull/42",
       sourcePrState: "open" as const,
       sourcePrLinkedIssueNumber: 7,
+      submoduleInit: "all" as const,
+      collisionPolicy: "error" as const,
     };
     const result = WorktreeCreatePayloadSchema.safeParse({
       rootPath: "/home/user/repo",
@@ -47,6 +49,41 @@ describe("WorktreeCreatePayloadSchema", () => {
     if (result.success) {
       expect(result.data.options).toEqual(fullOptions);
     }
+  });
+
+  // `submoduleInit` was in `CreateWorktreeOptions` but not in this schema, so a
+  // caller asking for `all` or `none` had the field stripped here and the host
+  // silently fell back to `inherit` — leaving a worktree of a submodule repo
+  // born unbuildable, which is the exact failure the option exists to prevent.
+  // The "no silent stripping" test above did not catch it because it enumerated
+  // the same fields the schema did.
+  it("carries submoduleInit through rather than stripping it", () => {
+    const result = WorktreeCreatePayloadSchema.safeParse({
+      rootPath: "/home/user/repo",
+      options: { ...validOptions, submoduleInit: "none" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.options.submoduleInit).toBe("none");
+  });
+
+  it("carries collisionPolicy through, since only the host can enforce it", () => {
+    // A renderer-side branch check reserves nothing, so the policy is worthless
+    // unless it reaches WorkspaceService, where collision detection rides the
+    // atomic `git worktree add` failure.
+    const result = WorktreeCreatePayloadSchema.safeParse({
+      rootPath: "/home/user/repo",
+      options: { ...validOptions, collisionPolicy: "error" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.options.collisionPolicy).toBe("error");
+  });
+
+  it("rejects a submoduleInit policy outside the declared union", () => {
+    const result = WorktreeCreatePayloadSchema.safeParse({
+      rootPath: "/home/user/repo",
+      options: { ...validOptions, submoduleInit: "recursive" },
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects a null byte in rootPath", () => {

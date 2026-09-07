@@ -6,6 +6,7 @@
  */
 
 import type { WebContentsView } from "electron";
+import type { ProjectSwitchTrace } from "../../shared/types/ipc/project.js";
 
 export type ViewState = "loading" | "active" | "cached";
 
@@ -83,4 +84,19 @@ export interface ViewEntry {
    * signals carry the preload cost that was paid when the view cold-started.
    */
   preloadEvalDurationMs?: number;
+  /**
+   * Perf trace of the switch that most recently activated this view, so the
+   * post-swap marks main emits from outside `performSwitch` (PTY port on
+   * did-finish-load, first-interactive) can join the same `switchId`.
+   */
+  switchTrace?: ProjectSwitchTrace;
+  /**
+   * Cold-start timeline (`performance.now()` values), set by the cold path in
+   * `performSwitch` and cleared by the view's first `app:first-interactive` —
+   * which is what turns them into the `projectview.coldstart.interactive` log.
+   * Absent on warm reactivations and once the view has been interactive.
+   */
+  coldStartAt?: number;
+  loadFinishedAt?: number;
+  visibleAt?: number;
 }

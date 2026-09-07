@@ -1,21 +1,53 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "@shared/types/git";
+import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 
-const { getFreshChangesMock } = vi.hoisted(() => ({
+const { getFreshChangesMock, getSubmoduleDeleteRiskMock } = vi.hoisted(() => ({
   getFreshChangesMock: vi.fn(),
+  getSubmoduleDeleteRiskMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
-  worktreeClient: { getFreshChanges: getFreshChangesMock },
+  worktreeClient: {
+    getFreshChanges: getFreshChangesMock,
+    getSubmoduleDeleteRisk: getSubmoduleDeleteRiskMock,
+  },
 }));
 
 import {
   summarizeWorktreeChanges,
   buildWorktreeDeletePreview,
+  buildSubmoduleCommitRows,
+  buildSubmoduleFileRows,
+  submoduleDeleteBlock,
   formatWorktreeDeletePreviewLines,
   formatWorktreeChangeRows,
   buildWorktreeChangeRows,
+  submoduleForceRequired,
+  submoduleCommitsAreCapped,
+  submodulesFromPreviewError,
+  settleWorktreeDeleteOutcome,
+  worktreeDeleteBlockedBy,
+  worktreeDeleteContentRisk,
+  WorktreeDeletePreviewError,
+  type WorktreeDeletePreview,
+  type WorktreeSubmoduleRiskState,
 } from "../worktreeDeletePreview";
+
+/** A submodule inventory that found nothing — the ordinary case. */
+function emptyRisk(over: Partial<SubmoduleDeleteRisk> = {}): SubmoduleDeleteRisk {
+  return {
+    entries: [],
+    dirtyFiles: [],
+    untrackedFiles: [],
+    atRiskCommits: [],
+    requiresMechanicalForce: false,
+    incomplete: false,
+    ...over,
+  };
+}
+
+const CLEAR: WorktreeSubmoduleRiskState = { status: "verified", risk: emptyRisk() };
 
 /**
  * The worktree root every fixture hangs off. Production `FileChangeDetail.path`
@@ -78,6 +110,7 @@ describe("summarizeWorktreeChanges", () => {
 describe("buildWorktreeDeletePreview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getSubmoduleDeleteRiskMock.mockResolvedValue(emptyRisk());
   });
 
   it("returns the fresh summary and file list from a forced status fetch", async () => {
@@ -92,14 +125,105 @@ describe("buildWorktreeDeletePreview", () => {
     expect(preview?.changes).toHaveLength(2);
   });
 
+  it("carries a completed submodule inventory as verified", async () => {
+    getFreshChangesMock.mockResolvedValue(changes([]));
+    getSubmoduleDeleteRiskMock.mockResolvedValue(
+      emptyRisk({ atRiskCommits: [{ oid: "a1b2c3d4e5", subject: "Fix the vendored parser" }] })
+    );
+    const preview = await buildWorktreeDeletePreview("wt-1");
+    expect(getSubmoduleDeleteRiskMock).toHaveBeenCalledWith("wt-1");
+    expect(preview?.submodules.status).toBe("verified");
+    expect(preview?.submodules.risk?.atRiskCommits).toHaveLength(1);
+  });
+
+  it("marks the submodule half unverified when its fetch rejects, without failing the preview", async () => {
+    // The parent status is what the fail-closed rejection contract covers.
+    // Letting a submodule inventory failure reject the whole preview would turn
+    // a partial answer into no answer.
+    getFreshChangesMock.mockResolvedValue(changes([file("a.ts", "modified")]));
+    getSubmoduleDeleteRiskMock.mockRejectedValue(new Error("no such handler"));
+    const preview = await buildWorktreeDeletePreview("wt-1");
+    expect(preview?.trackedChangeCount).toBe(1);
+    expect(preview?.submodules).toEqual({ status: "unverified", risk: null });
+  });
+
+  it("treats an incomplete inventory as unverified while keeping what it found", async () => {
+    getFreshChangesMock.mockResolvedValue(changes([]));
+    const partial = emptyRisk({ incomplete: true, dirtyFiles: ["vendor/lib/src/main.c"] });
+    getSubmoduleDeleteRiskMock.mockResolvedValue(partial);
+    const preview = await buildWorktreeDeletePreview("wt-1");
+    expect(preview?.submodules.status).toBe("unverified");
+    expect(preview?.submodules.risk).toEqual(partial);
+  });
+
+  it("treats a null inventory as unverified, never as nothing found", async () => {
+    getFreshChangesMock.mockResolvedValue(changes([]));
+    getSubmoduleDeleteRiskMock.mockResolvedValue(null);
+    const preview = await buildWorktreeDeletePreview("wt-1");
+    expect(preview?.submodules).toEqual({ status: "unverified", risk: null });
+  });
+
   it("returns null when the monitor is gone (getFreshChanges resolves null)", async () => {
     getFreshChangesMock.mockResolvedValue(null);
     await expect(buildWorktreeDeletePreview("wt-1")).resolves.toBeNull();
   });
 
-  it("propagates a fetch error so callers can fail closed", async () => {
+  it("propagates a fetch error so callers can fail closed, keeping the cause", async () => {
+    const cause = new Error("timeout");
+    getFreshChangesMock.mockRejectedValue(cause);
+    getSubmoduleDeleteRiskMock.mockResolvedValue(emptyRisk());
+    const error = await buildWorktreeDeletePreview("wt-1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorktreeDeletePreviewError);
+    expect((error as Error).cause).toBe(cause);
+  });
+
+  it("carries a completed submodule inventory through a failed parent fetch", async () => {
+    // The two arms are independent. Discarding a completed inventory because
+    // the parent status timed out is what let a force delete destroy nested
+    // files the D2 preview had already been told about.
     getFreshChangesMock.mockRejectedValue(new Error("timeout"));
-    await expect(buildWorktreeDeletePreview("wt-1")).rejects.toThrow("timeout");
+    getSubmoduleDeleteRiskMock.mockResolvedValue(
+      emptyRisk({ dirtyFiles: ["vendor/lib/src/main.c"] })
+    );
+    const error = await buildWorktreeDeletePreview("wt-1").catch((e: unknown) => e);
+    const submodules = submodulesFromPreviewError(error);
+    expect(submodules?.status).toBe("verified");
+    expect(submodules?.risk?.dirtyFiles).toEqual(["vendor/lib/src/main.c"]);
+  });
+
+  it("reports no submodule evidence when both arms fail", async () => {
+    getFreshChangesMock.mockRejectedValue(new Error("timeout"));
+    getSubmoduleDeleteRiskMock.mockRejectedValue(new Error("host gone"));
+    const error = await buildWorktreeDeletePreview("wt-1").catch((e: unknown) => e);
+    expect(submodulesFromPreviewError(error)).toEqual({ status: "unverified", risk: null });
+  });
+
+  it("returns no submodule state for an error it did not raise", () => {
+    expect(submodulesFromPreviewError(new Error("unrelated"))).toBeNull();
+  });
+});
+
+describe("submoduleCommitsAreCapped", () => {
+  it("treats commits on an incomplete inventory as a floor", () => {
+    expect(
+      submoduleCommitsAreCapped({
+        status: "unverified",
+        risk: emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "a1b2c3d", subject: "wip" }] }),
+      })
+    ).toBe(true);
+  });
+
+  it("treats commits on a completed inventory as an exact total", () => {
+    expect(
+      submoduleCommitsAreCapped({
+        status: "verified",
+        risk: emptyRisk({ atRiskCommits: [{ oid: "a1b2c3d", subject: "wip" }] }),
+      })
+    ).toBe(false);
+  });
+
+  it("is false when there are no commits to undercount", () => {
+    expect(submoduleCommitsAreCapped({ status: "unverified", risk: null })).toBe(false);
   });
 });
 
@@ -118,6 +242,7 @@ describe("formatWorktreeDeletePreviewLines", () => {
       hasUntrackedFiles: false,
       changes: [],
       rootPath: ROOT,
+      submodules: CLEAR,
     };
     expect(formatWorktreeDeletePreviewLines(preview)).toEqual(["No uncommitted changes."]);
   });
@@ -131,6 +256,7 @@ describe("formatWorktreeDeletePreviewLines", () => {
       hasUntrackedFiles: true,
       changes: files,
       rootPath: ROOT,
+      submodules: CLEAR,
     };
     const lines = formatWorktreeDeletePreviewLines(preview);
     expect(lines[0]).toBe("1 uncommitted tracked file and 1 untracked file:");
@@ -147,6 +273,7 @@ describe("formatWorktreeDeletePreviewLines", () => {
       hasUntrackedFiles: false,
       changes: files,
       rootPath: ROOT,
+      submodules: CLEAR,
     };
     const lines = formatWorktreeDeletePreviewLines(preview);
     // header + 12 files + overflow line
@@ -272,5 +399,331 @@ describe("formatWorktreeChangeRows", () => {
   it("renders raw paths when no root is supplied", () => {
     const rows = formatWorktreeChangeRows([file("src/a.ts", "modified")]);
     expect(rows).toEqual([`  M ${ROOT}/src/a.ts`]);
+  });
+});
+
+describe("submodule risk derivation", () => {
+  it("blocks on observed commits even when the walk did not finish", () => {
+    // Both reasons are present; the commits win because their remedy is the
+    // specific one, and it matches the order the host throws in.
+    expect(
+      submoduleDeleteBlock({
+        status: "unverified",
+        risk: emptyRisk({
+          incomplete: true,
+          atRiskCommits: [{ oid: "a1b2c3d4", subject: "WIP" }],
+        }),
+      })
+    ).toBe("at-risk-commits");
+  });
+
+  it("blocks on an inventory that could not be completed", () => {
+    // The host refuses `incomplete` before it reads `force`, so this is not a
+    // tier the user can consent past.
+    expect(submoduleDeleteBlock({ status: "unverified", risk: null })).toBe("unverified");
+    expect(
+      submoduleDeleteBlock({ status: "unverified", risk: emptyRisk({ incomplete: true }) })
+    ).toBe("unverified");
+  });
+
+  it("does not block a clean completed inventory", () => {
+    expect(submoduleDeleteBlock(CLEAR)).toBeNull();
+    expect(
+      submoduleDeleteBlock({
+        status: "verified",
+        risk: emptyRisk({ dirtyFiles: ["vendor/lib/a.c"], requiresMechanicalForce: true }),
+      })
+    ).toBeNull();
+  });
+
+  it("requires force for nested working-tree files, whatever the module layout", () => {
+    // An old-form submodule with an embedded `.git` directory sets no
+    // `requiresMechanicalForce`, and its dirty files are destroyed all the same.
+    expect(
+      submoduleForceRequired({
+        status: "verified",
+        risk: emptyRisk({ dirtyFiles: ["vendor/lib/src/main.c"] }),
+      })
+    ).toBe(true);
+    expect(
+      submoduleForceRequired({
+        status: "verified",
+        risk: emptyRisk({ untrackedFiles: ["vendor/lib/scratch.log"] }),
+      })
+    ).toBe(true);
+  });
+
+  it("does not require force for a modules directory alone", () => {
+    // The host supplies that `--force` itself, so demanding the checkbox for it
+    // collected consent to nothing.
+    expect(
+      submoduleForceRequired({
+        status: "verified",
+        risk: emptyRisk({ requiresMechanicalForce: true }),
+      })
+    ).toBe(false);
+    expect(submoduleForceRequired(CLEAR)).toBe(false);
+  });
+});
+
+describe("submodule preview rows", () => {
+  it("renders the real nested paths, dirty then untracked", () => {
+    const rows = buildSubmoduleFileRows(
+      emptyRisk({
+        dirtyFiles: ["vendor/lib/src/main.c"],
+        untrackedFiles: ["vendor/lib/scratch.log"],
+      })
+    );
+    expect(rows.map((r) => [r.glyph, r.label])).toEqual([
+      ["M", "vendor/lib/src/main.c"],
+      ["?", "vendor/lib/scratch.log"],
+    ]);
+    expect(rows.map((r) => r.statusLabel)).toEqual(["Modified", "Untracked"]);
+  });
+
+  it("caps the nested file list across both buckets", () => {
+    const rows = buildSubmoduleFileRows(
+      emptyRisk({
+        dirtyFiles: Array.from({ length: 10 }, (_, i) => `vendor/lib/d${i}.c`),
+        untrackedFiles: Array.from({ length: 10 }, (_, i) => `vendor/lib/u${i}.c`),
+      })
+    );
+    expect(rows).toHaveLength(13); // 12 files + overflow
+    expect(rows[12]).toEqual({
+      glyph: null,
+      statusLabel: null,
+      label: "…and 8 more",
+      isOverflow: true,
+    });
+  });
+
+  it("abbreviates commit oids and caps the list", () => {
+    const rows = buildSubmoduleCommitRows(
+      emptyRisk({
+        atRiskCommits: Array.from({ length: 7 }, (_, i) => ({
+          oid: `${i}abcdef0123456789`,
+          subject: `Commit ${i}`,
+        })),
+      })
+    );
+    expect(rows).toHaveLength(6); // 5 commits + overflow
+    // The full oid survives for identity (seven characters can collide); the
+    // abbreviation is a separate display field.
+    expect(rows[0]?.oid).toBe("0abcdef0123456789");
+    expect(rows[0]?.shortOid).toBe("0abcdef");
+    expect(rows[5]).toEqual({ oid: "", shortOid: "", subject: "…and 2 more", isOverflow: true });
+  });
+
+  it("returns nothing when there is no inventory to render", () => {
+    expect(buildSubmoduleFileRows(null)).toEqual([]);
+    expect(buildSubmoduleCommitRows(null)).toEqual([]);
+  });
+});
+
+describe("formatWorktreeDeletePreviewLines — submodules", () => {
+  const preview = (submodules: WorktreeSubmoduleRiskState, files: FileChangeDetail[] = []) => ({
+    ...summarizeWorktreeChanges(files),
+    changes: files,
+    rootPath: ROOT,
+    submodules,
+  });
+
+  it("never claims a clean tree while submodule work is listed below it", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      preview({
+        status: "verified",
+        risk: emptyRisk({
+          atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Fix the vendored parser" }],
+        }),
+      })
+    );
+    expect(lines[0]).toBe("No uncommitted changes in the worktree itself.");
+    expect(lines.some((l) => l.includes("Fix the vendored parser"))).toBe(true);
+  });
+
+  it("still reports a genuinely clean tree with the unqualified line", () => {
+    expect(formatWorktreeDeletePreviewLines(preview(CLEAR))).toEqual(["No uncommitted changes."]);
+  });
+
+  it("lists nested paths rather than the single parent entry that stands for them", () => {
+    // The parent's own status shows all of this as one ` M vendor/lib` row.
+    const lines = formatWorktreeDeletePreviewLines(
+      preview(
+        {
+          status: "verified",
+          risk: emptyRisk({
+            dirtyFiles: ["vendor/lib/src/main.c", "vendor/lib/src/parse.c"],
+            untrackedFiles: ["vendor/lib/scratch.log"],
+          }),
+        },
+        [file("vendor/lib", "modified")]
+      )
+    );
+    expect(lines).toContain("  M vendor/lib/src/main.c");
+    expect(lines).toContain("  M vendor/lib/src/parse.c");
+    expect(lines).toContain("  ? vendor/lib/scratch.log");
+    expect(lines.some((l) => l.includes("3 files the parent's status shows as one entry"))).toBe(
+      true
+    );
+  });
+
+  it("marks the at-risk commit header as a caution line", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      preview({
+        status: "verified",
+        risk: emptyRisk({ atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "WIP vendored fix" }] }),
+      })
+    );
+    // Scoped to what the inventory can actually prove — it measures
+    // reachability from this module repo's own remote-tracking refs, so it
+    // cannot claim the commit exists nowhere in the world.
+    const header = lines.find((l) => l.includes("no remote this clone knows about"));
+    expect(header?.startsWith("⚠ ")).toBe(true);
+    expect(header).toContain("1 commit inside submodules is");
+    expect(header).not.toContain("cannot be recovered");
+    // Stated as the refusal it is: the host throws on this before it reads
+    // `force`, so an approver told the delete "may destroy" these commits would
+    // be consenting to something that cannot happen either way.
+    expect(header).toContain("cannot be deleted until it is pushed");
+    expect(lines).toContain("  a1b2c3d WIP vendored fix");
+  });
+
+  it("says the inventory could not be finished rather than implying it found nothing", () => {
+    const lines = formatWorktreeDeletePreviewLines(preview({ status: "unverified", risk: null }));
+    const caution = lines.find((l) => l.includes("submodules"));
+    expect(caution?.startsWith("⚠ ")).toBe(true);
+    expect(caution).toContain("Could not finish checking");
+    expect(caution).toContain("cannot be deleted until that check completes");
+  });
+});
+
+/**
+ * The fail-closed rules shared by the two surfaces that gate a force delete —
+ * `WorktreeDeleteDialog`'s submit-time re-check and the MCP confirm bridge
+ * (#12115). One implementation, so they cannot disagree about the same
+ * worktree.
+ */
+describe("settleWorktreeDeleteOutcome / worktreeDeleteContentRisk (#12115)", () => {
+  function preview(over: Partial<WorktreeDeletePreview> = {}): WorktreeDeletePreview {
+    return {
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptyRisk() },
+      ...over,
+    };
+  }
+
+  it("folds a resolved preview, a null and a rejection into the three distinct states", async () => {
+    const settled = preview({ hasTrackedChanges: true, trackedChangeCount: 1 });
+    await expect(settleWorktreeDeleteOutcome(Promise.resolve(settled))).resolves.toEqual({
+      state: "verified",
+      preview: settled,
+    });
+    await expect(settleWorktreeDeleteOutcome(Promise.resolve(null))).resolves.toEqual({
+      state: "gone",
+    });
+    await expect(settleWorktreeDeleteOutcome(Promise.reject(new Error("boom")))).resolves.toEqual({
+      state: "failed",
+      submodules: null,
+    });
+  });
+
+  it("keeps the submodule half a failed parent fetch carried out with it", async () => {
+    const risk: WorktreeSubmoduleRiskState = {
+      status: "verified",
+      risk: emptyRisk({ dirtyFiles: ["vendor/lib/a.c"] }),
+    };
+    await expect(
+      settleWorktreeDeleteOutcome(
+        Promise.reject(new WorktreeDeletePreviewError(risk, new Error("timeout")))
+      )
+    ).resolves.toEqual({ state: "failed", submodules: risk });
+  });
+
+  it("reads the tracked-only count, never a combined hasChanges (#4927)", () => {
+    const risk = worktreeDeleteContentRisk(
+      { state: "verified", preview: preview({ untrackedFileCount: 3, hasUntrackedFiles: true }) },
+      { hasTrackedChanges: false }
+    );
+    expect(risk.hasTrackedChanges).toBe(false);
+    expect(risk.submoduleFilesAtRisk).toBe(false);
+  });
+
+  it("assumes the worst when the parent status could not be read", () => {
+    // "No data" must never be read as "clean".
+    expect(
+      worktreeDeleteContentRisk({ state: "failed", submodules: null }, { hasTrackedChanges: false })
+        .hasTrackedChanges
+    ).toBe(true);
+  });
+
+  it("escalates on a surviving inventory even though the parent fetch failed", () => {
+    const risk = worktreeDeleteContentRisk(
+      {
+        state: "failed",
+        submodules: { status: "verified", risk: emptyRisk({ untrackedFiles: ["vendor/lib/b.c"] }) },
+      },
+      { hasTrackedChanges: false }
+    );
+    expect(risk.submoduleFilesAtRisk).toBe(true);
+  });
+
+  it("takes the caller's seed for an already-removed worktree and loses no submodules with it", () => {
+    // The monitor is gone, so nothing is left to lose; escalating there would
+    // strand the caller behind a gate for a delete with no content.
+    expect(worktreeDeleteContentRisk({ state: "gone" }, { hasTrackedChanges: true })).toEqual({
+      hasTrackedChanges: true,
+      submoduleFilesAtRisk: false,
+      submodules: null,
+    });
+  });
+});
+
+describe("worktreeDeleteBlockedBy (#12115)", () => {
+  const commits = {
+    status: "verified",
+    risk: emptyRisk({ atRiskCommits: [{ oid: "abc", subject: "s" }] }),
+  } as const;
+
+  it("blocks on commits held only in this worktree's own module store", () => {
+    expect(
+      worktreeDeleteBlockedBy({
+        state: "verified",
+        preview: {
+          trackedChangeCount: 0,
+          untrackedFileCount: 0,
+          hasTrackedChanges: false,
+          hasUntrackedFiles: false,
+          changes: [],
+          rootPath: "/repo/wt-1",
+          submodules: commits,
+        },
+      })
+    ).toBe("at-risk-commits");
+  });
+
+  it("blocks on a completed inventory that a failed parent fetch did not take down with it", () => {
+    expect(worktreeDeleteBlockedBy({ state: "failed", submodules: commits })).toBe(
+      "at-risk-commits"
+    );
+  });
+
+  it("does not read an inventory the parent failure itself unverified as a refusal", () => {
+    // A parent timeout turning an unrecoverable-commit refusal into a blocked
+    // delete is the regression this guard exists for.
+    expect(
+      worktreeDeleteBlockedBy({
+        state: "failed",
+        submodules: { status: "unverified", risk: null },
+      })
+    ).toBeNull();
+  });
+
+  it("has nothing to block on for an already-removed worktree", () => {
+    expect(worktreeDeleteBlockedBy({ state: "gone" })).toBeNull();
   });
 });

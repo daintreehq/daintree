@@ -205,10 +205,9 @@ export class PRIntegrationService {
       isRunning: status.isPolling,
       candidateCount: status.candidateCount,
       resolvedPRCount: status.resolvedCount,
-      lastCheckTime: undefined,
       // Use the dedicated breaker flag, NOT `!isEnabled`: a rate-limit pause
       // also disables polling but must not show the "detection paused" badge.
-      circuitBreakerTripped: status.detectionStateTripped,
+      ...(status.detectionStateTripped ? { circuitBreakerTripped: true } : {}),
     };
   }
 

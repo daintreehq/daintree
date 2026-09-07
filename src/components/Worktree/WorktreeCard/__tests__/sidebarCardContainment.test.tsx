@@ -71,8 +71,15 @@ const worktree: WorktreeState = {
     changedFileCount: 3,
     insertions: 5,
     deletions: 2,
-    changes: [],
-    rootPath: "",
+    // Real files, because the changed-files list is the thing most likely to
+    // grow a container it should not have. An empty array renders nothing and
+    // every rule below passes vacuously.
+    changes: [
+      { path: "src/a.ts", status: "modified", insertions: 3, deletions: 1 },
+      { path: "src/b.ts", status: "modified", insertions: 1, deletions: 1 },
+      { path: "README.md", status: "modified", insertions: 1, deletions: 0 },
+    ],
+    rootPath: "/tmp/wt",
   },
   lastActivityTimestamp: null,
 };
@@ -142,14 +149,32 @@ function renderTerminals(
  * assertions below silently stopped defending anything.
  */
 function hasStructuralBorder(el: Element): boolean {
-  const cls = el.className.toString();
-  return /(^|\s|:)border(\s|$|-[trbl]\b)/.test(cls) || /\sborder\s/.test(` ${cls} `);
+  return el.className
+    .toString()
+    .split(/\s+/)
+    .some((cls) => {
+      // Variant-prefixed strokes are states, not perimeters. The old regex
+      // allowed `:` before `border`, so `hover:border` counted as a resting
+      // contour — and in the grid, where the rule is "no perimeter at all",
+      // that produced a false FAILURE rather than a false pass.
+      if (cls.includes(":")) return false;
+      // Rings and outlines close a region exactly as a border does. Leaving
+      // them out meant `ring-1 ring-border-default` on a nested fill sailed
+      // through the assertions below.
+      return (
+        cls === "border" ||
+        /^border-(\d|\[)/.test(cls) ||
+        /^border-[trblxyse](-|$)/.test(cls) ||
+        cls === "ring" ||
+        /^ring-(\d|\[)/.test(cls)
+      );
+    });
 }
 
 /**
- * A grouping surface — the card's one closed region per disclosure.
+ * A grouping surface — a resting fill.
  *
- * A fill is what makes it one, not a border. The sidebar's well carries a
+ * A fill is what makes a region visible, not a border. The sidebar's well carries a
  * perimeter as well, and has to: its cards are full-bleed with no border of
  * their own, so that stroke is also the only thing telling two adjacent cards
  * apart. The grid card already has its own border and a gutter, so its well is
@@ -163,7 +188,22 @@ function isWell(el: Element): boolean {
 }
 
 function wellCount(container: HTMLElement): number {
-  return Array.from(container.querySelectorAll("*")).filter(isWell).length;
+  return fills(container).length;
+}
+
+/**
+ * Every resting fill in the tree, outermost first — `querySelectorAll` walks
+ * in document order, so a disclosure's own shell always precedes anything
+ * nested inside it.
+ *
+ * A disclosure is allowed more than one fill. It is not allowed more than one
+ * PERIMETER, and nothing nested inside its shell may draw one: #12102 gave the
+ * changed-files list a tonal step of its own so its rows stop reading as loose
+ * text on the note rail's fill, and a stroke around it would have been the
+ * fourth closed contour this file exists to prevent.
+ */
+function fills(container: HTMLElement): Element[] {
+  return Array.from(container.querySelectorAll("*")).filter(isWell);
 }
 
 describe("sidebar session well", () => {
@@ -265,7 +305,19 @@ describe("sidebar card containment", () => {
     collapsed.unmount();
 
     const expanded = renderDetails({ variant: "sidebar", isExpanded: true });
-    expect(wellCount(expanded.container), "expanded Details should be exactly one well").toBe(1);
+    const [shell, ...nested] = fills(expanded.container);
+    expect(shell, "expanded Details should be welled").toBeTruthy();
+    expect(hasStructuralBorder(shell!), "the sidebar shell is the perimeter").toBe(true);
+    expect(
+      nested.some(hasStructuralBorder),
+      "nothing inside the well may draw a second perimeter"
+    ).toBe(false);
+    // Document order alone would let a fill that is a SIBLING of the well
+    // pass as though it were contained by it.
+    expect(
+      nested.every((el) => shell!.contains(el)),
+      "every other fill must sit inside the shell, not beside it"
+    ).toBe(true);
     expanded.unmount();
   });
 
@@ -321,10 +373,26 @@ describe("sidebar card containment", () => {
       collapsedDetails.unmount();
 
       const expandedDetails = renderDetails({ variant, isExpanded: true });
+      const detailFills = fills(expandedDetails.container);
+      // Two, and the budget is the point: the disclosure's own shell, and the
+      // changed-files section inside it. A third means something else on this
+      // panel has started drawing itself as a container.
       expect(
-        wellCount(expandedDetails.container),
-        `${variant}: expanded Details must have exactly one well`
-      ).toBe(1);
+        detailFills.length,
+        `${variant}: expanded Details must be the shell plus the changed-files section`
+      ).toBe(2);
+      expect(
+        detailFills.filter(hasStructuralBorder).length,
+        `${variant}: only the sidebar shell may carry a perimeter`
+      ).toBe(variant === "sidebar" ? 1 : 0);
+      expect(
+        detailFills.slice(1).some(hasStructuralBorder),
+        `${variant}: nothing nested inside the well may draw a perimeter`
+      ).toBe(false);
+      expect(
+        detailFills.slice(1).every((el) => detailFills[0]!.contains(el)),
+        `${variant}: the changed-files section must sit inside the shell`
+      ).toBe(true);
       expandedDetails.unmount();
 
       for (const isExpanded of [false, true]) {

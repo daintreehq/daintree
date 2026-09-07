@@ -15,10 +15,8 @@ const { mockGetGitCommonDir, mockParcelSubscribe } = vi.hoisted(() => {
   };
 });
 
-vi.mock("@parcel/watcher", () => ({
-  default: {
-    subscribe: mockParcelSubscribe,
-  },
+vi.mock("../../utils/parcelWatcherBackend.js", () => ({
+  subscribeParcelWatcher: mockParcelSubscribe,
 }));
 
 const mockSimpleGit = {

@@ -1,15 +1,24 @@
+import { EventEmitter } from "node:events";
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProcessTreeCache, type ProcessInfo } from "../ProcessTreeCache.js";
+import { CENSUS_SENTINEL_PREFIX } from "../WindowsProcessCensus.js";
 
-const { mockExec, mockExecFile } = vi.hoisted(() => {
+const { mockExec, mockExecFile, mockSpawn } = vi.hoisted(() => {
   const mockExec = vi.fn();
   const mockExecFile = vi.fn();
-  return { mockExec, mockExecFile };
+  const mockSpawn = vi.fn();
+  return { mockExec, mockExecFile, mockSpawn };
 });
 
+// `spawn` belongs here too: the Windows census runs through a persistent
+// PowerShell helper (`WindowsProcessCensus`), which this module's import graph
+// reaches. Without it the helper would call `undefined` — or, worse on a
+// Windows dev box, launch a real PowerShell from a unit test.
 vi.mock("child_process", () => ({
   exec: mockExec,
   execFile: mockExecFile,
+  spawn: mockSpawn,
 }));
 
 type CpuSnapshot = { kernelTicks: bigint; userTicks: bigint; wallMs: number };
@@ -506,6 +515,101 @@ describe("poll scheduling and adaptive backoff", () => {
     expect(vi.getTimerCount()).toBe(timersBefore);
   });
 
+  // The lineage ledger is the only record of descendants that have already
+  // detached, and it can only be built from sweeps that actually ran (#12203).
+  // Both the zero-subscriber skip and the 15s idle backoff would starve it.
+  it("keeps sweeping with no subscribers while the ledger holds roots", async () => {
+    cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshSpy.mockClear();
+
+    internals.refreshCallbacks.clear();
+    await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it("still skips with no subscribers when the ledger holds no roots", async () => {
+    cache.attachLineageLedger({ hasRoots: () => false, reconcile: () => {} });
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshSpy.mockClear();
+
+    internals.refreshCallbacks.clear();
+    await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it("caps idle backoff at the lineage ceiling while roots are tracked", async () => {
+    cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+    cache.start();
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+    }
+    expect(cache.getCurrentIntervalMs()).toBe(5000);
+  });
+
+  it("uses the full idle ceiling when nothing is tracked", async () => {
+    cache.attachLineageLedger({ hasRoots: () => false, reconcile: () => {} });
+    cache.start();
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+    }
+    expect(cache.getCurrentIntervalMs()).toBe(15000);
+  });
+
+  it("never backs off below the configured base interval", async () => {
+    cache.stop();
+    cache = new ProcessTreeCache(20000);
+    internals = cache as unknown as CacheInternals;
+    internals.isWindows = false;
+    (cache as unknown as { refreshUnix: typeof refreshSpy }).refreshUnix = refreshSpy;
+    cache.onRefresh(() => {});
+    cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The 5s lineage ceiling must not speed a deliberately slow cache up.
+    expect(cache.getCurrentIntervalMs()).toBe(20000);
+  });
+
+  // refresh() directly rather than start(): the beforeEach subscriber already
+  // kicked off (and settled) a refresh, so start() short-circuits as
+  // "already started" and the next sweep is a full interval away.
+  it("reconciles the ledger before firing refresh callbacks", async () => {
+    const order: string[] = [];
+    cache.attachLineageLedger({
+      hasRoots: () => true,
+      reconcile: () => order.push("reconcile"),
+    });
+    cache.onRefresh(() => order.push("callback"));
+
+    await cache.refresh();
+
+    expect(order.slice(0, 2)).toEqual(["reconcile", "callback"]);
+  });
+
+  it("a throwing ledger does not blind the census", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    cache.attachLineageLedger({
+      hasRoots: () => true,
+      reconcile: () => {
+        throw new Error("ledger exploded");
+      },
+    });
+    const callback = vi.fn();
+    cache.onRefresh(callback);
+
+    await cache.refresh();
+
+    expect(callback).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it("no-subscriber optimization still reschedules timer", async () => {
     cache.start();
     await vi.advanceTimersByTimeAsync(0); // first refresh completes
@@ -564,12 +668,10 @@ describe("ProcessTreeCache command/env construction", () => {
         _file: string,
         _args: unknown,
         _opts: unknown,
-        cb: (err: null, result: { stdout: string; stderr: string }) => void
+        cb: (err: null, stdout: string, stderr: string) => void
       ) => {
-        cb(null, {
-          stdout: "  PID  PPID %CPU   RSS COMM COMMAND\n    1    0  0.0  1000 init  init",
-          stderr: "",
-        });
+        cb(null, "  PID  PPID %CPU   RSS COMM COMMAND\n    1    0  0.0  1000 init  init", "");
+        return { pid: 999 };
       }
     );
 
@@ -589,30 +691,755 @@ describe("ProcessTreeCache command/env construction", () => {
     expect(callOpts.env!.LANG).toBe(process.env.LANG);
   });
 
-  it("prepends UTF-8 encoding directives to PowerShell command", async () => {
-    mockExec.mockImplementation(
-      (
-        _cmd: string,
-        _opts: unknown,
-        cb: (err: null, result: { stdout: string; stderr: string }) => void
-      ) => {
-        cb(null, { stdout: "[]", stderr: "" });
-      }
-    );
+  it("omits the ps probe from the snapshot it produced", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n    1    0 0.0 1000 init init\n  991 ${process.pid} 0.0 1000 ps ps -eo pid,ppid,%cpu,rss,comm,command`,
+            ""
+          );
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n    1    0 0.0 1000 init init\n  992 ${process.pid} 0.0 1000 ps ps -eo pid,ppid,%cpu,rss,comm,command`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
 
     const cache = new ProcessTreeCache(2500);
-    const internals = cache as unknown as {
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(false);
+    expect(await internals.refreshUnix()).toBe(false);
+    expect(cache.getProcess(991)).toBeUndefined();
+    expect(cache.getProcess(992)).toBeUndefined();
+    expect(cache.getProcess(1)?.comm).toBe("init");
+  });
+
+  it("ignores unrelated machine churn when deciding whether to reset backoff", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  100    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            ""
+          );
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  101    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
+
+    const cache = new ProcessTreeCache(2500);
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(true);
+    expect(await internals.refreshUnix()).toBe(false);
+    expect(cache.getProcess(101)?.comm).toBe("runner");
+  });
+
+  it("resets backoff when the owned terminal tree changes", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(null, `  PID  PPID %CPU RSS COMM COMMAND\n  200 ${process.pid} 0.0 1000 zsh zsh`, "");
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  200 ${process.pid} 0.0 1000 zsh zsh\n  201  200 0.0 1000 node node agent.js`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
+
+    const cache = new ProcessTreeCache(2500);
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(true);
+    expect(await internals.refreshUnix()).toBe(true);
+  });
+
+  describe("Windows refresh", () => {
+    interface FakeStream extends EventEmitter {
+      setEncoding: () => void;
+      resume: () => void;
+    }
+
+    interface FakeChild extends EventEmitter {
+      pid: number;
+      stdout: FakeStream;
+      stderr: FakeStream;
+      stdin: EventEmitter & { write: (chunk: string) => boolean; end: () => void };
+      kill: () => boolean;
+      writes: string[];
+    }
+
+    let helpers: FakeChild[] = [];
+
+    function makeStream(): FakeStream {
+      const stream = new EventEmitter() as FakeStream;
+      stream.setEncoding = vi.fn();
+      stream.resume = vi.fn();
+      return stream;
+    }
+
+    function installHelperSpawn(): void {
+      helpers = [];
+      mockSpawn.mockImplementation(() => {
+        const child = new EventEmitter() as FakeChild;
+        const writes: string[] = [];
+        child.pid = 9000 + helpers.length;
+        child.stdout = makeStream();
+        child.stderr = makeStream();
+        child.stdin = Object.assign(new EventEmitter(), {
+          write: vi.fn((chunk: string) => {
+            writes.push(chunk);
+            return true;
+          }),
+          end: vi.fn(),
+        });
+        child.kill = vi.fn();
+        child.writes = writes;
+        helpers.push(child);
+        return child;
+      });
+    }
+
+    /** Answer the census request the helper most recently wrote. */
+    function respond(child: FakeChild, stdout: string): void {
+      const id = child.writes[child.writes.length - 1].trim();
+      child.stdout.emit("data", `${stdout}\n${CENSUS_SENTINEL_PREFIX}${id}\n`);
+    }
+
+    interface WindowsInternals {
       isWindows: boolean;
       refreshWindows: () => Promise<boolean>;
-    };
-    internals.isWindows = true;
-    await internals.refreshWindows();
+    }
 
-    expect(mockExec).toHaveBeenCalledTimes(1);
-    const psCommand = mockExec.mock.calls[0][0] as string;
-    expect(psCommand).toContain(
-      "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)"
-    );
-    expect(psCommand).toContain("$OutputEncoding = [System.Text.UTF8Encoding]::new($false)");
+    function windowsCache(): { cache: ProcessTreeCache; internals: WindowsInternals } {
+      const cache = new ProcessTreeCache(2500);
+      const internals = cache as unknown as WindowsInternals;
+      internals.isWindows = true;
+      return { cache, internals };
+    }
+
+    /** Drive one census through the helper and settle it with `stdout`. */
+    async function refreshOnce(internals: WindowsInternals, stdout: string): Promise<boolean> {
+      const pending = internals.refreshWindows();
+      respond(helpers[helpers.length - 1], stdout);
+      return pending;
+    }
+
+    async function runWindowsRefresh(stdout: string): Promise<ProcessTreeCache> {
+      const { cache, internals } = windowsCache();
+      await refreshOnce(internals, stdout);
+      return cache;
+    }
+
+    beforeEach(() => {
+      installHelperSpawn();
+    });
+
+    it("serves every census from one persistent PowerShell", async () => {
+      // Before #12243 this was one `powershell.exe` start per poll. The count
+      // is the whole finding, so it is asserted directly rather than implied.
+      const { internals } = windowsCache();
+
+      for (let i = 0; i < 4; i++) {
+        await refreshOnce(internals, "[]");
+      }
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(mockExec).not.toHaveBeenCalled();
+      expect(mockExecFile).not.toHaveBeenCalled();
+      expect(helpers[0].writes).toHaveLength(4);
+    });
+
+    it("parses the CIM payload into the process cache", async () => {
+      const cache = await runWindowsRefresh(
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+          {
+            ProcessId: 200,
+            ParentProcessId: 100,
+            Name: "git.exe",
+            CommandLine: "git status",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "2097152",
+            CreationDate: null,
+          },
+        ])
+      );
+
+      expect(cache.getChildPids(100)).toEqual([200]);
+      expect(cache.getProcess(200)?.command).toContain("git status");
+    });
+
+    it("carries ExecutablePath through to ProcessInfo", async () => {
+      // `ImagePathProbe` no longer starts a PowerShell per PID on Windows; this
+      // field is where the image basename comes from instead (#12243).
+      const cache = await runWindowsRefresh(
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            ExecutablePath: "C:\\Program Files\\nodejs\\node.exe",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+        ])
+      );
+
+      expect(cache.getProcess(100)?.executablePath).toBe("C:\\Program Files\\nodejs\\node.exe");
+    });
+
+    it("leaves executablePath absent when the census carries none", async () => {
+      // CIM returns null for processes it cannot open. An absent field must not
+      // become an empty string that reads as a resolved path.
+      const cache = await runWindowsRefresh(
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "system.exe",
+            CommandLine: null,
+            ExecutablePath: null,
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1024",
+            CreationDate: null,
+          },
+          {
+            ProcessId: 101,
+            ParentProcessId: 1,
+            Name: "blank.exe",
+            CommandLine: null,
+            ExecutablePath: "   ",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1024",
+            CreationDate: null,
+          },
+        ])
+      );
+
+      // Both rows must EXIST first: `?.executablePath` reads undefined just as
+      // happily for a process the parse dropped, so without this an
+      // implementation that rejected rows with no ExecutablePath would pass.
+      expect(cache.getProcess(100)?.comm).toBe("system");
+      expect(cache.getProcess(101)?.comm).toBe("blank");
+      expect(cache.getProcess(100)?.executablePath).toBeUndefined();
+      expect(cache.getProcess(101)?.executablePath).toBeUndefined();
+    });
+
+    it("replaces the image path on every census rather than carrying one forward", async () => {
+      // The PID-reuse contract (#8794): the path came from the row that named
+      // the PID, so a row that stops carrying one must not keep serving the
+      // previous answer.
+      const { cache, internals } = windowsCache();
+      const row = (executablePath: string | null) =>
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            ExecutablePath: executablePath,
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1024",
+            CreationDate: null,
+          },
+        ]);
+
+      await refreshOnce(internals, row("C:\\a\\node.exe"));
+      expect(cache.getProcess(100)?.executablePath).toBe("C:\\a\\node.exe");
+
+      await refreshOnce(internals, row("C:\\b\\node.exe"));
+      expect(cache.getProcess(100)?.executablePath).toBe("C:\\b\\node.exe");
+
+      await refreshOnce(internals, row(null));
+      expect(cache.getProcess(100)?.executablePath).toBeUndefined();
+    });
+
+    it("omits the census helper from the snapshot it produced, but reports its RSS", async () => {
+      const { cache, internals } = windowsCache();
+      const pending = internals.refreshWindows();
+      const helperPid = helpers[0].pid;
+      respond(
+        helpers[0],
+        JSON.stringify([
+          {
+            ProcessId: helperPid,
+            ParentProcessId: process.pid,
+            Name: "powershell.exe",
+            CommandLine: "powershell.exe -NoProfile -Command while ($true) { }",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "62914560",
+            CreationDate: null,
+          },
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+        ])
+      );
+      await pending;
+
+      expect(cache.getProcess(helperPid)).toBeUndefined();
+      expect(cache.getProcess(100)?.comm).toBe("node");
+      // Census overhead, reported beside the census rather than billed to a
+      // terminal's subtree.
+      expect(cache.getCensusHelperRssKb()).toBe(61440);
+      expect(cache.getCensusHelperPid()).toBe(helperPid);
+    });
+
+    it("does not let the helper's own row drive the idle backoff", async () => {
+      // A one-shot probe had a new PID every poll, which made every snapshot
+      // look changed and pinned the census at its base interval. The FIRST
+      // refresh is the discriminating one: submitting the same row twice would
+      // read as unchanged even if the helper were included.
+      const { cache, internals } = windowsCache();
+      const helperRow = (pid: number) => ({
+        ProcessId: pid,
+        ParentProcessId: process.pid,
+        Name: "powershell.exe",
+        CommandLine: "powershell.exe -NoProfile",
+        KernelModeTime: "0",
+        UserModeTime: "0",
+        WorkingSetSize: "1024",
+        CreationDate: null,
+      });
+
+      const first = internals.refreshWindows();
+      const firstHelperPid = helpers[0].pid;
+      respond(helpers[0], JSON.stringify([helperRow(firstHelperPid)]));
+      // An empty cache growing an owned descendant is a change; this one is
+      // excluded, so there is nothing to see.
+      expect(await first).toBe(false);
+      expect(cache.getChildPids(process.pid)).toEqual([]);
+
+      // A replacement helper carries a different PID. That is the case a stable
+      // PID alone would not cover, and it must still leave the owned tree flat.
+      helpers[0].emit("exit", 0, null);
+
+      const second = internals.refreshWindows();
+      const replacementPid = helpers[1].pid;
+      expect(replacementPid).not.toBe(firstHelperPid);
+      respond(helpers[1], JSON.stringify([helperRow(replacementPid)]));
+      expect(await second).toBe(false);
+      expect(cache.getChildPids(process.pid)).toEqual([]);
+    });
+
+    it("publishes CPU deltas and startTime across successive production refreshes", async () => {
+      // The pre-existing CPU tests drive a copied formula over hand-built maps.
+      // This one goes through the real transport, which is what changed.
+      vi.useFakeTimers();
+      const cores = vi.spyOn(os, "availableParallelism").mockReturnValue(12);
+      try {
+        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        const { cache, internals } = windowsCache();
+        const row = (ticks: string, createdAt: string) =>
+          JSON.stringify([
+            {
+              ProcessId: 100,
+              ParentProcessId: 1,
+              Name: "node.exe",
+              CommandLine: "node server.js",
+              KernelModeTime: ticks,
+              UserModeTime: "0",
+              WorkingSetSize: "1048576",
+              CreationDate: createdAt,
+            },
+          ]);
+
+        await refreshOnce(internals, row("0", "2026-01-01T00:00:00.000Z"));
+        // First sample of a PID has nothing to diff against.
+        expect(cache.getProcess(100)?.cpuPercent).toBe(0);
+        expect(cache.getProcess(100)?.startTime).toBe("2026-01-01T00:00:00.000Z");
+
+        vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
+        await refreshOnce(internals, row("5000000", "2026-01-01T00:00:00.000Z"));
+        // 5,000,000 100ns ticks = 500ms of CPU over 1000ms of wall clock on 12
+        // cores. The core count is pinned rather than read from the machine,
+        // and the expectation is a literal rather than the formula restated:
+        // the production maths divides in BigInt before scaling, so the real
+        // answer is floor(5000 / 12) / 100 = 4.16, not 4.1666…, and a test that
+        // recomputed it would agree with the code however wrong the code was.
+        expect(cache.getProcess(100)?.cpuPercent).toBe(4.16);
+
+        // Same PID, new incarnation: the snapshot key changes with
+        // CreationDate, so the delta starts over rather than reading the dead
+        // process's counters as a spike.
+        vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
+        await refreshOnce(internals, row("9000000", "2026-01-01T00:00:01.500Z"));
+        expect(cache.getProcess(100)?.cpuPercent).toBe(0);
+        expect(cache.getProcess(100)?.startTime).toBe("2026-01-01T00:00:01.500Z");
+      } finally {
+        cores.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("clears the cache when the census comes back empty", async () => {
+      const { cache, internals } = windowsCache();
+      await refreshOnce(
+        internals,
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+        ])
+      );
+      expect(cache.getCacheSize()).toBe(1);
+
+      await refreshOnce(internals, "null");
+      expect(cache.getCacheSize()).toBe(0);
+    });
+
+    it("surfaces a helper failure as a refresh error and keeps the last snapshot", async () => {
+      const { cache, internals } = windowsCache();
+      await refreshOnce(
+        internals,
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+        ])
+      );
+
+      const failing = internals.refreshWindows();
+      helpers[0].emit("exit", 1, null);
+      await expect(failing).rejects.toThrow(/exited/);
+
+      // Blind is worse than stale: the cache holds the previous census.
+      expect(cache.getProcess(100)?.comm).toBe("node");
+    });
+
+    it("starts a replacement helper after a crash", async () => {
+      const { internals } = windowsCache();
+      const failing = internals.refreshWindows();
+      helpers[0].emit("exit", 1, null);
+      await expect(failing).rejects.toThrow();
+
+      await refreshOnce(internals, "[]");
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses to start a helper from a stopped cache", async () => {
+      // Nothing would ever tear that one down.
+      const { cache, internals } = windowsCache();
+      cache.stop();
+      await expect(internals.refreshWindows()).rejects.toThrow(/stopped/);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it("tears the helper down on stop()", async () => {
+      const { cache, internals } = windowsCache();
+      await refreshOnce(internals, "[]");
+
+      cache.stop();
+
+      expect(helpers[0].stdin.end).toHaveBeenCalled();
+      expect(helpers[0].kill).toHaveBeenCalled();
+      expect(cache.getCensusHelperPid()).toBeNull();
+      expect(cache.getCensusHelperRssKb()).toBeNull();
+    });
+  });
+
+  describe("backoff floor", () => {
+    it("never backs a slow-configured cache off to something faster than its base", () => {
+      // The ceilings cap how far the interval DRIFTS; they must not pull it
+      // below what the caller asked for. Only the lineage branch used to carry
+      // that floor, so a cache configured slower than the 15s idle ceiling was
+      // sped up by its first unchanged sweep.
+      const cache = new ProcessTreeCache(60_000);
+      const internals = cache as unknown as { advanceBackoff: () => void };
+
+      internals.advanceBackoff();
+      expect(cache.getCurrentIntervalMs()).toBe(60_000);
+    });
+
+    it("still advances toward the idle ceiling at the shipped base interval", () => {
+      const cache = new ProcessTreeCache(1_500);
+      const internals = cache as unknown as { advanceBackoff: () => void };
+
+      internals.advanceBackoff();
+      expect(cache.getCurrentIntervalMs()).toBe(2_250);
+      for (let i = 0; i < 20; i++) internals.advanceBackoff();
+      expect(cache.getCurrentIntervalMs()).toBe(15_000);
+    });
+  });
+
+  describe("Windows census idle retirement", () => {
+    it("retires the helper once demand has been gone past the backoff ceiling", async () => {
+      vi.useFakeTimers();
+      const spawned: Array<{ kill: ReturnType<typeof vi.fn>; stdin: { end: () => void } }> = [];
+      mockSpawn.mockImplementation(() => {
+        const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        const stdout = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stdout.setEncoding = vi.fn();
+        const stderr = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stderr.resume = vi.fn();
+        const writes: string[] = [];
+        const stdin = Object.assign(new EventEmitter(), {
+          write: vi.fn((chunk: string) => {
+            writes.push(chunk);
+            // Answer immediately: this test is about the idle timer, not framing.
+            queueMicrotask(() =>
+              stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}${chunk.trim()}\n`)
+            );
+            return true;
+          }),
+          end: vi.fn(),
+        });
+        Object.assign(child, {
+          pid: 9100 + spawned.length,
+          stdout,
+          stderr,
+          stdin,
+          kill: vi.fn(),
+        });
+        spawned.push(child as unknown as (typeof spawned)[number]);
+        return child;
+      });
+
+      try {
+        const cache = new ProcessTreeCache(1000);
+        const internals = cache as unknown as {
+          isWindows: boolean;
+          refreshCallbacks: Set<() => void>;
+        };
+        internals.isWindows = true;
+
+        const unsubscribe = cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cache.getCensusHelperPid()).not.toBeNull();
+
+        // Demand gone: the next poll takes refresh()'s early return, which is
+        // where the retirement timer is armed. An idle census has already
+        // backed off past its base interval, so give it more than one tick.
+        unsubscribe();
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(cache.getCensusHelperPid()).not.toBeNull();
+
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(cache.getCensusHelperPid()).toBeNull();
+        expect(spawned[0].stdin.end).toHaveBeenCalled();
+
+        // A returning subscriber gets a fresh helper rather than a dead one.
+        cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cache.getCensusHelperPid()).not.toBeNull();
+        cache.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts a fresh window when demand returns before the deadline", async () => {
+      vi.useFakeTimers();
+      mockSpawn.mockImplementation(() => {
+        const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        const stdout = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stdout.setEncoding = vi.fn();
+        const stderr = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stderr.resume = vi.fn();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: vi.fn((chunk: string) => {
+            queueMicrotask(() =>
+              stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}${chunk.trim()}\n`)
+            );
+            return true;
+          }),
+          end: vi.fn(),
+        });
+        Object.assign(child, { pid: 9300, stdout, stderr, stdin, kill: vi.fn() });
+        return child;
+      });
+
+      try {
+        const cache = new ProcessTreeCache(1000);
+        (cache as unknown as { isWindows: boolean }).isWindows = true;
+        const unsubscribe = cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Arm the retirement window, then take the demand back before it fires.
+        unsubscribe();
+        await vi.advanceTimersByTimeAsync(2_000);
+        cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(cache.getCensusHelperPid()).toBe(9300);
+
+        cache.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the helper while a lineage ledger still holds roots", async () => {
+      // Roots with no subscribers are still demand: the ledger can only record
+      // a descendant it observes.
+      vi.useFakeTimers();
+      mockSpawn.mockImplementation(() => {
+        const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        const stdout = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stdout.setEncoding = vi.fn();
+        const stderr = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stderr.resume = vi.fn();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: vi.fn((chunk: string) => {
+            queueMicrotask(() =>
+              stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}${chunk.trim()}\n`)
+            );
+            return true;
+          }),
+          end: vi.fn(),
+        });
+        Object.assign(child, { pid: 9400, stdout, stderr, stdin, kill: vi.fn() });
+        return child;
+      });
+
+      try {
+        const cache = new ProcessTreeCache(1000);
+        (cache as unknown as { isWindows: boolean }).isWindows = true;
+        cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+        const unsubscribe = cache.onRefresh(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+        unsubscribe();
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(cache.getCensusHelperPid()).toBe(9400);
+
+        cache.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the helper while demand is still there", async () => {
+      vi.useFakeTimers();
+      mockSpawn.mockImplementation(() => {
+        const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        const stdout = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stdout.setEncoding = vi.fn();
+        const stderr = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stderr.resume = vi.fn();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: vi.fn((chunk: string) => {
+            queueMicrotask(() =>
+              stdout.emit("data", `[]\n${CENSUS_SENTINEL_PREFIX}${chunk.trim()}\n`)
+            );
+            return true;
+          }),
+          end: vi.fn(),
+        });
+        Object.assign(child, { pid: 9200, stdout, stderr, stdin, kill: vi.fn() });
+        return child;
+      });
+
+      try {
+        const cache = new ProcessTreeCache(1000);
+        (cache as unknown as { isWindows: boolean }).isWindows = true;
+        cache.onRefresh(() => {});
+
+        // Well past the retirement window, but every poll is demanded — a
+        // healthy census at its backoff ceiling must not respawn PowerShell.
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(cache.getCensusHelperPid()).toBe(9200);
+        expect(mockSpawn).toHaveBeenCalledTimes(1);
+        cache.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

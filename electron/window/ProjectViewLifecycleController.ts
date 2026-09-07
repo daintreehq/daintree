@@ -177,12 +177,13 @@ export function deactivateEntry(host: ProjectViewManager, current: ViewEntry): v
 }
 
 /**
- * Delayed + periodic memory purge for a cached view. The renderer-side
- * `requestIdleCallback(gc)` above is best-effort inside a throttled
- * renderer; this is the guaranteed main-side counterpart (works throttled
- * or frozen) and additionally purges Blink's discardable caches. Purging
- * does not stop timers, ports, or agent output processing — it only drops
- * reclaimable memory — so it is safe for cached views with live agents.
+ * Delayed + periodic V8 garbage collection for a cached view. The
+ * renderer-side `requestIdleCallback(gc)` above is best-effort inside a
+ * throttled renderer; this is the guaranteed main-side counterpart (works
+ * throttled or frozen). It reclaims the renderer's JS heap only — Blink's
+ * discardable caches are not in reach from main (see the invariants on
+ * `purgeMemoryWebContents`). Collecting does not stop timers, ports, or
+ * agent output processing, so it is safe for cached views with live agents.
  */
 function schedulePurge(host: ProjectViewManager, entry: ViewEntry, delayMs: number): void {
   clearPurgeTimer(entry);
@@ -349,23 +350,36 @@ function forEachGuest(
   }
 }
 
-/** Sum the footprint of `hostWc`'s <webview> guests from a pid index. */
-export function sumGuestMemoryKb(
-  hostWc: Electron.WebContents,
-  memoryByPid: ReadonlyMap<number, number>
-): number {
-  let totalKb = 0;
+/**
+ * OS pids of `hostWc`'s live <webview> guests. Guests are separate renderer
+ * processes the host pid lookup never sees, so memory attribution has to
+ * enumerate them explicitly.
+ */
+export function collectGuestPids(hostWc: Electron.WebContents): number[] {
+  const pids: number[] = [];
   forEachGuest(hostWc, (guest) => {
     try {
       const getPid = (guest as { getOSProcessId?: () => number }).getOSProcessId;
       if (typeof getPid !== "function") return;
       const pid = getPid.call(guest);
       if (typeof pid !== "number" || pid <= 0) return;
-      totalKb += memoryByPid.get(pid) ?? 0;
+      pids.push(pid);
     } catch {
       // Guest telemetry is best-effort; keep the host sample intact.
     }
   });
+  return pids;
+}
+
+/** Sum the footprint of `hostWc`'s <webview> guests from a pid index. */
+export function sumGuestMemoryKb(
+  hostWc: Electron.WebContents,
+  memoryByPid: ReadonlyMap<number, number>
+): number {
+  let totalKb = 0;
+  for (const pid of collectGuestPids(hostWc)) {
+    totalKb += memoryByPid.get(pid) ?? 0;
+  }
   return totalKb;
 }
 

@@ -102,8 +102,31 @@ function createPtyClientMock() {
   };
 }
 
-async function flushMicrotasks(): Promise<void> {
-  for (let i = 0; i < 16; i++) await Promise.resolve();
+// Captured before vi.useFakeTimers() swaps the global. spawnSessionTerminal
+// awaits command normalization, which reads package.json — real threadpool I/O
+// that neither a microtask flush nor a faked timer can advance.
+const realSetTimeout = globalThis.setTimeout;
+
+async function flushAsyncWork(): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+  }
+}
+
+/**
+ * Wait on real time for `predicate`, leaving the fake backoff timers alone.
+ * A fixed tick count would let a slow worker read "normalization still
+ * pending" as "the guard stopped the respawn".
+ */
+async function waitForReal(predicate: () => boolean, timeoutMs = 5000): Promise<boolean> {
+  // vi.setSystemTime freezes Date.now, so the deadline has to come from the
+  // real clock or it would never expire.
+  const deadline = vi.getRealSystemTime() + timeoutMs;
+  while (vi.getRealSystemTime() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => realSetTimeout(resolve, 10));
+  }
+  return predicate();
 }
 
 describe("DevPreviewSessionService crash-loop guard", () => {
@@ -168,8 +191,9 @@ describe("DevPreviewSessionService crash-loop guard", () => {
     }
     // Install succeeds -> handleExit respawns the dev server (awaits port
     // allocation, which reuses the registered port -> microtask resolution).
+    const spawnsBeforeRespawn = ptyClient.spawn.mock.calls.length;
     ptyClient.emitExit(installTerminalId, 0);
-    await flushMicrotasks();
+    await waitForReal(() => ptyClient.spawn.mock.calls.length > spawnsBeforeRespawn);
     return currentTerminalId();
   }
 
@@ -350,7 +374,7 @@ describe("DevPreviewSessionService crash-loop guard", () => {
     // no fresh PTY, still stopped — until the user restarts explicitly.
     const spawnsBeforeEnsure = ptyClient.spawn.mock.calls.length;
     const reEnsured = await service.ensure(baseRequest);
-    await flushMicrotasks();
+    await flushAsyncWork();
 
     expect(reEnsured.status).toBe("stopped");
     expect(reEnsured.crashLoopStopped).toBe(true);

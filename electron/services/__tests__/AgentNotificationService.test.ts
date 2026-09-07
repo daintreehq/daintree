@@ -1112,6 +1112,43 @@ describe("AgentNotificationService", () => {
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
     });
 
+    it("skips pulse audio during scheduled quiet hours but keeps the loop alive", () => {
+      // Monday 23:00 sits inside the 22:00 -> 06:00 window.
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      mockStore({
+        soundEnabled: true,
+        workingPulseEnabled: true,
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+        quietHoursWeekdays: [],
+      } as unknown as Partial<typeof DEFAULT_NOTIFICATION_SETTINGS>);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+
+      // Step outside the window — the next tick must fire without a new spawn,
+      // proving the interval timer survived the suppressed tick.
+      vi.setSystemTime(new Date(2024, 0, 2, 12, 0));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips pulse audio during a session mute but keeps the loop alive", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+      agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+
+      agentNotificationService.setSessionMuteUntil(0);
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
     it("does not gate the pulse when OS DND state is undefined", () => {
       mockStore({ soundEnabled: true, workingPulseEnabled: true });
       osDndServiceMock.getState.mockReturnValue(undefined);
@@ -1168,7 +1205,7 @@ describe("AgentNotificationService", () => {
 
   describe("agent:spawned UI feedback sound", () => {
     it("plays agent-spawned sound when uiFeedbackSoundEnabled is true", () => {
-      mockStore({ uiFeedbackSoundEnabled: true });
+      mockStore({ soundEnabled: true, uiFeedbackSoundEnabled: true });
 
       // Advance past boot grace period so the sound is not suppressed
       vi.advanceTimersByTime(10_000);
@@ -1184,7 +1221,22 @@ describe("AgentNotificationService", () => {
     });
 
     it("does not play agent-spawned sound when uiFeedbackSoundEnabled is false", () => {
-      mockStore({ uiFeedbackSoundEnabled: false });
+      mockStore({ soundEnabled: true, uiFeedbackSoundEnabled: false });
+
+      vi.advanceTimersByTime(10_000);
+
+      events.emit("agent:spawned", {
+        terminalId: "term-1",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        timestamp: Date.now(),
+      });
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+    });
+
+    it("does not play agent-spawned sound when soundEnabled is false, even if uiFeedbackSoundEnabled is true (#12185)", () => {
+      mockStore({ soundEnabled: false, uiFeedbackSoundEnabled: true });
 
       vi.advanceTimersByTime(10_000);
 
@@ -1199,7 +1251,7 @@ describe("AgentNotificationService", () => {
     });
 
     it("suppresses agent-spawned sound during boot grace period", () => {
-      mockStore({ uiFeedbackSoundEnabled: true });
+      mockStore({ soundEnabled: true, uiFeedbackSoundEnabled: true });
 
       // Emit immediately after initialization (within boot grace)
       events.emit("agent:spawned", {
@@ -1215,6 +1267,7 @@ describe("AgentNotificationService", () => {
     it("suppresses agent-spawned sound during quiet hours", () => {
       // Set quiet hours 22:00–06:00, fix time at midnight so it falls within the window
       mockStore({
+        soundEnabled: true,
         uiFeedbackSoundEnabled: true,
         quietHoursEnabled: true,
         quietHoursStartMin: 22 * 60,
@@ -1237,10 +1290,27 @@ describe("AgentNotificationService", () => {
     });
 
     it("suppresses agent-spawned sound during session mute", () => {
-      mockStore({ uiFeedbackSoundEnabled: true });
+      mockStore({ soundEnabled: true, uiFeedbackSoundEnabled: true });
 
       // Mute for 60 seconds from now
       agentNotificationService.setSessionMuteUntil(Date.now() + 60_000);
+
+      // Advance past boot grace period
+      vi.advanceTimersByTime(10_000);
+
+      events.emit("agent:spawned", {
+        terminalId: "term-1",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        timestamp: Date.now(),
+      });
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+    });
+
+    it("suppresses agent-spawned sound while OS Do-Not-Disturb is active (#12185)", () => {
+      mockStore({ soundEnabled: true, uiFeedbackSoundEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(true);
 
       // Advance past boot grace period
       vi.advanceTimersByTime(10_000);

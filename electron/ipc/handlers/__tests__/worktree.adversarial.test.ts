@@ -279,7 +279,9 @@ describe("worktree IPC adversarial", () => {
       throw new Error("fs cache unreachable");
     });
     storeMock.get.mockImplementation(
-      baseStoreGetImpl({ notificationSettings: { uiFeedbackSoundEnabled: true } })
+      baseStoreGetImpl({
+        notificationSettings: { soundEnabled: true, uiFeedbackSoundEnabled: true },
+      })
     );
     worktreeService.createWorktree.mockResolvedValue("wt-1");
 

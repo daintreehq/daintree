@@ -209,6 +209,20 @@ export interface IssueMutationError {
 }
 
 /**
+ * The clause `WorkspaceService.deleteWorktree` uses when the safe `branch -d`
+ * refused a branch Git does not consider fully merged. Two things key off it:
+ * the delete is permanent-failed rather than retried (a retry can only find
+ * the worktree already gone), and the toast reports a branch deliberately kept
+ * rather than a broken delete. Matched as a substring so a wrapped or prefixed
+ * variant still classifies.
+ */
+const BRANCH_KEPT_MARKER = "was kept because Git reports it isn't fully merged";
+
+function isBranchKeptError(message: string): boolean {
+  return message.includes(BRANCH_KEPT_MARKER);
+}
+
+/**
  * Error patterns that cannot be remedied by retrying — e.g. uncommitted
  * changes block the delete until the user resolves them. These flip the
  * outbox entry to `failed` after a single attempt rather than burning the
@@ -223,7 +237,7 @@ const PERMANENT_ERROR_PATTERNS = [
   "Cannot delete the main worktree",
   "Cannot delete active worktree",
   "Cannot delete branch:",
-  "has unmerged changes",
+  BRANCH_KEPT_MARKER,
   "(detached HEAD)",
 ];
 
@@ -252,6 +266,100 @@ function isConnectivityError(message: string): boolean {
   );
 }
 
+/**
+ * The directories behind one `workingTreeChangedAt` stamp, with enough
+ * continuity information for a consumer to tell whether it has seen every
+ * burst since the one it last acted on (#12244).
+ */
+export interface WorktreeChangedDirs {
+  /** The `workingTreeChangedAt` stamp these directories describe. */
+  readonly at: number;
+  /**
+   * The stamp this record superseded, or `null` when that is unknown — an
+   * authoritative snapshot catching up, or the first record for this worktree.
+   *
+   * This is the whole skipped-burst defence. The store sees every host event in
+   * order, but React can batch two of them into one render, and the consumer
+   * would then see only the newer record. Comparing this against the stamp it
+   * last consumed tells it a burst went by unseen, so it falls back to a full
+   * re-read instead of scoping to a set that is missing the older burst's
+   * directories.
+   */
+  readonly previousAt: number | null;
+  /**
+   * Worktree-relative directories (`""` = the worktree root), or `null` when
+   * the burst could not be described and everything must be re-read.
+   */
+  readonly dirs: readonly string[] | null;
+  /**
+   * The host run this record belongs to. Continuity is only ever claimed within
+   * one run: across a host restart (new epoch) or a re-created worktree at the
+   * same path (new generation), whatever changed on disk in between reached
+   * nobody, so the chain has to break.
+   *
+   * Carried on the record rather than tested against the incoming event,
+   * because only the FIRST event of a new epoch sees the transition — a later
+   * one in the same run would find `epochChanged` false and chain straight back
+   * onto the dead run's stamp.
+   */
+  readonly run: string;
+}
+
+/** The host run a snapshot belongs to: its epoch plus the worktree's incarnation. */
+function runKeyFor(snapshot: WorktreeSnapshot, epoch: string): string {
+  return `${epoch}\u0000${snapshot.generation ?? ""}`;
+}
+
+/**
+ * Fold one snapshot's working-tree-change fields into the side map, chaining
+ * `previousAt` off whatever the map already held for this worktree. Returns the
+ * previous map identity unchanged when the stamp has not moved, so a quiet
+ * snapshot notifies no subscriber.
+ *
+ * `continuous` is false for the authoritative full-snapshot path, which can
+ * jump across host events the store never saw individually. A run change breaks
+ * continuity regardless of what the caller claims.
+ */
+function mergeChangedDirs(
+  current: Map<string, WorktreeChangedDirs>,
+  snapshot: WorktreeSnapshot,
+  epoch: string,
+  continuous: boolean
+): Map<string, WorktreeChangedDirs> {
+  const { workingTreeChangedAt: at } = snapshot;
+  if (at === undefined) return current;
+  const run = runKeyFor(snapshot, epoch);
+  const existing = current.get(snapshot.id);
+  // Only a record from the SAME host run can be compared against or chained
+  // off. One from a dead run is not "older" — it describes a different
+  // timeline, so it neither dedups nor rejects nor supplies a predecessor.
+  const previous = existing !== undefined && existing.run === run ? existing : undefined;
+  if (previous !== undefined) {
+    if (previous.at === at) return current;
+    // A strictly older stamp is never a new burst — it is a stale one being
+    // replayed. Renderer-built PR/issue overlays spread the CACHED snapshot,
+    // whose fs stamp goes stale the moment a timestamp-only update takes the
+    // `snapshotsEqual` fast path and leaves that object in place. Letting one
+    // walk the record backwards would reconnect the continuity chain across a
+    // burst that was never seen, and the consumer would scope past it.
+    if (at < previous.at) return current;
+  }
+  // A record with no same-run predecessor is written once per run transition
+  // and reports `previousAt: null`, which is what actually stops the consumer
+  // scoping off it. The directories stay faithful to what the host said.
+  const next = new Map(current);
+  next.set(snapshot.id, {
+    at,
+    previousAt: continuous ? (previous?.at ?? null) : null,
+    // Absent on the wire means the host described no burst for this stamp,
+    // which is not the same as a burst that touched nothing — both must reach
+    // the consumer as "re-read everything".
+    dirs: snapshot.workingTreeChangedDirs ?? null,
+    run,
+  });
+  return next;
+}
+
 export interface WorktreeViewState {
   worktrees: Map<string, WorktreeSnapshot>;
   /**
@@ -276,6 +384,13 @@ export interface WorktreeViewState {
    * that leave `git status` unmoved (#11330).
    */
   workingTreeChangedAtById: Map<string, number>;
+  /**
+   * `worktreeId → ` the directories behind the latest `workingTreeChangedAt`,
+   * so the file browser can re-list only what changed (#12244). A side map for
+   * the same reason as {@link workingTreeChangedAtById}, and updated in lockstep
+   * with it on both merge paths.
+   */
+  workingTreeChangedDirsById: Map<string, WorktreeChangedDirs>;
   manualAssociations: Map<string, ManualIssueAssociation>;
   /**
    * Host-minted `(epoch, seq)` stamp of the most recently applied event.
@@ -435,6 +550,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     worktrees: new Map(),
     statusCheckedAt: new Map(),
     workingTreeChangedAtById: new Map(),
+    workingTreeChangedDirsById: new Map(),
     manualAssociations: new Map(),
     version: { epoch: "", seq: 0 },
     tombstones: new Map(),
@@ -519,6 +635,38 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const workingTreeChangedAtChanged =
         nextWorkingTreeChangedAt !== prev.workingTreeChangedAtById;
 
+      // Same rebuild for the affected-directory side map. Continuity is
+      // deliberately not claimed here: a snapshot is the host's authoritative
+      // state and can jump across flushes the store never saw one by one, so
+      // every advanced stamp lands with `previousAt: null` and the file browser
+      // takes one full re-read before scoping resumes.
+      let nextWorkingTreeChangedDirs = prev.workingTreeChangedDirsById;
+      {
+        let rebuilt = new Map<string, WorktreeChangedDirs>();
+        for (const s of merged) {
+          const carried = prev.workingTreeChangedDirsById.get(s.id);
+          // Carried by identity only within one host run: across an epoch or a
+          // re-created worktree the record's `previousAt` describes a chain the
+          // new run knows nothing about, and repeating the stamp would preserve
+          // it.
+          if (
+            carried !== undefined &&
+            carried.at === s.workingTreeChangedAt &&
+            carried.run === runKeyFor(s, version.epoch)
+          ) {
+            rebuilt.set(s.id, carried);
+            continue;
+          }
+          rebuilt = mergeChangedDirs(rebuilt, s, version.epoch, false);
+        }
+        const unchanged =
+          rebuilt.size === prev.workingTreeChangedDirsById.size &&
+          [...rebuilt].every(([id, record]) => prev.workingTreeChangedDirsById.get(id) === record);
+        if (!unchanged) nextWorkingTreeChangedDirs = rebuilt;
+      }
+      const workingTreeChangedDirsChanged =
+        nextWorkingTreeChangedDirs !== prev.workingTreeChangedDirsById;
+
       // Once hydrated, suppress redundant Map identity churn when every
       // incoming snapshot is value-equal to its existing counterpart. Cold
       // starts always rebuild so `isInitialized` flips correctly even when
@@ -542,6 +690,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ...(workingTreeChangedAtChanged
             ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
             : {}),
+          ...(workingTreeChangedDirsChanged
+            ? { workingTreeChangedDirsById: nextWorkingTreeChangedDirs }
+            : {}),
           ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
           ...(associationsChanged ? { manualAssociations: manual } : {}),
         });
@@ -559,6 +710,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ...(statusCheckedAtChanged ? { statusCheckedAt: nextStatusCheckedAt } : {}),
         ...(workingTreeChangedAtChanged
           ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
+          : {}),
+        ...(workingTreeChangedDirsChanged
+          ? { workingTreeChangedDirsById: nextWorkingTreeChangedDirs }
           : {}),
         ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
         ...(associationsChanged ? { manualAssociations: manual } : {}),
@@ -651,24 +805,49 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const workingTreeChangedAtChanged =
         workingTreeChangedAtById !== prevState.workingTreeChangedAtById;
 
+      // Per-event, so continuity holds: the store sees every host update in
+      // order and each record can name the stamp it superseded (#12244) — but
+      // only within one host run. An epoch transition means the host restarted,
+      // and whatever changed on disk while it was down reached nobody, so the
+      // first event of the new epoch must not chain off the old one's stamp.
+      const workingTreeChangedDirsById = mergeChangedDirs(
+        prevState.workingTreeChangedDirsById,
+        merged,
+        version.epoch,
+        true
+      );
+      const workingTreeChangedDirsChanged =
+        workingTreeChangedDirsById !== prevState.workingTreeChangedDirsById;
+
+      // Replace with the complete state so Zustand does not merge into a second object.
       if (existing && snapshotsEqual(existing, merged)) {
-        set({
-          version,
-          ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
-          ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
-          ...(tombstonesChanged ? { tombstones } : {}),
-        });
+        set(
+          {
+            ...prevState,
+            version,
+            ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+            ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
+            ...(workingTreeChangedDirsChanged ? { workingTreeChangedDirsById } : {}),
+            ...(tombstonesChanged ? { tombstones } : {}),
+          },
+          true
+        );
         return true;
       }
       const next = new Map(prev);
       next.set(state.id, merged);
-      set({
-        worktrees: next,
-        version,
-        ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
-        ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
-        ...(tombstonesChanged ? { tombstones } : {}),
-      });
+      set(
+        {
+          ...prevState,
+          worktrees: next,
+          version,
+          ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+          ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
+          ...(workingTreeChangedDirsChanged ? { workingTreeChangedDirsById } : {}),
+          ...(tombstonesChanged ? { tombstones } : {}),
+        },
+        true
+      );
       return true;
     },
 
@@ -749,6 +928,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const hadWorktree = prevState.worktrees.has(worktreeId);
       const hadStatusCheckedAt = prevState.statusCheckedAt.has(worktreeId);
       const hadWorkingTreeChangedAt = prevState.workingTreeChangedAtById.has(worktreeId);
+      const hadWorkingTreeChangedDirs = prevState.workingTreeChangedDirsById.has(worktreeId);
       const hadDeletingId = prevState.deletingIds.has(worktreeId);
       const hadDeleteError = prevState.deleteErrors.has(worktreeId);
       const hadDeleteErrorArgs = prevState.deleteErrorArgs.has(worktreeId);
@@ -766,6 +946,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ? new Map(prevState.workingTreeChangedAtById)
         : prevState.workingTreeChangedAtById;
       if (hadWorkingTreeChangedAt) nextWorkingTreeChangedAt.delete(worktreeId);
+      const nextWorkingTreeChangedDirs = hadWorkingTreeChangedDirs
+        ? new Map(prevState.workingTreeChangedDirsById)
+        : prevState.workingTreeChangedDirsById;
+      if (hadWorkingTreeChangedDirs) nextWorkingTreeChangedDirs.delete(worktreeId);
       const nextDeletingIds = hadDeletingId
         ? new Set(prevState.deletingIds)
         : prevState.deletingIds;
@@ -802,6 +986,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         worktrees: nextWorktrees,
         statusCheckedAt: nextStatusCheckedAt,
         workingTreeChangedAtById: nextWorkingTreeChangedAt,
+        workingTreeChangedDirsById: nextWorkingTreeChangedDirs,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
@@ -1480,7 +1665,11 @@ async function runDeleteAsync(
     const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
     const hadDevPreview = existingDevPreview !== null;
     await window.electron.devPreview.stopByWorktree({ worktreeId });
-    await worktreeClient.delete(worktreeId, options.force, options.deleteBranch, mutationId);
+    await worktreeClient.delete(worktreeId, {
+      force: options.force,
+      deleteBranch: options.deleteBranch,
+      mutationId,
+    });
     if (hadDevPreview) {
       notify({
         type: "success",
@@ -1500,26 +1689,48 @@ async function runDeleteAsync(
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
     const prev = get();
-    // Partial-success path: the backend emits `worktree-removed` BEFORE the
-    // branch-delete step (WorkspaceService.deleteWorktree:1587 vs :1592), so a
-    // branch-delete failure arrives after `applyRemove` has already cleared
-    // the card. The card surface is gone — fall back to a toast so the user
-    // learns the branch was not cleaned up. Without this, the failure is
-    // silently swallowed (the original race guard's bug).
+    // Partial-success path: the backend removes the worktree and emits
+    // `worktree-removed` BEFORE it touches the branch, so a branch-delete
+    // failure arrives after `applyRemove` has already cleared the card. The
+    // card surface is gone — fall back to a toast so the user learns the
+    // branch was not cleaned up. Without this, the failure is silently
+    // swallowed (the original race guard's bug).
     if (!prev.deletingIds.has(worktreeId) && !prev.worktrees.has(worktreeId)) {
       // The worktree directory is already gone (only the branch delete failed),
       // so the closed terminals have no home to come back to — drop the snapshot
       // rather than relaunch them against a deleted worktree.
       pendingTerminalRestores.delete(mutationId);
       pruneOutboxEntry(get, set, mutationId);
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Couldn't delete branch",
-        message,
-        priority: "high",
-        context: { worktreeId },
-      });
+      // Deliberately NO `worktreeId` in the context here, unlike every other
+      // notify in this store. `notify`'s origin-surface gate reads it as "the
+      // card is on screen, so the signal is already visible inline" and routes
+      // the toast to the inbox — but this branch exists precisely because the
+      // card is gone, and a surviving ghost row (terminals outlived the
+      // worktree) still answers to the id. Attaching it would suppress the one
+      // surface that reports the outcome. The message names the branch, so
+      // nothing is lost by dropping it.
+      if (isBranchKeptError(message)) {
+        // Not a malfunction: the safe `branch -d` refused rather than discard
+        // work Git does not consider merged. A warning keeps that legible as a
+        // deliberate outcome instead of dressing a working safeguard as a fault
+        // — and as a fault the user could fix by retrying, which they can't.
+        notify({
+          type: "warning",
+          title: "Branch kept",
+          message,
+          priority: "high",
+          context: { eventKind: "git" },
+        });
+      } else {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Couldn't delete branch",
+          message,
+          priority: "high",
+          context: { eventKind: "git" },
+        });
+      }
       return;
     }
     handleDeleteFailure(get, set, worktreeId, options, mutationId, message);
@@ -1938,11 +2149,12 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.baseBehindCount === b.baseBehindCount &&
     a.baseMatchesUpstream === b.baseMatchesUpstream &&
     a.baseCompareRef === b.baseCompareRef &&
-    // lastGitStatusCheckedAt and workingTreeChangedAt are deliberately NOT
-    // compared (like `timestamp`): both advance on events that change nothing
-    // else in the snapshot, so comparing either here would force a new
-    // worktrees Map identity per quiet tick. They live in the store's
-    // `statusCheckedAt` / `workingTreeChangedAtById` side maps instead.
+    // lastGitStatusCheckedAt, workingTreeChangedAt and workingTreeChangedDirs
+    // are deliberately NOT compared (like `timestamp`): all advance on events
+    // that change nothing else in the snapshot, so comparing any of them here
+    // would force a new worktrees Map identity per quiet tick. They live in the
+    // store's `statusCheckedAt` / `workingTreeChangedAtById` /
+    // `workingTreeChangedDirsById` side maps instead.
     a.lastFetchedAt === b.lastFetchedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
@@ -1970,6 +2182,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     resourceStatusEqual(a.resourceStatus, b.resourceStatus) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus) &&
+    setupStatusEqual(a.setupStatus, b.setupStatus) &&
     lifecyclePhaseResultsEqual(a.lifecyclePhaseResults, b.lifecyclePhaseResults) &&
     linkedEqual(a.linked ?? null, b.linked ?? null)
   );
@@ -2033,6 +2246,27 @@ function lifecycleStatusEqual(
     a.currentCommand === b.currentCommand &&
     a.commandIndex === b.commandIndex &&
     a.totalCommands === b.totalCommands &&
+    a.startedAt === b.startedAt &&
+    a.completedAt === b.completedAt &&
+    a.error === b.error
+  );
+}
+
+/**
+ * Compared in `snapshotsEqual` because a setup transition is the only change
+ * some snapshots carry — a worktree whose config copy finished is otherwise
+ * byte-identical to the pending one, and folding it out would leave
+ * `worktree.waitUntilReady` waiting on a row that never updates.
+ */
+function setupStatusEqual(
+  a: WorktreeSnapshot["setupStatus"],
+  b: WorktreeSnapshot["setupStatus"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.state === b.state &&
+    a.stage === b.stage &&
     a.startedAt === b.startedAt &&
     a.completedAt === b.completedAt &&
     a.error === b.error

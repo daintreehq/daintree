@@ -3,7 +3,7 @@ import { getPluginManifestSchema, MANIFEST_CONTRIBUTION_CAPS } from "../plugin.j
 import { MAX_TERMINALS_PER_RECIPE } from "../../../shared/utils/recipeSanitizer.js";
 
 function parseManifest(contributes: Record<string, unknown>, capabilities: string[] = []) {
-  return getPluginManifestSchema(false).safeParse({
+  return getPluginManifestSchema("user").safeParse({
     name: "acme.recipes-test",
     version: "1.0.0",
     capabilities,

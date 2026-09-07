@@ -137,7 +137,8 @@ export class SessionStore {
   // Tier-elevation decay timers, keyed by sessionId (unique across SSE and
   // HTTP). A renderer-approved "Always allow" elevation is bounded to
   // MCP_TIER_ELEVATION_TTL_MS; on expiry the session silently decays to the
-  // `workbench` baseline (#8462). `tierElevationStartedAt` drives the same
+  // baseline captured before the first elevation in the chain — not to a
+  // hardcoded `workbench` (#8462). `tierElevationStartedAt` drives the same
   // awake-time correction as the idle reaper; `tierElevationToken` records
   // the tier captured when the timer was armed so a fresh re-elevation
   // between arm and fire is never wiped (#2243 stale-token guard). Stored

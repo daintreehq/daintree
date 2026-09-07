@@ -714,7 +714,7 @@ function SettingsDialogInner({
         </div>
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <AppDialog.Header plainBody>
+          <AppDialog.Header>
             <AppDialog.Title
               as="h3"
               icon={
@@ -767,7 +767,7 @@ function SettingsDialogInner({
             </div>
           )}
 
-          <ScrollShadow className="flex-1" scrollClassName="p-6">
+          <ScrollShadow className="flex-1" scrollClassName="py-6 dialog-body-inset">
             {isSearching && (
               <div role="region" aria-label="Search results">
                 <SearchResults
@@ -1126,6 +1126,11 @@ function ProjectFormTabContent({
           projectPath={projectForm.currentProject?.path}
         />
       );
+
+    // Reads the project-plugin store and the installed-plugin list directly —
+    // none of its state lives in the shared project form, so it takes no props.
+    case "project:plugins":
+      return <LazyComp />;
 
     default:
       // A project-scope registry entry exists but ProjectFormTabContent has no

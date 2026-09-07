@@ -23,9 +23,11 @@ interface PluginContextMenuSectionProps {
   dispatchArgs?: Record<string, unknown>;
   /**
    * Whether to render a leading separator above the items. Defaults to `true`
-   * (the section trails native menu items on every surface). Pass `false` only
-   * when plugin items are a menu's entire content — since #11757 the `file`
-   * surface has a built-in core above them and keeps the separator.
+   * (the section trails native menu items on the surfaces that render it
+   * inline). Pass `false` when the parent owns the boundary instead: plugin
+   * items are a menu's entire content, or the section sits inside a submenu
+   * whose shell already separates the groups — which is what the `file` surface
+   * does since #12206.
    */
   leadingSeparator?: boolean;
 }

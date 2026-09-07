@@ -193,7 +193,7 @@ describe("bridgePtyEvent", () => {
       sessionId: string;
       worktreeId: string | null;
       terminalId: string;
-      launchGeneration: number | undefined;
+      launchGeneration: number | null | undefined;
     }> = [];
     events.on("agent-session:captured", (payload) => {
       payloads.push({

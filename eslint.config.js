@@ -774,6 +774,7 @@ export default tseslint.config(
       "src/components/Worktree/diffTokenRanges.ts",
       "src/components/Worktree/diffTokenizePipeline.ts",
       "src/components/Worktree/diffTokenizer.ts",
+      "src/components/Worktree/markdownBlockDiff.ts",
     ],
     rules: { "no-restricted-imports": "off" },
   },
@@ -1183,6 +1184,12 @@ export default tseslint.config(
       "build/**",
       "public/**",
       ".claude/**",
+      // Agent workflow skills, in the same category as scripts/ and .claude/:
+      // Node tooling outside the TypeScript build graph, run by hand or by an
+      // agent, never bundled. `.agents/**` held only Markdown until the
+      // optimize skill's check-pair.mjs, which linted as browser code and
+      // failed no-undef on `console` and `process`.
+      ".agents/**",
       // Native N-API addons live under electron/native/. The CJS wrapper
       // and binding.gyp aren't part of the TypeScript build graph; they're
       // packaged build infrastructure (analogous to scripts/).
@@ -1192,6 +1199,12 @@ export default tseslint.config(
       // map). They're test fixtures, not part of the TS build graph — like
       // packages/*/dist (#10512).
       "plugins/sample/*/view/**",
+      // A project plugin's `dist/` is the same case on both halves: the worker
+      // entry is ESM imported by Node and the view is ESM served over
+      // `plugin://`, both hand-authored and shipped verbatim because the host
+      // compiles nothing. Linting them as TS-build-graph source flags the
+      // globals each half legitimately has and the other does not.
+      "plugins/sample-project/*/dist/**",
     ],
   }
 );

@@ -1030,3 +1030,56 @@ describe("Recipe Validation Schemas", () => {
     });
   });
 });
+
+describe("portable project plugin kinds (#12280)", () => {
+  // A project-local plugin's kind persists in the portable form, which is
+  // byte-identical to a global plugin's runtime form. If a global plugin of the
+  // same manifest and kind id is installed AND declares hasPty, a registry
+  // lookup here answers from the wrong plugin and demands a `cwd` the project
+  // panel never had — and a rejected entry is a DELETED panel.
+  const projectPanel = {
+    id: "plug-1",
+    title: "Overview",
+    kind: "acme.dashboard.overview",
+    kindRef: { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+    pluginId: "acme.dashboard",
+    location: "grid",
+  };
+
+  it("accepts a project plugin panel with no cwd", () => {
+    expect(TerminalSnapshotSchema.safeParse(projectPanel).success).toBe(true);
+    expect(AppStateTerminalEntrySchema.safeParse(projectPanel).success).toBe(true);
+  });
+
+  it("preserves kindRef and extensionStateVersion through validation", () => {
+    const parsed = TerminalSnapshotSchema.safeParse({
+      ...projectPanel,
+      extensionState: { activeTab: "a" },
+      extensionStateVersion: 2,
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const data = parsed.data as Record<string, unknown>;
+    expect(data.kindRef).toEqual(projectPanel.kindRef);
+    expect(data.extensionStateVersion).toBe(2);
+  });
+
+  it("keeps a malformed kindRef from deleting the panel", () => {
+    // The field is deliberately undeclared so a corrupt value degrades at read
+    // time instead of failing validation and taking the record with it.
+    expect(
+      TerminalSnapshotSchema.safeParse({ ...projectPanel, kindRef: { origin: "project" } }).success
+    ).toBe(true);
+  });
+
+  it("still requires cwd for a genuine PTY panel", () => {
+    expect(
+      TerminalSnapshotSchema.safeParse({
+        id: "t1",
+        title: "Term",
+        kind: "terminal",
+        location: "grid",
+      }).success
+    ).toBe(false);
+  });
+});

@@ -2,7 +2,7 @@
 
 Electron IDE for orchestrating AI coding agents — many agent terminals running in parallel across git worktrees, with fleet broadcasting, a worktree dashboard, context injection, and an MCP control surface. 18 agent CLIs are supported; the roster lives in `shared/config/agents/` + `shared/config/agentRegistry.ts`. Product, repo, and config dir are all "Daintree" (`daintreehq/daintree`, `.daintree/`).
 
-**Stack:** Electron 42 (Chromium 148), React 19 + React Compiler, Vite 8, TypeScript 6, Tailwind CSS v4, Zustand 5, node-pty, simple-git, better-sqlite3 + drizzle, @xterm/xterm 6.1 beta. Node 22.13.0 (`.nvmrc`, guarded by `check:node-version`). Exact pins in `package.json`.
+**Stack:** Electron 42 (Chromium 148), React 19 + React Compiler, Vite 8, TypeScript 6, Tailwind CSS v4, Zustand 5, node-pty, simple-git, better-sqlite3 + drizzle, @xterm/xterm 6.1 beta. Node 22.23.2 (`.nvmrc`, guarded by `check:node-version`). Exact pins in `package.json`.
 
 **Research against our exact versions** — never assume older docs apply. Known traps: Electron 42 (unsigned macOS notifications silently emit `failed`; `Session.clearStorageData` drops `quotas`), xterm 6.x (canvas renderer, `windowsMode` and `fastScrollModifier` all removed; new event system), Tailwind v4 (`color-mix()` alpha semantics).
 
@@ -30,7 +30,7 @@ Use `npm run typecheck`, never a bare `tsc -b` — the project-reference graph e
 
 Each project gets its own `WebContentsView` and V8 context via `ProjectViewManager`, with LRU eviction under memory pressure — so renderer state is **per project view**, not global. Per-window services live in `WindowContext.services`; PtyClient and WorkspaceClient are shared globals.
 
-**Cross-store reads go through `src/store/storeAccessors.ts`** — never import a partner store at module eval (TDZ; see `docs/architecture/store-init-order.md`). ~108 Zustand stores in two flavors, app-global vs per-project-view.
+**Cross-store reads go through `src/store/storeAccessors.ts`** — never import a partner store at module eval (TDZ; see `docs/architecture/store-init-order.md`). 116 store creation sites across 115 files — 114 app-global `create()`, plus two `zustand/vanilla`: `shortcutHintStore` (module singleton) and `createWorktreeStore`, the sole per-project-view factory.
 
 **Durable state spans two engines with separate migrations:** better-sqlite3 + drizzle (`npm run db:generate`) and electron-store JSON (`electron/store.ts`).
 
@@ -38,7 +38,7 @@ Each project gets its own `WebContentsView` and V8 context via `ProjectViewManag
 
 Panels are a 7-member union in `shared/types/panel.ts` (`terminal`, `browser`, `dev-preview`, `review`, `file`, `file-browser`, `diff`) with per-kind modules in `src/panels/<kind>/` and the registry in `shared/config/panelKindRegistry.ts`.
 
-Plugins are manifest-driven, run in sandboxed utility subprocesses, and contribute actions, panels, agents, toolbar buttons, and forge providers under capability + consent gating. GitHub ships as a builtin forge plugin (`plugins/builtin/github`) so the host stays forge-neutral. Author SDK = the `packages/*` npm workspace (`npm run packages:build`).
+Plugins are manifest-driven, activate out-of-process in unsandboxed `utilityProcess.fork` workers (builtins are the exception and load in-process), and contribute actions, panels, agents, toolbar buttons, and forge providers under capability + consent gating. GitHub ships as a builtin forge plugin (`plugins/builtin/github`) so the host stays forge-neutral. Author SDK = the `packages/*` npm workspace (`npm run packages:build`).
 
 ## Generated code and ratchets
 
@@ -51,7 +51,7 @@ Plugins are manifest-driven, run in sandboxed utility subprocesses, and contribu
 | drizzle migrations               | `npm run db:generate`                                 |
 | help prompts                     | `npm run build:help`                                  |
 
-Nine ratchet baselines live in `scripts/baselines/`. Each has a matching `*:check` and `*:update` script — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`.
+Nine ratchet baselines live in `scripts/baselines/` — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`. Six have matching `*:check`/`*:update` scripts; three do not — update `lint:ratchet` with `-- --update`, `check:ipc-handwritten` via `ipc-handwritten:update`, and `theme:text-ramp` with `-- --check` / `-- --plan` (`--plan` rewrites the manifest).
 
 Only `lint:ratchet` and `check:ipc-handwritten` run inside `npm run check`; the budget scripts are deliberately out of CI pre-1.0. The lint ratchet gates **per-rule as well as in total**, and a rule vanishing from live output is a hard failure — so you cannot silence a rule in config to get under the gate.
 

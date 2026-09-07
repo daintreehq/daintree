@@ -17,6 +17,11 @@ import {
   sanitizeRecipeTerminals,
   MAX_TERMINALS_PER_RECIPE,
 } from "../../shared/utils/recipeSanitizer.js";
+import {
+  detectRecipeForwardIncompat,
+  describeRecipeForwardIncompat,
+  type RecipeForwardIncompat,
+} from "../../shared/utils/recipeCompatibility.js";
 
 /**
  * Builds the exact UTF-8 byte string that `writeInRepoRecipe` lands on disk
@@ -334,6 +339,38 @@ export class ProjectIdentityFiles {
     }
   }
 
+  /**
+   * Inspects the file a write to `recipeName` would land on and reports what
+   * re-serializing this build's in-memory recipe over it would delete (#12261).
+   * Returns `null` when the write is lossless — including when the file does not
+   * exist yet, or holds content this build cannot parse at all (a malformed file
+   * is already skipped by the reader and carries nothing worth preserving).
+   *
+   * Deliberately reads the file fresh rather than consulting the load-time hash
+   * cache. The cache cannot answer this question: its entries are keyed by the
+   * recipe id the reader resolved, and the files at risk here include ones the
+   * reader dropped entirely (every terminal unsupported), which never got an
+   * entry. A cold cache must never read as "safe to overwrite".
+   */
+  async inspectInRepoRecipeForwardCompat(
+    projectPath: string,
+    recipeName: string
+  ): Promise<RecipeForwardIncompat | null> {
+    const filePath = path.join(projectPath, DAINTREE_RECIPES_DIR, safeRecipeFilename(recipeName));
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, "utf-8");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
+    try {
+      return detectRecipeForwardIncompat(JSON.parse(content));
+    } catch {
+      return null;
+    }
+  }
+
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
     const { recipes } = await this.readInRepoRecipesWithHashes(projectPath);
     return recipes;
@@ -427,6 +464,18 @@ export class ProjectIdentityFiles {
           continue;
         }
         seenIds.add(result.data.id);
+        // Name what this build cannot represent while the passthrough parse
+        // still carries it. Sanitization below is about to discard the
+        // evidence, and re-serializing the reduced recipe over this file would
+        // delete it from git with nothing to show for it (#12261). The write
+        // paths refuse that separately; this is the read-time half.
+        const forwardIncompat = detectRecipeForwardIncompat(result.data);
+        if (forwardIncompat) {
+          console.warn(
+            `[ProjectIdentityFiles] ${entry.name} holds content this build does not support — ` +
+              `it will not round-trip: ${describeRecipeForwardIncompat(forwardIncompat)}`
+          );
+        }
         // The schema only validates shape (and passes unknown fields through).
         // Content-validate every terminal at this trust boundary — dropping any
         // with a bad type or control-char-laden command/args/env — so an

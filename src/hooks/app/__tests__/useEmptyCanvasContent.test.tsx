@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
   scratchState: {
     currentScratch: null as { id: string; name: string; path: string } | null,
   },
+  surface: {
+    resolved: null as { claim: unknown; config: { id: string; name: string } } | null,
+  },
 }));
 
 vi.mock("@/store", () => ({
@@ -25,6 +28,15 @@ vi.mock("@/store/scratchStore", () => ({
 }));
 vi.mock("@/lazyPanels", () => ({
   LazyWelcomeScreen: () => <div data-testid="welcome-screen" />,
+}));
+vi.mock("@/components/Plugin/ProjectSurfaceView", () => ({
+  // The surface resolver and the view module have their own suites; what is
+  // under test here is that the project canvas defers to a claim when one
+  // resolves, and only then.
+  useProjectSurface: () => h.surface.resolved,
+  ProjectSurfaceView: (props: { config: { id: string } }) => (
+    <div data-testid="project-surface" data-kind={props.config.id} />
+  ),
 }));
 vi.mock("@/components/Terminal/ContentGridEmptyState", () => ({
   // Reflect the props back out so the wiring itself is under test, not the
@@ -62,6 +74,7 @@ describe("useEmptyCanvasContent", () => {
   beforeEach(() => {
     h.projectState.currentProject = null;
     h.scratchState.currentScratch = null;
+    h.surface.resolved = null;
   });
 
   describe("with an active scratch", () => {
@@ -177,6 +190,69 @@ describe("useEmptyCanvasContent", () => {
 
     it("still defers for a git-backed project", () => {
       h.projectState.currentProject = { ...lightweight, gitBacked: undefined };
+
+      expect(renderContent().current.emptyContent).toBeUndefined();
+    });
+  });
+
+  describe("with a project plugin claiming the empty canvas (§7.8)", () => {
+    const surface = {
+      claim: { pluginId: "project__project-1__acme.dash", panelKindId: "k" },
+      config: { id: "project:project-1/acme.dash/overview", name: "Mission Control" },
+    };
+
+    beforeEach(() => {
+      h.projectState.currentProject = project;
+      h.surface.resolved = surface;
+    });
+
+    it("draws the claimed surface instead of the stock launcher", () => {
+      render(<>{renderContent().current.emptyContent}</>);
+
+      expect(screen.getByTestId("project-surface").getAttribute("data-kind")).toBe(
+        surface.config.id
+      );
+      expect(screen.queryByTestId("empty-state")).toBeNull();
+    });
+
+    it("keeps the canvas keyed on the project", () => {
+      expect(renderContent().current.workspaceId).toBe(project.id);
+    });
+
+    it("still supplies the launcher for a project opened without git", () => {
+      // A claim replaces the CANVAS, and the non-git branch's canvas is the
+      // launcher — so the claim wins there too rather than the two racing.
+      h.projectState.currentProject = { ...project, gitBacked: false };
+
+      render(<>{renderContent().current.emptyContent}</>);
+
+      expect(screen.getByTestId("project-surface")).toBeTruthy();
+    });
+
+    it("leaves a scratch canvas alone", () => {
+      // A scratch has no project to own its surface; the resolver would return
+      // null in prod, but pin the branch so a future edit cannot leak a claim
+      // into a workspace it does not belong to.
+      h.projectState.currentProject = null;
+      h.scratchState.currentScratch = scratch;
+
+      render(<>{renderContent().current.emptyContent}</>);
+
+      expect(screen.getByTestId("empty-state")).toBeTruthy();
+      expect(screen.queryByTestId("project-surface")).toBeNull();
+    });
+
+    it("leaves the welcome screen alone", () => {
+      h.projectState.currentProject = null;
+
+      render(<>{renderContent().current.emptyContent}</>);
+
+      expect(screen.getByTestId("welcome-screen")).toBeTruthy();
+      expect(screen.queryByTestId("project-surface")).toBeNull();
+    });
+
+    it("falls back to the stock canvas when nothing resolves", () => {
+      h.surface.resolved = null;
 
       expect(renderContent().current.emptyContent).toBeUndefined();
     });

@@ -287,17 +287,22 @@ describe("webContentsLifecycle", () => {
   });
 
   describe("purgeMemoryWebContents", () => {
-    it("sends the pressure notification before the HeapProfiler GC sequence", async () => {
+    it("sends only the HeapProfiler GC sequence", async () => {
       const wc = createMockWc();
       await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
       const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
       expect(methods).toEqual([
-        "Memory.simulatePressureNotification",
         "HeapProfiler.enable",
         "HeapProfiler.collectGarbage",
         "HeapProfiler.disable",
       ]);
-      expect(wc.debugger.sendCommand.mock.calls[0][1]).toEqual({ level: "critical" });
+    });
+
+    it("never sends Memory.simulatePressureNotification (never reached this renderer)", async () => {
+      const wc = createMockWc();
+      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
+      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
+      expect(methods).not.toContain("Memory.simulatePressureNotification");
     });
 
     it("never sends Memory.forciblyPurgeJavaScriptMemory (SIGSEGVs throttled hidden views)", async () => {

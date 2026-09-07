@@ -21,6 +21,17 @@ vi.mock("../../GitServiceCache.js", () => ({
   gitServiceCache: { delete: vi.fn() },
 }));
 
+const fileSearchCacheInvalidatorMock = vi.hoisted(() => ({
+  handleWorktreeUpdate: vi.fn(),
+  handleWorktreeRemoved: vi.fn(),
+  handleProjectClosed: vi.fn(),
+  reset: vi.fn(),
+}));
+
+vi.mock("../fileSearchCacheInvalidation.js", () => ({
+  fileSearchCacheInvalidator: fileSearchCacheInvalidatorMock,
+}));
+
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
 import { gitServiceCache } from "../../GitServiceCache.js";
@@ -98,6 +109,53 @@ describe("WorkspaceHostEventRouter", () => {
 
   // Number of ms past the `sys:worktree:update` debounce window.
   const SYS_WORKTREE_DEBOUNCE_MS = 50;
+
+  describe("file-search cache invalidation", () => {
+    it("hands every worktree-update snapshot to the invalidator", () => {
+      // The router does not decide; it delivers. The `workingTreeChangedAt`
+      // comparison that keeps a branch or PR-state snapshot from costing a
+      // rebuild lives in FileSearchCacheInvalidator and is tested there.
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({ workingTreeChangedAt: 1234 });
+
+      router.routeHostEvent(entry, event);
+
+      expect(fileSearchCacheInvalidatorMock.handleWorktreeUpdate).toHaveBeenCalledWith(
+        event.worktree,
+        // The producer identity the invalidator needs to tell one host's stream
+        // from another's, and to notice a host restart.
+        { projectPath: entry.projectPath, hostEpoch: event.epoch }
+      );
+    });
+
+    it("invalidates before the sys-bus coalescing window drains", () => {
+      // A keystroke landing in the same tick as the change must see the dropped
+      // index, so this deliberately does NOT ride the 50ms debounce.
+      const entry = makeEntry();
+
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ workingTreeChangedAt: 1234 }));
+
+      expect(fileSearchCacheInvalidatorMock.handleWorktreeUpdate).toHaveBeenCalledTimes(1);
+      expect(events.emit).not.toHaveBeenCalledWith("sys:worktree:update", expect.anything());
+    });
+
+    it("drops the index when a worktree is removed", () => {
+      // Covers external removals (`git worktree remove`, IDE cleanup), which the
+      // WORKTREE_DELETE handler's own invalidate call never sees.
+      const entry = makeEntry();
+
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "/project/test/wt",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 2,
+      });
+
+      expect(fileSearchCacheInvalidatorMock.handleWorktreeRemoved).toHaveBeenCalledWith(
+        "/project/test/wt"
+      );
+    });
+  });
 
   describe("inotify-limit-reached dedup", () => {
     it("fires toast on first emit", () => {

@@ -23,8 +23,11 @@ vi.mock("fs/promises", () => ({
 import { CodexAppServerError } from "../CodexAppServerClient.js";
 import {
   listCodexSubagents,
+  listCodexSessionsForCwd,
   readCodexSubagentTranscript,
+  resolveCodexResumeLatestSession,
   selectParentThread,
+  selectResumeLatestThread,
   toSubagent,
   toSubagentStatus,
   toSubagentMessages,
@@ -473,5 +476,296 @@ describe("readCodexSubagentTranscript", () => {
     expect(result.messages).toEqual([{ role: "reply", text: "done" }]);
     expect(turnParams.itemsView).toBe("summary");
     expect(turnParams.sortDirection).toBe("desc");
+  });
+});
+
+describe("selectResumeLatestThread", () => {
+  it("picks the most recent root, which is what `codex resume --last` opens", () => {
+    expect(
+      selectResumeLatestThread([
+        { id: "older", sessionId: "older", recencyAt: 100 },
+        { id: "newest", sessionId: "newest", recencyAt: 300 },
+        { id: "middle", sessionId: "middle", recencyAt: 200 },
+      ])
+    ).toEqual({ sessionId: "newest" });
+  });
+
+  it("returns the session id, not the thread id, when the protocol distinguishes them", () => {
+    expect(
+      selectResumeLatestThread([{ id: "thread-abc", sessionId: "session-xyz", recencyAt: 10 }])
+    ).toEqual({ sessionId: "session-xyz" });
+  });
+
+  it("falls back to the thread id when a server omits sessionId", () => {
+    expect(selectResumeLatestThread([{ id: "thread-abc", recencyAt: 10 }])).toEqual({
+      sessionId: "thread-abc",
+    });
+  });
+
+  it("ignores subagent threads, which `--last` never opens", () => {
+    expect(
+      selectResumeLatestThread([
+        { id: "child", sessionId: "root", parentThreadId: "root", recencyAt: 900 },
+        { id: "root", sessionId: "root", recencyAt: 100 },
+      ])
+    ).toEqual({ sessionId: "root" });
+  });
+
+  it("refuses a tie at the top rather than guessing Codex's own tie-break", () => {
+    expect(
+      selectResumeLatestThread([
+        { id: "a", sessionId: "a", recencyAt: 500 },
+        { id: "b", sessionId: "b", recencyAt: 500 },
+      ])
+    ).toEqual({ sessionId: null });
+  });
+
+  it("is not made ambiguous by a tie below the winner", () => {
+    expect(
+      selectResumeLatestThread([
+        { id: "winner", sessionId: "winner", recencyAt: 900 },
+        { id: "a", sessionId: "a", recencyAt: 500 },
+        { id: "b", sessionId: "b", recencyAt: 500 },
+      ])
+    ).toEqual({ sessionId: "winner" });
+  });
+
+  it("does not read a repeated row as a rival to itself", () => {
+    expect(
+      selectResumeLatestThread([
+        { id: "same", sessionId: "same", recencyAt: 500 },
+        { id: "same", sessionId: "same", recencyAt: 500 },
+      ])
+    ).toEqual({ sessionId: "same" });
+  });
+
+  it("ranks on updatedAt then createdAt when recencyAt is absent", () => {
+    expect(
+      selectResumeLatestThread([
+        { id: "created-only", sessionId: "created-only", createdAt: 800 },
+        { id: "updated", sessionId: "updated", updatedAt: 900 },
+      ])
+    ).toEqual({ sessionId: "updated" });
+  });
+
+  it("reports nothing for an empty or unusable page", () => {
+    expect(selectResumeLatestThread([])).toEqual({ sessionId: null });
+    expect(selectResumeLatestThread([{ recencyAt: 5 }, { id: 42 }])).toEqual({ sessionId: null });
+  });
+
+  it("drops an id that could not be spliced into a shell command safely", () => {
+    expect(
+      selectResumeLatestThread([{ id: "a; rm -rf /", sessionId: "a; rm -rf /", recencyAt: 900 }])
+    ).toEqual({ sessionId: null });
+  });
+});
+
+describe("resolveCodexResumeLatestSession", () => {
+  it("queries the folder the way `--last` selects, and answers with the session id", async () => {
+    let listParams: QueryParams = {};
+    scriptSession((method, params) => {
+      if (method === "thread/list") {
+        listParams = params;
+        return { data: [{ id: "root", sessionId: "root", recencyAt: 10 }] };
+      }
+      return {};
+    });
+
+    await expect(resolveCodexResumeLatestSession("/repo")).resolves.toBe("root");
+
+    expect(listParams.cwd).toEqual(["/repo"]);
+    expect(listParams.sortKey).toBe("recency_at");
+    expect(listParams.sortDirection).toBe("desc");
+    expect(listParams.useStateDbOnly).toBe(true);
+    // `sourceKinds` omitted means the server's interactive-only default, which
+    // is exactly what `--last` uses without `--include-non-interactive`. Naming
+    // the kinds would change the filter rather than restate it.
+    expect(listParams).not.toHaveProperty("sourceKinds");
+    expect(listParams).not.toHaveProperty("archived");
+  });
+
+  it("asks under both spellings of a symlinked path, since the cwd filter is exact", async () => {
+    let listParams: QueryParams = {};
+    scriptSession((method, params) => {
+      if (method === "thread/list") {
+        listParams = params;
+        return { data: [] };
+      }
+      return {};
+    });
+
+    await resolveCodexResumeLatestSession("/tmp/repo");
+
+    expect(listParams.cwd).toEqual(["/tmp/repo", "/private/tmp/repo"]);
+  });
+
+  it("answers null when the folder has no session, so restore keeps plain --last", async () => {
+    scriptSession(() => ({ data: [] }));
+    await expect(resolveCodexResumeLatestSession("/repo")).resolves.toBeNull();
+  });
+
+  it("answers null rather than throwing when Codex cannot be reached", async () => {
+    runSession.mockRejectedValue(new CodexAppServerError("cli-missing", "no codex"));
+    await expect(resolveCodexResumeLatestSession("/repo")).resolves.toBeNull();
+  });
+});
+
+describe("resolveCodexResumeLatestSession budget", () => {
+  it("runs on a restore-sized budget rather than the transport default", async () => {
+    // Restore blocks on this before it can launch the pane, so it has to give
+    // up long before the transport's 15s whole-session default would.
+    scriptSession(() => ({ data: [] }));
+
+    await resolveCodexResumeLatestSession("/repo");
+
+    const options = runSession.mock.calls[0]?.[1] as { timeoutMs?: number } | undefined;
+    expect(options?.timeoutMs).toBe(2_000);
+  });
+});
+
+// issue #12182 — "Find session" on the lost-session banner.
+describe("listCodexSessionsForCwd", () => {
+  it("queries the folder's root threads and maps them for the picker", async () => {
+    let listParams: QueryParams = {};
+    scriptSession((method, params) => {
+      if (method === "thread/list") {
+        listParams = params;
+        return {
+          data: [
+            { id: "root-1", sessionId: "root-1", preview: "fix the flaky test", recencyAt: 20 },
+            { id: "root-2", preview: "add the banner", updatedAt: 10 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result).toEqual({
+      status: "ok",
+      sessions: [
+        { id: "root-1", preview: "fix the flaky test", updatedAt: 20_000 },
+        { id: "root-2", preview: "add the banner", updatedAt: 10_000 },
+      ],
+    });
+    expect(listParams.cwd).toEqual(["/repo"]);
+    expect(listParams.sortKey).toBe("recency_at");
+    expect(listParams.sortDirection).toBe("desc");
+    expect(listParams.useStateDbOnly).toBe(true);
+    // Same non-archived, interactive-only default the resume-latest lookup
+    // and picker share — naming either would broaden the filter, not restate it.
+    expect(listParams).not.toHaveProperty("sourceKinds");
+    expect(listParams).not.toHaveProperty("archived");
+  });
+
+  it("excludes subagent threads — a picker only offers root conversations", async () => {
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "root", sessionId: "root", recencyAt: 5 },
+            { id: "child", parentThreadId: "root", recencyAt: 6 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result).toEqual({
+      status: "ok",
+      sessions: [{ id: "root", preview: "", updatedAt: 5_000 }],
+    });
+  });
+
+  it("orders sessions most-recently-active first", async () => {
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "older", sessionId: "older", recencyAt: 1 },
+            { id: "newer", sessionId: "newer", recencyAt: 99 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result.status).toBe("ok");
+    expect(result.status === "ok" ? result.sessions.map((s) => s.id) : []).toEqual([
+      "newer",
+      "older",
+    ]);
+  });
+
+  it("drops a thread with no usable id rather than throwing", async () => {
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return { data: [{ preview: "no id at all", recencyAt: 1 }] };
+      }
+      return {};
+    });
+
+    await expect(listCodexSessionsForCwd("/repo")).resolves.toEqual({ status: "ok", sessions: [] });
+  });
+
+  it("drops a thread whose id doesn't match the session-id shape", async () => {
+    // The id reaches buildResumeCommand and is interpolated into a shell
+    // command the instant it's picked — never trust it unvalidated off the wire.
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "ok-thread", sessionId: "ok-thread", recencyAt: 5 },
+            { id: "bad; rm -rf /", sessionId: "bad; rm -rf /", recencyAt: 6 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result).toEqual({
+      status: "ok",
+      sessions: [{ id: "ok-thread", preview: "", updatedAt: 5_000 }],
+    });
+  });
+
+  it("asks under both spellings of a symlinked path, since the cwd filter is exact", async () => {
+    let listParams: QueryParams = {};
+    scriptSession((method, params) => {
+      if (method === "thread/list") {
+        listParams = params;
+        return { data: [] };
+      }
+      return {};
+    });
+
+    await listCodexSessionsForCwd("/tmp/repo");
+
+    expect(listParams.cwd).toEqual(["/tmp/repo", "/private/tmp/repo"]);
+  });
+
+  it("forwards codexHome to the session so the query runs against the pane's own profile", async () => {
+    scriptSession(() => ({ data: [] }));
+
+    await listCodexSessionsForCwd("/repo", "/pane/.codex");
+
+    const options = runSession.mock.calls[0]?.[1] as { codexHome?: string } | undefined;
+    expect(options?.codexHome).toBe("/pane/.codex");
+  });
+
+  it("reports unavailable rather than throwing when Codex cannot be reached", async () => {
+    runSession.mockRejectedValue(new CodexAppServerError("cli-missing", "no codex"));
+
+    await expect(listCodexSessionsForCwd("/repo")).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "cli-missing",
+    });
   });
 });

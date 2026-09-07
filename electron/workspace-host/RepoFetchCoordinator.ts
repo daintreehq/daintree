@@ -2,6 +2,7 @@ import { createBackgroundFetchGit } from "../utils/hardenedGit.js";
 import { getGitCommonDir } from "../utils/gitUtils.js";
 import { classifyGitError } from "../../shared/utils/gitOperationErrors.js";
 import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
+import type { WorkspaceFetchResult } from "../../shared/types/workspace-host.js";
 
 const FETCH_ABORT_TIMEOUT_MS = 60_000;
 
@@ -77,6 +78,14 @@ interface FetchFailureEntry {
 interface RemoteState {
   failure: FetchFailureEntry | null;
   lastSuccessfulFetch: number | null;
+  /**
+   * Whether the fetch behind {@link lastSuccessfulFetch} passed `--prune`.
+   * The recency window is a superset test, not an equality one: a pruned
+   * success covers a later plain fetch, but a plain success must NOT satisfy a
+   * prune request or "Fetch and prune" clicked seconds after "Fetch" would
+   * silently never prune.
+   */
+  lastSuccessfulFetchPruned: boolean;
   /** Bumped when the repo's monitors are torn down so stale completions discard. */
   generation: number;
 }
@@ -92,6 +101,11 @@ const STATE_KEY_DELIMITER = "\u0000";
 
 function stateKey(commonDir: string, remote: string): string {
   return `${commonDir}${STATE_KEY_DELIMITER}${remote}`;
+}
+
+/** `prune` defaults to on — see {@link FetchOptions.prune}. */
+function prunesRefs(opts: FetchOptions): boolean {
+  return opts.prune !== false;
 }
 
 export interface RepoFetchCoordinatorCallbacks {
@@ -131,46 +145,24 @@ export interface FetchOptions {
    * `remotes`.
    */
   primaryRemote?: string;
+  /**
+   * Pass `--prune`, deleting remote-tracking refs for branches gone from the
+   * remote. Defaults to `true`: every scheduled, wake, and auth-retry fetch has
+   * pruned since #6564, and dropping that would let `refs/remotes/` accumulate
+   * dead branches in a worktree-heavy repo. Only the explicit "Fetch" menu row
+   * passes `false`, which is the whole reason this is an option rather than a
+   * constant (#12091).
+   */
+  prune?: boolean;
 }
 
-export interface FetchResult {
-  status: "success" | "skipped" | "failed";
-  /** Present when status === "failed". */
-  reason?: GitOperationReason;
-  /** Why we skipped — for logging / diagnostics. */
-  skipReason?: "no-common-dir" | "in-failure-window" | "auth-suspended" | "stale-generation";
-  /**
-   * Coordinator's `lastSuccessfulFetch` for the primary (commondir, remote)
-   * after this call settled. Set on success (the timestamp just written) and
-   * on skipped/failed outcomes (the prior timestamp, if any). Lets
-   * `WorkspaceService` propagate the freshest known value to monitors without
-   * reaching into coordinator internals.
-   *
-   * Scoped to the primary remote on purpose: taking the newest timestamp
-   * across every fetched remote would let a healthy auxiliary `origin` vouch
-   * for counts measured against a base remote that failed, which is a
-   * fresh-looking badge over stale data — the same class of bug #11747 exists
-   * to fix.
-   */
-  lastFetchedAt?: number | null;
-  /**
-   * True when this call ended in (or remained in) an auth-class failure for
-   * the primary remote. Includes the `auth-suspended` skip case so the
-   * renderer keeps showing the "Sign in to refresh" affordance instead of
-   * flashing stale counts when a sibling's force-fetch is rate-cached.
-   */
-  authFailed?: boolean;
-  /**
-   * True when this call ended in (or remained in) a transient (network /
-   * repo-not-found-first / generic transient) failure for the primary remote.
-   * Drives the "Couldn't reach the remote" tooltip line on the worktree card.
-   * False on success, on auth-class failures (those use `authFailed`), and on
-   * the `no-common-dir` skip path where we have no state to report.
-   */
-  networkFailed?: boolean;
-  /** Remote this result describes. Absent only on the `no-common-dir` skip. */
-  remote?: string;
-}
+/**
+ * Result of one coordinator fetch. Defined in `shared/types/workspace-host.ts`
+ * because a manual fetch's outcome crosses the workspace-host boundary back to
+ * the main process (#12091); aliased here so every existing reference keeps its
+ * local name.
+ */
+export type FetchResult = WorkspaceFetchResult;
 
 /**
  * Per-repo coordinator for background `git fetch` calls.
@@ -273,7 +265,7 @@ export interface FetchResult {
           continue;
         }
       }
-      const recent = this.recentSuccessResult(state, opts.force === true, remote);
+      const recent = this.recentSuccessResult(state, opts.force === true, remote, prunesRefs(opts));
       if (recent) {
         settled.set(remote, recent);
         continue;
@@ -299,9 +291,15 @@ export interface FetchResult {
       }
     }
 
-    return (
-      settled.get(primary) ?? { status: "skipped", skipReason: "stale-generation", remote: primary }
+    const primaryResult = settled.get(primary) ?? {
+      status: "skipped" as const,
+      skipReason: "stale-generation" as const,
+      remote: primary,
+    };
+    const auxiliaryFailed = remotes.some(
+      (remote) => remote !== primary && settled.get(remote)?.status === "failed"
     );
+    return auxiliaryFailed ? { ...primaryResult, auxiliaryFailed } : primaryResult;
   }
 
   /**
@@ -448,9 +446,13 @@ export interface FetchResult {
   private recentSuccessResult(
     state: RemoteState,
     force: boolean,
-    remote: string
+    remote: string,
+    prune: boolean
   ): FetchResult | null {
     if (state.failure || state.lastSuccessfulFetch === null) return null;
+    // A prune request the cached success didn't prune for is a different
+    // operation, not a duplicate of it — reusing it would drop the prune.
+    if (prune && !state.lastSuccessfulFetchPruned) return null;
     const window = force ? FORCE_FETCH_RECENCY_WINDOW_MS : FETCH_RECENCY_WINDOW_MS;
     const elapsed = Date.now() - state.lastSuccessfulFetch;
     if (elapsed < 0 || elapsed >= window) return null;
@@ -496,6 +498,7 @@ export interface FetchResult {
       state = {
         failure: null,
         lastSuccessfulFetch: null,
+        lastSuccessfulFetchPruned: false,
         generation: this.baseGeneration,
       };
       this.states.set(key, state);
@@ -525,7 +528,12 @@ export interface FetchResult {
     // Re-check recency after waiting on the chain — back-to-back sibling
     // fetches (wake storm, auth retry) all queue before the first completes,
     // so the dedup has to look at the timestamp the prior link just wrote.
-    const recent = this.recentSuccessResult(stateAtStart, opts.force === true, remote);
+    const recent = this.recentSuccessResult(
+      stateAtStart,
+      opts.force === true,
+      remote,
+      prunesRefs(opts)
+    );
     if (recent) {
       return { result: recent, fetched: false };
     }
@@ -548,7 +556,19 @@ export interface FetchResult {
       // so concurrent foreground operations (status polls, user pushes) don't
       // contend on the same file. Requires Git ≥ 2.29 — all supported platforms
       // ship ≥ 2.34, so no version guard is needed.
-      await git.raw(["fetch", remote, "--no-auto-gc", "--prune", "--no-write-fetch-head"]);
+      const prune = prunesRefs(opts);
+      // `--no-prune`, not merely omitting `--prune`: `fetch.prune=true` or
+      // `remote.<name>.prune=true` in the user's git config would otherwise
+      // prune anyway, and the whole point of the "Fetch" row is that it does
+      // not delete refs. The flag has to be explicit in BOTH directions or the
+      // choice the menu offers isn't one.
+      await git.raw([
+        "fetch",
+        remote,
+        "--no-auto-gc",
+        prune ? "--prune" : "--no-prune",
+        "--no-write-fetch-head",
+      ]);
 
       const state = this.states.get(key);
       if (!state || state.generation !== generationAtStart) {
@@ -559,6 +579,7 @@ export interface FetchResult {
       }
       state.failure = null;
       state.lastSuccessfulFetch = Date.now();
+      state.lastSuccessfulFetchPruned = prune;
       return {
         result: {
           status: "success",

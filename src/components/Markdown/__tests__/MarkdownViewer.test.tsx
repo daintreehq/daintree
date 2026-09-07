@@ -55,11 +55,39 @@ describe("MarkdownViewer", () => {
     expect(new URL(img.getAttribute("src") ?? "").searchParams.get("v")).toBe("rev-7");
   });
 
+  // #12134: the reading size is a rung of the shared type scale, resolved to a
+  // token on the document root. Pinning the token rather than a pixel value is
+  // the point — a raw size would stop tracking the scale.
+  it("declares the chosen rung as a type-scale token on the document root", async () => {
+    const { container } = render(
+      <MarkdownViewer {...FIXTURE_PROPS} viewMode="rendered" fontSize="2xl" />
+    );
+
+    await screen.findByRole("heading", { level: 1 });
+    const root = container.querySelector<HTMLElement>(".markdown-document");
+    expect(root).not.toBeNull();
+    expect(root!.style.getPropertyValue("--markdown-font-size")).toBe("var(--text-2xl)");
+  });
+
+  it("leaves the property absent without a size, so the stylesheet keeps the default", async () => {
+    const { container } = render(<MarkdownViewer {...FIXTURE_PROPS} viewMode="rendered" />);
+
+    await screen.findByRole("heading", { level: 1 });
+    const root = container.querySelector<HTMLElement>(".markdown-document");
+    expect(root!.style.getPropertyValue("--markdown-font-size")).toBe("");
+  });
+
   it("stays silent in source mode, which has no chunk to wait on", () => {
     const onRendered = vi.fn();
-    render(<MarkdownViewer {...FIXTURE_PROPS} viewMode="source" onRendered={onRendered} />);
+    const { container } = render(
+      <MarkdownViewer {...FIXTURE_PROPS} viewMode="source" fontSize="2xl" onRendered={onRendered} />
+    );
 
     expect(screen.getByTestId("code-viewer-mock")).toBeDefined();
     expect(onRendered).not.toHaveBeenCalled();
+    // Source is CodeMirror, which this scale does not reach: the rung must not
+    // leak onto the editor as an inherited custom property.
+    expect(container.querySelector(".markdown-document")).toBeNull();
+    expect(container.querySelector<HTMLElement>("[style*='--markdown-font-size']")).toBeNull();
   });
 });

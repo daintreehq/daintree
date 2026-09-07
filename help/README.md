@@ -22,7 +22,7 @@ claude                            # Claude Code
 codex                             # Codex CLI
 ```
 
-Each agent auto-discovers its instruction file from the working directory and constrains itself to help-assistant mode. Note that running a CLI here by hand is **not** an end-to-end test of a real help session: MCP wiring is injected per session at spawn time (a fresh bearer token in `.mcp.json` for Claude, `-c` flags for Codex), so a manual launch from this directory gets the prompt but not the live MCP servers.
+Each agent auto-discovers its instruction file from the working directory and constrains itself to help-assistant mode. Note that running a CLI here by hand is **not** an end-to-end test of a real help session: MCP wiring is injected per session at spawn time (a per-lane `--mcp-config` file carrying a fresh bearer token for Claude, `-c` flags for Codex), so a manual launch from this directory gets the prompt but not the live MCP servers.
 
 ## Architecture
 
@@ -68,7 +68,7 @@ Both share:
 - **Tone:** Concise, actionable, grounded in documentation
 - **Scope boundary:** If a question is outside docs, search GitHub issues or offer to file one
 - **Forge access:** Search/view issues without confirmation, never write through a forge CLI. Creating an issue requires user approval of the exact draft; because `forge.createIssue` has no repository argument and targets the active worktree's repo, Daintree feedback is handed to the user to file by default and filed directly only when the active worktree is itself a `daintreehq/daintree` checkout
-- **Topic coverage:** 11 documentation areas (getting started, panels, agents, worktrees, keybindings, actions, context injection, recipes, themes, browser/devpreview, workflows)
+- **Topic coverage:** 10 documentation areas (getting started, panels, agents, worktrees, keybindings, actions, context injection, recipes, themes, browser/devpreview)
 
 ### Editing the prompts
 
@@ -101,8 +101,8 @@ Help sessions run at one of three authorization tiers, selected by user settings
 | Tier | Trigger | Capabilities (categories) |
 | --- | --- | --- |
 | `workbench` | User selects "Workbench — read-only" in Settings → Assistant | Read-only introspection: list projects, worktrees, terminals; read git status, diffs, commits, agent state, terminal output; view forge issues/PRs including CI status and issue comments; check review readiness and detect a project's runnable commands; search actions and skills. |
-| `action` | Default for help sessions | Adds in-app orchestration: spawn agents (`agent.launch`), send prompts to running agents (`terminal.sendCommand`), close terminals (`terminal.close`/`terminal.kill`), create worktrees, inject context, run recipes, open files, run a detected project check (`project.runCheck`). |
-| `system` | User selects "System — destructive and external writes" in Settings → Assistant | Adds filesystem-destructive and externally-visible operations: delete worktrees, stage/commit/push git, write the OS clipboard, create and modify forge issues/PRs/reviews from the local app. |
+| `action` | Default for help sessions | Adds in-app orchestration: spawn agents (`agent.launch`), send prompts to running agents (`terminal.sendCommand`), close terminals (`terminal.close`/`terminal.kill`), create worktrees, delete them (`worktree.delete`, or the session-scoped `worktree.deleteOwned`) and tear down their provisioned resources — all confirm-gated — inject context, run recipes, open files, run a detected project check (`project.runCheck`). |
+| `system` | User selects "System — destructive and external writes" in Settings → Assistant | Adds worktree creation at an explicit root outside the project, terminal arm/disarm for automation, git stage/unstage/fetch/commit/push, OS clipboard and CopyTree-to-disk writes, and forge issue/PR/review reads and writes from the local app. |
 
 These are the **help-assistant** tiers. They are distinct from the `external` tier that API-key clients connect at, which is a much smaller, separately budgeted allowlist — see [`docs/architecture/mcp-server.md`](../docs/architecture/mcp-server.md). Nothing that shrank the external surface applies to the tiers above.
 

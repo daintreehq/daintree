@@ -1,7 +1,6 @@
 import { utilityProcess, UtilityProcess, app } from "electron";
 import { EventEmitter } from "events";
 import { createHash } from "crypto";
-import fs, { existsSync } from "fs";
 import path from "path";
 import os from "os";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -12,22 +11,24 @@ import {
   PLUGIN_DEV_WORKER_KIND,
   PLUGIN_PROD_WORKER_KIND,
 } from "../../../shared/types/pluginDevWorker.js";
-import type {
-  PluginHostToWorkerMessage,
-  PluginWorkerToHostMessage,
-} from "../../../shared/types/pluginDevWorker.js";
+import type { PluginIdentity } from "../../../shared/types/plugin.js";
+import type { PluginHostToWorkerMessage } from "../../../shared/types/pluginDevWorker.js";
+import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 
 const logger = createLogger("main:PluginDevWorker");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Debounce for `dist/index.js` change events. Vite emits a write (and often a
- * rename) per rebuild; coalesce them so one rebuild triggers one reload. */
-const RELOAD_DEBOUNCE_MS = 200;
-
 /** Graceful-dispose grace period before SIGKILL, matching WorkspaceHostProcess. */
 const DISPOSE_TIMEOUT_MS = 1000;
+
+/**
+ * Budget from a successful fork to the worker's `ready` handshake (#12275).
+ * Separate from the activation budget in `PluginService`: this one covers
+ * bootstrap, that one the plugin's own `activate()`.
+ */
+const READY_TIMEOUT_MS = 5000;
 
 // Time-windowed crash-loop guard. Mirrors the constants in PtyHostLifecycle,
 // WorkspaceHostProcess, and CrashLoopGuardService so all guards follow the same
@@ -36,24 +37,37 @@ const DISPOSE_TIMEOUT_MS = 1000;
 // imported because the guards operate at independent layers. The alignment test
 // (`crashGuardAlignment.test.ts`) asserts the values stay in lockstep.
 //
-// Crucially, an intentional reload (mtime change → kill → respawn) is NOT a
-// crash: `reload()` clears the crash window before killing, so a developer
-// doing rapid saves can never trip the cap. Only an unintended worker exit
-// (plugin bootstrap throw, segfault) accumulates toward it.
+// Crucially, a rebuild is NOT a crash. A dev rebuild is reconciled by
+// PluginService replacing the whole plugin — this host is disposed and a fresh
+// one forked with an empty window — so rapid saves can never trip the cap. Only
+// an unintended worker exit (plugin bootstrap throw, segfault) accumulates
+// toward it.
 const CRASH_THRESHOLD = 3;
 export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
 export interface PluginDevWorkerHostOptions {
   pluginId: string;
+  /**
+   * The plugin's identity as the host knows it, relayed to the worker so the
+   * proxy's `host.pluginInfo` answers with the real binding rather than a
+   * reconstruction. `projectRoot` in particular cannot be derived from the
+   * instance key.
+   */
+  identity: PluginIdentity;
   /** Plugin directory root (the symlink target). Used as the worker `cwd`. */
   pluginDir: string;
-  /** Absolute path to the built bundle (`dist/index.js`) the worker imports. */
-  bundlePath: string;
   /**
-   * `"dev"` (default) hot-reloads the worker on every `bundlePath` rebuild;
-   * `"prod"` runs the same worker without the file watcher (production bundles
-   * never rebuild in place, so there is nothing to watch). Crash supervision,
-   * fork lifecycle, and graceful dispose are identical in both modes.
+   * Absolute path to the built bundle (`dist/index.js`) the worker imports.
+   * Absent for a commands-only plugin — one with no `main`, whose only
+   * executable code is its manifest commands' handler modules (#12274). The
+   * worker still forks and boots the harness; it just has nothing to import
+   * until a command is dispatched.
+   */
+  bundlePath?: string;
+  /**
+   * Distinguishes the two worker kinds for the service name and the
+   * utility-process kind label only. Crash supervision, fork lifecycle, and
+   * graceful dispose are identical in both modes.
    */
   mode?: "dev" | "prod";
   /**
@@ -67,44 +81,54 @@ export interface PluginDevWorkerHostOptions {
 }
 
 /**
- * Owns the `utilityProcess.fork` lifecycle for one plugin: fork the worker,
- * hand it the bundle to import, and (in `"dev"` mode only) watch `bundlePath`
- * for rebuilds, killing + respawning on each change. Production plugins reuse
- * the same host with `mode: "prod"` and no file watcher. Crash supervision
- * mirrors
+ * Owns the `utilityProcess.fork` lifecycle for one plugin: fork the worker and
+ * hand it the bundle to import — or nothing to import, for a commands-only
+ * plugin whose handler modules are loaded on dispatch instead (#12274). Rebuild detection is deliberately NOT here —
+ * a rebuild changes the manifest and the views as well as the backend, so it is
+ * reconciled one layer up by {@link PluginDevArtifactWatcher} driving the
+ * ordinary dev-load path, which replaces this host along with everything else
+ * the plugin contributes (#12277). Crash supervision mirrors
  * {@link WorkspaceHostProcess} (sliding crash window, `child-process-gone`
  * filtering, exit/gone ordering defer).
  *
  * Messages from the worker are re-emitted as `worker-message` events; the
  * {@link PluginDevWorkerMainBridge} consumes them and replies via {@link send}.
- * Lifecycle signals are emitted as `ready`, `reloading`, `exit`, and
- * `crash-loop`.
+ * Messages are validated against the protocol schema before they are forwarded;
+ * anything that fails is a terminal, plugin-scoped failure (#12276).
+ *
+ * Lifecycle signals are emitted as `ready`, `exit`, `crash-loop`, and
+ * `protocol-violation`.
  */
 export class PluginDevWorkerHost extends EventEmitter {
   private child: UtilityProcess | null = null;
   private isDisposed = false;
-  private isReloading = false;
   readonly pluginId: string;
+  private readonly identity: PluginIdentity;
   private readonly pluginDir: string;
-  private readonly bundlePath: string;
+  private readonly bundlePath: string | undefined;
   private readonly serviceName: string;
   private readonly mode: "dev" | "prod";
   private readonly workerKind: string;
   /** Spike #10890: permission-model execArgv flags appended at fork time. */
   private readonly permissionExecArgv: readonly string[];
 
-  private watcher: fs.FSWatcher | null = null;
-  private reloadTimer: NodeJS.Timeout | null = null;
   private disposeTimer: NodeJS.Timeout | null = null;
 
   /**
    * Sliding window of recent UNINTENTIONAL crash timestamps. Lazy-pruned to
-   * entries within `CRASH_WINDOW_MS` on each crash. Reload-driven exits clear
-   * it (see {@link reload}) so deliberate kills never count toward the cap.
+   * entries within `CRASH_WINDOW_MS` on each crash. A deliberate kill sets
+   * {@link expectingExit} and is never recorded.
    */
   private crashTimestamps: number[] = [];
   /** Set true around an intentional kill so the exit handler skips crash accounting. */
   private expectingExit = false;
+
+  /**
+   * Latched once this worker has spoken the protocol wrongly. Terminal: the
+   * worker is torn down and never respawned, so the latch only ever guards
+   * against re-reporting from a message admitted in the same tick.
+   */
+  private protocolViolated = false;
 
   private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
   private childProcessGoneHandler:
@@ -113,10 +137,13 @@ export class PluginDevWorkerHost extends EventEmitter {
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
+  /** Armed per fork; cleared by `ready`, by an exit, or by dispose. */
+  private readyTimer: NodeJS.Timeout | null = null;
 
   constructor(options: PluginDevWorkerHostOptions) {
     super();
     this.pluginId = options.pluginId;
+    this.identity = options.identity;
     this.pluginDir = options.pluginDir;
     this.bundlePath = options.bundlePath;
     this.mode = options.mode ?? "dev";
@@ -139,21 +166,18 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.registerChildProcessGoneListener();
   }
 
-  /** Fork the worker and begin watching the bundle. Resolves when the worker
-   * posts `ready`; rejects on fork failure or premature exit.
+  /** Fork the worker. Resolves when the worker posts `ready`; rejects on fork
+   * failure or premature exit.
    *
    * Deliberately NOT `async`: an async wrapper would adopt `readyPromise`'s
    * state in a *fresh* promise that bypasses the `readyPromise.catch` guard
    * (constructor / {@link startFresh}), so a fire-and-forget caller
    * (`void host.start()`) would surface an unhandled rejection when dispose or
    * a premature exit rejects ready. Returning `readyPromise` directly keeps the
-   * guard in effect; `startWorker`/`startWatching` swallow their own errors and
-   * never throw synchronously, so awaiting callers still observe rejections. */
+   * guard in effect; `startWorker` swallows its own errors and never throws
+   * synchronously, so awaiting callers still observe rejections. */
   start(): Promise<void> {
-    this.startWorker();
-    // Production workers never rebuild their bundle in place, so there is
-    // nothing to hot-reload — skip the file watcher entirely.
-    if (this.mode === "dev") this.startWatching();
+    this.startWorker(/* armDeadline */ true);
     return this.readyPromise;
   }
 
@@ -183,48 +207,25 @@ export class PluginDevWorkerHost extends EventEmitter {
     }
   }
 
-  /**
-   * Reload the worker: clear the crash window (this is an intentional restart,
-   * not a crash), kill the current child, and fork a fresh one once it exits.
-   * The new worker re-imports the rebuilt bundle and re-runs `activate`.
-   */
-  reload(): void {
-    if (this.isDisposed) return;
-    if (this.isReloading) return;
-    this.isReloading = true;
-
-    // Deliberate restart — give future crashes a fresh budget so rapid saves
-    // can't trip the crash-loop cap (#7917 manualRestart parallel).
-    this.crashTimestamps = [];
-
-    this.emit("reloading");
-
-    if (!this.child) {
-      // No live child (e.g. a prior crash gave up); just fork a new one.
-      this.isReloading = false;
-      this.startFresh();
-      return;
-    }
-
-    this.killChild(() => {
-      if (this.isDisposed) return;
-      this.isReloading = false;
-      this.startFresh();
-    });
-  }
-
   /** Re-arm the ready promise and fork a new worker. */
   private startFresh(): void {
     if (this.isDisposed) return;
-    this.readyPromise = new Promise((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
-    this.readyPromise.catch(() => undefined);
-    this.startWorker();
+    // Only re-arm once the previous wait has settled. Re-arming over a still
+    // pending resolver would orphan the original `start()` caller forever, and
+    // PluginService reads a `start()` rejection as a hard fork failure (#12279).
+    // The crash path settles the waiter before it gets here; this keeps that a
+    // property of the code rather than of the caller's timing.
+    if (!this.readyResolve) {
+      this.readyPromise = new Promise((resolve, reject) => {
+        this.readyResolve = resolve;
+        this.readyReject = reject;
+      });
+      this.readyPromise.catch(() => undefined);
+    }
+    this.startWorker(/* armDeadline */ false);
   }
 
-  /** Promise that resolves on the next `ready` after a reload. */
+  /** Promise that resolves on the next `ready` after a crash respawn. */
   waitForReady(): Promise<void> {
     return this.readyPromise;
   }
@@ -233,18 +234,7 @@ export class PluginDevWorkerHost extends EventEmitter {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
-    if (this.watcher) {
-      try {
-        this.watcher.close();
-      } catch {
-        // ignore — watcher may already be closed
-      }
-      this.watcher = null;
-    }
-    if (this.reloadTimer) {
-      clearTimeout(this.reloadTimer);
-      this.reloadTimer = null;
-    }
+    this.clearReadyDeadline();
     if (this.childProcessGoneHandler) {
       app.off("child-process-gone", this.childProcessGoneHandler);
       this.childProcessGoneHandler = null;
@@ -286,114 +276,12 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.removeAllListeners();
   }
 
-  /** Kill the current child, invoking `onExit` once it's gone. */
-  private killChild(onExit: () => void): void {
-    const child = this.child;
-    if (!child) {
-      onExit();
-      return;
-    }
-    this.expectingExit = true;
-
-    let settled = false;
-    const finish = (): void => {
-      if (settled) return;
-      settled = true;
-      if (this.disposeTimer) {
-        clearTimeout(this.disposeTimer);
-        this.disposeTimer = null;
-      }
-      onExit();
-    };
-
-    // Prefer a cooperative dispose, fall back to kill after the grace period.
-    this.send({ type: "dispose" });
-    this.disposeTimer = setTimeout(() => {
-      this.disposeTimer = null;
-      if (this.child === child) {
-        try {
-          child.kill();
-        } catch {
-          // already gone
-        }
-      }
-    }, DISPOSE_TIMEOUT_MS);
-    this.disposeTimer.unref?.();
-
-    child.once("exit", () => finish());
-  }
-
-  private startWatching(): void {
-    if (this.watcher || this.isDisposed) return;
-    const dir = path.dirname(this.bundlePath);
-    const base = path.basename(this.bundlePath);
-
-    // `fs.watch` on the `dist/` dir is preferred — watching the file directly
-    // would go stale when Vite replaces it via rename, and filtering by
-    // filename coalesces rename+write. But `dist/` may not exist yet when
-    // Daintree loads the plugin (Vite hasn't produced the first build). In that
-    // case watch the plugin root for `dist/` appearing, then re-arm the real
-    // watcher. A single-dir watch is one fd — no recursive-watch fd leak.
-    if (existsSync(dir)) {
-      try {
-        this.watcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
-          if (filename && filename !== base) return;
-          this.scheduleReload();
-        });
-        this.watcher.on("error", (error) => {
-          logger.warn(`[${this.serviceName}] Bundle watcher error`, {
-            error: formatErrorMessage(error, "watch failed"),
-          });
-        });
-      } catch (error) {
-        logger.warn(`[${this.serviceName}] Failed to watch bundle dir ${dir}`, {
-          error: formatErrorMessage(error, "watch failed"),
-        });
-      }
-      return;
-    }
-
-    const distName = path.basename(dir);
-    try {
-      this.watcher = fs.watch(this.pluginDir, { persistent: false }, (_event, filename) => {
-        if (filename && filename !== distName) return;
-        if (!existsSync(dir)) return;
-        // `dist/` now exists — swap to watching it for real, then reload to pick
-        // up the freshly-built bundle.
-        if (this.watcher) {
-          try {
-            this.watcher.close();
-          } catch {
-            // ignore
-          }
-          this.watcher = null;
-        }
-        this.startWatching();
-        this.scheduleReload();
-      });
-      this.watcher.on("error", (error) => {
-        logger.warn(`[${this.serviceName}] Plugin-dir watcher error`, {
-          error: formatErrorMessage(error, "watch failed"),
-        });
-      });
-    } catch (error) {
-      logger.warn(`[${this.serviceName}] Failed to watch plugin dir ${this.pluginDir}`, {
-        error: formatErrorMessage(error, "watch failed"),
-      });
-    }
-  }
-
-  private scheduleReload(): void {
-    if (this.isDisposed) return;
-    if (this.reloadTimer) clearTimeout(this.reloadTimer);
-    this.reloadTimer = setTimeout(() => {
-      this.reloadTimer = null;
-      this.reload();
-    }, RELOAD_DEBOUNCE_MS);
-    this.reloadTimer.unref?.();
-  }
-
-  private startWorker(): void {
+  /**
+   * @param armDeadline Whether this fork gets a fork-to-ready deadline. True for
+   * the fork `start()` is awaiting; false for the supervisor's own crash
+   * respawn, which answers to the crash-loop cap instead.
+   */
+  private startWorker(armDeadline: boolean): void {
     if (this.isDisposed) return;
     this.pendingChildProcessGoneReason = null;
     this.expectingExit = false;
@@ -443,18 +331,140 @@ export class PluginDevWorkerHost extends EventEmitter {
 
     this.installLogForwarding();
 
-    this.child.on("message", (msg: PluginWorkerToHostMessage) => {
-      this.handleWorkerMessage(msg);
+    // Bind both listeners to THIS child so a superseded or retiring worker can
+    // never speak for the host (#12279).
+    const child = this.child;
+
+    child.on("message", (raw: unknown) => {
+      // Third-party code can post to `parentPort` directly, so this callback is
+      // an untrusted-input boundary. Node re-throws straight out of `emit()`,
+      // which lands in `uncaughtException` and takes the whole app into fatal
+      // recovery over one plugin's bug (#12276) — so nothing may escape here,
+      // including a throw from a synchronous `worker-message` listener.
+      //
+      // Authority is checked BEFORE validation: a retiring generation's messages
+      // are not this host's to read at all, malformed or not, and rejecting one
+      // must not tear down the incoming worker that already replaced it.
+      if (!this.hasAuthority(child)) return;
+      try {
+        this.handleWorkerMessage(raw);
+      } catch (error) {
+        // The report is best-effort — a logger that itself throws must not be
+        // the thing that escapes into `uncaughtException`.
+        try {
+          logger.error(`[${this.serviceName}] Worker message handling threw`, error);
+        } catch {
+          // swallowed: stopping the worker below is what matters
+        }
+        this.failProtocolViolation("worker message handling failed");
+      }
     });
 
-    this.child.on("exit", (code) => {
+    child.on("exit", (code) => {
+      if (this.child !== child) return;
       this.handleExit(code);
     });
+
+    if (armDeadline) this.armReadyDeadline(child);
   }
 
-  private handleWorkerMessage(msg: PluginWorkerToHostMessage): void {
-    if (this.isDisposed) return;
+  /**
+   * Bound the gap between a successful fork and this child's `ready`.
+   *
+   * `utilityProcess.fork()` only throws for an immediate spawn failure, and
+   * Electron merely WARNS a utility process on an unhandled rejection instead of
+   * killing it (#10340) — so a worker whose bootstrap throws, or whose import
+   * spins, stays alive-but-mute and emits no `exit` to react to. Nothing else
+   * bounds that gap: `start()` would stay pending forever, and the in-flight
+   * `activationPromises` entry it feeds hangs every later retry with it.
+   *
+   * Armed for the fork `start()` is AWAITING, because that is what the deadline
+   * is for: an awaited bootstrap that never completes hangs its caller, and
+   * through it the cached in-flight activation. Deliberately NOT armed for the
+   * supervisor's own crash respawn — nobody awaits that fork, so a wedged one
+   * hangs no one, and it already answers to the crash-loop cap; a second
+   * deadline there would be a competing restart policy layered over the ladder.
+   *
+   * On expiry the worker is wedged rather than crashing, so it is stopped
+   * WITHOUT crash accounting: a bootstrap that never completes must not burn the
+   * respawn budget, and the failure has to stay visible to its caller.
+   */
+  private armReadyDeadline(child: UtilityProcess): void {
+    this.clearReadyDeadline();
+    this.readyTimer = setTimeout(() => {
+      this.readyTimer = null;
+      if (this.isDisposed || this.child !== child) return;
+      const message = `Plugin worker "${this.pluginId}" did not become ready within ${READY_TIMEOUT_MS}ms`;
+      logger.error(`[${this.serviceName}] ${message}`);
+      if (this.readyReject) {
+        this.readyReject(new Error(message));
+        this.readyReject = null;
+        this.readyResolve = null;
+      }
+      this.expectingExit = true;
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+    }, READY_TIMEOUT_MS);
+    this.readyTimer.unref?.();
+  }
+
+  private clearReadyDeadline(): void {
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
+  }
+
+  /**
+   * Whether messages from `child` still carry authority.
+   *
+   * Dispose asks the worker to shut down cooperatively and only force-kills it
+   * after a grace period, so a retiring worker stays alive and connected well
+   * after the host stopped speaking for it — and its `dispose` handler runs the
+   * plugin's cleanup, which can itself call the host. Those calls must not be
+   * forwarded: the bridge stamps every host call with the CURRENT generation, so
+   * a late prompt, settings/storage write or delegated action from the dead
+   * generation would pass every downstream staleness check and commit with full
+   * authority (#12279). A rebuild takes the same route — PluginService disposes
+   * this host outright and forks a fresh one (#12277).
+   *
+   * Gating on child identity is self-clearing — a crash respawn's replacement
+   * becomes `this.child` and is served immediately, including the host calls its
+   * `activate()` makes, so this cannot deadlock activation.
+   */
+  private hasAuthority(child: UtilityProcess): boolean {
+    return !this.isDisposed && this.child === child;
+  }
+
+  private handleWorkerMessage(raw: unknown): void {
+    if (this.isDisposed || this.protocolViolated) return;
+
+    const parsed = parseWorkerToHostMessage(raw);
+    if (!parsed.ok) {
+      // Field paths and issue codes only — the offending values stay out of
+      // the log, and the reason handed onward becomes user-visible provenance.
+      logger.error(
+        `[${this.serviceName}] Worker sent a message that violates the protocol`,
+        undefined,
+        { issues: parsed.issues }
+      );
+      this.failProtocolViolation("worker sent a malformed message");
+      return;
+    }
+    const msg = parsed.message;
+
     if (msg.type === "ready") {
+      this.clearReadyDeadline();
+      // No `expectingExit` guard here, unlike #12282's in-host reload. A child
+      // is only ever asked to die by `dispose()`, which sets `isDisposed`
+      // first — so both this method and `hasAuthority` have already dropped the
+      // message by the time a doomed child's `ready` could reach this branch. A
+      // rebuild no longer kills a child from under a live host at all: it
+      // replaces the whole plugin one layer up (#12277).
+      //
       // Spike #10890: record whether Electron honored the permission-model
       // execArgv flags. Only logged when we actually requested them, so a
       // normal fork stays quiet. `honored=false` on Electron 42 is the expected
@@ -471,8 +481,9 @@ export class PluginDevWorkerHost extends EventEmitter {
       // Re-import the bundle and re-run activate on every (re)start.
       this.send({
         type: "start",
-        bundleUrl: pathToBundleUrl(this.bundlePath),
+        bundleUrl: this.bundlePath ? pathToBundleUrl(this.bundlePath) : undefined,
         pluginId: this.pluginId,
+        identity: this.identity,
       });
       if (this.readyResolve) {
         this.readyResolve();
@@ -486,14 +497,66 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.emit("worker-message", msg);
   }
 
+  /**
+   * Terminal failure for one plugin instance: the worker is speaking a protocol
+   * main does not understand, so stop it rather than keep reading from it.
+   *
+   * Deliberately NOT routed through the crash window. `crashTimestamps` records
+   * the process actually exiting; a live-but-misbehaving worker is a different
+   * failure class, and feeding it in would both mis-report the cause and race a
+   * second provenance write against the one the bridge is about to make.
+   *
+   * `dispose()` is what stops it — it sets `isDisposed`, so the exit this
+   * triggers is never counted or respawned.
+   */
+  private failProtocolViolation(reason: string): void {
+    if (this.isDisposed) return;
+    // Re-entry after the latch still disposes: a first pass whose reporting
+    // threw must not leave the misbehaving worker running.
+    if (this.protocolViolated) {
+      this.dispose();
+      return;
+    }
+    this.protocolViolated = true;
+    try {
+      logger.error(`[${this.serviceName}] Protocol violation: ${reason}; stopping the worker`);
+    } catch {
+      // reporting is best-effort; stopping the worker is not
+    }
+    try {
+      if (this.readyReject) {
+        this.readyReject(new Error(`Plugin dev worker "${this.pluginId}": ${reason}`));
+        this.readyReject = null;
+        this.readyResolve = null;
+      }
+      // The bridge turns this into the plugin's `loadError` and tears its own
+      // side down. Emitted before `dispose()`, which drops every listener.
+      this.emit("protocol-violation", reason);
+    } catch (error) {
+      try {
+        logger.error(`[${this.serviceName}] protocol-violation listener threw`, error);
+      } catch {
+        // swallowed
+      }
+    } finally {
+      // Runs with no bridge attached, and however the reporting above went.
+      this.dispose();
+    }
+  }
+
   private handleExit(code: number | undefined): void {
+    this.clearReadyDeadline();
     const wasExpected = this.expectingExit;
     this.expectingExit = false;
     this.child = null;
 
+    // A crash rejects: a worker that dies on load has genuinely failed to
+    // activate. A deliberate kill only happens under dispose, which already
+    // settled this waiter, so there is nothing left to reject there.
     if (this.readyReject) {
       this.readyReject(new Error(`Plugin dev worker exited (code ${code ?? "unknown"})`));
       this.readyReject = null;
+      this.readyResolve = null;
     }
 
     if (this.isDisposed) {
@@ -501,7 +564,7 @@ export class PluginDevWorkerHost extends EventEmitter {
       return;
     }
 
-    // An intentional kill (reload/dispose) is not a crash — emit exit and stop.
+    // An intentional kill (dispose) is not a crash — emit exit and stop.
     if (wasExpected) {
       this.pendingChildProcessGoneReason = null;
       this.emit("exit", code ?? 0, /* expected */ true);
@@ -563,6 +626,14 @@ export class PluginDevWorkerHost extends EventEmitter {
     const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
     const forward = (kind: "stdout" | "stderr", chunk: Buffer): void => {
+      // Keep draining after teardown starts (an unread stream stalls the child's
+      // exit) but stop decoding and logging it once the worker has been killed
+      // for a protocol violation — it has no business writing to the app log on
+      // its way out. Narrowed to that case deliberately: a graceful teardown
+      // (unload, idle-dispose, quit) runs the plugin's own disposer, and its
+      // failures are logged on stderr from there, so gating on `isDisposed`
+      // would silently discard a plugin author's broken cleanup.
+      if (this.protocolViolated) return;
       const text = chunk.toString("utf8").trimEnd();
       if (!text) return;
       const line = `[plugin-dev:${this.pluginId}] ${text}`;

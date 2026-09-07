@@ -21,6 +21,12 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 vi.mock("../../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
+// The assistant-terminal predicate falls back to this store for records that
+// predate the spawn-time stamp; faked so both of its branches are exercised.
+vi.mock("../../AgentAvailabilityStore.js", () => ({
+  getAgentAvailabilityStore: () => ({ isHelpTerminal: (id: string) => id === "marked-help" }),
+}));
+
 import { gracefulTeardownAndJournalProject } from "../projectSessionJournal.js";
 import type { PtyClient } from "../../PtyClient.js";
 import type { WorkspaceClient } from "../../WorkspaceClient.js";
@@ -36,6 +42,7 @@ interface FakeTerminal {
   cwd: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  isAssistantTerminal?: boolean;
   spawnedAt: number;
 }
 
@@ -508,6 +515,104 @@ describe("gracefulTeardownAndJournalProject", () => {
 
       expect(result.confirmed).toBe(true);
       expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("the assistant's overlay terminal", () => {
+    it("journals neither the record nor the session-id writeback for it", async () => {
+      // #12183: a sleep used to journal the assistant as an ordinary
+      // AgentSessionRecord, and after a sleep it is usually the newest one —
+      // so the empty-grid resume line offered to reopen the assistant's
+      // conversation as a grid pane running the underlying CLI.
+      const { client } = makePtyClient({
+        terminals: [
+          {
+            id: "assistant",
+            projectId: "proj",
+            launchAgentId: "claude",
+            isAssistantTerminal: true,
+            cwd: "/root",
+            spawnedAt: 1,
+          },
+          { id: "t1", projectId: "proj", launchAgentId: "claude", cwd: "/a", spawnedAt: 1 },
+        ],
+        outcome: {
+          confirmed: true,
+          sessions: [
+            { id: "assistant", agentSessionId: "assistant-session" },
+            { id: "t1", agentSessionId: "s1" },
+          ],
+        },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      // The ordinary pane beside it still journals — the skip is targeted, not
+      // a blanket bail-out of the teardown's journaling.
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+      const [record] = journalMock.journalAgentSession.mock.calls[0]!;
+      expect(record).toMatchObject({ sessionId: "s1" });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [
+          { id: "assistant", agentSessionId: undefined },
+          { id: "t1", agentSessionId: undefined },
+        ],
+      };
+      updater(state);
+      expect(state.terminals).toEqual([
+        { id: "assistant", agentSessionId: undefined },
+        { id: "t1", agentSessionId: "s1" },
+      ]);
+    });
+
+    it("skips the writeback entirely when the assistant is the only capture", async () => {
+      const { client } = makePtyClient({
+        terminals: [
+          {
+            id: "assistant",
+            projectId: "proj",
+            launchAgentId: "claude",
+            isAssistantTerminal: true,
+            cwd: "/root",
+            spawnedAt: 1,
+          },
+        ],
+        outcome: { confirmed: true, sessions: [{ id: "assistant", agentSessionId: "a1" }] },
+      });
+
+      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      expect(result.confirmed).toBe(true);
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+    });
+
+    it("still recognises a record marked only through the availability store", async () => {
+      // Covers a terminal that predates the spawn-time stamp — adopted across
+      // a pty-host restart, say — where the renderer's `help.markTerminal` is
+      // the only signal there is.
+      const { client } = makePtyClient({
+        terminals: [
+          {
+            id: "marked-help",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/r",
+            spawnedAt: 1,
+          },
+        ],
+        outcome: { confirmed: true, sessions: [{ id: "marked-help", agentSessionId: "s1" }] },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client);
+
+      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
     });
   });
 });

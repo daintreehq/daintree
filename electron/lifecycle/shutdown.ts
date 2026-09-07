@@ -4,6 +4,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
+import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
 import {
@@ -52,7 +53,11 @@ import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
-import { CLEANUP_TIMEOUT_MS, SHUTDOWN_TAIL_TIMEOUT_MS } from "./shutdownConfig.js";
+import {
+  CLEANUP_TIMEOUT_MS,
+  PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
+  SHUTDOWN_TAIL_TIMEOUT_MS,
+} from "./shutdownConfig.js";
 import {
   getActiveShutdown,
   setShutdownRunner,
@@ -223,7 +228,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     try {
       // Snapshot terminal infos before the kills — info is gone once the PTY
       // exits — so each captured agent session can be journaled below. Outside
-      // the 4s kill race; a failed snapshot just no-ops the journal step.
+      // PROJECT_GRACEFUL_KILL_TIMEOUT_MS; a failed snapshot just no-ops the
+      // journal step.
       let terminalInfoById = new Map<
         string,
         Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number]
@@ -245,14 +251,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       const allProjects = projectStore.getAllProjects();
       const projectIds = allProjects.map((p) => p.id);
       // Cap each project's graceful kill independently (in parallel) rather
-      // than racing the whole batch against one 4s deadline: a single slow
+      // than racing the whole batch against one shared deadline: a single slow
       // project must not discard the captured sessions of projects that did
       // finish in time — both the projectStore write and the resume journal
-      // below depend on those partial results. Wall-clock stays ~4s (parallel).
+      // below depend on those partial results. Wall-clock stays at one
+      // project's budget, not the sum (parallel).
       // A rejected kill is isolated the same way and for the same reason: one
       // project's IPC failing must cost only that project's captures, not every
       // project's (an unhandled rejection here would escape to the outer catch
       // and skip the state write and the journal wholesale).
+      //
+      // Inside a project the same isolation runs one level down (#12180): the
+      // host streams each terminal's capture as it lands and bounds each
+      // terminal's teardown on its own, so a pane that outruns the budget —
+      // Codex mid-turn, or one sitting behind a modal — costs its own id and
+      // not the whole project's.
       const allResults = await Promise.all(
         projectIds.map((pid) => {
           let timer: ReturnType<typeof setTimeout> | undefined;
@@ -265,7 +278,14 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             // and the next launch is supposed to restore the project as it was.
             ptyClient.gracefulKillByProject(pid, { preserveSession: true }),
             new Promise<Array<{ id: string; agentSessionId: string | null }>>((resolve) => {
-              timer = setTimeout(() => resolve([]), 4000);
+              // Whatever the host streamed before this fired, not `[]`. The
+              // aggregate reply waits on the slowest pane in the project, so a
+              // pane that runs its full budget used to take every sibling's
+              // already-captured id down with it.
+              timer = setTimeout(
+                () => resolve(ptyClient.getPartialGracefulKillResults(pid)),
+                PROJECT_GRACEFUL_KILL_TIMEOUT_MS
+              );
             }),
           ])
             .catch((error) => {
@@ -280,7 +300,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       for (let i = 0; i < projectIds.length; i++) {
         const results = allResults[i];
-        const captured = results.filter((r) => r.agentSessionId);
+        // Same assistant skip as the journal below, keeping this block a true
+        // mirror of `gracefulTeardownAndJournalProject`'s writeback.
+        const captured = results.filter(
+          (r) =>
+            r.agentSessionId &&
+            !isAssistantTerminalRecord(terminalInfoById.get(r.id) ?? { id: r.id })
+        );
         if (captured.length === 0) continue;
 
         try {
@@ -316,7 +342,11 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         .map((r) => ({ result: r, info: terminalInfoById.get(r.id) }))
         .filter((c): c is { result: typeof c.result; info: NonNullable<typeof c.info> } =>
           Boolean(c.info?.launchAgentId)
-        );
+        )
+        // The assistant's overlay terminal is not a resumable grid pane
+        // (#12183). Read off the pre-kill snapshot above, which is the only
+        // place its identity still survives once the PTY is gone.
+        .filter((c) => !isAssistantTerminalRecord(c.info));
 
       if (capturedAgents.length > 0) {
         const uniqueWorktreeIds = [
@@ -471,6 +501,18 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         import("../services/PluginCliServer.js")
           .then(({ stopPluginCliServer }) => stopPluginCliServer())
           .catch(() => {}),
+        // SIGTERM (then SIGKILL) every child a plugin spawned via
+        // host.process.spawn (#12216). Electron signals nothing to a
+        // `child_process.spawn` tree on quit — on any platform — so without
+        // this a plugin's dev server simply outlives the app. Narrower than
+        // pluginService.dispose() on purpose: quit wants the OS children gone,
+        // not a full registry teardown. Bounded internally by the kill grace
+        // window, and by the cleanup race around this Promise.all.
+        import("../services/PluginService.js")
+          .then(({ pluginService }) => pluginService.shutdownManagedProcesses())
+          .catch((err) => {
+            console.warn("[MAIN] Plugin managed-process shutdown failed:", err);
+          }),
         import("../services/IdleBackgroundAutoCloseService.js")
           .then(({ getIdleBackgroundAutoCloseService }) =>
             getIdleBackgroundAutoCloseService().stop()

@@ -1,10 +1,12 @@
 import fs from "fs/promises";
 import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
+import { createLogger } from "../utils/logger.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
 // which it adds to every bundled chunk for CJS interop.
@@ -23,11 +25,17 @@ interface AjvInstance {
 
 import {
   DEPRECATED_CONTRIBUTION_ALIASES,
+  describeManifestIssues,
   getPluginManifestSchema,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import {
+  actionHandlerArityHint,
+  appendHandlerHint,
+  channelHandlerArityHint,
+} from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
@@ -37,7 +45,11 @@ import {
   type PluginProcessInfo,
 } from "../../shared/types/ipc/pluginProcess.js";
 import { z } from "zod";
-import { isBuiltInPluginCapability } from "../../shared/types/plugin.js";
+import {
+  isBuiltInPluginCapability,
+  UNBOUND_PLUGIN_HOST_BINDING,
+  type ProjectSurfaceSlot,
+} from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -59,10 +71,49 @@ import type {
   PluginSettingsUiValues,
   PluginWorktreeStatus,
   PluginPanelBadge,
+  PluginRuntimeStatus,
+  PluginWorkerStatus,
+  PluginWorkerState,
+  PluginWorkerReason,
+  PluginProtocolAuthority,
   ViewContribution,
+  PluginHostBinding,
+  PluginOrigin,
+  ProjectPluginInfo,
+  ProjectPluginTrustDecision,
+  ProjectPluginTrustRecord,
+  ProjectPluginTrustState,
+  ProjectPluginVisibility,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
+import {
+  getProjectPluginVisibility as readProjectPluginVisibility,
+  setPluginVisibilityDefault as writePluginVisibilityDefault,
+  setProjectPluginVisibility as writeProjectPluginVisibility,
+} from "./plugin/projectPluginVisibility.js";
+import {
+  setPluginContributionScope,
+  clearPluginContributionScope,
+} from "./plugin/PluginContributionBroadcaster.js";
+import { claimProjectSurface, releasePluginSurfaces } from "./plugin/PluginSurfaceRegistry.js";
+import {
+  ProjectPluginController,
+  type ProjectPluginControllerDeps,
+} from "./plugin/ProjectPluginController.js";
+import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
+import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
+import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
+import { getPluginCapabilityConsentService } from "./plugin-capability/instances.js";
+import { getWebContentsForProject } from "../window/webContentsRegistry.js";
+import { projectStore } from "./ProjectStore.js";
+import { store } from "../store.js";
+import {
+  makeProjectPluginInstanceKey,
+  parseProjectPluginInstanceKey,
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "../../shared/types/plugin.js";
 import {
   PluginPanelLifecycleBroker,
   type PanelLifecycleSourceHandle,
@@ -95,6 +146,8 @@ import {
 import {
   createHost as createPluginHost,
   type PluginHostFactoryDeps,
+  type PluginWorktreeEventPayload,
+  type PluginWorktreeSnapshotFetchResult,
 } from "./plugin/PluginHostFactory.js";
 import type {
   LoadedPlugin,
@@ -109,6 +162,7 @@ import { getWindowForWebContents } from "../window/webContentsRegistry.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
+  toRuntimePanelKindId,
   unregisterPluginPanelKinds,
   onPanelKindRegistered,
   onPanelKindUnregistered,
@@ -163,7 +217,7 @@ import {
   unregisterPluginRecipes,
 } from "./plugin/PluginRecipeRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -175,6 +229,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import { withTimeout, TimeoutError } from "../utils/withTimeout.js";
 import type {
   PluginDiagnosticsAuditRecord,
   PluginDiagnosticsLogLine,
@@ -184,7 +239,12 @@ import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
 import { CONFIRM_TRIGGERING_CAPABILITIES } from "../../shared/config/pluginCapabilities.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
-const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+// The leading segment allows `_` so a project plugin's instance-qualified id
+// (`project__{projectId}__{publisher}.{name}.{action}`) validates. A
+// plugin-authored id can never contain `_` there — the manifest name pattern is
+// `[a-z0-9-]` — so this widens the alphabet without loosening what an author
+// may write.
+const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
@@ -219,6 +279,36 @@ const COMMAND_HANDLER_EXTENSIONS = [".js", ".mjs"] as const;
  * the file's contents are not read.
  */
 const DEV_MARKER_FILENAME = ".dev-marker";
+
+/**
+ * Why this dev plugin's manifest cannot be adopted right now, or `null` when it
+ * can. Runs BEFORE the reconcile unloads anything, which is the whole point: a
+ * manifest the author is midway through editing — unreadable, malformed, or
+ * schema-invalid — must leave the running plugin alone rather than take it down
+ * and fail to bring it back.
+ *
+ * The identity check matters as much as the schema one. `loadPlugin` keys a
+ * global plugin by `manifest.name`, so a renamed manifest would register a
+ * different id while the session, the unload and the status all still name the
+ * old one — a reload that reports success and leaves the author's plugin gone.
+ */
+async function readDevManifestError(pluginDir: string, pluginId: string): Promise<string | null> {
+  let json: unknown;
+  try {
+    json = JSON.parse(await fs.readFile(path.join(pluginDir, "plugin.json"), "utf-8"));
+  } catch (err) {
+    return formatErrorMessage(err, "plugin.json could not be read");
+  }
+  const schema = getPluginManifestSchema(false);
+  const parsed = schema.safeParse(json);
+  if (!parsed.success) {
+    return `plugin.json is not a valid manifest: ${describeManifestIssues(parsed.error.issues, schema)}`;
+  }
+  if (parsed.data.name !== pluginId) {
+    return `plugin.json now declares "${parsed.data.name}", but this dev session is linked as "${pluginId}" — restart daintree-plugin dev to pick up the new name`;
+  }
+  return null;
+}
 
 const ACTIVATE_TIMEOUT_MS = 5000;
 /**
@@ -342,7 +432,16 @@ export function allocatePluginViewGeneration(): number {
 }
 
 /**
- * Build the `plugin://{pluginId}/{PLUGIN_VIEW_GENERATION_PREFIX}{n}/{path}` URL
+ * How many view generations this session has minted. Each one permanently adds
+ * a module record to a renderer's map (Chromium has no eviction API), so the
+ * hot-reload path reports it rather than assuming the growth is negligible.
+ */
+export function pluginViewGenerationsAllocated(): number {
+  return nextPluginViewGeneration - 1;
+}
+
+/**
+ * Build the `plugin://{authority}/{PLUGIN_VIEW_GENERATION_PREFIX}{n}/{path}` URL
  * that `PluginViewHost` passes to `import()`. Strips a single leading `./` so
  * the host segment doesn't end up with an awkward `./dist/view.js` path
  * component — the URL handler accepts either form, but the canonical shape
@@ -366,9 +465,13 @@ export function allocatePluginViewGeneration(): number {
  * but drops the query — so a query would refresh the entry chunk and leave
  * every secondary chunk stale.
  */
-function buildPluginViewUrl(pluginId: string, componentPath: string, generation: number): string {
+function buildPluginViewUrl(
+  authority: PluginProtocolAuthority,
+  componentPath: string,
+  generation: number
+): string {
   const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
-  return `plugin://${pluginId}/${PLUGIN_VIEW_GENERATION_PREFIX}${generation}/${normalized}`;
+  return `plugin://${authority}/${PLUGIN_VIEW_GENERATION_PREFIX}${generation}/${normalized}`;
 }
 
 /**
@@ -421,8 +524,105 @@ function resolveGlobalConfigDir(): string | null {
   return null;
 }
 
+/** Cheap local predicate so the class body does not import the parser twice. */
+function isProjectPluginInstanceKey(pluginId: string): boolean {
+  return parseProjectPluginInstanceKey(pluginId) !== null;
+}
+
+/**
+ * Project-plugin lifecycle goes to the file logger, not `console.*`. A trust
+ * decision that failed to persist and a manifest that would not parse are both
+ * only diagnosable after the fact, and the packaged app has no console to read
+ * them from (#12212).
+ */
+const logger = createLogger("main:PluginService");
+
+/**
+ * Read one project's trust record. Absence is the default and it means
+ * disabled — discovery still runs, nothing executes.
+ */
+function readProjectPluginTrust(projectId: string): ProjectPluginTrustRecord | undefined {
+  try {
+    const all = store.get("projectPluginTrust") as
+      Record<string, ProjectPluginTrustRecord> | undefined;
+    const record = all?.[projectId];
+    if (!record || (record.decision !== "enabled" && record.decision !== "disabled")) {
+      return undefined;
+    }
+    return {
+      decision: record.decision,
+      decidedAt: typeof record.decidedAt === "number" ? record.decidedAt : 0,
+      knownPluginIds: Array.isArray(record.knownPluginIds)
+        ? record.knownPluginIds.filter((id): id is string => typeof id === "string")
+        : [],
+      stagedPluginIds: Array.isArray(record.stagedPluginIds)
+        ? record.stagedPluginIds.filter((id): id is string => typeof id === "string")
+        : [],
+      mutedPluginIds: Array.isArray(record.mutedPluginIds)
+        ? record.mutedPluginIds.filter((id): id is string => typeof id === "string")
+        : [],
+    };
+  } catch (err) {
+    // Fail closed: an unreadable record is not a grant.
+    logger.warn("Failed to read project plugin trust", { projectId, error: err });
+    return undefined;
+  }
+}
+
+/**
+ * Write (or clear) one project's trust record. Always rewrites the whole map —
+ * electron-store dot-notation would nest on a key containing dots, and a
+ * project id is opaque.
+ *
+ * Returns whether the record reached disk. A consent decision that silently
+ * failed to persist is the worst of both worlds: the session behaves as though
+ * the user answered, and the next launch asks again with no trace of why
+ * (#12212). The caller propagates a `false` to the renderer rather than
+ * assuming the write landed.
+ */
+function writeProjectPluginTrust(
+  projectId: string,
+  record: ProjectPluginTrustRecord | undefined
+): boolean {
+  try {
+    const all = {
+      ...((store.get("projectPluginTrust") as Record<string, ProjectPluginTrustRecord>) ?? {}),
+    };
+    if (record === undefined) {
+      delete all[projectId];
+    } else {
+      all[projectId] = record;
+    }
+    store.set("projectPluginTrust", all);
+    return true;
+  } catch (err) {
+    logger.error("Failed to persist project plugin trust", err, {
+      projectId,
+      decision: record?.decision ?? "cleared",
+    });
+    return false;
+  }
+}
+
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
+  /**
+   * The single map the `plugin://` protocol handler resolves a URL authority
+   * against. Each load seeds two keys pointing at the same root: the opaque
+   * authority minted for that load, and the plugin's manifest id as an alias —
+   * plugin authors write `plugin://{pluginId}/…` by hand and that contract is
+   * documented (docs/plugins/contribution-points.md). One map, so the handler
+   * keeps exactly one resolution path.
+   *
+   * Both keys are dropped on unload, but only the authority is per-load: it is
+   * never reissued, so a host-minted URL captured before an unload 404s forever
+   * rather than resolving into whatever next occupies that plugin id. The alias
+   * keeps plain id semantics by construction — a reload rebinds it — which is
+   * exactly what a hand-written `plugin://{pluginId}/…` URL asks for.
+   */
+  private pluginRootsByAuthority = new Map<string, string>();
+  /** pluginId → the authority minted for its current load; the invalidation and URL-building side. */
+  private pluginAuthorities = new Map<string, PluginProtocolAuthority>();
   /**
    * Live panel badges set via `host.setPanelBadge`, keyed `pluginId → panelId →
    * badge` (#10585). Plugin-first so {@link unloadPlugin} drops a plugin's whole
@@ -501,6 +701,19 @@ export class PluginService {
    */
   private commandModulePaths = new Map<string, string>();
   /**
+   * In-flight command-handler discovery, keyed by plugin id. Set synchronously
+   * on the same tick the plugin becomes addressable and cleared when probing
+   * settles, so activation can tell "this plugin has no command handlers" apart
+   * from "we have not looked yet" (#12274).
+   *
+   * Without it, an activation trigger that lands mid-probe reads an empty
+   * {@link commandModulePaths}, concludes the plugin needs no worker, and
+   * `activatePlugin` latches that verdict in `activatedPlugins` for the
+   * plugin's lifetime — leaving a commands-only plugin permanently unable to
+   * fork the worker its commands now need.
+   */
+  private commandDiscovery = new Map<string, Promise<void>>();
+  /**
    * Set of namespaced action ids whose descriptor was registered from
    * `manifest.contributes.commands`. Distinguishes a manifest-declared
    * command (whose handler is the lazy `src/{cmd.id}.{ext}` import) from
@@ -521,6 +734,22 @@ export class PluginService {
    * survives. Cleared on unload alongside the rest of the per-plugin state.
    */
   private pluginsWithLoadTimeErrors = new Set<string>();
+  /**
+   * Runtime load/activation errors for project plugin instances (#12232).
+   *
+   * A project plugin loads under an instance key that
+   * {@link PluginInstalledRecordsStore.upsertInstalledRecord} deliberately
+   * refuses to persist — the key names one machine's project id and the plugin
+   * has no install provenance to record. Every `loadError` write on the load
+   * and activation paths went through that store, so for a project plugin the
+   * error was written to nothing at all and `getPluginLoadError` reported a
+   * clean load however the activation had actually gone.
+   *
+   * This is the same channel with the persistence removed: session-scoped,
+   * keyed by the instance key the call sites already use, and dropped in
+   * `unloadPlugin` with the rest of the per-plugin state.
+   */
+  private projectPluginLoadErrors = new Map<string, PluginLoadError>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   private workspaceClient: WorkspaceClient | null = null;
@@ -539,10 +768,21 @@ export class PluginService {
    * so early-boot subscriptions attach to the real client instead of being
    * silently dropped.
    */
+  /**
+   * The {@link PluginHostBinding} each loaded plugin's host was built with.
+   *
+   * Only collaborators that outlive a single host closure need this — today
+   * just the shared {@link PluginProcessManager}'s stream sink, which is one
+   * instance for every plugin and so cannot close over one binding. Everything
+   * else reads the binding captured inside its own host object. Dropped in
+   * `unloadPlugin` so a reload of the same id can rebind.
+   */
+  private hostBindings = new Map<string, PluginHostBinding>();
+
   private pendingWorktreeSubs: Array<{
     pluginId: string;
     event: WorkspaceWorktreeEvent;
-    handler: () => void;
+    handler: (payload?: PluginWorktreeEventPayload) => void;
     activate: (client: WorkspaceClient) => void;
   }> = [];
   private initialized = false;
@@ -630,7 +870,20 @@ export class PluginService {
    */
   private pluginWorkers = new Map<
     string,
-    { workerHost: PluginDevWorkerHost; bridge: PluginDevWorkerMainBridge; revoke: () => void }
+    {
+      workerHost: PluginDevWorkerHost;
+      bridge: PluginDevWorkerMainBridge;
+      revoke: () => void;
+      /** Full teardown — the same disposer registered in {@link cleanupMap}. */
+      cleanup: () => void;
+      /**
+       * Verdict of this entry's last activation: `undefined` while one is in
+       * flight, `false` once it failed. Read by {@link activateViaWorker} so a
+       * retry against a live-but-failed worker forks a fresh one instead of
+       * short-circuiting on the entry's mere existence (#12275).
+       */
+      activation: { ok?: boolean };
+    }
   >();
   /**
    * Last time each plugin was needed (activation trigger, action dispatch,
@@ -746,6 +999,8 @@ export class PluginService {
       isDisposed: () => this.disposed,
       listPluginActions: () => this.listPluginActions(),
       initPromise: this.initPromise,
+      listPluginRuntimeStatuses: () => this.listPluginRuntimeStatuses(),
+      isReplacingPlugin: () => this.devReplaceDepth > 0,
     });
 
     // Ownership is resolved against the live kind registry rather than trusted
@@ -774,11 +1029,14 @@ export class PluginService {
 
     this.storage = new PluginStorageManager({
       getPluginsRoot: () => this.pluginsRoot,
-      // Resolve the active worktree's path the same way host.getActiveWorktree
-      // does — first isCurrent snapshot — so "worktree"-scoped storage tracks the
-      // user's active worktree. Returns undefined when none is active or the
-      // workspace client isn't wired yet, which the storage API treats as
-      // "no target" (read → undefined, write → throw).
+      // The UNBOUND fallback only: an installed or builtin plugin has no project
+      // of its own, so the app-global active worktree — first isCurrent snapshot,
+      // the same rule host.getActiveWorktree uses — is the only thing its
+      // "worktree" scope can mean. A bound host never reaches this; it resolves
+      // its own project's current worktree in PluginHostFactory (#12229).
+      // Returns undefined when none is active or the workspace client isn't
+      // wired yet, which the storage API treats as "no target" (read →
+      // undefined, write → throw).
       getActiveWorktreePath: async () => {
         const snapshots = await this.fetchAllWorktreeSnapshots();
         return snapshots.find((s) => s.isCurrent === true)?.path;
@@ -900,6 +1158,17 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    // Native watchers go first: a settled burst arriving mid-teardown would
+    // otherwise queue a reload into a service that is going away.
+    this.projectPluginWatcherRegistry?.dispose();
+    this.projectPluginWatcherRegistry = null;
+    this.devArtifactWatcherRegistry?.dispose();
+    this.devArtifactWatcherRegistry = null;
+    this.devSessions.clear();
+    // Forget every project's plugin bookkeeping BEFORE the unload sweep below,
+    // so the controller cannot re-load into a service that is going away.
+    this.projectPluginController?.dispose();
+    this.projectPluginController = null;
     // Run each loaded plugin's full disposer cascade (cleanupMap, event-cleanups,
     // contribution unregisters, best-effort MCP shutdown) so service teardown
     // honors the Disposable contract. App-quit MCP teardown remains owned by
@@ -1201,8 +1470,28 @@ export class PluginService {
   private async loadPlugin(
     root: string,
     dirName: string,
-    opts: { isBuiltin: boolean; disabled: Set<string> }
+    opts: {
+      isBuiltin: boolean;
+      disabled: Set<string>;
+      /**
+       * Which root this directory came from. Defaults to the boolean's meaning
+       * so the three startup scans keep their existing behaviour verbatim.
+       */
+      origin?: PluginOrigin;
+      /**
+       * Registry key for this instance. A project plugin loads under
+       * `project__{projectId}__{manifestId}` so two projects shipping the same
+       * manifest id get separate contributions, authority, grants and teardown.
+       * Absent for installed and builtin plugins, whose key IS their manifest id.
+       */
+      instanceKey?: string;
+      /** The project this instance is bound to. Absent means app-global. */
+      binding?: PluginHostBinding;
+    }
   ): Promise<LoadedPlugin | null> {
+    const origin: PluginOrigin = opts.origin ?? (opts.isBuiltin ? "builtin" : "user");
+    const isProject = origin === "project";
+    const isUserInstalled = origin === "user";
     const pluginDir = path.join(root, dirName);
     const manifestPath = path.join(pluginDir, "plugin.json");
 
@@ -1226,7 +1515,7 @@ export class PluginService {
       return null;
     }
 
-    const parseResult = getPluginManifestSchema(opts.isBuiltin).safeParse(json);
+    const parseResult = getPluginManifestSchema(origin).safeParse(json);
     if (!parseResult.success) {
       const namespaceIssue = parseResult.error.issues.find(
         (i) =>
@@ -1241,7 +1530,7 @@ export class PluginService {
           title: "Plugin uses a reserved namespace",
           message: `Plugin "${String(inferredName ?? dirName)}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
         });
-        if (!opts.isBuiltin) {
+        if (isUserInstalled) {
           this.records.upsertInstalledRecord(String(inferredName ?? dirName), {
             loadError: { message: namespaceIssue.message, at: Date.now() },
           });
@@ -1252,6 +1541,26 @@ export class PluginService {
     }
 
     const manifest = parseResult.data;
+    // The registry key for this instance. Identical to the manifest id for
+    // installed and builtin plugins, so every existing key, path and id is
+    // byte-for-byte what it was; distinct for a project plugin, which is what
+    // keeps two projects' copies of the same id from sharing anything.
+    const pluginId = opts.instanceKey ?? manifest.name;
+    const binding = opts.binding ?? UNBOUND_PLUGIN_HOST_BINDING;
+
+    // Discovery validated one manifest; this is a second read of the same file.
+    // A rewrite in between — a rebase, an agent edit, a hostile swap — could
+    // hand a DIFFERENT plugin the identity the user already knows and trusts.
+    // Refuse rather than let a renamed manifest inherit a staged-or-known id.
+    if (opts.instanceKey !== undefined) {
+      const expected = parseProjectPluginInstanceKey(opts.instanceKey)?.manifestId;
+      if (expected !== manifest.name) {
+        console.error(
+          `[PluginService] Project plugin in ${dirName} declares "${manifest.name}" but was discovered as "${String(expected)}" — refusing to load`
+        );
+        return null;
+      }
+    }
     // Manifest-immutability invariant: the parsed manifest is stored on
     // LoadedPlugin.manifest and read across the whole PluginService lifecycle
     // (capability checks, contribution loops, host closures). Deep-freeze it so
@@ -1290,8 +1599,11 @@ export class PluginService {
       console.warn(
         `[PluginService] Plugin "${manifest.name}" v${manifest.version} is blocklisted (${blockMatch.reason}) — refusing to load`
       );
-      this.reservedNames.add(manifest.name);
-      if (!this.blockedPlugins.has(manifest.name)) {
+      // A project plugin never claims the global namespace: reserving its id
+      // would let one repository's blocklisted manifest deny that id to every
+      // other project and to the user's own installed plugins.
+      if (!isProject) this.reservedNames.add(manifest.name);
+      if (!isProject && !this.blockedPlugins.has(manifest.name)) {
         this.blockedPlugins.set(manifest.name, {
           manifest,
           dir: pluginDir,
@@ -1315,7 +1627,11 @@ export class PluginService {
     // effect on next launch. The name is reserved so a later dir scan cannot
     // hijack a claimed namespace just because the matching plugin is off; the
     // manifest is tracked so listPlugins() can still surface it for the toggle.
-    if (opts.disabled.has(manifest.name)) {
+    // The Preferences disable list is about installed and builtin plugins. A
+    // project plugin's gate is its project's trust decision, and staging is how
+    // an individual one stays off — routing it through the global list would let
+    // one project's plugin id disable another's.
+    if (!isProject && opts.disabled.has(manifest.name)) {
       console.log(
         `[PluginService] ${opts.isBuiltin ? "Built-in" : "User"} plugin "${manifest.name}" is disabled, skipping`
       );
@@ -1330,7 +1646,12 @@ export class PluginService {
       return null;
     }
 
-    if (this.plugins.has(manifest.name) || this.reservedNames.has(manifest.name)) {
+    // Collision is checked against the INSTANCE key, not the manifest id. A
+    // project plugin is explicitly allowed to share an id with an installed one
+    // (§7.1) — both load, identity keeps them apart, and the plugin manager
+    // surfaces the overlap rather than hiding it. The reserved-name check still
+    // applies to the global roots, where one id really can only have one owner.
+    if (this.plugins.has(pluginId) || (!isProject && this.reservedNames.has(manifest.name))) {
       console.error(
         `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName} — rejecting`
       );
@@ -1362,7 +1683,7 @@ export class PluginService {
     // (the unified `plugins.disabled` list, #9284), so we only run here when
     // the plugin is going to load. Must run after the engine gate above so
     // incompatible plugins don't leave zombie records in the store.
-    if (!opts.isBuiltin) {
+    if (isUserInstalled) {
       const existing = this.records.getInstalledRecord(manifest.name);
       if (!existing) {
         this.records.upsertInstalledRecord(manifest.name, {});
@@ -1380,6 +1701,8 @@ export class PluginService {
       dir: pluginDir,
       loadedAt: Date.now(),
       isBuiltin: opts.isBuiltin,
+      origin,
+      binding,
       // One generation per load, shared by every view this plugin contributes,
       // so a reload swaps the whole plugin's view modules together (#11301).
       // Held on the plugin rather than a local so `activatePluginForView` can
@@ -1389,7 +1712,15 @@ export class PluginService {
 
     if (manifest.main) {
       const resolved = this.resolveEntryPath(pluginDir, manifest.main);
-      if (resolved) {
+      if (resolved && isProject && !(await this.isRealpathContained(pluginDir, resolved))) {
+        // Lexical containment is not enough for the one root a repository can
+        // write: `dist/main.js` can be a symlink that points anywhere. Match the
+        // `plugin://` handler and resolve symlinks before deciding, so an
+        // in-directory link out of the plugin is refused rather than executed.
+        console.warn(
+          `[PluginService] Plugin ${manifest.name}: main entry resolves outside the plugin directory through a symlink, ignoring`
+        );
+      } else if (resolved) {
         plugin.resolvedMain = resolved;
       } else {
         console.warn(
@@ -1410,8 +1741,13 @@ export class PluginService {
     // `await registerPluginSkills(...)` further down already splits it, so two
     // concurrent loads of the same name can still both pass dedup. Tracked
     // separately; closing it needs an explicit name reservation at the check.
-    if (!opts.isBuiltin) {
+    if (isUserInstalled) {
       const isDev = existsSync(path.join(pluginDir, DEV_MARKER_FILENAME));
+      // Armed off the marker, not off `devMode` below: a session whose first
+      // build has not landed has no resolvable `main` and so is not a dev
+      // plugin yet — but it is exactly the case that needs watching, because
+      // the build that makes it one is the next thing to happen (#12277).
+      if (isDev) this.ensureDevSession(manifest.name, pluginDir);
       if (isDev && plugin.resolvedMain) {
         plugin.devMode = true;
         this.records.upsertInstalledRecord(manifest.name, { devMode: true });
@@ -1429,19 +1765,39 @@ export class PluginService {
       }
     }
 
+    // Scope the contribution registries to this plugin's project BEFORE a
+    // single contribution is registered. The registries are module-level
+    // singletons filtered at read/broadcast time by owning plugin id, so a
+    // contribution registered while the index says "global" is broadcast to
+    // every project until the next mutation corrects it. `"global"` is the
+    // explicit no-op form for the unbound roots.
+    setPluginContributionScope(pluginId, binding.projectId ?? "global");
+
+    // Contributed `actionId`s are authored in the plugin's own manifest
+    // namespace (the schema enforces exactly that), but a project plugin's
+    // commands register under its INSTANCE namespace. Left unrewritten, every
+    // declarative toolbar button, menu item, keybinding and context-menu entry
+    // would dispatch an id that either resolves to nothing or — worse — to a
+    // same-named installed plugin's action.
+    const ownPrefix = `${manifest.name}.`;
+    const qualifyActionId = (actionId: string): string =>
+      isProject && actionId.startsWith(ownPrefix)
+        ? `${pluginId}.${actionId.slice(ownPrefix.length)}`
+        : actionId;
+
     for (const btn of manifest.contributes.toolbarButtons) {
       // Canonical `{pluginId}.{id}` form (#9281) — matches `registerPluginAction`
       // and `panelKindRegistry`. The legacy `plugin.{pluginId}.{id}` form lived
       // here alone and is migrated renderer-side by `toolbarPreferencesStore`'s
       // v9 migration so existing user pins survive the rename.
-      const buttonId = `${manifest.name}.${btn.id}` as PluginToolbarButtonId;
+      const buttonId = `${pluginId}.${btn.id}` as PluginToolbarButtonId;
       registerToolbarButton({
         id: buttonId,
         label: btn.label,
         iconId: btn.iconId,
-        actionId: btn.actionId,
+        actionId: qualifyActionId(btn.actionId),
         priority: btn.priority ?? 3,
-        pluginId: manifest.name,
+        pluginId,
       });
     }
     if (manifest.contributes.toolbarButtons.length > 0) {
@@ -1449,21 +1805,30 @@ export class PluginService {
     }
 
     for (const menuItem of manifest.contributes.menuItems) {
-      trackPluginExpression(manifest.name, menuItem.when);
-      registerPluginMenuItem(manifest.name, menuItem);
+      trackPluginExpression(pluginId, menuItem.when);
+      registerPluginMenuItem(pluginId, {
+        ...menuItem,
+        actionId: qualifyActionId(menuItem.actionId),
+      });
     }
 
     for (const keybinding of manifest.contributes.keybindings) {
-      trackPluginExpression(manifest.name, keybinding.when);
-      registerPluginKeybinding(manifest.name, keybinding);
+      trackPluginExpression(pluginId, keybinding.when);
+      registerPluginKeybinding(pluginId, {
+        ...keybinding,
+        actionId: qualifyActionId(keybinding.actionId),
+      });
     }
     if (manifest.contributes.keybindings.length > 0) {
       this.broadcaster.scheduleKeybindingsBroadcast(false);
     }
 
     for (const ctxMenu of manifest.contributes.contextMenus) {
-      trackPluginExpression(manifest.name, ctxMenu.when);
-      registerPluginContextMenuItem(manifest.name, ctxMenu);
+      trackPluginExpression(pluginId, ctxMenu.when);
+      registerPluginContextMenuItem(pluginId, {
+        ...ctxMenu,
+        actionId: qualifyActionId(ctxMenu.actionId),
+      });
     }
     if (manifest.contributes.contextMenus.length > 0) {
       this.broadcaster.scheduleContextMenuItemsBroadcast(false);
@@ -1476,7 +1841,7 @@ export class PluginService {
     // keeps idle plugins from holding live subprocesses they never use.
 
     if (manifest.contributes.forgeProviders.length > 0) {
-      registerForgeProviders(manifest.name, manifest.contributes.forgeProviders);
+      registerForgeProviders(pluginId, manifest.contributes.forgeProviders);
       // Wake workspace-hosts whose PR polling paused on a "no provider
       // matches" resolution so they re-evaluate against the new descriptor
       // (#9997). Covers both the startup scan and runtime install/enable.
@@ -1484,7 +1849,7 @@ export class PluginService {
     }
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
-      registerFileDecorationProviders(manifest.name, manifest.contributes.fileDecorationProviders);
+      registerFileDecorationProviders(pluginId, manifest.contributes.fileDecorationProviders);
     }
 
     // Skills (#10892) are read and parsed eagerly here so the built-in MCP
@@ -1492,11 +1857,11 @@ export class PluginService {
     // A malformed/unreadable skill file is skipped (with a warning) rather than
     // failing the plugin load. Torn down per-plugin in unloadPlugin.
     if (manifest.contributes.skills.length > 0) {
-      await registerPluginSkills(manifest.name, pluginDir, manifest.contributes.skills);
+      await registerPluginSkills(pluginId, pluginDir, manifest.contributes.skills);
     }
 
     if (manifest.contributes.agents.length > 0) {
-      registerPluginAgents(manifest.name, manifest.contributes.agents, pluginDir);
+      registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
       this.broadcaster.scheduleAgentsBroadcast(false);
       // Mirror the updated registry into the pty-host so its activity monitor
       // resolves this agent's detection patterns at spawn time (#10587). The
@@ -1513,14 +1878,14 @@ export class PluginService {
       const ownedAgentIds = new Set(
         manifest.contributes.agents
           .map((agent) => agent.id)
-          .filter((id) => getPluginIdForAgent(id) === manifest.name)
+          .filter((id) => getPluginIdForAgent(id) === pluginId)
       );
-      registerPluginRecipes(manifest.name, manifest.contributes.recipes, ownedAgentIds);
+      registerPluginRecipes(pluginId, manifest.contributes.recipes, ownedAgentIds);
       this.broadcaster.scheduleRecipesBroadcast(false);
     }
 
     if (manifest.contributes.processTools.length > 0) {
-      registerPluginProcessTools(manifest.name, manifest.contributes.processTools);
+      registerPluginProcessTools(pluginId, manifest.contributes.processTools);
       // Mirror into the pty-host, where `ProcessDetector` runs — the renderer
       // needs no broadcast because the detected icon id already reaches it on
       // the terminal identity event (#11613).
@@ -1533,13 +1898,16 @@ export class PluginService {
     // plugin as loaded. Without this, `hasPlugin(pluginId)` returns false
     // inside the plugin's own init, and registerHandler/registerPluginAction
     // throw "Unknown plugin" even for a correctly loaded plugin.
-    this.plugins.set(manifest.name, plugin);
+    // Minted and committed synchronously with the registry insert below, so the
+    // authority is resolvable the instant the plugin is addressable.
+    const authority = this.mintPluginAuthority(pluginId, plugin.dir);
+    this.plugins.set(pluginId, plugin);
 
     // Panel kinds are published only AFTER the map commit above, with no await
     // in between (#11728). `registerPanelKind` is what makes a panel
     // addressable — it carries the `plugin://` `componentPath` and schedules the
-    // `plugin:panel-kinds-changed` broadcast — while `getPluginDir` (the
-    // protocol handler's resolver) reads `this.plugins`. Publishing first, as
+    // `plugin:panel-kinds-changed` broadcast — while the protocol handler's
+    // resolver reads the authority map committed with it. Publishing first, as
     // this block used to, handed the renderer a URL that the protocol could not
     // yet resolve; any plugin with an await before the commit (a `skills`
     // contribution alone was enough) 404'd its own view module, and a rejected
@@ -1572,7 +1940,24 @@ export class PluginService {
     }
 
     for (const panel of manifest.contributes.panels) {
-      const panelId = `${manifest.name}.${panel.id}`;
+      // A project plugin's panel kinds register under the project-qualified
+      // runtime id, so two projects can each contribute `acme.dash/overview`
+      // without one silently overwriting the other. `toRuntimePanelKindId`
+      // returns null for a project ref with no owning project — that can only
+      // mean a bug in the caller, and inventing the unqualified form here would
+      // alias a project kind onto a global one.
+      const panelId = isProject
+        ? toRuntimePanelKindId(
+            { origin: "project", pluginId: manifest.name, kindId: panel.id },
+            binding.projectId
+          )
+        : `${manifest.name}.${panel.id}`;
+      if (panelId === null) {
+        console.error(
+          `[PluginService] Plugin "${manifest.name}": cannot qualify panel kind "${panel.id}" without an owning project — skipping`
+        );
+        continue;
+      }
       const view = viewsByBareId.get(panel.id);
       if (view) unmatchedViewIds.delete(panel.id);
       registerPanelKind({
@@ -1588,11 +1973,20 @@ export class PluginService {
         // absence stays `undefined` and `panelKindIsDockable` applies the
         // default. #11332.
         ...(panel.dockable !== undefined ? { dockable: panel.dockable } : {}),
-        extensionId: manifest.name,
+        // Absence has to survive as `undefined` for the same reason as
+        // `dockable`: a plugin that declares no state version gets its bag
+        // handed over unjudged, and defaulting to 1 here would start refusing
+        // bags on a promise the author never made (#12280).
+        ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
+        // Keyed by the INSTANCE, because `unregisterPluginPanelKinds` matches
+        // on `extensionId` alone: keying by manifest id would make one
+        // project's unload sweep every other project's copies of the same kind.
+        extensionId: pluginId,
+        ...(isProject ? { projectId: binding.projectId, pluginManifestId: manifest.name } : {}),
         ...(view && !panel.hasPty
           ? {
               componentPath: buildPluginViewUrl(
-                manifest.name,
+                authority,
                 view.componentPath,
                 plugin.viewGeneration
               ),
@@ -1615,6 +2009,54 @@ export class PluginService {
       );
     }
 
+    // Project surface claims (§7.8). After the panels loop, because a claim
+    // resolves to the RUNTIME panel-kind id that loop just registered — the
+    // renderer mounts a surface through the ordinary plugin-view path, so a
+    // claim naming a kind that never registered would point at nothing.
+    //
+    // Additive only: a claim replaces one slot's content and touches no host
+    // chrome, so the project switcher, the worktree dashboard and the stock
+    // launcher stay reachable even when the claimed view is broken.
+    if (isProject && binding.projectId != null && binding.projectId.length > 0) {
+      const surfaceProjectId = binding.projectId;
+      const surfaces = manifest.contributes.surfaces ?? {};
+      for (const [slot, claim] of Object.entries(surfaces) as [
+        ProjectSurfaceSlot,
+        { viewId: string } | undefined,
+      ][]) {
+        if (claim === undefined) continue;
+        const panelKindId = toRuntimePanelKindId(
+          { origin: "project", pluginId: manifest.name, kindId: claim.viewId },
+          surfaceProjectId
+        );
+        // The schema already cross-checks `viewId` against `contributes.views`,
+        // and a view without a matching panel is a manifest error — so a miss
+        // here means the panels loop skipped the kind (an unqualifiable id, or
+        // a `hasPty` panel whose view is ignored). Skip the slot rather than
+        // publish a claim the renderer cannot resolve.
+        // `componentPath`, not merely a registered kind: the panels loop leaves
+        // it off for a PTY panel (and for a view it skipped), and a claim with
+        // no module to load would hold the project's slot against every other
+        // plugin while rendering nothing.
+        if (panelKindId === null || getPanelKindConfig(panelKindId)?.componentPath === undefined) {
+          console.warn(
+            `[PluginService] Plugin "${manifest.name}": surfaces.${slot} names view "${claim.viewId}", which registered no loadable panel kind — the slot keeps its stock content`
+          );
+          continue;
+        }
+        const result = claimProjectSurface(surfaceProjectId, slot, { pluginId, panelKindId });
+        if (!result.ok) {
+          // Never a silent last-wins: which surface the user sees would then be
+          // a function of directory-scan order. First claim stands and BOTH
+          // plugins are named, because the fix is to change one of the two
+          // manifests and the author cannot do that without knowing the other.
+          console.error(
+            `[PluginService] Project surface conflict: "${manifest.name}" claims surfaces.${slot}, which is already owned by "${result.heldBy}" in this project. The incumbent keeps the slot; only one plugin may claim it.`
+          );
+        }
+      }
+    }
+
     // Plugins without a `main` entry contribute no executable code — the
     // provenance record reflects a clean load immediately. Plugins with a
     // `main` entry defer the `loadError: null` write to `_doActivate()` so
@@ -1622,7 +2064,7 @@ export class PluginService {
     // happen BEFORE manifest command registration: a colliding command
     // writes its own `loadError` via `registerManifestCommands` (#9281), and
     // clearing it back to `null` here would silently lose the diagnostic.
-    if (!plugin.resolvedMain && !opts.isBuiltin) {
+    if (!plugin.resolvedMain && isUserInstalled) {
       this.records.upsertInstalledRecord(manifest.name, { loadError: null });
     }
 
@@ -1633,7 +2075,21 @@ export class PluginService {
     // front). Probes happen after `plugins.set()` so
     // `validateAndBuildActionDescriptor` sees the plugin as loaded.
     if (manifest.contributes.commands.length > 0) {
-      await this.registerManifestCommands(manifest.name, plugin, opts.isBuiltin);
+      // Published before this stack yields, so an activation trigger racing
+      // discovery waits for the answer instead of reading a half-filled map
+      // (#12274). Calling `registerManifestCommands` runs its body up to the
+      // first probe, but nothing else can interleave until this stack suspends —
+      // and nothing runs between `plugins.set()` above and here either, so
+      // there is no gap on either side to cover.
+      const discovery = this.registerManifestCommands(pluginId, plugin);
+      this.commandDiscovery.set(pluginId, discovery);
+      try {
+        await discovery;
+      } finally {
+        if (this.commandDiscovery.get(pluginId) === discovery) {
+          this.commandDiscovery.delete(pluginId);
+        }
+      }
     }
 
     return plugin;
@@ -1644,15 +2100,12 @@ export class PluginService {
    * filesystem-convention handler path. Handler modules are NOT imported here —
    * the dynamic `import()` is deferred to {@link dispatchHandler} so plugins
    * with many commands don't pay the eval cost during the 5s activation
-   * budget. Collisions with built-in action ids surface via the provenance
-   * `loadError` field for non-builtins, or a console warning for builtins
-   * (which have no installed-record slot).
+   * budget. Collisions with built-in action ids surface through
+   * {@link recordPluginLoadError} — the provenance record for an installed
+   * plugin, the in-memory map for a project one — or as a console warning for
+   * builtins, which have neither.
    */
-  private async registerManifestCommands(
-    pluginId: string,
-    plugin: LoadedPlugin,
-    isBuiltin: boolean
-  ): Promise<void> {
+  private async registerManifestCommands(pluginId: string, plugin: LoadedPlugin): Promise<void> {
     let owners = this.pluginActionOwners.get(pluginId);
     let registered = false;
     for (const cmd of plugin.manifest.contributes.commands) {
@@ -1660,10 +2113,7 @@ export class PluginService {
       if (BUILT_IN_ACTION_ID_SET.has(namespacedId)) {
         const message = `Plugin "${pluginId}" command id "${namespacedId}" collides with a built-in action id`;
         console.error(`[PluginService] ${message}`);
-        if (!isBuiltin) {
-          this.records.upsertInstalledRecord(pluginId, {
-            loadError: { message, at: Date.now() },
-          });
+        if (this.recordPluginLoadError(pluginId, plugin, { message, at: Date.now() })) {
           // Mark so a later `_doActivate()` success doesn't clear this
           // load-time diagnostic. Collisions are manifest-level facts that
           // don't go away when `main` activates cleanly.
@@ -1683,8 +2133,7 @@ export class PluginService {
           `[PluginService] Failed to validate manifest command "${namespacedId}":`,
           err
         );
-        if (!isBuiltin) {
-          this.records.upsertInstalledRecord(pluginId, { loadError });
+        if (this.recordPluginLoadError(pluginId, plugin, loadError)) {
           this.pluginsWithLoadTimeErrors.add(pluginId);
         }
         continue;
@@ -1702,7 +2151,19 @@ export class PluginService {
       owners.add(descriptor.id);
       registered = true;
 
-      const resolvedPath = await this.resolveCommandHandlerPath(plugin.dir, cmd.id);
+      // A project plugin's `src/` is authoring source the host never reads —
+      // its load contract is the committed `dist/`, so there is nothing to
+      // probe for. That is a distribution rule, not a trust one: an installed
+      // or dev-linked plugin's handler module is imported and run inside that
+      // plugin's own worker like every other surface it contributes (#12274),
+      // so what this gate selects is which plugins use the filesystem
+      // convention at all, never which ones get to run code in Electron main.
+      // Project plugins register command handlers from their entry point with
+      // `host.registerAction` instead.
+      const resolvedPath =
+        plugin.origin === "project"
+          ? null
+          : await this.resolveCommandHandlerPath(plugin.dir, cmd.id);
       if (resolvedPath) {
         this.commandModulePaths.set(descriptor.id, resolvedPath);
       }
@@ -1745,13 +2206,22 @@ export class PluginService {
   }
 
   /**
-   * Lazily resolve a manifest-declared command's handler module from
-   * {@link commandModulePaths}, import it via `runImport`, and cache the
-   * default export in {@link pluginActionHandlers}. Concurrent dispatches
-   * race on the cache: the first to set wins; subsequent setters drop the
-   * (identical) handler to avoid clobbering an in-flight set. ESM's
-   * URL-keyed module cache makes the duplicate import effectively free, so
-   * a full in-flight promise map adds no value here.
+   * Resolve the handler for a manifest-declared command, deferred to first
+   * dispatch so a plugin with twenty commands pays no import cost at load.
+   *
+   * Where that handler RUNS is the whole point of #12274. A non-builtin's
+   * module is imported and invoked inside that plugin's own worker; what comes
+   * back here is a synthetic stand-in that relays the call over the port, the
+   * same shape `host.registerAction` has produced for worker-registered actions
+   * since #5600. Only a built-in — app-bundled code, never uninstalled, never
+   * dev-symlinked — is imported into Electron main, and it says so by name
+   * rather than by being what's left over after the other branches.
+   *
+   * The synthetic is deliberately NOT cached in {@link pluginActionHandlers}:
+   * it would outlive the worker generation it was built against, and a stale
+   * bridge is exactly the binding a reload exists to discard. Rebuilding the
+   * closure per dispatch costs nothing and cannot go stale, so no invalidation
+   * hook is needed at any of the four teardown paths.
    */
   private async loadManifestCommandHandler(channel: string): Promise<ActionHandler> {
     const cached = this.pluginActionHandlers.get(channel);
@@ -1762,6 +2232,9 @@ export class PluginService {
     }
     const descriptor = this.pluginActions.get(channel);
     const pluginId = descriptor?.pluginId ?? channel;
+    if (this.plugins.get(pluginId)?.isBuiltin !== true) {
+      return this.buildWorkerCommandHandler(pluginId, channel, resolvedPath);
+    }
     const mod = (await this.runImport(pluginId, resolvedPath)) as { default?: unknown };
     if (typeof mod.default !== "function") {
       throw new Error(
@@ -1776,6 +2249,36 @@ export class PluginService {
     if (existing) return existing;
     this.pluginActionHandlers.set(channel, handler);
     return handler;
+  }
+
+  /**
+   * Build the stand-in that relays a manifest command into its plugin's worker
+   * (#12274). The worker entry is looked up when the command RUNS, not when
+   * this closure is built, so a reload that replaced the worker in between is
+   * routed to the live generation rather than a dead one.
+   *
+   * `dispatchHandler` has already awaited `activatePlugin`, but that promise
+   * never rejects (#9428) — a plugin whose activation failed still arrives
+   * here, just with no worker behind it. That reads as a missing entry and
+   * fails with a message naming activation, so the toast doesn't blame the
+   * handler file for a failure that happened before it.
+   */
+  private buildWorkerCommandHandler(
+    pluginId: string,
+    channel: string,
+    resolvedPath: string
+  ): ActionHandler {
+    return async (args: unknown) => {
+      const entry = this.pluginWorkers.get(pluginId);
+      if (!entry || entry.activation.ok === false) {
+        throw new Error(`Plugin "${pluginId}" is not activated; cannot run command "${channel}"`);
+      }
+      // `entry.activation.ok` describes the last outcome the bridge REPORTED,
+      // which survives the worker it described: after a crash the entry and its
+      // stale `ok: true` both persist while a replacement forks. The bridge's
+      // own generation state is the live fact, so it makes the final call.
+      return entry.bridge.invokeCommand(channel, resolvedPath, args);
+    };
   }
 
   /**
@@ -1797,6 +2300,30 @@ export class PluginService {
   }
 
   /**
+   * Whether a non-builtin plugin has code for a worker to run (#12274).
+   *
+   * `main` is the obvious case. The other is a plugin that declares commands
+   * and ships handler modules but no entry point: before this, its `src/` files
+   * were imported into Electron main precisely BECAUSE it had no worker, which
+   * is the asymmetry the issue closes. It needs one now.
+   *
+   * Reads {@link commandModulePaths}, so it is only meaningful after
+   * `registerManifestCommands` has probed — which is load time, well before any
+   * activation trigger. A command whose file is missing, whose only sibling is
+   * `.ts`, or whose registration was rejected leaves no entry, so a descriptor
+   * with nothing behind it still forks nothing.
+   */
+  private hasWorkerCode(pluginId: string, plugin: LoadedPlugin): boolean {
+    if (plugin.isBuiltin) return false;
+    if (plugin.resolvedMain) return true;
+    return (
+      plugin.manifest.contributes?.commands?.some((cmd) =>
+        this.commandModulePaths.has(`${pluginId}.${cmd.id}`)
+      ) ?? false
+    );
+  }
+
+  /**
    * Actually import the plugin's `main` module, create its host, and run
    * `activate()`. Wrapped by {@link activatePlugin} for idempotency &
    * concurrent-caller dedup — direct callers will re-import on every call.
@@ -1805,7 +2332,7 @@ export class PluginService {
    */
   private async _doActivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
-    if (!plugin || !plugin.resolvedMain) return;
+    if (!plugin) return;
     // User-installed plugins activate inside a `utilityProcess.fork` worker
     // (#10526). Dev plugins hot-reload on each `dist/index.js` rebuild; packaged
     // prod plugins run the same worker without the file watcher. Out-of-process
@@ -1820,8 +2347,15 @@ export class PluginService {
     // builders are SYNCHRONOUS — they can't cross the worker's async MessagePort
     // (#8879), so routing built-ins through the worker would silently break forge.
     if (!plugin.isBuiltin) {
+      // Eligibility (`main`, or a manifest command with a resolved handler) is
+      // decided by `activateViaWorker` itself — it is the same predicate its
+      // reuse guard needs, so it lives in one place.
       return this.activateViaWorker(pluginId, plugin);
     }
+    // A built-in with no `main` has nothing to activate. Its manifest commands
+    // are still dispatchable: `loadManifestCommandHandler` imports them on
+    // demand, in-process, which for a built-in is the intended path (#12274).
+    if (!plugin.resolvedMain) return;
     try {
       // Bound the dynamic import — a built-in with a hanging top-level await
       // would otherwise pin this promise forever and stall `Promise.allSettled`
@@ -1908,11 +2442,44 @@ export class PluginService {
    * Only a fork failure (no worker at all) rejects.
    */
   private async activateViaWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
-    if (!plugin.resolvedMain) return;
+    // Worker eligibility reads the probed handler paths, so it cannot be decided
+    // while the probe is still running (#12274) — deciding early would latch
+    // "no worker needed" for the plugin's lifetime. Only a plugin with no `main`
+    // depends on the answer, though, and the wait is deliberately confined to
+    // it: `main` alone already makes a plugin eligible, so making every plugin
+    // queue behind a filesystem probe would let one unresponsive mount stall an
+    // activation that never needed the probe's result.
+    if (!plugin.resolvedMain) {
+      const discovery = this.commandDiscovery.get(pluginId);
+      if (discovery) {
+        await discovery.catch(() => undefined);
+        // Post-await liveness re-check (#9428). Throwing rather than returning:
+        // a return reads as a successful activation, and `activatePlugin` would
+        // leave this fulfilled promise cached under an id whose CURRENT
+        // generation was never activated — every later trigger would then get
+        // the stale promise back and no worker would ever fork. The rejection
+        // path drops the in-flight entry instead, so the live generation can
+        // still activate (#10899); `activatePlugin` itself still never rejects.
+        if (this.plugins.get(pluginId) !== plugin) {
+          throw new Error(`Plugin "${pluginId}" was replaced during activation`);
+        }
+      }
+    }
+    if (!this.hasWorkerCode(pluginId, plugin)) return;
     // A re-activation while a worker is already live is a no-op — the worker
     // owns its own reload cycle; activatePlugin's idempotency normally prevents
     // this, but guard defensively against the unload-race re-entry path.
-    if (this.pluginWorkers.has(pluginId)) return;
+    const existing = this.pluginWorkers.get(pluginId);
+    if (existing) {
+      // ...unless its last generation FAILED. A worker left alive after a failed
+      // activation is not an activated plugin, so returning here would let
+      // `activatePlugin` cache the id and turn every later retry into a no-op —
+      // the bug this method exists to fix, one level up. Drop it and fork fresh,
+      // which is what Settings → Retry means for a generation that is not coming
+      // back on its own.
+      if (existing.activation.ok !== false) return;
+      existing.cleanup();
+    }
 
     // Spike #10890 (opt-in): compute the permission-model execArgv flags BEFORE
     // creating the host, so the default (env-off) path never awaits and stays
@@ -1937,8 +2504,14 @@ export class PluginService {
     const { host, revoke } = this.createHost(pluginId);
     const workerHost = new PluginDevWorkerHost({
       pluginId,
+      // The host's own identity, so the worker-side proxy reports the real
+      // binding instead of reconstructing one from the instance key.
+      identity: host.pluginInfo,
       pluginDir: plugin.dir,
-      bundlePath: plugin.resolvedMain,
+      // Absent for a commands-only plugin: the worker boots the harness and
+      // reports activated without importing anything, then imports each command
+      // handler on its first dispatch (#12274).
+      bundlePath: plugin.resolvedMain ?? undefined,
       mode: plugin.devMode ? "dev" : "prod",
       permissionExecArgv,
     });
@@ -1957,20 +2530,48 @@ export class PluginService {
         this.removeHandlers(pluginId);
         this.unregisterImperativePluginActions(pluginId);
       },
+      // A protocol violation terminates the worker for good (#12276). Provenance
+      // is already recorded by `onActivationResult`; this releases the runtime
+      // state the owner holds — worker entry, activation cache, prompts — so the
+      // plugin can be re-opened rather than left stuck dead.
+      onTerminalFailure: () => {
+        terminalFailure = true;
+        // Guarded to the live entry: a replacement worker must not be torn down
+        // by its predecessor's failure.
+        if (this.pluginWorkers.get(pluginId) !== entry) return;
+        // Published HERE rather than from the host listener in
+        // `watchWorkerHealth`. The bridge subscribes to `protocol-violation` in
+        // its constructor, so it runs first: it fails the activation (which
+        // publishes `activation-failed`) and tears the entry down, and by the
+        // time the health listener gets its turn its identity guard fails. The
+        // violation would otherwise be reported as "it threw while starting up".
+        this.setWorkerStatus(pluginId, "failed", "protocol-violation", null);
+        this.deactivateWorker(pluginId);
+      },
       // Fires on every activation outcome (initial + each reload). Keeps the
       // provenance `loadError` in sync so a fix-and-save clears a stale error
       // and a freshly-introduced one is recorded — the first-activation promise
       // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
-        lastActivationOk = result.ok;
-        if (plugin.isBuiltin) return;
+        activation.ok = result.ok;
+        // Guarded to the live entry: a retired generation settling late must not
+        // describe the replacement that already took its place (#10899).
+        if (this.pluginWorkers.get(pluginId) === entry) {
+          if (result.ok) {
+            this.setWorkerStatus(pluginId, "ready", null, null);
+          } else {
+            this.setWorkerStatus(pluginId, "failed", "activation-failed", result.error);
+          }
+        }
         if (result.ok) {
           if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
-            this.records.upsertInstalledRecord(pluginId, { loadError: null });
+            this.recordPluginLoadError(pluginId, plugin, null);
           }
         } else {
-          this.records.upsertInstalledRecord(pluginId, {
-            loadError: { message: result.error, stack: result.stack, at: Date.now() },
+          this.recordPluginLoadError(pluginId, plugin, {
+            message: result.error,
+            stack: result.stack,
+            at: Date.now(),
           });
         }
       },
@@ -1980,14 +2581,27 @@ export class PluginService {
     // first activation must not be cached as "activated" (#10523 retry-on-reopen):
     // for a prod worker — which has no file watcher to auto-recover — we tear the
     // worker down below so a re-open (Settings → Retry) re-forks and re-runs.
-    let lastActivationOk: boolean | undefined;
+    const activation: { ok?: boolean } = {};
+    /** Set when the worker broke the protocol and was terminated (#12276). */
+    let terminalFailure = false;
 
-    const entry = { workerHost, bridge, revoke };
+    const entry = { workerHost, bridge, revoke, cleanup: () => cleanup(), activation };
     this.pluginWorkers.set(pluginId, entry);
+    // Subscribed to the host's own lifecycle events rather than threaded through
+    // the bridge: the supervisor respawns a crashed worker without telling this
+    // service, so the process edges are only observable here (#12278).
+    const detachHealth = this.watchWorkerHealth(pluginId, entry);
+    this.setWorkerStatus(pluginId, "starting", null, null, { newGeneration: true });
 
     // Register the teardown disposer up front so a concurrent unloadPlugin()
     // during fork/activation tears the worker down through the normal cascade.
+    let cleanedUp = false;
     const cleanup = (): void => {
+      // One-shot: a late catch running after the entry was already replaced must
+      // not detach the SUCCESSOR's listeners or dispose its worker.
+      if (cleanedUp) return;
+      cleanedUp = true;
+      detachHealth();
       bridge.dispose();
       workerHost.dispose();
       revoke();
@@ -2001,13 +2615,35 @@ export class PluginService {
       await workerHost.start();
     } catch (err) {
       // Fork failure — no worker exists, so this is a hard activation failure.
-      cleanup();
-      const loadError = toPluginLoadError(err);
-      if (!plugin.isBuiltin) {
-        this.records.upsertInstalledRecord(pluginId, { loadError });
+      //
+      // Guarded, because this catch also fires for a startup that was CANCELLED:
+      // an unload during the fork disposes the worker, which rejects `start()`.
+      // The unload has already dropped this instance's status, so writing here
+      // unguarded resurrects an orphan no later `unloadPlugin` can clear (it
+      // returns early once the id is gone from `plugins`) — and during a restart
+      // it would describe the replacement using its predecessor's disposal
+      // error. A protocol violation reported by the bridge keeps its own,
+      // sharper reason for the same reason.
+      if (!this.disposed && this.pluginWorkers.get(pluginId) === entry && !terminalFailure) {
+        this.setWorkerStatus(
+          pluginId,
+          "failed",
+          "fork-failed",
+          formatErrorMessage(err, "fork failed")
+        );
       }
+      cleanup();
+      this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       console.error(`[PluginService] Failed to start worker for ${pluginId}:`, err);
       throw err;
+    }
+
+    // A protocol violation during boot already tore the worker down and dropped
+    // the entry, so the raced-unload check below would read as a clean return
+    // and let `activatePlugin` cache the id as activated. Rethrow instead: the
+    // recovery path is a re-open that forks a fresh worker.
+    if (terminalFailure) {
+      throw new Error(`Plugin "${pluginId}" dev worker stopped: protocol violation`);
     }
 
     // If an unload raced the fork, the cleanup already disposed everything.
@@ -2018,54 +2654,72 @@ export class PluginService {
 
     // Bound the first activation so a plugin with a hanging `activate()` (or a
     // never-resolving top-level await in the worker) can't stall the
-    // `Promise.allSettled` startup gate forever. On timeout the worker stays
-    // alive — `onActivationResult` will clear/record the error if activation
-    // eventually settles (or, for a dev worker, a reload follows). The
-    // provenance `loadError` is owned by `onActivationResult`; this catch only
-    // logs and unblocks startup.
-    let timer: NodeJS.Timeout | undefined;
+    // `Promise.allSettled` startup gate forever.
+    const gate = bridge.waitForActivation();
+    // The race abandons this promise on timeout; a late `activate-error` would
+    // otherwise settle it with nobody listening.
+    gate.catch(() => undefined);
     try {
-      await Promise.race([
-        bridge.waitForActivation(),
-        new Promise<void>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            reject(
-              new Error(
-                `Plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
-              )
-            );
-          }, ACTIVATE_TIMEOUT_MS);
-          timer.unref?.();
-        }),
-      ]);
+      await withTimeout(
+        gate,
+        ACTIVATE_TIMEOUT_MS,
+        `Plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
+      );
+      return;
     } catch (err) {
-      // The worker didn't settle in time — typically a hanging `activate()` or a
-      // never-resolving top-level await in the bundle. The worker stays alive in
-      // isolation (it can't stall the main process); record the timeout as the
-      // provenance loadError so diagnostics surface why the plugin never came up.
-      // If activation eventually settles (or a dev reload follows),
-      // `onActivationResult` overwrites this.
-      if (!plugin.isBuiltin) {
-        this.records.upsertInstalledRecord(pluginId, { loadError: toPluginLoadError(err) });
+      // Record only what the bridge did not. It settles a failed activation
+      // twice — `onActivationResult` first, with the WORKER's error and stack,
+      // then a rejection carrying a freshly-built main-process `Error` — so
+      // recording every rejection would overwrite the real plugin stack with
+      // this process's own. An outcome the bridge never reported at all, though,
+      // is ours to persist: neither a timeout nor a crash calls
+      // `onActivationResult`, and those are the two failures that would
+      // otherwise leave no evidence at all.
+      if (activation.ok === undefined) {
+        this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       }
       console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
-    } finally {
-      if (timer) clearTimeout(timer);
+      if (err instanceof TimeoutError) {
+        if (this.pluginWorkers.get(pluginId) === entry) {
+          this.setWorkerStatus(pluginId, "failed", "activation-timeout", err.message);
+        }
+        // A hung `activate()` leaves a worker burning CPU behind a host that has
+        // already given up on it, and no message will ever arrive to retire it.
+        // Isolated: a throw out of teardown must not replace the activation
+        // failure it is cleaning up after, nor skip the bookkeeping below.
+        try {
+          bridge.retire(`Plugin "${pluginId}" activate() did not settle`);
+        } catch (retireErr) {
+          console.error(`[PluginService] Retiring "${pluginId}" threw:`, retireErr);
+        }
+      }
     }
 
-    // A failed first activation must not be cached as a successful one
-    // (#10523): `activatePlugin` adds the id to `activatedPlugins` when this
-    // method resolves, which would short-circuit every later re-open. A dev
-    // worker keeps watching so the author can fix the error and save to reload —
-    // its retry path is the watcher, not a re-activation — so leave it alive.
-    // A prod worker has no watcher, so the only recovery is a re-open / Settings
-    // → Retry that re-runs `activatePlugin`; tear the failed worker down and
-    // rethrow so the in-flight entry is dropped and the id is never cached,
-    // mirroring the in-process loader's rethrow-on-activate-failure semantics.
-    if (lastActivationOk === false && !plugin.devMode) {
-      cleanup();
+    // Every unsuccessful outcome marks the generation failed — not just the ones
+    // the bridge reported. A timeout never reports, and neither does a crash, so
+    // leaving this `undefined` would let the reuse guard read a dead entry as
+    // "still in flight" and cache the id as activated.
+    activation.ok = false;
+
+    // An unload raced the failure and already tore the entry down.
+    if (this.pluginWorkers.get(pluginId) !== entry) {
       throw new Error(`Plugin "${pluginId}" activate() failed`);
     }
+
+    // A failed first activation must not be cached as a successful one (#10523):
+    // `activatePlugin` adds the id to `activatedPlugins` when this method
+    // RESOLVES, which would short-circuit every later re-open and make the
+    // panel's retry control a no-op forever. Throwing instead routes through
+    // `activatePlugin`'s existing identity-guarded rejection handler, which drops
+    // the in-flight entry so a retry genuinely re-runs (#10899) — while
+    // `activatePlugin` itself still never rejects (#9428).
+    //
+    // A dev worker is left alive so the author can fix the error and save: its
+    // retry path is `PluginDevArtifactWatcher` reconciling the whole plugin
+    // (#12277). A prod worker has no watcher, so tear it down and let the next
+    // trigger fork a fresh one.
+    if (!plugin.devMode) cleanup();
+    throw new Error(`Plugin "${pluginId}" activate() failed`);
   }
 
   /**
@@ -2075,6 +2729,18 @@ export class PluginService {
    * retry; a hang only affects the first attempt.
    */
   private async runImport(pluginId: string, resolvedMain: string): Promise<unknown> {
+    // Built-in origin is a POSITIVE requirement to run plugin code in Electron
+    // main, not the default that other branches happen to route around
+    // (#12274). Both current callers already select for it — the built-in arm
+    // of `_doActivate`, and the built-in arm of `loadManifestCommandHandler` —
+    // so this changes nothing today and is here for the next caller, where
+    // reaching main by omission is exactly the mistake that would be easy to
+    // make and invisible once made.
+    if (this.plugins.get(pluginId)?.isBuiltin !== true) {
+      throw new Error(
+        `Plugin "${pluginId}" is not a built-in and must not be imported into Electron main`
+      );
+    }
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
@@ -2204,17 +2870,18 @@ export class PluginService {
    * Returns a plain {@link PluginActivationResult} so the renderer's
    * `PluginViewHost` can surface the real activation cause (#10618). Because
    * {@link activatePlugin} never rejects (the contribution-point trigger
-   * contract), failures are read back from the persisted provenance `loadError`
-   * after the await — covering all three failure modes (worker fork failure,
-   * activate() timeout, activate() throw). An unknown kind id resolves to
-   * `{ ok: true }`: there is nothing to activate, and the renderer's module
-   * import then fails on its own with a more specific error.
+   * contract), failures are read back from {@link getPluginLoadError} after the
+   * await — covering all three failure modes (worker fork failure, activate()
+   * timeout, activate() throw) for installed plugins through the persisted
+   * provenance record and for project plugins through the in-memory map
+   * (#12232). An unknown kind id resolves to `{ ok: true }`: there is nothing
+   * to activate, and the renderer's module import then fails on its own with a
+   * more specific error.
    *
-   * Limitation: built-in plugins have no installed provenance record, so a
-   * built-in activation failure (logged, not persisted) reads back as
-   * `{ ok: true }` here and falls through to the renderer's generic import
-   * error. Built-ins are app-bundled trusted code where this is rare; surfacing
-   * it would need a separate in-memory built-in load-error map.
+   * Limitation: built-in plugins have neither channel, so a built-in activation
+   * failure (logged, not recorded) reads back as `{ ok: true }` here and falls
+   * through to the renderer's generic import error. Built-ins are app-bundled
+   * trusted code where this is rare.
    *
    * `requestRecoveryPath` is the renderer's "my import of this view's module
    * failed, give me a URL V8 hasn't seen" request (#11728). A rejected dynamic
@@ -2232,8 +2899,19 @@ export class PluginService {
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
     for (const [pluginId, plugin] of this.plugins) {
+      const projectId = plugin.binding?.projectId ?? null;
       for (const panel of plugin.manifest.contributes.panels) {
-        if (`${pluginId}.${panel.id}` === panelKindId) {
+        // A project plugin's kinds are registered under the project-qualified
+        // runtime id, not `{pluginId}.{panelId}`, so matching only the latter
+        // would leave every lazily-activated project panel un-activated.
+        const runtimeId =
+          projectId === null
+            ? `${pluginId}.${panel.id}`
+            : toRuntimePanelKindId(
+                { origin: "project", pluginId: plugin.manifest.name, kindId: panel.id },
+                projectId
+              );
+        if (runtimeId === panelKindId) {
           await this.activatePlugin(pluginId);
           const loadError = this.getPluginLoadError(pluginId);
           if (loadError) {
@@ -2249,11 +2927,16 @@ export class PluginService {
             ? undefined
             : live.manifest.contributes.views.find((v) => v.id === panel.id);
           if (!view) return { ok: true };
+          // Same reason the map re-read above exists: without a live authority
+          // the URL would address nothing, so offer no recovery path at all
+          // rather than one that 404s.
+          const authority = this.pluginAuthorities.get(pluginId);
+          if (!authority) return { ok: true };
           live.recoveryViewGeneration ??= allocatePluginViewGeneration();
           return {
             ok: true,
             recoveryComponentPath: buildPluginViewUrl(
-              pluginId,
+              authority,
               view.componentPath,
               live.recoveryViewGeneration
             ),
@@ -2368,10 +3051,22 @@ export class PluginService {
       list.push(rest);
     }
 
+    // `this.plugins` is keyed by the REGISTRY key, which for a project plugin is
+    // its instance key (`project__{projectId}__{publisher.name}`) and not
+    // `manifest.name` — the manifest keeps the bare id it declares, and
+    // `loadPlugin` asserts the two agree rather than rewriting either. Keying
+    // this off `manifest.name` therefore dropped every project plugin from the
+    // snapshot, which is both the wrong set for a bug report and, since the log
+    // buffers and audit records are themselves keyed by the registry key, the
+    // one class of plugin whose author is reading these diagnostics (#12214).
+    //
+    // `info.instanceId` IS that registry key — `listPlugins` carries it through
+    // (#12211) — so this filters and indexes on the key itself rather than
+    // reconstructing it from manifest object identity.
     const plugins = this.listPlugins()
-      .filter((info) => this.plugins.has(info.manifest.name))
+      .filter((info) => this.plugins.has(info.instanceId))
       .map((info) => {
-        const pluginId = info.manifest.name;
+        const pluginId = info.instanceId;
         const buffer = this.logBuffers.get(pluginId);
         return {
           pluginId,
@@ -2419,10 +3114,13 @@ export class PluginService {
       getHostGitFactory: () => this.hostGitFactory,
       getProcessManager: () => this.getProcessManager(),
       declaredCapabilities: (pluginId) => this.declaredCapabilities(pluginId),
-      fetchAllWorktreeSnapshots: () => this.fetchAllWorktreeSnapshots(),
+      fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
+      fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
+        this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),
       recordPluginLog: (boundPlugin, pluginId, level, message, fields) =>
         this.recordPluginLog(boundPlugin, pluginId, level, message, fields),
       serializePluginBadges: (pluginId) => this.serializePluginBadges(pluginId),
+      pluginDisplayName: (pluginId) => this.getPluginDisplayName(pluginId),
       pluginDataDir: (pluginId) => this.pluginDataDir(pluginId),
       isPathUnder: (root, candidate) => this.isPathUnder(root, candidate),
       expandAllowedPathEntries: (pluginId, options) =>
@@ -2448,8 +3146,23 @@ export class PluginService {
     };
   }
 
-  private createHost(pluginId: string): { host: PluginHostApi; revoke: () => void } {
-    return createPluginHost(this.hostFactoryDeps, pluginId);
+  /**
+   * Build a plugin's host object, bound to `binding`'s project.
+   *
+   * Every caller passes {@link UNBOUND_PLUGIN_HOST_BINDING} today: installed
+   * and builtin plugins stay app-global by design, and nothing yet loads a
+   * project-owned plugin. The parameter is what makes a bound host possible
+   * once the project-scoped loader lands.
+   */
+  private createHost(
+    pluginId: string,
+    binding?: PluginHostBinding
+  ): { host: PluginHostApi; revoke: () => void } {
+    // The instance's own binding, captured at load, is authoritative — never a
+    // default resolved from whatever project is focused when activation runs.
+    const resolved = binding ?? this.plugins.get(pluginId)?.binding ?? UNBOUND_PLUGIN_HOST_BINDING;
+    this.hostBindings.set(pluginId, resolved);
+    return createPluginHost(this.hostFactoryDeps, pluginId, resolved);
   }
 
   /**
@@ -2470,10 +3183,19 @@ export class PluginService {
           // dispatcher. `panelId` is the spawn-time routing target (#11300):
           // non-null targets the panel that started the process, null keeps the
           // historical broadcast to every panel the plugin owns.
-          broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, {
-            panelId,
-            payload: event,
-          });
+          //
+          // The manager is a single instance shared by every plugin, so the
+          // owning plugin's binding is looked up here rather than closed over.
+          // A bound plugin's process output reaches only its own project's
+          // views; an unbound one deliberately reaches all of them, as its
+          // panels can live in any project.
+          const channel = `plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`;
+          const projectId = this.hostBindings.get(pluginId)?.projectId ?? null;
+          if (projectId === null) {
+            broadcastToRenderer(channel, { panelId, payload: event });
+            return;
+          }
+          broadcastToProjectRenderers(projectId, channel, { panelId, payload: event });
         },
         ptySpawner: (config, context) =>
           this.getPluginPtyTransport().spawn(context.id, context.generation, {
@@ -2527,6 +3249,20 @@ export class PluginService {
   }
 
   /**
+   * App-quit teardown for every child a plugin spawned via `host.process.spawn`
+   * (#12216). Called from `lifecycle/shutdown.ts` — the per-plugin `killAll` on
+   * the unload cascade only covers a plugin going away, and nothing was
+   * unloading these at quit, so a plugin's dev server outlived the app.
+   *
+   * Deliberately narrower than `dispose()`: quit wants the OS children gone,
+   * not a full registry teardown with its contribution broadcasts and a second
+   * best-effort MCP shutdown that `shutdown.ts` already runs on its own.
+   */
+  async shutdownManagedProcesses(): Promise<void> {
+    await this.processManager?.shutdownAll();
+  }
+
+  /**
    * Test seam: inject a {@link PluginProcessManager} wired to a controllable
    * fake spawner so host-level spawn/unload behavior can be exercised without
    * forking a real `node:child_process`. Production never calls this.
@@ -2545,16 +3281,22 @@ export class PluginService {
     this.hostGitFactory = factory;
   }
 
-  _registerFakePluginForTests(plugin: LoadedPlugin): void {
-    this.plugins.set(plugin.manifest.name, plugin);
+  _registerFakePluginForTests(plugin: LoadedPlugin, instanceKey?: string): void {
+    this.mintPluginAuthority(plugin.manifest.name, plugin.dir);
+    // `instanceKey` mirrors the real `loadPlugin`, which keys a project plugin
+    // by `project__{projectId}__{name}` while leaving `manifest.name` bare.
+    // Without it a test cannot reproduce the shape the registry actually holds
+    // for a project plugin, which is where the two diverge (#12214).
+    this.plugins.set(instanceKey ?? plugin.manifest.name, plugin);
   }
 
   _unregisterFakePluginForTests(pluginId: string): void {
+    this.invalidatePluginAuthority(pluginId);
     this.plugins.delete(pluginId);
   }
 
-  _createHostForTests(pluginId: string): PluginHostApi {
-    return this.createHost(pluginId).host;
+  _createHostForTests(pluginId: string, binding?: PluginHostBinding): PluginHostApi {
+    return this.createHost(pluginId, binding).host;
   }
 
   /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */
@@ -2567,6 +3309,30 @@ export class PluginService {
   /** The plugin's declared `scopes.fs.allowedPaths` (empty when none / unloaded). */
   private declaredAllowedPaths(pluginId: string): readonly string[] {
     return this.plugins.get(pluginId)?.manifest.scopes?.fs?.allowedPaths ?? [];
+  }
+
+  /**
+   * The implicit project root a project plugin gets when it declares no
+   * `scopes.fs.allowedPaths` (spec §7.2).
+   *
+   * It lives inside that tree, so the tree is the only sensible default, and
+   * without it `host.fs` and `host.git` would have no root at all and the
+   * plugin could reach nothing but its own data dir. Returned as an explicitly
+   * `"project"`-classified entry rather than as a literal path: literal
+   * classification calls anything under the user's home directory `"user-data"`,
+   * and most projects live under `~/`, which would deny `fs:project-read` the
+   * project root while granting it to `fs:user-data-read`.
+   *
+   * Only a project-origin plugin gets it. An installed or builtin plugin has no
+   * project of its own, and `origin` is checked as well as the root so a
+   * malformed binding cannot widen one.
+   */
+  private implicitProjectRoot(pluginId: string): ExpandedFsPath | null {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin || plugin.origin !== "project") return null;
+    const projectRoot = plugin.binding?.projectRoot;
+    if (!projectRoot) return null;
+    return { path: projectRoot, rootClass: "project" };
   }
 
   /** The implicit per-plugin data dir, always an allowed `user-data` root. */
@@ -2643,11 +3409,16 @@ export class PluginService {
     const needsSnapshots = declared.some(
       (entry) => entry.startsWith("${project}") || entry.startsWith("${worktree}")
     );
-    const snapshots = needsSnapshots ? await this.fetchAllWorktreeSnapshots() : [];
+    const snapshots = needsSnapshots ? await this.allowedPathSnapshots(pluginId) : [];
 
     const entries: ExpandedFsPath[] = [];
     if (opts.includeDataDir) {
       entries.push({ path: this.pluginDataDir(pluginId), rootClass: "user-data" });
+    }
+    // A declared list replaces this default rather than extending it.
+    if (declared.length === 0) {
+      const implicit = this.implicitProjectRoot(pluginId);
+      if (implicit) entries.push(implicit);
     }
     for (const raw of declared) {
       try {
@@ -2662,6 +3433,27 @@ export class PluginService {
       }
     }
     return entries;
+  }
+
+  /**
+   * The worktree set a plugin's `${project}` / `${worktree}` tokens expand against.
+   *
+   * A bound plugin gets its own project's worktrees. Resolving these from the
+   * focused window instead would let a project plugin's declared filesystem
+   * roots follow whichever project the user happened to be looking at — the
+   * confused deputy the binding exists to prevent, and the one place the
+   * containment allowlist itself would have leaked.
+   *
+   * Unbound stays ambient on purpose: an installed or builtin plugin has no
+   * project of its own, so every open project's worktrees are the only thing
+   * its tokens can mean. A bound-but-rootless binding is malformed and expands
+   * to nothing, which drops the token entries and leaves containment closed.
+   */
+  private async allowedPathSnapshots(pluginId: string): Promise<WorktreeSnapshot[]> {
+    const binding = this.plugins.get(pluginId)?.binding;
+    if (!binding || binding.projectId === null) return this.fetchAllWorktreeSnapshots();
+    if (binding.projectRoot === null) return [];
+    return this.fetchWorktreeSnapshotsForProject(binding.projectId, binding.projectRoot);
   }
 
   /** Expand a single `allowedPaths` entry (token or literal) into a typed root. */
@@ -2717,15 +3509,86 @@ export class PluginService {
    * project's worktree, which is exactly the bug being fixed.
    */
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
+    const result = await this.fetchAllWorktreeSnapshotsResult();
+    return result.status === "ok" ? result.snapshots : [];
+  }
+
+  /**
+   * {@link fetchAllWorktreeSnapshots} keeping the reason it has nothing and the
+   * project the snapshots belong to (#12174), for `host.getWorktreesResult()`.
+   *
+   * Every branch that flattens to `[]` above maps to a distinct `reason` here.
+   * Nothing about the containment posture changes: this still never widens to
+   * the cross-project aggregate, and the array-shaped read above is unchanged
+   * for storage, `${worktree}`/`${project}` allowlist roots and the spawn cwd —
+   * they keep failing closed on an empty list rather than learning a new shape.
+   */
+  private async fetchAllWorktreeSnapshotsResult(): Promise<PluginWorktreeSnapshotFetchResult> {
     const client = this.workspaceClient;
-    if (!client) return [];
-    const windowId = this.resolveScopeWindowId();
-    if (windowId === undefined) return [];
+    if (!client) return { status: "unavailable", reason: "workspace-unavailable" };
     try {
-      return await client.getAllStatesAsync(windowId);
+      // Inside the try: scope resolution walks the live window/view registries,
+      // and a throw there must degrade like any other failed read rather than
+      // reject into a plugin's timer.
+      const windowId = this.resolveScopeWindowId();
+      if (windowId === undefined) return { status: "unavailable", reason: "scope-unresolved" };
+      const result = await client.getAllStatesResultAsync(windowId);
+      return result.status === "ok"
+        ? { status: "ok", projectId: result.projectId, snapshots: result.states }
+        : { status: "unavailable", reason: result.reason };
     } catch (err) {
       console.error("[PluginService] Failed to fetch worktree snapshots:", err);
-      return [];
+      return { status: "unavailable", reason: "fetch-failed" };
+    }
+  }
+
+  /**
+   * Worktree snapshots for one named project — the read behind every worktree
+   * surface of a project-bound host.
+   *
+   * Unlike {@link fetchAllWorktreeSnapshots} this consults no window and no
+   * focus: the binding names the project, and the workspace-host pool is keyed
+   * by project path, so the answer is the same whichever project the user is
+   * looking at. `expectedProjectId` guards the path→id race, so a folder
+   * reopened as a different project answers `[]` rather than the new project's
+   * worktrees.
+   *
+   * Once the project closes its pool entry is gone and this resolves `[]`,
+   * degrading the bound host exactly like an unloaded one (`getActiveWorktree`
+   * → `null`, `getWorktrees` → `[]`) instead of throwing into a stray timer.
+   */
+  private async fetchWorktreeSnapshotsForProject(
+    projectId: string,
+    projectRoot: string
+  ): Promise<WorktreeSnapshot[]> {
+    const result = await this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot);
+    return result.status === "ok" ? result.snapshots : [];
+  }
+
+  /**
+   * {@link fetchWorktreeSnapshotsForProject} keeping the reason it has nothing
+   * (#12174). A closed project — pool entry gone, or the path reopened as a
+   * different project so `expectedProjectId` no longer matches — reports
+   * `project-unavailable` instead of the `[]` a live project with no worktrees
+   * returns, which is the whole distinction the plugin side was missing.
+   */
+  private async fetchWorktreeSnapshotsForProjectResult(
+    projectId: string,
+    projectRoot: string
+  ): Promise<PluginWorktreeSnapshotFetchResult> {
+    const client = this.workspaceClient;
+    if (!client) return { status: "unavailable", reason: "workspace-unavailable" };
+    try {
+      const result = await client.getAllStatesForProjectResultAsync(projectRoot, projectId);
+      return result.status === "ok"
+        ? { status: "ok", projectId: result.projectId, snapshots: result.states }
+        : { status: "unavailable", reason: result.reason };
+    } catch (err) {
+      console.error(
+        `[PluginService] Failed to fetch worktree snapshots for project ${projectId}:`,
+        err
+      );
+      return { status: "unavailable", reason: "fetch-failed" };
     }
   }
 
@@ -2793,7 +3656,7 @@ export class PluginService {
   private subscribeWorktreeEvent(
     pluginId: string,
     event: WorkspaceWorktreeEvent,
-    handler: () => void
+    handler: (payload?: PluginWorktreeEventPayload) => void
   ): () => void {
     let boundClient: WorkspaceClient | null = null;
     let pendingRecord: (typeof this.pendingWorktreeSubs)[number] | null = null;
@@ -2871,6 +3734,22 @@ export class PluginService {
     }
   }
 
+  /**
+   * Realpath containment, matching the `plugin://` protocol handler: resolve
+   * symlinks on BOTH ends before comparing, so a link that sits inside the root
+   * but points outside it is rejected. Returns false when either side cannot be
+   * resolved — a path we cannot canonicalise is a path we do not execute.
+   */
+  private async isRealpathContained(root: string, candidate: string): Promise<boolean> {
+    try {
+      const realRoot = await fs.realpath(root);
+      const realCandidate = await fs.realpath(candidate);
+      return this.isPathUnder(realRoot, realCandidate);
+    } catch {
+      return false;
+    }
+  }
+
   private resolveEntryPath(pluginDir: string, relativePath: string): string | null {
     const resolved = path.resolve(pluginDir, relativePath);
     const normalizedDir = path.normalize(pluginDir) + path.sep;
@@ -2882,6 +3761,17 @@ export class PluginService {
 
   hasPlugin(pluginId: string): boolean {
     return this.plugins.has(pluginId);
+  }
+
+  /**
+   * The managed plugins directory this instance discovers user plugins from.
+   * Public because tests and the packaging flow construct the service with a
+   * temp root, so callers that need to reason about that root (the manifest
+   * validation handler's containment check) must read the live value rather
+   * than recompute the default.
+   */
+  getPluginsRoot(): string {
+    return this.pluginsRoot;
   }
 
   registerHandler<TArgs, TResult>(
@@ -3003,6 +3893,11 @@ export class PluginService {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
         // surfaces to the renderer (rethrown after logging).
+        //
+        // Hint first, so the audit record and the renderer's toast both carry
+        // it — the failure this catches most often is a signature mistake the
+        // plugin's own stack trace cannot name (#12214).
+        appendHandlerHint(err, actionHandlerArityHint(actionHandler, err));
         console.error(`[PluginService] Action handler "${channel}" threw:`, err);
         // Audit at the dispatch boundary (#10463) so non-IPC callers (agent
         // automation, recipe dispatch) leave the same durable trail as a
@@ -3080,6 +3975,14 @@ export class PluginService {
       // process. The error still surfaces to the renderer (we rethrow after
       // logging) — the renderer-side wrapping in `usePluginActions` turns
       // that rejection into a user-facing toast.
+      //
+      // Only the legacy path is hinted (#12214). A typed registration is stored
+      // as the `(ctx, ...args)` adapter above, whose declared arity is 1 for a
+      // reason that has nothing to do with the author's own signature — hinting
+      // on it would accuse every typed handler of a mistake it did not make.
+      if (!channelSchema) {
+        appendHandlerHint(err, channelHandlerArityHint(handler, err));
+      }
       console.error(`[PluginService] Handler "${key}" threw:`, err);
       // Audit at the dispatch boundary (#10463). `channel` carries the plugin
       // channel string that failed (the IPC transport is always plugin:invoke);
@@ -3176,6 +4079,13 @@ export class PluginService {
     if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
       throw new Error(`Invalid dev plugin id "${pluginId}" — expected a scoped "publisher.name"`);
     }
+    // Queued behind any reconcile or stop for this plugin: a CLI restart sends
+    // stop and start back to back, and a start that overtook the stop would be
+    // undone by it.
+    return this.serializeDevSession(pluginId, () => this.doLoadDevPlugin(pluginId));
+  }
+
+  private async doLoadDevPlugin(pluginId: string): Promise<void> {
     if (this.plugins.has(pluginId)) {
       this.unloadPlugin(pluginId);
     }
@@ -3193,6 +4103,791 @@ export class PluginService {
       );
     }
     await this.activatePlugin(pluginId);
+  }
+
+  // ----- `daintree-plugin dev` sessions (#12277) --------------------------
+
+  private devArtifactWatcherRegistry: PluginDevArtifactWatcher | null = null;
+
+  /**
+   * Per-session state the watcher does not own. Its presence IS the session:
+   * it outlives the plugin loads the session drives, so a reload that fails to
+   * produce a loadable plugin still has somewhere to report why.
+   */
+  private devSessions = new Map<string, { reloadCount: number; detail: string | null }>();
+
+  /** One dev operation at a time per plugin — reload, or the stop behind it. */
+  private devSessionChains = new Map<string, Promise<void>>();
+
+  /**
+   * Nesting depth of in-flight plugin replacements. While non-zero the
+   * contribution registries are mid-swap, so no snapshot taken from them is
+   * authoritative — see the broadcaster's `isReplacingPlugin` dep.
+   */
+  private devReplaceDepth = 0;
+
+  private get devArtifactWatchers(): PluginDevArtifactWatcher {
+    if (!this.devArtifactWatcherRegistry) {
+      this.devArtifactWatcherRegistry = new PluginDevArtifactWatcher({
+        reload: (pluginId) => this.reloadDevPlugin(pluginId),
+        onStateChange: (pluginId) => this.emitRuntimeStatus(pluginId),
+      });
+    }
+    return this.devArtifactWatcherRegistry;
+  }
+
+  /**
+   * Start watching this plugin's artifact, or keep watching it. Idempotent:
+   * the reconcile re-enters `loadPlugin`, which calls this again for the same
+   * session.
+   */
+  private ensureDevSession(pluginId: string, pluginDir: string): void {
+    if (this.disposed) return;
+    if (!this.devSessions.has(pluginId)) {
+      this.devSessions.set(pluginId, { reloadCount: 0, detail: null });
+    }
+    this.devArtifactWatchers.ensure(pluginId, pluginDir);
+    this.emitRuntimeStatus(pluginId);
+  }
+
+  /**
+   * End a dev session and unload its plugin (`plugin.dev.stop`).
+   *
+   * The watcher is stopped BEFORE the queue is joined, so no further rebuild
+   * can queue work behind the unload; the unload itself goes through the chain
+   * so it lands after any reconcile already in flight rather than racing it.
+   */
+  async stopDevSession(pluginId: string): Promise<void> {
+    this.devArtifactWatcherRegistry?.stop(pluginId);
+    await this.serializeDevSession(pluginId, async () => {
+      // Stopped a second time, deliberately. A reconcile already in flight when
+      // the first stop landed re-enters `loadPlugin`, which re-arms the session
+      // through `ensureDevSession` — so without this the queued teardown would
+      // unload the plugin and leave that replacement subscription watching a
+      // session nobody owns.
+      this.devArtifactWatcherRegistry?.stop(pluginId);
+      const had = this.devSessions.delete(pluginId);
+      this.unloadPlugin(pluginId);
+      if (had) this.emitRuntimeStatus(pluginId);
+    });
+  }
+
+  // ----- instance runtime health (#12278) ---------------------------------
+
+  /**
+   * Last published worker lifecycle per plugin instance. Deliberately keyed
+   * independently of {@link pluginWorkers}: a FAILED worker's entry is torn
+   * down immediately (crash loop, protocol violation), and dropping the status
+   * with it would erase the only account of why a mounted panel went dark. The
+   * status is removed by {@link unloadPlugin}, when the instance genuinely
+   * leaves the inventory.
+   */
+  private workerStatuses = new Map<string, PluginWorkerStatus>();
+
+  /**
+   * Monotonic worker-process id. Bumped for every fork — including the crash
+   * supervisor's own respawns, which `PluginService` never initiates — so a
+   * panel can tell "my backend was replaced" from "my backend is the one I
+   * mounted against". Distinct from `viewGeneration`, which counts published
+   * module URLs and does not move when only the backend is swapped.
+   */
+  private workerGenerationSeq = 0;
+
+  /** In-flight restarts, keyed by instance. Two panels of one plugin await one. */
+  private workerRestarts = new Map<string, Promise<void>>();
+
+  /**
+   * Record a worker lifecycle transition and publish it.
+   *
+   * `failed` latches against `stopped`: the teardown that FOLLOWS a terminal
+   * failure (`onTerminalFailure` calls `deactivateWorker`) must not overwrite
+   * the cause with the bland "deactivated" that ordinary idle disposal writes.
+   * Every other transition wins, so a restart's `starting` clears the failure.
+   */
+  private setWorkerStatus(
+    pluginId: string,
+    state: PluginWorkerState,
+    reason: PluginWorkerReason | null,
+    detail: string | null,
+    opts?: { newGeneration?: boolean }
+  ): void {
+    const prior = this.workerStatuses.get(pluginId);
+    if (state === "stopped" && prior?.state === "failed") return;
+    const generation = opts?.newGeneration
+      ? ++this.workerGenerationSeq
+      : (prior?.generation ?? ++this.workerGenerationSeq);
+    // A repeat of the same state under the same generation is not a transition;
+    // publishing it would remount every panel watching the generation.
+    if (
+      prior &&
+      prior.state === state &&
+      prior.generation === generation &&
+      prior.reason === reason &&
+      prior.detail === detail
+    ) {
+      return;
+    }
+    this.workerStatuses.set(pluginId, {
+      generation,
+      state,
+      stateSince: Date.now(),
+      reason,
+      detail,
+    });
+    this.emitRuntimeStatus(pluginId);
+  }
+
+  /**
+   * Subscribe to one worker host's lifecycle for the life of `entry`.
+   *
+   * Every handler identity-guards on the captured entry rather than checking
+   * presence: a replacement worker registered under the same plugin id must
+   * never be described by its predecessor's late events (#10899). Returns the
+   * detach function, which the entry's cleanup runs.
+   */
+  private watchWorkerHealth(
+    pluginId: string,
+    entry: { workerHost: PluginDevWorkerHost }
+  ): () => void {
+    const isCurrent = (): boolean => this.pluginWorkers.get(pluginId) === entry;
+    const onReady = (): void => {
+      if (!isCurrent()) return;
+      this.setWorkerStatus(pluginId, "activating", null, null);
+    };
+    const onExit = (code: number, expected: boolean): void => {
+      if (!isCurrent() || expected) return;
+      // The supervisor decides a tick later whether to respawn or trip the cap,
+      // so this is optimistic by design: `starting` is what the shell renders as
+      // "Reloading", and a crash-loop verdict overwrites it with `failed` before
+      // the user could act on it.
+      this.setWorkerStatus(pluginId, "starting", "crashed", `Worker exited (code ${code})`, {
+        newGeneration: true,
+      });
+    };
+    const onCrashLoop = (code: number): void => {
+      if (!isCurrent()) return;
+      this.setWorkerStatus(
+        pluginId,
+        "failed",
+        "crash-loop",
+        `Worker crashed repeatedly (code ${code}) and will not be restarted automatically`
+      );
+    };
+    const onProtocolViolation = (reason: string): void => {
+      if (!isCurrent()) return;
+      this.setWorkerStatus(pluginId, "failed", "protocol-violation", reason);
+    };
+    entry.workerHost.on("ready", onReady);
+    entry.workerHost.on("exit", onExit);
+    entry.workerHost.on("crash-loop", onCrashLoop);
+    entry.workerHost.on("protocol-violation", onProtocolViolation);
+    return () => {
+      entry.workerHost.off("ready", onReady);
+      entry.workerHost.off("exit", onExit);
+      entry.workerHost.off("crash-loop", onCrashLoop);
+      entry.workerHost.off("protocol-violation", onProtocolViolation);
+    };
+  }
+
+  /**
+   * Restart one plugin's backend, retiring the current generation and starting
+   * a fresh one. The narrow teardown ({@link deactivateWorker}) keeps the
+   * plugin's manifest contributions and its panels' registered kinds, so every
+   * panel on the instance rebinds to the new generation rather than closing.
+   *
+   * Concurrent callers share one restart: a plugin with three open panels whose
+   * user clicks "Restart plugin" in each gets one teardown, not three.
+   */
+  async restartPluginWorker(pluginId: string): Promise<PluginRuntimeStatus | null> {
+    const inFlight = this.workerRestarts.get(pluginId);
+    if (inFlight) {
+      await inFlight;
+      return this.buildRuntimeStatus(pluginId);
+    }
+    // Plain `Error`, like every other refusal this service raises — the IPC
+    // handler is the layer that owns user-facing `AppError` shaping.
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`Plugin "${pluginId}" isn't loaded`);
+    }
+    // A restart must not revive what the user deliberately turned off. The
+    // disabled set is a Set, not a list.
+    if (this.records.getDisabledIds().has(pluginId)) {
+      throw new Error(`Plugin "${pluginId}" is disabled`);
+    }
+    // Worker eligibility is the same predicate activation forks on, so it is
+    // read from the one place that encodes it: a builtin runs in-process, and a
+    // plugin with neither `main` nor a resolved command handler has no code for
+    // a worker to run — but a commands-only plugin DOES have a live worker
+    // (#12274) and must stay restartable. Refused BEFORE anything is published:
+    // a `starting` for a plugin no worker event can ever settle would strand
+    // every panel on it in "Reloading" until the stall banner fires.
+    if (!this.hasWorkerCode(pluginId, plugin)) {
+      throw new Error(`Plugin "${pluginId}" has no backend to restart`);
+    }
+    const run = (async (): Promise<void> => {
+      this.deactivateWorker(pluginId);
+      // No explicit `starting` here: `activateViaWorker` publishes one on a new
+      // generation as it forks, and doing it twice would bump the generation
+      // twice for a single restart. The `failed`/`stopped` this leaves standing
+      // in the gap is accurate — the old worker really is gone — and only the
+      // `stopped` case is latched, which a fresh `starting` clears.
+      //
+      // Never rejects by contract (#9428) — the outcome is read back off the
+      // status the activation path published.
+      await this.activatePlugin(pluginId);
+    })();
+    const settled = run.finally(() => {
+      if (this.workerRestarts.get(pluginId) === settled) this.workerRestarts.delete(pluginId);
+    });
+    void settled.catch(() => undefined);
+    this.workerRestarts.set(pluginId, settled);
+    await settled;
+    return this.buildRuntimeStatus(pluginId);
+  }
+
+  /** Live state of every tracked instance, for a renderer that has just attached. */
+  listPluginRuntimeStatuses(): PluginRuntimeStatus[] {
+    const statuses: PluginRuntimeStatus[] = [];
+    const ids = new Set([...this.devSessions.keys(), ...this.workerStatuses.keys()]);
+    for (const pluginId of ids) {
+      const status = this.buildRuntimeStatus(pluginId);
+      if (status) statuses.push(status);
+    }
+    return statuses;
+  }
+
+  private buildRuntimeStatus(pluginId: string): PluginRuntimeStatus | null {
+    const session = this.devSessions.get(pluginId);
+    const worker = this.workerStatuses.get(pluginId) ?? null;
+    if (!session && !worker) return null;
+    const watcher = session ? this.devArtifactWatcherRegistry?.stateOf(pluginId) : undefined;
+    return {
+      pluginId,
+      viewGeneration: this.plugins.get(pluginId)?.viewGeneration ?? null,
+      worker,
+      dev: session
+        ? {
+            reloadCount: session.reloadCount,
+            watcher: watcher?.state ?? "waiting",
+            // The session's own last failure outranks the watcher's: a healthy
+            // watch that keeps loading a broken manifest is the case the author
+            // needs told.
+            detail: session.detail ?? watcher?.detail ?? null,
+          }
+        : null,
+    };
+  }
+
+  /**
+   * Publish one instance's health to the renderers entitled to see it.
+   *
+   * Scoped to the owning project for a project-local instance, matching the
+   * pull path (`plugin:runtime-statuses-get`) and the precedent every other
+   * project-local plugin event already follows. This is not just symmetry: the
+   * payload carries plugin-authored `detail` — activation errors, stack text,
+   * paths inside that project's checkout — and no other project's view has a
+   * panel on the instance to render it. An app-global id takes the full
+   * broadcast it has always taken, spelled out rather than routed through
+   * `broadcastToProjectRenderers`'s null widening so the common case reads as
+   * what it is.
+   */
+  private emitRuntimeStatus(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:runtime-status-changed" as const,
+      payload: { pluginId, status: this.buildRuntimeStatus(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  private setDevSessionDetail(pluginId: string, detail: string | null): void {
+    const session = this.devSessions.get(pluginId);
+    if (!session || session.detail === detail) return;
+    session.detail = detail;
+    this.emitRuntimeStatus(pluginId);
+  }
+
+  /**
+   * Serialize dev work for one plugin. The chain is kept settled rather than
+   * rejected so one failed reconcile does not poison every reload queued
+   * behind it.
+   */
+  private serializeDevSession<T>(pluginId: string, task: () => Promise<T>): Promise<T> {
+    const prior = this.devSessionChains.get(pluginId) ?? Promise.resolve();
+    const run = prior.then(task, task);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.devSessionChains.set(pluginId, settled);
+    void settled.then(() => {
+      if (this.devSessionChains.get(pluginId) === settled) {
+        this.devSessionChains.delete(pluginId);
+      }
+    });
+    return run;
+  }
+
+  /**
+   * Reconcile a dev plugin against what is now on disk — manifest, views and
+   * backend as one artifact generation.
+   *
+   * This is `loadDevPlugin`'s path, not a second loader, which is the whole
+   * point: the manifest is re-read, `loadPlugin` mints a fresh
+   * `viewGeneration`, and every contribution is re-registered under it — so a
+   * view-only rebuild republishes `componentPath` on a URL the renderer's
+   * module map has never seen, and the backend that answers it is the one that
+   * shipped in the same build.
+   */
+  private reloadDevPlugin(pluginId: string): Promise<boolean> {
+    return this.serializeDevSession(pluginId, () => this.doReloadDevPlugin(pluginId));
+  }
+
+  /**
+   * Returns whether the artifact on disk was actually adopted. A `false` here
+   * is not a failure the author has to see — it is the watcher being told not
+   * to treat these bytes as loaded, so the next save still reconciles rather
+   * than comparing equal against a build that never ran.
+   */
+  private async doReloadDevPlugin(pluginId: string): Promise<boolean> {
+    if (this.disposed) return false;
+    // Same escape gate `loadDevPlugin` applies: the id becomes a path segment
+    // under `pluginsRoot` (#10518).
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) return false;
+    // A stop that landed while the settle was in flight wins.
+    if (!this.devSessions.has(pluginId)) return false;
+    // Re-read rather than captured at arm time: the user can disable the plugin
+    // in Preferences while the CLI session keeps running, and an unload-then-load
+    // would quietly bring it back.
+    if (this.records.getDisabledIds().has(pluginId)) return false;
+
+    const pluginDir = path.join(this.pluginsRoot, pluginId);
+    const manifestError = await readDevManifestError(pluginDir, pluginId);
+    if (manifestError) {
+      // Checked BEFORE anything is unloaded: a manifest the author is midway
+      // through editing must never take the running plugin down with it, and
+      // the next save reconciles. Reported rather than swallowed, so "my
+      // rebuild did nothing" has an answer.
+      this.setDevSessionDetail(pluginId, manifestError);
+      return false;
+    }
+    if (this.disposed || !this.devSessions.has(pluginId)) return false;
+
+    // The author's own diagnostics are usually WHY they are saving, so a
+    // reconcile that wipes them on every rebuild makes the Logs tab useless
+    // exactly when it matters. Carried here and nowhere else: an ordinary
+    // unload still clears, because that plugin is going away rather than being
+    // replaced by its next build.
+    const carriedLogs = this.logBuffers.get(pluginId);
+    const restoreLogs = (): void => {
+      if (!carriedLogs?.length) return;
+      const fresh = this.logBuffers.get(pluginId) ?? [];
+      this.logBuffers.set(pluginId, [...carriedLogs, ...fresh].slice(-PLUGIN_LOG_BUFFER_MAX));
+    };
+
+    // Everything from here to the matching decrement runs against half-swapped
+    // contribution registries. Snapshots taken in that window are not
+    // authoritative, and the renderer prunes persisted preferences off ones
+    // that claim to be — see the broadcaster's `isReplacingPlugin`.
+    this.devReplaceDepth++;
+    try {
+      if (this.plugins.has(pluginId)) this.unloadPlugin(pluginId);
+      const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+        isBuiltin: false,
+        disabled: this.records.getDisabledIds(),
+      });
+      if (!loaded) {
+        restoreLogs();
+        this.setDevSessionDetail(
+          pluginId,
+          `Couldn't load "${pluginId}" after a rebuild — it may be disabled in Preferences, or its plugin.json may be invalid`
+        );
+        return false;
+      }
+
+      // Disabled intent is re-read after the load as well as before it: the
+      // toggle is not serialized against this chain, so it can land in the gap
+      // and would otherwise be undone by the activation below.
+      if (this.records.getDisabledIds().has(pluginId)) {
+        this.unloadPlugin(pluginId);
+        return false;
+      }
+      await this.activatePlugin(pluginId);
+    } finally {
+      this.devReplaceDepth--;
+      // The registries are whole again, so anything the replacement held back
+      // can be published for real.
+      if (this.devReplaceDepth === 0) this.broadcaster.flushDeferredCompleteSnapshots();
+    }
+
+    // A stop admitted during the load leaves the plugin running behind a
+    // session that no longer exists; drop it rather than strand it.
+    if (!this.devSessions.has(pluginId)) {
+      this.unloadPlugin(pluginId);
+      return false;
+    }
+    restoreLogs();
+
+    const session = this.devSessions.get(pluginId);
+    if (session) {
+      session.reloadCount++;
+      // `activatePlugin` never rejects, so the activation error (if any) is
+      // read back off the provenance record rather than caught here. Assigned
+      // unconditionally so a fixed plugin clears the previous failure.
+      session.detail = this.getPluginLoadError(pluginId)?.message ?? null;
+    }
+    this.emitRuntimeStatus(pluginId);
+    return true;
+  }
+
+  // ----- project-local plugins (`<projectRoot>/.daintree/plugins/`) -------
+
+  /**
+   * Lazily built so a service that never opens a project never constructs it,
+   * and so tests can drive discovery/trust without a project view.
+   */
+  private projectPluginController: ProjectPluginController | null = null;
+
+  private get projectPlugins(): ProjectPluginController {
+    if (!this.projectPluginController) {
+      this.projectPluginController = new ProjectPluginController(this.projectPluginDeps);
+    }
+    return this.projectPluginController;
+  }
+
+  private get projectPluginDeps(): ProjectPluginControllerDeps {
+    return {
+      discover: (projectRoot) => discoverProjectPlugins(projectRoot),
+      loadProjectPlugin: (args) => this.loadProjectPluginInstance(args),
+      unloadProjectPlugin: (instanceKey) => this.unloadPlugin(instanceKey),
+      // Grants are held per plugin instance and an instance key names its
+      // project, so revoking by instance key purges exactly this project's
+      // grants — never another project's copy of the same manifest id.
+      purgeConsentForInstance: (instanceKey) => {
+        // The store reports whether the purge reached disk. A silent false
+        // means the grants come back on next launch for a plugin the user just
+        // revoked, which is exactly the kind of failure that must be loud.
+        const durable = getPluginCapabilityConsentService().revokeAllForPlugin(instanceKey);
+        if (!durable) {
+          console.error(
+            `[PluginService] capability grants for "${instanceKey}" were revoked in memory but could not be persisted — they may return on next launch`
+          );
+        }
+      },
+      listGlobalPluginIds: () =>
+        new Set<string>([
+          ...[...this.plugins.keys()].filter((id) => !isProjectPluginInstanceKey(id)),
+          ...this.reservedNames,
+          ...this.disabledPlugins.keys(),
+          ...this.blockedPlugins.keys(),
+        ]),
+      // The instance's most recent load/activation failure, so a row that
+      // loaded but could not run says so instead of reading as clean (#12232).
+      getPluginLoadError: (instanceKey) => this.getPluginLoadError(instanceKey),
+      readTrust: (projectId) => readProjectPluginTrust(projectId),
+      writeTrust: (projectId, record) => writeProjectPluginTrust(projectId, record),
+      emitToProject: (projectId, name, payload) => {
+        broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, { name, payload });
+      },
+      isProjectClosed: (projectId) => {
+        try {
+          return projectStore.getProjectById(projectId)?.status === "closed";
+        } catch {
+          // A store read failure must not be read as "closed" — that would
+          // unload a live project's plugins on a transient DB error.
+          return false;
+        }
+      },
+    };
+  }
+
+  /**
+   * Discover, trust-gate and (if trusted) load a project's own plugins.
+   *
+   * Called on every switch into a project, warm or cold. It must run AFTER the
+   * project's view is registered in `webContentsRegistry`: registration alone
+   * fires no contribution broadcast, so a plugin loaded into an unregistered
+   * view would be invisible until the next unrelated mutation. The explicit
+   * snapshot push at the end closes the same gap for a load that lands while
+   * the view is still coming up.
+   */
+  async onProjectOpened(projectId: string, projectRoot: string): Promise<void> {
+    if (this.disposed) return;
+    await this.projectPlugins.onProjectOpened(projectId, projectRoot);
+    await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId, projectRoot);
+  }
+
+  /** This project stopped being live: unload everything it owns. */
+  async onProjectClosed(projectId: string): Promise<void> {
+    // Stop the watcher first: it is the one thing that could otherwise queue a
+    // reload behind the teardown.
+    this.projectPluginWatcherRegistry?.stop(projectId);
+    if (!this.projectPluginController) return;
+    await this.projectPluginController.onProjectClosed(projectId);
+    await this.pushSnapshotToProject(projectId);
+  }
+
+  /**
+   * Record the user's answer. A decision that applied in memory but did not
+   * reach disk still rejects: the plugins are running, and the user needs to
+   * know the choice will be asked for again (#12212). The snapshot and the
+   * watcher are reconciled either way — the in-memory state changed regardless
+   * of whether the write landed.
+   */
+  async setProjectPluginTrust(
+    projectId: string,
+    decision: ProjectPluginTrustDecision
+  ): Promise<void> {
+    let failure: unknown;
+    try {
+      await this.projectPlugins.setTrust(projectId, decision);
+    } catch (err) {
+      failure = err;
+    }
+    await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId);
+    if (failure !== undefined) throw failure;
+  }
+
+  async activateStagedProjectPlugin(projectId: string, pluginId: string): Promise<void> {
+    await this.projectPlugins.activateStaged(projectId, pluginId);
+    await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId);
+  }
+
+  /**
+   * Switch one of a project's own plugins off, or back on, without touching the
+   * folder-level trust decision. Same post-change snapshot push and watcher sync
+   * as a trust change — muting unloads a plugin, so the project's views have to
+   * be told what is no longer there.
+   */
+  async setProjectPluginMuted(projectId: string, pluginId: string, muted: boolean): Promise<void> {
+    await this.projectPlugins.setMuted(projectId, pluginId, muted);
+    await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId);
+  }
+
+  /** The per-project visibility overlay for INSTALLED plugins. */
+  getProjectPluginVisibility(projectId: string): ProjectPluginVisibility {
+    return readProjectPluginVisibility(projectId);
+  }
+
+  /**
+   * Hide or show one installed plugin in one project. `null` clears the decision
+   * back to the default.
+   *
+   * The plugin keeps running — this is a visibility filter, not an unload — so
+   * the only thing that has to happen after the write is a rebroadcast of the
+   * scoped contribution channels. Nothing in the registries changed, so nothing
+   * else would fire, and the switch would otherwise take effect only on the next
+   * unrelated plugin event.
+   */
+  setProjectPluginVisibility(projectId: string, pluginId: string, visible: boolean | null): void {
+    if (!writeProjectPluginVisibility(projectId, pluginId, visible)) return;
+    this.announceVisibilityChange(projectId);
+  }
+
+  /**
+   * Set whether a plugin is hidden in projects that have not decided for
+   * themselves. Changes what every unanswered project sees, so the rebroadcast
+   * is the same one a per-project change triggers.
+   */
+  setPluginVisibilityDefault(projectId: string, pluginId: string, hidden: boolean): void {
+    if (!writePluginVisibilityDefault(pluginId, hidden)) return;
+    this.announceVisibilityChange(projectId);
+  }
+
+  private announceVisibilityChange(projectId: string): void {
+    this.broadcaster.broadcastVisibilityChanged();
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:project-plugin-visibility-changed",
+      payload: { projectId, visibility: readProjectPluginVisibility(projectId) },
+    });
+  }
+
+  // ----- project-local plugin hot reload (§7.10) -------------------------
+
+  private projectPluginWatcherRegistry: ProjectPluginWatcher | null = null;
+
+  private get projectPluginWatchers(): ProjectPluginWatcher {
+    if (!this.projectPluginWatcherRegistry) {
+      this.projectPluginWatcherRegistry = new ProjectPluginWatcher({
+        discover: (projectRoot) => discoverProjectPlugins(projectRoot),
+        loadedManifestIds: (projectId) => this.projectPlugins.loadedManifestIds(projectId),
+        reload: (projectId, projectRoot, manifestIds) =>
+          this.hotReloadProjectPlugins(projectId, projectRoot, manifestIds),
+        viewGenerationsAllocated: () => pluginViewGenerationsAllocated(),
+        onAppQuit: (dispose) => {
+          try {
+            app.once("before-quit", dispose);
+          } catch {
+            // No app object (tests, or a headless harness): nothing to hook.
+          }
+        },
+      });
+    }
+    return this.projectPluginWatcherRegistry;
+  }
+
+  /**
+   * A watcher exists for every open project that has not answered "no".
+   *
+   * Trust gates *execution*, not observation. Gating the watcher on
+   * `enabled` deadlocked the first plugin a project ever gets: trust cannot be
+   * granted before a plugin exists, and without a watcher the plugin is not
+   * noticed until the user switches projects and back — so an agent creating
+   * `.daintree/plugins/` in the project the user is looking at produced nothing
+   * at all (#12212). Watching while the decision is still open runs no plugin
+   * code: `discoverProjectPlugins` parses `plugin.json` and stops, and
+   * `reloadChanged` still refuses to LOAD anything without a recorded grant.
+   *
+   * It is not free, though, and the comment that once claimed otherwise was
+   * wrong: arming a folder that already exists also fingerprints each plugin's
+   * build output to seed the hot-reload baseline. That is bounded stat traffic
+   * over a folder the user opened, not execution — but a project with many
+   * plugin directories pays it before deciding anything, and there is no
+   * per-project watcher budget yet. Worth revisiting if watcher count ever
+   * shows up in a profile.
+   *
+   * An explicit "no" is the one answer that stops it. A remembered `disabled`
+   * tears the native subscription down with everything else, as does a close.
+   */
+  private async syncProjectPluginWatcher(projectId: string, projectRoot?: string): Promise<void> {
+    const trust = this.projectPlugins.getTrustState(projectId);
+    // A close can land while an open is still awaiting its snapshot push, every
+    // close notification is fire-and-forget, and the project store's own status
+    // reconciliation flips a row to "closed" without ever reaching
+    // `onProjectClosed`. Re-reading the row here is what keeps any of them from
+    // leaving a live native watcher behind.
+    if (
+      this.disposed ||
+      this.isProjectRowClosed(projectId) ||
+      !(trust.enabled || trust.decision === null)
+    ) {
+      this.projectPluginWatcherRegistry?.stop(projectId);
+      return;
+    }
+    const root = projectRoot ?? projectStore.getProjectById(projectId)?.path;
+    if (!root) {
+      this.projectPluginWatcherRegistry?.stop(projectId);
+      return;
+    }
+    await this.projectPluginWatchers.ensure(projectId, root);
+  }
+
+  /** A store read failure must never be read as "closed" — that would unload a live project. */
+  private isProjectRowClosed(projectId: string): boolean {
+    try {
+      return projectStore.getProjectById(projectId)?.status === "closed";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The watcher's reload edge. Drops the plugins it named and re-runs the
+   * project-open reconcile in one serialized task, so the swap inherits the
+   * trust gate, the staging rules and the generation guard rather than
+   * reimplementing them — and a fresh `plugin://` authority and `__dtv-N` view
+   * generation are minted by the load itself.
+   */
+  private async hotReloadProjectPlugins(
+    projectId: string,
+    projectRoot: string,
+    manifestIds: readonly string[]
+  ): Promise<void> {
+    if (this.disposed) return;
+    // The watcher is stopped by close and revoke, but a burst can already be
+    // in flight when either lands — and a project closed behind our back never
+    // stops it at all. Refuse at the edge as well as at the source.
+    if (this.isProjectRowClosed(projectId)) {
+      this.projectPluginWatcherRegistry?.stop(projectId);
+      return;
+    }
+    await this.projectPlugins.reloadChanged(projectId, projectRoot, manifestIds);
+    await this.pushSnapshotToProject(projectId);
+  }
+
+  listProjectPlugins(projectId: string): ProjectPluginInfo[] {
+    return this.projectPlugins.listProjectPlugins(projectId);
+  }
+
+  getProjectPluginTrustState(projectId: string): ProjectPluginTrustState {
+    return this.projectPlugins.getTrustState(projectId);
+  }
+
+  /**
+   * Manual reload escape hatch: re-scan the folder and reconcile. Same code path
+   * as a project open, so it inherits the trust gate and the staging rules
+   * rather than bypassing them.
+   */
+  async reloadProjectPlugins(projectId: string): Promise<void> {
+    const root = projectStore.getProjectById(projectId)?.path;
+    if (!root) return;
+    await this.onProjectOpened(projectId, root);
+  }
+
+  /**
+   * Load one project plugin under its instance key, bound to its project.
+   * Returns false when the manifest was rejected at load.
+   */
+  private async loadProjectPluginInstance(args: {
+    projectId: string;
+    projectRoot: string;
+    dir: string;
+    dirName: string;
+    manifest: Readonly<PluginManifest>;
+  }): Promise<boolean> {
+    const instanceKey = makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
+    // Re-derive the parent from the realpath-resolved directory discovery
+    // returned, so the load reads through the same resolved path the symlink
+    // containment check passed on.
+    const parent = path.dirname(args.dir);
+    const dirName = path.basename(args.dir);
+
+    const loaded = await this.loadPlugin(parent, dirName, {
+      isBuiltin: false,
+      disabled: new Set<string>(),
+      origin: "project",
+      instanceKey,
+      binding: { projectId: args.projectId, projectRoot: args.projectRoot },
+    });
+    if (!loaded) return false;
+
+    // Activation still obeys the manifest's own activation events — a trusted
+    // project plugin with no `onStartupFinished` does not execute until
+    // something actually triggers it, exactly like an installed plugin.
+    if (this.shouldActivateOnStartup(loaded.manifest)) {
+      await this.activatePlugin(instanceKey);
+    }
+    return true;
+  }
+
+  /**
+   * Re-push the full contribution snapshot to every live view of one project.
+   * Contribution registration schedules a coalesced broadcast, but a view that
+   * registered a moment ago has nothing to coalesce with; this makes the
+   * project's own views consistent without widening the broadcaster's
+   * unresolved-target behaviour.
+   */
+  private async pushSnapshotToProject(projectId: string): Promise<void> {
+    if (this.disposed) return;
+    let targets: Electron.WebContents[];
+    try {
+      targets = getWebContentsForProject(projectId);
+    } catch {
+      return;
+    }
+    for (const wc of targets) {
+      await this.broadcaster.pushSnapshotTo(wc, projectId);
+    }
   }
 
   unloadPlugin(pluginId: string): void {
@@ -3366,8 +5061,17 @@ export class PluginService {
     });
 
     // Drop the load-time-error marker (#9281) so a reload with a fixed
-    // manifest can successfully clear `loadError` on next activation.
+    // manifest can successfully clear `loadError` on next activation, and the
+    // project instance's in-memory error (#12232) with it — nothing outlives
+    // the load it describes.
     this.pluginsWithLoadTimeErrors.delete(pluginId);
+    this.projectPluginLoadErrors.delete(pluginId);
+
+    // The instance is leaving the inventory, so its runtime status goes with it
+    // — unlike a worker teardown, which retains the status precisely because the
+    // plugin is still there to explain (#12278). Emitted after the delete so the
+    // renderer receives the `null` that drops it from the map.
+    if (this.workerStatuses.delete(pluginId)) this.emitRuntimeStatus(pluginId);
 
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
@@ -3380,8 +5084,29 @@ export class PluginService {
       this.promptDispatcher.cancelForPlugin(pluginId)
     );
 
+    // Both `plugin://` keys die with the load. The authority is never reissued,
+    // so a host-minted URL the renderer captured before this point 404s instead
+    // of resolving into the next occupant of this plugin id; the manifest-id
+    // alias is rebound by a reload, which is the id semantics a hand-written
+    // URL asked for.
+    this.invalidatePluginAuthority(pluginId);
     this.plugins.delete(pluginId);
     this.pluginWorkerActivity.delete(pluginId);
+    this.hostBindings.delete(pluginId);
+    // Drop the project-scope index entry with the instance it described.
+    // Leaving it behind would keep filtering broadcasts against a plugin id
+    // that no longer exists, and would resurface if the id were reloaded
+    // under a different project.
+    runUnloadStep(pluginId, "clearPluginContributionScope", () =>
+      clearPluginContributionScope(pluginId)
+    );
+
+    // A surface must not outlive the plugin that draws it: the claimed view's
+    // module is unimportable the moment its authority is dropped, so a
+    // surviving claim would leave the project rendering a permanently-failing
+    // view where its stock content used to be. Trust revoke unloads through
+    // this same cascade, so revoking trust releases the slot too.
+    runUnloadStep(pluginId, "releasePluginSurfaces", () => releasePluginSurfaces(pluginId));
 
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an
@@ -3420,7 +5145,7 @@ export class PluginService {
     for (const [pluginId, plugin] of this.plugins) {
       if (plugin.isBuiltin) continue;
       const entry = this.pluginWorkers.get(pluginId);
-      const loadError = this.records.getInstalledRecord(pluginId)?.loadError ?? null;
+      const loadError = this.getPluginLoadError(pluginId) ?? null;
       snapshots.push({
         kind: "plugin-worker",
         id: pluginId,
@@ -3503,7 +5228,7 @@ export class PluginService {
         skipped++;
         continue;
       }
-      if (this.deactivateIdleWorker(pluginId)) {
+      if (this.deactivateWorker(pluginId)) {
         disposed.push(pluginId);
       } else {
         skipped++;
@@ -3559,17 +5284,25 @@ export class PluginService {
   }
 
   /**
-   * Narrow worker teardown for the idle-dispose path: the worker, bridge, and
-   * activate-time imperative registrations go; the plugin, its manifest
-   * contributions, and its provenance record stay. The next lazy trigger
-   * (dispatch, panel open, forge/decoration pull) re-forks via
-   * `activateViaWorker` exactly like a dev reload re-registers over
-   * `clearPriorRegistrations` — that cycle is the proof this teardown is
-   * re-entrant. Contrast `unloadPlugin`, which removes the plugin entirely.
+   * Narrow worker teardown: the worker, bridge, and activate-time imperative
+   * registrations go; the plugin, its manifest contributions, and its
+   * provenance record stay. The next lazy trigger (dispatch, panel open,
+   * forge/decoration pull) re-forks via `activateViaWorker` exactly like a dev
+   * reload re-registers over `clearPriorRegistrations` — that cycle is the
+   * proof this teardown is re-entrant. Contrast `unloadPlugin`, which removes
+   * the plugin entirely.
+   *
+   * Two callers: the idle-dispose sweep, and a terminal protocol violation
+   * (#12276), which needs exactly this shape — the worker is unrecoverable, but
+   * the plugin itself did nothing to lose its contributions, and clearing the
+   * activation cache is what lets a re-open fork a fresh one.
    */
-  private deactivateIdleWorker(pluginId: string): boolean {
+  private deactivateWorker(pluginId: string): boolean {
     const entry = this.pluginWorkers.get(pluginId);
     if (!entry) return false;
+    // No-ops when the worker already FAILED — the cause the user needs shown
+    // outranks the teardown that followed it (see `setWorkerStatus`).
+    this.setWorkerStatus(pluginId, "stopped", "deactivated", null);
     this.activatedPlugins.delete(pluginId);
     this.activationPromises.delete(pluginId);
     const cleanup = this.cleanupMap.get(pluginId);
@@ -3577,7 +5310,7 @@ export class PluginService {
       try {
         cleanup();
       } catch (err) {
-        console.error(`[PluginService] Idle-dispose cleanup for "${pluginId}" threw:`, err);
+        console.error(`[PluginService] Worker teardown cleanup for "${pluginId}" threw:`, err);
       }
       this.cleanupMap.delete(pluginId);
     }
@@ -3674,6 +5407,21 @@ export class PluginService {
   }
 
   /**
+   * The user-facing name of a loaded plugin — what any surface that names a
+   * plugin to a person should print instead of its id.
+   *
+   * The id is an instance key for a project-owned plugin, so printing it raw
+   * leaks `project__{projectId}__{manifestId}` into the UI (#12211). An
+   * unloaded plugin falls back to its manifest id rather than the instance key,
+   * which keeps even the miss path free of the machine-local project id.
+   */
+  getPluginDisplayName(pluginId: string): string {
+    const manifest = this.plugins.get(pluginId)?.manifest;
+    if (!manifest) return pluginManifestIdFromInstanceKey(pluginId);
+    return manifest.displayName ?? manifest.name;
+  }
+
+  /**
    * Resolve a `${settings:<id>}` template by reading the named user-scope
    * setting and stringifying the value. Booleans and numbers become their
    * JSON representation; objects/arrays become JSON-encoded strings. An
@@ -3697,13 +5445,32 @@ export class PluginService {
     const desiredDisabled = this.records.getDisabledIds();
     const installed = this.records.getInstalledRecords();
 
+    // `instanceId` is the MAP KEY, not `manifest.name`: for a project-owned
+    // plugin those differ, and the key is what every contribution carries as
+    // its `pluginId`/`extensionId`. Dropping it here is what left the renderer
+    // unable to match a contribution to its plugin (#12211).
     const toInfo = (
+      instanceId: string,
       p: { manifest: PluginManifest; dir: string; isBuiltin: boolean },
       loadedAt: number,
       isRunning: boolean,
       blocklistReason?: string
     ): LoadedPluginInfo => {
-      const disabled = desiredDisabled.has(p.manifest.name);
+      const projectId = projectIdFromPluginInstanceKey(instanceId);
+      const isProject = projectId !== null;
+      const identity = {
+        instanceId,
+        origin: isProject ? ("project" as const) : ("global" as const),
+        projectId,
+      };
+      // Both of these are keyed by manifest id, and a project plugin is allowed
+      // to share its manifest id with an installed one — so consulting either
+      // for a project row hands it the *other* plugin's state. The disable list
+      // is explicitly about installed and builtin plugins (a project plugin's
+      // gate is its project's trust decision, see the load path), and the
+      // install record belongs to the global copy. A project instance only ever
+      // reaches this projection from the running map, so it is never disabled.
+      const disabled = isProject ? false : desiredDisabled.has(p.manifest.name);
       // pendingRestart: desired state diverges from running state.
       // Running + now-disabled → unload pending; skipped + now-enabled → load pending.
       // Blocklisted plugins are host-refused, not user-toggled — no pending cue.
@@ -3712,6 +5479,7 @@ export class PluginService {
       const pluginDanger = computePluginDanger(p.manifest);
       if (p.isBuiltin) {
         return {
+          ...identity,
           manifest: p.manifest,
           dir: p.dir,
           loadedAt,
@@ -3730,8 +5498,9 @@ export class PluginService {
           blocklistReason,
         };
       }
-      const record = installed[p.manifest.name];
+      const record = isProject ? undefined : installed[p.manifest.name];
       return {
+        ...identity,
         manifest: p.manifest,
         dir: p.dir,
         loadedAt,
@@ -3743,7 +5512,17 @@ export class PluginService {
         originalUrl: record?.originalUrl ?? null,
         // A blocklisted plugin is a policy refusal, not a technical failure —
         // suppress any stale activation error so the UI shows only "Blocked".
-        loadError: blocklisted ? null : (record?.loadError ?? null),
+        //
+        // Read by INSTANCE key rather than off `record` (#12232). `record` is
+        // deliberately undefined for a project row — the install records are
+        // keyed by manifest id and belong to the global copy — so every other
+        // field above is *inapplicable* to a project plugin, but this one would
+        // be silently wrong: a plugin that loaded and then failed would report
+        // a clean load to the plugin manager and to the diagnostics snapshot
+        // (#12222), which both read this row. For a global plugin the instance
+        // key IS `manifest.name`, so this resolves to the same record field it
+        // was already reading.
+        loadError: blocklisted ? null : (this.getPluginLoadError(instanceId) ?? null),
         disabled,
         updateAvailable: record?.updateAvailable ?? null,
         devMode: record?.devMode ?? false,
@@ -3754,30 +5533,59 @@ export class PluginService {
       };
     };
 
-    // Plugins that loaded and are running this session.
-    const running = Array.from(this.plugins.values()).map((p) => toInfo(p, p.loadedAt, true));
+    // Plugins that loaded and are running this session. Iterated by ENTRY: the
+    // map key is the registry id, which diverges from `manifest.name` for a
+    // project plugin and is the only thing that names the instance.
+    const running = [...this.plugins].map(([id, p]) => toInfo(id, p, p.loadedAt, true));
 
     // Plugins skipped at launch because they were disabled. They carry no
     // `loadedAt` — the main module never ran — so it's reported as 0.
-    const skipped = Array.from(this.disabledPlugins.values()).map((p) => toInfo(p, 0, false));
+    const skipped = [...this.disabledPlugins].map(([id, p]) => toInfo(id, p, 0, false));
 
     // Plugins refused at launch by the blocklist / kill-switch (#10891). Also
     // never ran (`loadedAt: 0`); the reason drives the "Blocked" badge/banner.
-    const blocked = Array.from(this.blockedPlugins.values()).map((p) =>
-      toInfo(p, 0, false, p.reason)
-    );
+    const blocked = [...this.blockedPlugins].map(([id, p]) => toInfo(id, p, 0, false, p.reason));
 
     return [...running, ...skipped, ...blocked];
   }
 
   /**
-   * Resolve a plugin id to its installed-on-disk root directory. Returns
-   * `undefined` when the plugin is unknown or was skipped at load (disabled in
-   * Preferences). Used by the `plugin://` protocol handler to map URL hosts to
-   * filesystem roots without exposing the private `plugins` map.
+   * Resolve a `plugin://` URL authority to the plugin root that serves it.
+   * Accepts either the opaque per-load authority or a plugin's manifest id,
+   * which is seeded as an alias for the same root. Returns `undefined` when the
+   * authority is unknown, was invalidated by an unload, or names a plugin that
+   * was skipped at load (disabled in Preferences).
+   *
+   * Used by the `plugin://` protocol handler to map URL hosts to filesystem
+   * roots without exposing the private `plugins` map.
    */
-  getPluginDir(pluginId: string): string | undefined {
-    return this.plugins.get(pluginId)?.dir;
+  getPluginRootByAuthority(authority: string): string | undefined {
+    return this.pluginRootsByAuthority.get(authority);
+  }
+
+  /**
+   * Mint the `plugin://` authority for a load and seed both of its keys.
+   *
+   * The token comes from a CSPRNG and is never derived from the manifest id —
+   * derivation would reintroduce the id collision the authority exists to
+   * prevent. It is not a secret: it is a namespace, not a capability, so
+   * nothing may authorize on possession of one.
+   */
+  private mintPluginAuthority(pluginId: string, dir: string): PluginProtocolAuthority {
+    this.invalidatePluginAuthority(pluginId);
+    const authority = `pi-${randomBytes(16).toString("hex")}` as PluginProtocolAuthority;
+    this.pluginAuthorities.set(pluginId, authority);
+    this.pluginRootsByAuthority.set(authority, dir);
+    this.pluginRootsByAuthority.set(pluginId, dir);
+    return authority;
+  }
+
+  /** Drop both keys a load seeded, so every URL addressing it 404s from here on. */
+  private invalidatePluginAuthority(pluginId: string): void {
+    const previous = this.pluginAuthorities.get(pluginId);
+    if (previous) this.pluginRootsByAuthority.delete(previous);
+    this.pluginAuthorities.delete(pluginId);
+    this.pluginRootsByAuthority.delete(pluginId);
   }
 
   /**
@@ -3919,11 +5727,72 @@ export class PluginService {
 
   /**
    * Most recent activation error for a plugin id, or `undefined` if the last
-   * load succeeded (or the plugin has never been loaded). Reads from the
-   * persisted provenance record so the error survives a host restart.
+   * load succeeded (or the plugin has never been loaded). An installed plugin
+   * reads from the persisted provenance record so the error survives a host
+   * restart; a project plugin reads the session-scoped
+   * {@link projectPluginLoadErrors} map, which is the only channel it has.
+   *
+   * The two are exclusive rather than layered. A project instance key is never
+   * written to `plugins.installed`, so a record found under one could only be
+   * stale or hand-forged — falling back to it would let either outlive the
+   * load it describes.
    */
   getPluginLoadError(pluginId: string): PluginLoadError | undefined {
+    if (isProjectPluginInstanceKey(pluginId)) {
+      return this.projectPluginLoadErrors.get(pluginId);
+    }
     return this.records.getInstalledRecord(pluginId)?.loadError ?? undefined;
+  }
+
+  /**
+   * Record — or clear, with `null` — a plugin's most recent load/activation
+   * error on whichever channel owns that plugin id: the in-memory map for a
+   * project instance, the durable provenance record for anything else.
+   * Built-ins have neither and are dropped here rather than at seven call
+   * sites (the documented limitation on {@link activatePluginForView}).
+   *
+   * Returns whether the error reached a channel, which is the same question
+   * the callers' old `!isBuiltin` guard answered — so `pluginsWithLoadTimeErrors`
+   * keeps its existing membership — plus a generation check the id-keyed
+   * channels need and the durable one never did. The check is object identity,
+   * not presence: a project plugin unloads and reloads under the same key on
+   * every disable/enable, dev reload and project reopen, so a late
+   * `onActivationResult` or activation timeout belonging to the previous load
+   * would otherwise pin its error on the healthy new one.
+   */
+  private recordPluginLoadError(
+    pluginId: string,
+    plugin: LoadedPlugin,
+    loadError: PluginLoadError | null
+  ): boolean {
+    if (this.plugins.get(pluginId) !== plugin) return false;
+    if (plugin.isBuiltin) return false;
+    if (!isProjectPluginInstanceKey(pluginId)) {
+      this.records.upsertInstalledRecord(pluginId, { loadError });
+      return true;
+    }
+
+    const previous = this.projectPluginLoadErrors.get(pluginId);
+    if (loadError === null) {
+      if (previous === undefined) return true;
+      this.projectPluginLoadErrors.delete(pluginId);
+    } else {
+      // A repeat of the same failure says nothing new, so keep `at` current but
+      // skip the push — otherwise a plugin failing every retry spams the
+      // renderer with snapshots whose rows are identical.
+      if (previous?.message === loadError.message && previous.stack === loadError.stack) {
+        this.projectPluginLoadErrors.set(pluginId, loadError);
+        return true;
+      }
+      this.projectPluginLoadErrors.set(pluginId, loadError);
+    }
+    // The project plugin list carries this row, and a lazily-activated plugin
+    // fails with no other mutation behind it to ride out on — without a push
+    // the manager would keep describing a plugin that failed as a clean one.
+    // Read through the field, not the lazy getter: an error must never be the
+    // thing that constructs the controller.
+    this.projectPluginController?.notifyLoadErrorChanged(pluginId);
+    return true;
   }
 
   /**
@@ -3944,17 +5813,33 @@ export class PluginService {
     if (!contribution || typeof contribution !== "object") {
       throw new Error("Plugin action contribution must be an object");
     }
-    const { id, title, description, category, kind, danger } = contribution;
-    if (typeof id !== "string" || !PLUGIN_ACTION_ID_RE.test(id)) {
+    const { title, description, category, kind, danger } = contribution;
+    const rawId = contribution.id;
+    if (typeof rawId !== "string" || !PLUGIN_ACTION_ID_RE.test(rawId)) {
       throw new Error(
-        `Plugin action id "${id}" is invalid. Expected "{pluginId}.{actionId}" (lowercase start, alphanumerics, dot/dash/underscore).`
+        `Plugin action id "${rawId}" is invalid. Expected "{pluginId}.{actionId}" (lowercase start, alphanumerics, dot/dash/underscore).`
       );
     }
-    if (!id.startsWith(`${pluginId}.`)) {
-      throw new Error(
-        `Plugin "${pluginId}" cannot register action "${id}": id must be prefixed with the plugin's own id.`
-      );
+    // A project plugin's code only knows its MANIFEST id — it is never told the
+    // instance key, and telling it would hand it another project's namespace to
+    // guess at. So `host.registerAction("acme.dash.foo")` is accepted from the
+    // instance that declares `acme.dash` and normalised to the instance
+    // namespace here, which is what keeps two projects' identically-named
+    // actions from overwriting each other in the global action map.
+    const manifestId = this.plugins.get(pluginId)?.manifest.name;
+    const manifestPrefix =
+      manifestId !== undefined && manifestId !== pluginId ? `${manifestId}.` : null;
+    let id = rawId;
+    if (!rawId.startsWith(`${pluginId}.`)) {
+      if (manifestPrefix !== null && rawId.startsWith(manifestPrefix)) {
+        id = `${pluginId}.${rawId.slice(manifestPrefix.length)}`;
+      } else {
+        throw new Error(
+          `Plugin "${pluginId}" cannot register action "${rawId}": id must be prefixed with the plugin's own id.`
+        );
+      }
     }
+
     if (typeof title !== "string" || !title.trim()) {
       throw new Error(`Plugin action "${id}" must have a non-empty title`);
     }

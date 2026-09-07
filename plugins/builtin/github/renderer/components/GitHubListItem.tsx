@@ -31,7 +31,13 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
-import { RESOURCE_ITEM_HEIGHT_PX } from "./GitHubDropdownSkeletons";
+import {
+  RAIL_SLOT,
+  RESOURCE_ITEM_HEIGHT_PX,
+  RESOURCE_RAIL,
+  RESOURCE_RAIL_SLOT,
+  RESOURCE_ROW_STATE_MARK,
+} from "./GitHubDropdownSkeletons";
 import { deriveRowModel, describeWorktree, type ForgeRowPrimaryAction } from "./forgeRowModel";
 
 interface GitHubListItemProps {
@@ -93,9 +99,6 @@ function getStateLabel(state: string, type: "issue" | "pr", isDraft?: boolean): 
 function isPR(item: Issue | PR): item is PR {
   return "isDraft" in item;
 }
-
-/** The trailing rail's only always-present slot, so rows share a right edge. */
-const RAIL_SLOT = "shrink-0 flex items-center justify-center";
 
 export function GitHubListItem({
   item,
@@ -321,7 +324,10 @@ export function GitHubListItem({
             repeating them here made the row announce each of them twice. */}
         <span className="sr-only">{primaryActionHint}</span>
         {onToggleSelect ? (
-          <span className="group/icon shrink-0 relative w-4 h-4 mt-1">
+          <span
+            data-state-mark
+            className={cn("group/icon relative w-4 h-4", RESOURCE_ROW_STATE_MARK)}
+          >
             {/* State icon: visible by default, hidden on hover or when selection active */}
             <span
               className={cn(
@@ -356,7 +362,12 @@ export function GitHubListItem({
             </span>
           </span>
         ) : (
-          <span className={cn("shrink-0 mt-1", stateColor)} role="img" aria-label={stateLabel}>
+          <span
+            data-state-mark
+            className={cn(RESOURCE_ROW_STATE_MARK, stateColor)}
+            role="img"
+            aria-label={stateLabel}
+          >
             <StateIcon className="h-4 w-4" />
           </span>
         )}
@@ -408,9 +419,10 @@ export function GitHubListItem({
                 fixed identity slot, which sits immediately before the always-present
                 menu. That is what keeps avatars (and CI glyphs) in one column down
                 the list instead of sliding left whenever a neighbour appears. */}
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div data-rail className={RESOURCE_RAIL}>
               {restAssignees.length > 0 && (
                 <span
+                  data-rail-slot="count"
                   className="shrink-0 text-3xs text-text-secondary tabular-nums"
                   aria-hidden="true"
                 >
@@ -429,7 +441,8 @@ export function GitHubListItem({
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <span
-                          className={cn(RAIL_SLOT, "w-4 h-3.5")}
+                          data-rail-slot="ci"
+                          className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.ci.box)}
                           role="img"
                           aria-label={ciTooltip}
                         >
@@ -453,7 +466,12 @@ export function GitHubListItem({
               {firstAssignee && assigneeLabel && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className={cn(RAIL_SLOT, "w-4")} role="img" aria-label={assigneeLabel}>
+                    <span
+                      data-rail-slot="assignee"
+                      className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.assignee.box)}
+                      role="img"
+                      aria-label={assigneeLabel}
+                    >
                       <Avatar src={firstAssignee.avatarUrl ?? ""} alt="" className="w-4 h-4" />
                     </span>
                   </TooltipTrigger>
@@ -470,6 +488,7 @@ export function GitHubListItem({
                        keyboard (Shift+F10) while DOM focus stays in the search
                        input — otherwise these commands would be pointer-only. */
                     id={menuTriggerId}
+                    data-rail-slot="menu"
                     onClick={(e) => e.stopPropagation()}
                     className={cn(
                       RAIL_SLOT,
@@ -478,7 +497,8 @@ export function GitHubListItem({
                       // Emphasis comes from the secondary ink, not from an
                       // opacity wash: 55% put it under the 3:1 floor a
                       // graphical control has to clear.
-                      "w-6 h-6 -me-1 rounded text-text-secondary",
+                      RESOURCE_RAIL_SLOT.menu.box,
+                      "rounded text-text-secondary",
                       "hover:bg-overlay-medium hover:text-text-primary",
                       "transition-[background-color,color] duration-150 ease-out",
                       "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"

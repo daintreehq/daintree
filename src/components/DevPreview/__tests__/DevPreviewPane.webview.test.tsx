@@ -5,6 +5,11 @@ import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import {
+  buildDevPreviewProxyOrigin,
+  DEV_PREVIEW_PROXY_STATUS_TEXT,
+} from "@shared/utils/devPreviewProxy";
+import type { NormalizeResult } from "@shared/utils/urlUtils";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -12,12 +17,15 @@ vi.mock("@/lib/notify", () => ({
   notify: (args: unknown) => notifyMock(args),
 }));
 
-type MockWebContents = {
-  setUserAgent: ReturnType<typeof vi.fn>;
-  getUserAgent: ReturnType<typeof vi.fn>;
-  enableDeviceEmulation: ReturnType<typeof vi.fn>;
-  disableDeviceEmulation: ReturnType<typeof vi.fn>;
-};
+/**
+ * One entry per `<webview>` element React actually created. `srcWrites` are seed writes
+ * (React setting the attribute); `loadURLs` are imperative navigations. The mock's
+ * `loadURL` also writes `src`, so without separating the two by origin a test cannot
+ * tell a fresh guest's seed from a corrective load — which is the exact distinction
+ * #12297 turns on.
+ */
+type GuestRecord = { srcWrites: string[]; loadURLs: string[] };
+const guestLog: GuestRecord[] = [];
 
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
@@ -28,15 +36,27 @@ type MockWebviewElement = HTMLElement & {
   isLoading: ReturnType<typeof vi.fn>;
   executeJavaScript: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
-  getWebContents: () => MockWebContents;
   capturePage: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
+// Opt-in for the next guest to report a load already in flight, so the pane's
+// mount-time readiness probe leaves it unready (#12296).
+let nextWebviewStartsLoading = false;
+
 function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   let currentUrl = element.getAttribute("src") ?? "http://localhost:5173/";
-  let loading = false;
+  let loading = nextWebviewStartsLoading;
   const webview = element as MockWebviewElement;
+
+  const record: GuestRecord = { srcWrites: [], loadURLs: [] };
+  guestLog.push(record);
+  let inLoadURL = false;
+  const setAttributeDirect = element.setAttribute.bind(element);
+  element.setAttribute = (name: string, value: string) => {
+    if (name === "src" && !inLoadURL) record.srcWrites.push(value);
+    setAttributeDirect(name, value);
+  };
 
   const syncUrlFromAttribute = () => {
     const src = element.getAttribute("src");
@@ -48,8 +68,14 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   webview.reload = vi.fn();
   webview.stop = vi.fn();
   webview.loadURL = vi.fn((url: string) => {
+    record.loadURLs.push(url);
     currentUrl = url;
-    element.setAttribute("src", url);
+    inLoadURL = true;
+    try {
+      element.setAttribute("src", url);
+    } finally {
+      inLoadURL = false;
+    }
   });
   webview.setZoomFactor = vi.fn();
   webview.getURL = vi.fn(() => {
@@ -59,13 +85,6 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   webview.isLoading = vi.fn(() => loading);
   webview.executeJavaScript = vi.fn().mockResolvedValue(0);
   webview.getWebContentsId = vi.fn(() => 42);
-  const mockWc = {
-    setUserAgent: vi.fn(),
-    getUserAgent: vi.fn(() => "original-ua"),
-    enableDeviceEmulation: vi.fn(),
-    disableDeviceEmulation: vi.fn(),
-  };
-  webview.getWebContents = vi.fn(() => mockWc);
   webview.capturePage = vi.fn(() =>
     Promise.resolve({ toPNG: () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })
   );
@@ -255,15 +274,30 @@ vi.mock("@/hooks/useFindInPage", () => ({
   }),
 }));
 
+// The props the tests actually read, named so recording them needs no type assertion.
+// The index signature keeps every other prop flowing through untyped, as before.
+type MockToolbarProps = {
+  onNavigate: (url: string) => void;
+  validateUrl?: (url: string) => NormalizeResult;
+  onPromoteToPortal?: () => void;
+  onCaptureScreenshot: () => Promise<boolean>;
+} & Record<string, unknown>;
+
 const { browserToolbarPropsSpy } = vi.hoisted(() => ({
-  browserToolbarPropsSpy: vi.fn(),
+  browserToolbarPropsSpy: vi.fn<(props: MockToolbarProps) => void>(),
 }));
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
-  BrowserToolbar: (props: Record<string, unknown>) => {
+  BrowserToolbar: (props: MockToolbarProps) => {
     browserToolbarPropsSpy(props);
     return <div data-testid="browser-toolbar" />;
   },
 }));
+
+function latestToolbarProps(): MockToolbarProps {
+  const call = browserToolbarPropsSpy.mock.calls.at(-1);
+  if (!call) throw new Error("Expected BrowserToolbar to have rendered");
+  return call[0];
+}
 
 const headerContentPointerDownSpy = vi.hoisted(() => vi.fn());
 
@@ -334,6 +368,12 @@ function emitWebviewEvent(
   webview.dispatchEvent(event);
 }
 
+// The mocked `window.electron` needs a cast to be reachable at all; doing it once
+// here keeps it out of every individual test.
+function getElectronMock(): { webview: Record<string, unknown> } {
+  return (window as unknown as { electron: { webview: Record<string, unknown> } }).electron;
+}
+
 function getWebviewElement(container: HTMLElement): MockWebviewElement {
   const webview = container.querySelector("webview");
   if (!webview) {
@@ -368,6 +408,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       dispatchEvent: vi.fn(),
     }));
     scrollPositionRef.current = undefined;
+    guestLog.length = 0;
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
       const element = originalCreateElement(tagName, options);
@@ -426,6 +467,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         onConsoleMessage: vi.fn(() => vi.fn()),
         onConsoleContextCleared: vi.fn(() => vi.fn()),
         reloadIgnoringCache: vi.fn(() => Promise.resolve()),
+        setDeviceEmulation: vi.fn(() => Promise.resolve({ applied: true })),
         onUnresponsive: vi.fn(() => vi.fn()),
         onResponsive: vi.fn(() => vi.fn()),
       },
@@ -457,8 +499,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("hard-reloads the focused webview guest when onReloadShortcut fires for this panel (#9497)", async () => {
     let reloadCb: ((payload: { panelId: string }) => void) | undefined;
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
       reloadCb = cb;
       return vi.fn();
@@ -488,8 +529,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("unsubscribes from onReloadShortcut on unmount (#9497)", () => {
     const unsubscribe = vi.fn();
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onReloadShortcut = vi.fn(() => unsubscribe);
 
     const { unmount } = render(<DevPreviewPane {...baseProps} />);
@@ -500,8 +540,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("closes this panel when onCloseShortcut fires for it, and ignores other panels (#10859)", async () => {
     let closeCb: ((payload: { panelId: string }) => void) | undefined;
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onCloseShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
       closeCb = cb;
       return vi.fn();
@@ -536,8 +575,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("unsubscribes from onCloseShortcut on unmount (#10859)", () => {
     const unsubscribe = vi.fn();
-    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-      .electron;
+    const electron = getElectronMock();
     electron.webview.onCloseShortcut = vi.fn(() => unsubscribe);
 
     const { unmount } = render(<DevPreviewPane {...baseProps} />);
@@ -674,10 +712,18 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       }));
     };
 
-    const getEmulationMock = (container: HTMLElement) =>
-      getWebviewElement(container).getWebContents().enableDeviceEmulation;
-    const getDisableEmulationMock = (container: HTMLElement) =>
-      getWebviewElement(container).getWebContents().disableDeviceEmulation;
+    // Emulation is a main-process IPC call keyed by the guest's webContents id.
+    // The webview tag has no getWebContents(); mocking one is what made the
+    // broken renderer-side path look tested (#12298).
+    type EmulationPayload = { webContentsId: number; panelId: string; emulation: unknown };
+    const setDeviceEmulationMock = () =>
+      (window as unknown as { electron: { webview: { setDeviceEmulation: unknown } } }).electron
+        .webview.setDeviceEmulation as unknown as {
+        mock: { calls: Array<[EmulationPayload]> };
+        mockClear: () => void;
+      };
+    const emulationCalls = (): EmulationPayload[] =>
+      setDeviceEmulationMock().mock.calls.map(([payload]) => payload);
 
     it("applies device emulation for the active preset without reloading the page", async () => {
       withPreset("iphone");
@@ -688,13 +734,21 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      expect(getEmulationMock(container)).toHaveBeenCalledWith({
-        screenPosition: "mobile",
-        screenSize: { width: 393, height: 852 },
-        viewPosition: { x: 0, y: 0 },
-        deviceScaleFactor: 1,
-        viewSize: { width: 393, height: 852 },
-        scale: 1,
+      expect(emulationCalls()).toContainEqual({
+        webContentsId: 42,
+        panelId: "dev-preview-panel-1",
+        emulation: {
+          params: {
+            screenPosition: "mobile",
+            screenSize: { width: 393, height: 852 },
+            viewPosition: { x: 0, y: 0 },
+            deviceScaleFactor: 1,
+            viewSize: { width: 393, height: 852 },
+            scale: 1,
+          },
+          userAgent: expect.stringContaining("iPhone"),
+          touch: true,
+        },
       });
       expect(webview.reload).not.toHaveBeenCalled();
     });
@@ -708,13 +762,18 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      getEmulationMock(container).mockClear();
+      setDeviceEmulationMock().mockClear();
 
       act(() => {
         emitWebviewEvent(webview, "did-finish-load");
       });
+      await act(async () => {
+        await Promise.resolve();
+      });
 
-      expect(getEmulationMock(container)).toHaveBeenCalledWith({
+      const firstCall = emulationCalls()[0];
+      if (!firstCall) throw new Error("expected a device-emulation call");
+      expect((firstCall.emulation as { params: unknown }).params).toEqual({
         screenPosition: "mobile",
         screenSize: { width: 360, height: 780 },
         viewPosition: { x: 0, y: 0 },
@@ -733,7 +792,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      getEmulationMock(container).mockClear();
+      setDeviceEmulationMock().mockClear();
       withPreset(undefined);
       rerender(<DevPreviewPane {...baseProps} />);
 
@@ -741,7 +800,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
 
-      expect(getDisableEmulationMock(container)).toHaveBeenCalled();
+      expect(emulationCalls()).toContainEqual({
+        webContentsId: 42,
+        panelId: "dev-preview-panel-1",
+        emulation: null,
+      });
       expect(webview.reload).not.toHaveBeenCalled();
     });
   });
@@ -786,8 +849,12 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     const callsAfterFirstRetry = webview.loadURL.mock.calls.length;
 
-    // Successful load resets retry counter
+    // The retry issues its own load, so the real sequence carries a load start
+    // before the successful finish. Without it the failure latch from the first
+    // did-fail-load would still be up and did-finish-load would (correctly) refuse
+    // to treat this as a successful load.
     act(() => {
+      emitWebviewEvent(webview, "did-start-loading");
       emitWebviewEvent(webview, "did-finish-load");
     });
 
@@ -1033,11 +1100,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.executeJavaScript).not.toHaveBeenCalledWith("window.scrollY");
   });
 
-  it("does not persist scrollY=0 from CDP (avoids clobbering prior position)", async () => {
-    // Defense: handleGetScrollPosition returns 0 on CDP error. If we persisted
-    // {scrollY: 0}, an earlier captured position could be silently overwritten.
-    // The renderer guard `> 0` keeps the prior value intact.
-    const getScrollPosition = vi.fn().mockResolvedValue(0);
+  it("does not persist a failed CDP scroll read (null sentinel)", async () => {
+    // handleGetScrollPosition answers `null` when it could not read at all, and
+    // only then must the prior stored position survive. A genuine 0 is a real
+    // position and is covered by the sibling test below (#12298).
+    const getScrollPosition = vi.fn().mockResolvedValue(null);
     (window as unknown as { electron: Record<string, unknown> }).electron = {
       system: { openExternal: vi.fn() },
       window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
@@ -1074,6 +1141,48 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     expect(getScrollPosition).toHaveBeenCalled();
     expect(terminalStoreState.setDevPreviewScrollPosition).not.toHaveBeenCalled();
+  });
+
+  it("persists a successful scrollY=0 so a return to the top overwrites a stale offset", async () => {
+    const getScrollPosition = vi.fn().mockResolvedValue(0);
+    (window as unknown as { electron: Record<string, unknown> }).electron = {
+      system: { openExternal: vi.fn() },
+      window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
+      webview: {
+        registerPanel: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+        onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
+        onCloseShortcut: vi.fn(() => vi.fn()),
+        onNavigationBlocked: vi.fn(() => vi.fn()),
+        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
+        onUnresponsive: vi.fn(() => vi.fn()),
+        onResponsive: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn().mockResolvedValue(undefined),
+        getScrollPosition,
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+      },
+    };
+
+    const { unmount } = render(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
+      "dev-preview-panel-1",
+      { url: "http://localhost:5173/", scrollY: 0 }
+    );
   });
 
   it("captures scroll position when status transitions from running", async () => {
@@ -1915,12 +2024,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       error: { code: "EXECUTION_ERROR", message },
     });
 
-    const getPromoteHandler = () => {
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
-        onPromoteToPortal?: () => void;
-      };
-      return props.onPromoteToPortal;
-    };
+    const getPromoteHandler = () => latestToolbarProps().onPromoteToPortal;
 
     it("renders the dispatch failure reason inline, without a global toast", async () => {
       const message = "Portal is already showing this URL";
@@ -1971,12 +2075,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   });
 
   describe("screenshot capture", () => {
-    const getToolbarCapture = () => {
-      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
-        onCaptureScreenshot: () => Promise<boolean>;
-      };
-      return props.onCaptureScreenshot;
-    };
+    const getToolbarCapture = () => latestToolbarProps().onCaptureScreenshot;
 
     const getWriteImageMock = () => {
       const electron = (window as unknown as { electron: { clipboard: Record<string, unknown> } })
@@ -2236,8 +2335,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("keeps the unresponsive banner visible while the URL is unchanged", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2258,8 +2356,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     it("clears the unresponsive banner when the guest becomes responsive again", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
       let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2285,8 +2382,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("does not clear a crashed banner when a stale responsive event arrives", () => {
       let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         responsiveCb = cb;
         return vi.fn();
@@ -2309,8 +2405,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     it("ignores unresponsive events targeting a different panel", () => {
       let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
-        .electron;
+      const electron = getElectronMock();
       electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
         unresponsiveCb = cb;
         return vi.fn();
@@ -2690,6 +2785,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
         emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
@@ -2707,6 +2803,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2764,6 +2861,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           emitWebviewEvent(webview, "did-frame-navigate", {
             isMainFrame: true,
             httpResponseCode: 502,
+            httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
             url: "http://localhost:5173/",
           });
         });
@@ -2787,6 +2885,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2807,6 +2906,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: false,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/iframe",
         });
         emitWebviewEvent(webview, "did-finish-load");
@@ -2823,6 +2923,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2848,6 +2949,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           emitWebviewEvent(webview, "did-frame-navigate", {
             isMainFrame: true,
             httpResponseCode: 502,
+            httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
             url: "http://localhost:5173/",
           });
         });
@@ -2871,6 +2973,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-frame-navigate", {
           isMainFrame: true,
           httpResponseCode: 502,
+          httpStatusText: DEV_PREVIEW_PROXY_STATUS_TEXT,
           url: "http://localhost:5173/",
         });
       });
@@ -2889,6 +2992,413 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+  });
+
+  describe("failed-load and early-crash recovery (#12296)", () => {
+    const REFUSED = {
+      errorCode: -102,
+      errorDescription: "ERR_CONNECTION_REFUSED",
+      isMainFrame: true,
+      validatedURL: "http://localhost:5173/",
+    };
+
+    // Render a pane whose guest reports isLoading() true from creation, so the
+    // mount-time readiness probe leaves isWebviewReady false — the state of a
+    // renderer that dies during its first load, before dom-ready ever fires.
+    const renderNeverReadyPane = () => {
+      nextWebviewStartsLoading = true;
+      try {
+        return render(<DevPreviewPane {...baseProps} />);
+      } finally {
+        nextWebviewStartsLoading = false;
+      }
+    };
+
+    // Chromium commits its own error document when a main-frame load fails and
+    // replays the whole lifecycle for it. This is the sequence captured from the
+    // real guest against a closed port.
+    const emitErrorDocumentTail = (webview: MockWebviewElement, url = "http://localhost:5173/") => {
+      emitWebviewEvent(webview, "dom-ready");
+      emitWebviewEvent(webview, "did-navigate", { url });
+      emitWebviewEvent(webview, "did-finish-load");
+      emitWebviewEvent(webview, "did-stop-loading");
+    };
+
+    it("keeps a terminal load error across the error document's own lifecycle", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -105,
+          errorDescription: "ERR_NAME_NOT_RESOLVED",
+          isMainFrame: true,
+          validatedURL: "http://missing.test/",
+        });
+        emitErrorDocumentTail(webview, "http://missing.test/");
+      });
+
+      expect(container.textContent).toContain("Couldn't resolve address");
+      expect(container.textContent).toContain("Couldn't resolve missing.test");
+    });
+
+    it("survives the exact captured sequence, with no did-navigate at all", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Verbatim from the issue's real-Electron capture against a closed port:
+      // did-start-loading → did-fail-load(-102) → dom-ready → did-finish-load →
+      // did-stop-loading. Nothing in that tail may read as a successful load.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitWebviewEvent(webview, "dom-ready");
+        emitWebviewEvent(webview, "did-finish-load");
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+
+      // The failure survived: the scheduled retry is still pending and fires with
+      // the URL that failed, rather than having been cancelled by the tail.
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore + 1);
+      expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/");
+    });
+
+    it("exhausts the connection-refused budget when each retry starts its own load", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      const loadsBefore = webview.loadURL.mock.calls.length;
+
+      // MAX_RETRIES = 5, so the 6th failure is the one that gives up. Every cycle
+      // carries the load start the scheduled retry actually issues — the event that
+      // used to refill the budget and make the cap unreachable.
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-fail-load", REFUSED);
+          emitErrorDocumentTail(webview);
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+          });
+        }
+      }
+
+      expect(webview.loadURL.mock.calls.length - loadsBefore).toBe(5);
+      expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/");
+      expect(container.textContent).toContain("Dev server unreachable");
+      expect(container.textContent).toContain("Unable to connect to dev server");
+
+      // Past every remaining backoff window, nothing more is scheduled: the cap
+      // stops the loop rather than merely relabelling the overlay.
+      act(() => {
+        vi.advanceTimersByTime(30000);
+      });
+      expect(webview.loadURL.mock.calls.length - loadsBefore).toBe(5);
+    });
+
+    it("recovers when the dev server comes up mid retry loop", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      for (let i = 0; i < 2; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-fail-load", REFUSED);
+          emitErrorDocumentTail(webview);
+        });
+        act(() => {
+          vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+        });
+      }
+
+      // The third attempt finds the server up.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 200,
+          httpStatusText: "OK",
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+      expect(container.textContent).not.toContain("Dev server unreachable");
+
+      // A confirmed success returns the full budget: the next failure retries at
+      // the first backoff step rather than partway up the ladder.
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore + 1);
+    });
+
+    it("cancels a pending retry when a fresh navigation starts", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore);
+    });
+
+    it("cancels a pending retry when the panel closes", () => {
+      const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      unmount();
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      expect(webview.loadURL.mock.calls.length).toBe(loadsBefore);
+    });
+
+    it("hands the retry budget back when the user reloads after exhaustion", () => {
+      let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+      const electron = getElectronMock();
+      electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+        reloadCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-fail-load", REFUSED);
+          emitErrorDocumentTail(webview);
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+          });
+        }
+      }
+      expect(container.textContent).toContain("Unable to connect to dev server");
+
+      // Manual recovery must not inherit the exhausted budget now that a load
+      // start no longer refills it.
+      act(() => {
+        reloadCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      const loadsBefore = webview.loadURL.mock.calls.length;
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-fail-load", REFUSED);
+        emitErrorDocumentTail(webview);
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.loadURL.mock.calls.length).toBeGreaterThan(loadsBefore);
+    });
+
+    it("lifts the blocking overlay at dom-ready while a subresource is still pending", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(container.textContent).toContain("Loading preview");
+
+      // The document is committed and usable; a hanging image means
+      // did-stop-loading never arrives. dom-ready is the shared finish boundary,
+      // so the overlay lifts and the watchdog it used to silently outlive is gone.
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+      expect(container.textContent).not.toContain("Loading preview");
+
+      act(() => {
+        vi.advanceTimersByTime(60000);
+      });
+      expect(webview.stop).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Page load timed out");
+    });
+
+    it("still times out when the main document never reaches dom-ready", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(30000);
+      });
+
+      expect(webview.stop).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Page load timed out");
+    });
+
+    it("renders an application 502 instead of the proxy outage overlay", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Same status code, different provenance: the proxy forwarded this one from
+      // the developer's app, so its error page has to stay inspectable.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          httpStatusText: "Bad Gateway",
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+      act(() => {
+        vi.advanceTimersByTime(16000);
+      });
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
+    it("reloads a guest that crashed before its first dom-ready", () => {
+      const electron = getElectronMock();
+      const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
+
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      // Auto-recovery on the first crash routes through the same reload the manual
+      // action uses; both used to return early while isWebviewReady was false.
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      // It has to reach the guest directly: the cache-ignoring IPC only acts on a
+      // panel registered at dom-ready, so for this guest it would resolve having
+      // done nothing at all.
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(reloadIgnoringCache).not.toHaveBeenCalled();
+    });
+
+    it("uses the cache-ignoring reload once the guest has reached dom-ready", () => {
+      const electron = getElectronMock();
+      const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
+
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(reloadIgnoringCache).toHaveBeenCalledWith(42, "dev-preview-panel-1");
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
+    it("clears the crash banner only once the reload is actually issued", () => {
+      let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+      const electron = getElectronMock();
+      electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+        reloadCb = cb;
+        return vi.fn();
+      });
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      // Two crashes inside the 60s window: auto-recovery stops, so the banner and
+      // its manual actions are the only way out.
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+
+      webview.reload.mockClear();
+      act(() => {
+        reloadCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(container.textContent).not.toContain("Preview process crashed");
+    });
+
+    it("recreates the guest when it can no longer be reloaded in place", () => {
+      let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+      const electron = getElectronMock();
+      electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+        reloadCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = renderNeverReadyPane();
+      const webview = getWebviewElement(container);
+
+      // A renderer that died before it was ever attached has no WebContents to
+      // reach, so recovery falls through to a fresh guest rather than doing
+      // nothing.
+      webview.getWebContentsId.mockImplementation(() => {
+        throw new Error("The WebView must be attached to the DOM");
+      });
+      webview.reload.mockImplementation(() => {
+        throw new Error("The WebView must be attached to the DOM");
+      });
+
+      act(() => {
+        reloadCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      expect(getWebviewElement(container)).not.toBe(webview);
     });
   });
 
@@ -2980,6 +3490,283 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5174/");
+    });
+  });
+
+  // #12297 — crossing onto the stable proxy origin used to lose the route. `showEmptyState`
+  // unmounts the `<webview>` while `isProxyUrlPending` is true, and the replacement guest was
+  // seeded from `webviewSeedUrl`, which is captured once per session. These tests run the
+  // *configured proxy* path the existing coverage never reached, and assert call counts so a
+  // fix that re-requests a consumed callback would fail here.
+  describe("proxy-origin route preservation (#12297)", () => {
+    const PROXY_PORT = 43000;
+    const PROXY = buildDevPreviewProxyOrigin(PROXY_PORT, "project-1", "dev-preview-panel-1");
+
+    function enableProxyMode(port = PROXY_PORT) {
+      Object.assign(window.electron, {
+        devPreview: {
+          getProxyPort: vi.fn().mockResolvedValue({ port }),
+          mintBrowserToken: vi
+            .fn()
+            .mockResolvedValue({ bootstrapUrl: `${PROXY}/_daintree/bootstrap` }),
+        },
+      });
+    }
+
+    function setSavedHistory(history: { past: string[]; present: string; future: string[] }) {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: history,
+        browserZoom: 1.4,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+    }
+
+    // Let the proxy-port promise resolve and every dependent effect flush.
+    async function settle() {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    function seedsAcrossGuests(): string[] {
+      return guestLog.flatMap((g) => g.srcWrites);
+    }
+
+    function loadsAcrossGuests(): string[] {
+      return guestLog.flatMap((g) => g.loadURLs);
+    }
+
+    beforeEach(() => {
+      enableProxyMode();
+    });
+
+    it("seeds a replacement guest from the migrated route, not the session's first URL", async () => {
+      // A session that persisted a raw upstream URL: the pane gates the webview out while it
+      // migrates onto the proxy origin, then mounts a fresh guest. Before the fix that guest
+      // was seeded with the stale `webviewSeedUrl` and landed on "/".
+      setSavedHistory({
+        past: [],
+        present: "http://localhost:5173/consume?token=audit-single-use#done",
+        future: [],
+      });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      const expected = `${PROXY}/consume?token=audit-single-use#done`;
+
+      expect(webview.getAttribute("src")).toBe(expected);
+      // Path, query and fragment all survive the origin change.
+      expect(seedsAcrossGuests()).not.toContain(`${PROXY}/`);
+      expect(seedsAcrossGuests().at(-1)).toBe(expected);
+    });
+
+    it("does not re-request the destination after seeding a replacement guest", async () => {
+      // The seed navigates the guest by itself, so a corrective loadURL on top of it would be
+      // a second request — exactly the callback replay the issue rules out.
+      setSavedHistory({ past: [], present: "http://localhost:5173/once", future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+
+      expect(webview.getAttribute("src")).toBe(`${PROXY}/once`);
+      // Both halves matter: no corrective load, and no second guest seeded with the same
+      // route — either one would be a second request for the destination.
+      expect(loadsAcrossGuests()).toEqual([]);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/once`]);
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
+    it("creates exactly one guest, seeded once, while migrating", async () => {
+      setSavedHistory({ past: [], present: "http://localhost:5173/deep/route?a=1", future: [] });
+      render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      // Exact, not "at most": two guests each seeded with the destination would request it
+      // twice while still satisfying a loadURL-only assertion.
+      expect(guestLog).toHaveLength(1);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/deep/route?a=1`]);
+      expect(loadsAcrossGuests()).toEqual([]);
+    });
+
+    it("re-seeds a genuine replacement guest when a redirect crosses off the proxy origin", async () => {
+      // The reported sequence, end to end, against an ALREADY-MOUNTED guest — the case the
+      // gated-first-mount tests above cannot reach. The guest is on the proxy origin, follows
+      // an absolute upstream redirect off it, which gates the webview out; the pane migrates
+      // the route back onto the proxy origin and mounts a REPLACEMENT guest. That guest must
+      // start from the callback route, not from the origin's root.
+      setSavedHistory({ past: [], present: `${PROXY}/once`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const firstGuest = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "dom-ready");
+        await Promise.resolve();
+      });
+      expect(guestLog).toHaveLength(1);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/once`]);
+
+      // The guest followed the upstream's absolute redirect and committed off-origin.
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "did-navigate", {
+          url: "http://localhost:5173/consume?token=audit-single-use#done",
+        });
+        await Promise.resolve();
+      });
+      await settle();
+
+      const expected = `${PROXY}/consume?token=audit-single-use#done`;
+      // A replacement guest was created, and it starts from the callback route with its
+      // query and fragment intact — before the fix it started from the frozen session seed.
+      expect(guestLog.length).toBeGreaterThan(1);
+      expect(seedsAcrossGuests().at(-1)).toBe(expected);
+      expect(seedsAcrossGuests()).not.toContain(`${PROXY}/`);
+      // The seed navigates the replacement guest by itself; a corrective load on top would
+      // be a second request for a single-use callback.
+      expect(loadsAcrossGuests()).toEqual([]);
+      expect(getWebviewElement(container).getAttribute("src")).toBe(expected);
+    });
+
+    it("keeps a replacement guest's seed current across repeated origin crossings", async () => {
+      // Guards specifically against a fix that refreshes the seed once and then re-freezes:
+      // the second crossing must be seeded from the second destination, not the first.
+      setSavedHistory({ past: [], present: `${PROXY}/start`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      for (const route of ["/first?n=1", "/second?n=2"]) {
+        const guest = getWebviewElement(container);
+        await act(async () => {
+          emitWebviewEvent(guest, "dom-ready");
+          await Promise.resolve();
+        });
+        await act(async () => {
+          emitWebviewEvent(guest, "did-navigate", { url: `http://localhost:5173${route}` });
+          await Promise.resolve();
+        });
+        await settle();
+        expect(seedsAcrossGuests().at(-1)).toBe(`${PROXY}${route}`);
+      }
+
+      expect(loadsAcrossGuests()).toEqual([]);
+    });
+
+    it("hands the toolbar a validator that accepts the panel's own origin", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const props = latestToolbarProps();
+      expect(props.validateUrl).toBeTypeOf("function");
+      // The reported failure: this returned "Only localhost URLs are allowed".
+      expect(props.validateUrl!(`${PROXY}/typed-route`)).toEqual({ url: `${PROXY}/typed-route` });
+      // A raw upstream address is retargeted rather than pushed off-origin.
+      expect(props.validateUrl!("http://localhost:5173/typed-route").url).toBe(
+        `${PROXY}/typed-route`
+      );
+      // Still no blanket acceptance of external hosts.
+      expect(props.validateUrl!("http://example.com/x").url).toBeUndefined();
+    });
+
+    it("navigates the live guest to a submitted route without remounting it", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+      const guestsBefore = guestLog.length;
+      const props = latestToolbarProps();
+
+      await act(async () => {
+        props.onNavigate(`${PROXY}/typed?x=1#s`);
+        await Promise.resolve();
+      });
+
+      // Same guest, one imperative load, and `src` genuinely was not re-bound (#9940) —
+      // the seed write count must not have grown.
+      expect(guestLog.length).toBe(guestsBefore);
+      expect(guestLog.at(-1)!.loadURLs).toEqual([`${PROXY}/typed?x=1#s`]);
+      expect(guestLog.at(-1)!.srcWrites).toEqual([`${PROXY}/`]);
+    });
+
+    it("retargets a raw upstream address onto the proxy origin, requesting it once", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+      const props = latestToolbarProps();
+
+      await act(async () => {
+        props.onNavigate("http://localhost:5173/once");
+        await Promise.resolve();
+      });
+
+      // Never lands on the raw origin, so the pane never gates the guest out and never
+      // re-requests the route from a replacement guest.
+      expect(loadsAcrossGuests()).toEqual([`${PROXY}/once`]);
+      expect(loadsAcrossGuests()).not.toContain("http://localhost:5173/once");
+      // One guest throughout, seeded once — the destination is requested exactly once.
+      expect(guestLog).toHaveLength(1);
+      expect(seedsAcrossGuests()).toEqual([`${PROXY}/`]);
+    });
+
+    it("ignores a rejected address entirely — no load, no mount, no history entry", async () => {
+      setSavedHistory({ past: [], present: `${PROXY}/`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+      const guestsBefore = guestLog.length;
+      const loadsBefore = loadsAcrossGuests().length;
+      const props = latestToolbarProps();
+
+      await act(async () => {
+        props.onNavigate("http://evil.localhost:43000/x");
+        await Promise.resolve();
+      });
+
+      expect(guestLog.length).toBe(guestsBefore);
+      expect(loadsAcrossGuests()).toHaveLength(loadsBefore);
+    });
+
+    it("does not treat a prefix-matching port as the proxy origin", async () => {
+      // The ports must be this way round: `"…:43000/x".startsWith("…:4300")` is TRUE, so the
+      // old check called the pane settled and left the guest on an origin it never proxied.
+      // (The reverse arrangement is rejected by `startsWith` too, and proves nothing.)
+      const shortPortProxy = buildDevPreviewProxyOrigin(4300, "project-1", "dev-preview-panel-1");
+      enableProxyMode(4300);
+      setSavedHistory({ past: [], present: `${PROXY}/x`, future: [] });
+
+      render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      expect(seedsAcrossGuests().at(-1)).toBe(`${shortPortProxy}/x`);
+      // Never seeded on the longer-port origin that merely has the real one as a prefix.
+      expect(seedsAcrossGuests()).not.toContain(`${PROXY}/x`);
     });
   });
 });

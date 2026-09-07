@@ -12,6 +12,7 @@ import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCa
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { useSearchablePalette } from "./useSearchablePalette";
+import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 export interface ActionPaletteItem {
   id: string;
@@ -384,6 +385,13 @@ export function useActionPalette(): UseActionPaletteReturn {
           if (result.ok) return;
           // DISABLED is already visible on the originating surface (#8814).
           if (result.error.code === "DISABLED") return;
+          // Same idea: a destructive action that parked a confirmation reports
+          // CONFIRMATION_REQUIRED so an agent can't read the no-op as done
+          // (#12120). Here the dialog it opened IS the feedback — toasting
+          // "couldn't run" over a confirm the user is being asked to answer
+          // would contradict it. Matched by sentinel, not by code, so a genuine
+          // refusal from the outer gate still toasts.
+          if (isStagedConfirmation(result.error)) return;
           // Two kinds of action own their failure toast, and only for a failure
           // thrown out of run() (EXECUTION_ERROR): a plugin action, whose
           // synthetic run() self-notifies in usePluginActions, and a built-in

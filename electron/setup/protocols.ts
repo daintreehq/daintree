@@ -41,12 +41,25 @@ import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 
-export type GetPluginDir = (pluginId: string) => string | undefined;
+/**
+ * Resolve a `plugin://` authority to the plugin root that serves it.
+ *
+ * The authority is an opaque token minted per plugin load and never reissued,
+ * so a host-minted URL captured before an unload resolves to nothing rather
+ * than into whatever now occupies that plugin id. A plugin's manifest id is
+ * seeded as an alias alongside it — plugin authors write `plugin://{pluginId}/…`
+ * by hand (docs/plugins/contribution-points.md), and that form keeps plain id
+ * semantics. Both keys live in the same map, so neither gets its own resolution
+ * path here.
+ *
+ * `undefined` means unknown, invalidated, or disabled.
+ */
+export type GetPluginRootByAuthority = (authority: string) => string | undefined;
 
 // Track which sessions have had protocols registered to avoid double-registration
 const registeredSessions = new WeakSet<Electron.Session>();
 let cachedDistPath: string | null = null;
-let cachedGetPluginDir: GetPluginDir | null = null;
+let cachedPluginRootResolver: GetPluginRootByAuthority | null = null;
 
 /**
  * Create the app:// protocol handler function for a given distPath.
@@ -568,16 +581,19 @@ async function readContainedDaintreeFile(
 }
 
 /**
- * The origin allowed to read this daintree-file:// response via cross-origin
- * fetch(), or null for everyone else. The scheme is corsEnabled so the file
- * viewer can fetch() media bytes for blob-URL playback, but eligibility alone
- * must not grant reads: a browser panel hosting an arbitrary remote site
- * shares the scheme registration, and echoing its origin here would hand it
- * the user's local files. Only the trusted app document qualifies — app:// in
- * production, the Vite dev-server origins in development. Tag loads (<img>,
- * <video>) are no-cors and never consult this.
+ * The origin allowed to read this response via cross-origin fetch(), or null
+ * for everyone else. Shared by the two corsEnabled schemes that need it:
+ * daintree-file:// (the file viewer fetches media bytes for blob-URL playback)
+ * and plugin:// (the renderer reads a view module's text to compile its
+ * Tailwind classes, #12220).
+ *
+ * Eligibility alone must not grant reads: a browser panel hosting an arbitrary
+ * remote site shares the scheme registration, and echoing its origin here would
+ * hand it the user's local files. Only the trusted app document qualifies —
+ * app:// in production, the Vite dev-server origins in development. Tag loads
+ * (<img>, <video>) and ESM imports are no-cors and never consult this.
  */
-function daintreeFileCorsOrigin(request: GlobalRequest): string | null {
+function trustedAppCorsOrigin(request: GlobalRequest): string | null {
   const origin = request.headers.get("origin");
   if (!origin) return null;
   if (origin === "app://daintree") return origin;
@@ -595,6 +611,101 @@ function daintreeFileCorsOrigin(request: GlobalRequest): string | null {
 }
 
 /**
+ * Method gate and `?path=&root=` validation shared by the three query-string
+ * schemes (daintree-file://, daintree-pdf://, daintree-media://). Returns the
+ * normalized pair, or the Response to relay.
+ *
+ * Validation order is load-bearing and identical for all three: a malformed
+ * request must be refused on its shape before anything touches the filesystem.
+ */
+function parseContainedFileRequest(
+  request: GlobalRequest
+): { normalizedRoot: string; normalizedFile: string } | Response {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  const url = new URL(request.url);
+  const filePath = url.searchParams.get("path");
+  const rootPath = url.searchParams.get("root");
+
+  if (!filePath || !rootPath) {
+    return new Response("Missing path or root parameter", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  if (filePath.includes("\0") || rootPath.includes("\0")) {
+    return new Response("Invalid path", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
+    return new Response("Paths must be absolute", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  return { normalizedRoot: path.normalize(rootPath), normalizedFile: path.normalize(filePath) };
+}
+
+/**
+ * Create the daintree-media:// protocol handler — direct range-streamed
+ * playback for <video>/<audio> (#12242). URL shape mirrors daintree-file://:
+ * `daintree-media://load?path=…&root=…`.
+ *
+ * Media-only by construction: a canonical path that isn't audio or video 404s
+ * rather than falling through to a buffered read, so this scheme can never
+ * serve an arbitrary repo file the way daintree-file:// legitimately does. That
+ * is the same narrowing daintree-pdf:// applies, and it is what makes the extra
+ * `standard: true` privilege cheap — the scheme's whole reachable surface is
+ * media files under a caller-supplied root.
+ *
+ * The streaming, containment, O_NOFOLLOW and range handling are
+ * streamContainedMediaFile's, unchanged and shared with daintree-file://.
+ */
+function createDaintreeMediaProtocolHandler() {
+  return async (request: GlobalRequest) => {
+    try {
+      const parsed = parseContainedFileRequest(request);
+      if (parsed instanceof Response) return parsed;
+      const { normalizedRoot, normalizedFile } = parsed;
+
+      const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
+      if (contained instanceof Response) return contained;
+
+      // Classified from the canonical path, not the request path: on Windows
+      // O_NOFOLLOW is a no-op, so a final-component symlink (`clip.mp4` →
+      // `secrets.env`) opens fine and request-path routing would stream it
+      // under a media MIME. On POSIX ELOOP rejects that symlink at open, so the
+      // two spellings agree either way.
+      const realMimeType = getMimeType(contained.realFile);
+      if (!isMediaMimeType(realMimeType)) {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+
+      return await streamContainedMediaFile(normalizedFile, realMimeType, request);
+    } catch (err) {
+      console.error("[MAIN] daintree-media protocol error:", err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+  };
+}
+
+/**
  * Create the daintree-file:// protocol handler function.
  */
 function createDaintreeFileProtocolHandler() {
@@ -604,7 +715,7 @@ function createDaintreeFileProtocolHandler() {
     // Constructed Responses have mutable headers, so the CORS grant rides on
     // every path (success and error alike) — a blocked error response would
     // otherwise surface as an opaque TypeError instead of a readable status.
-    const corsOrigin = daintreeFileCorsOrigin(request);
+    const corsOrigin = trustedAppCorsOrigin(request);
     if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
     return response;
   };
@@ -613,41 +724,10 @@ function createDaintreeFileProtocolHandler() {
 /** The daintree-file:// request core, minus the CORS header pass. */
 function createDaintreeFileRequestCore() {
   return async (request: GlobalRequest) => {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method Not Allowed", {
-        status: 405,
-        headers: buildDaintreeFileErrorHeaders(),
-      });
-    }
-
     try {
-      const url = new URL(request.url);
-      const filePath = url.searchParams.get("path");
-      const rootPath = url.searchParams.get("root");
-
-      if (!filePath || !rootPath) {
-        return new Response("Missing path or root parameter", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (filePath.includes("\0") || rootPath.includes("\0")) {
-        return new Response("Invalid path", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
-        return new Response("Paths must be absolute", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      const normalizedRoot = path.normalize(rootPath);
-      const normalizedFile = path.normalize(filePath);
+      const parsed = parseContainedFileRequest(request);
+      if (parsed instanceof Response) return parsed;
+      const { normalizedRoot, normalizedFile } = parsed;
 
       // Audio and video take the streaming path instead of the buffer-and-cap
       // core. Classification must come from the canonical path, not the request
@@ -949,42 +1029,13 @@ function buildDaintreePdfHeaders(realFile: string, contentLength: number): Recor
  */
 function createDaintreePdfProtocolHandler() {
   return async (request: GlobalRequest) => {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method Not Allowed", {
-        status: 405,
-        headers: buildDaintreeFileErrorHeaders(),
-      });
-    }
-
     try {
-      const url = new URL(request.url);
-      const filePath = url.searchParams.get("path");
-      const rootPath = url.searchParams.get("root");
-
-      if (!filePath || !rootPath) {
-        return new Response("Missing path or root parameter", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (filePath.includes("\0") || rootPath.includes("\0")) {
-        return new Response("Invalid path", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
-        return new Response("Paths must be absolute", {
-          status: 400,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
+      const parsed = parseContainedFileRequest(request);
+      if (parsed instanceof Response) return parsed;
 
       const result = await readContainedDaintreeFile(
-        path.normalize(rootPath),
-        path.normalize(filePath),
+        parsed.normalizedRoot,
+        parsed.normalizedFile,
         "pdf"
       );
       if (result instanceof Response) return result;
@@ -1020,7 +1071,8 @@ const PLUGIN_REVALIDATE_DIRECTIVE = "no-cache";
 function buildPluginHeaders(
   mimeType: string,
   filePath: string,
-  stats?: { mtime: Date }
+  stats?: { mtime: Date },
+  corsOrigin?: string | null
 ): Record<string, string> {
   // Vite content-hashed assets (`assets/<name>-<hash>.<ext>`) are immutable;
   // everything else is `no-cache` so plugin reloads pick up fresh bundles.
@@ -1040,6 +1092,13 @@ function buildPluginHeaders(
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": cacheControl,
     ...(stats ? { "Last-Modified": toHttpDate(stats.mtime) } : {}),
+    // Unconditional, not paired with the header below: the RESPONSE varies by
+    // request `Origin` whether or not this particular one carries the echo, and
+    // content-hashed plugin assets are served `immutable`. Without it a cached
+    // entry stored for a tag load (no Origin, no echo) can be replayed to the
+    // renderer's fetch(), which then fails CORS for no visible reason.
+    Vary: "Origin",
+    ...(corsOrigin ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
   };
 }
 
@@ -1055,13 +1114,14 @@ function buildPluginErrorHeaders(): Record<string, string> {
 /**
  * Create the plugin:// protocol handler.
  *
- * URL shape: `plugin://{pluginId}/{relative/path}`. The host segment is the
- * plugin's manifest name; the pathname is resolved against the plugin's
- * installed-on-disk root via `getPluginDir`. Security mirrors `daintree-file://`:
+ * URL shape: `plugin://{authority}/{relative/path}`. The host segment is an
+ * opaque per-load authority (or the plugin's manifest id, which PluginService
+ * aliases to the same root); the pathname is resolved against the plugin's
+ * installed-on-disk root via `getPluginRoot`. Security mirrors `daintree-file://`:
  * segment-by-segment `..` rejection, `fs.realpath()` containment, and
  * `O_RDONLY | O_NOFOLLOW` on the final open to close the realpath/open TOCTOU.
  */
-export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
+export function createPluginProtocolHandler(getPluginRoot: GetPluginRootByAuthority) {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", {
@@ -1080,18 +1140,19 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
       });
     }
 
-    const pluginId = url.hostname;
-    if (!pluginId) {
+    const authority = url.hostname;
+    if (!authority) {
       return new Response("Not Found", {
         status: 404,
         headers: buildPluginErrorHeaders(),
       });
     }
 
-    const pluginRoot = getPluginDir(pluginId);
+    const pluginRoot = getPluginRoot(authority);
     if (!pluginRoot) {
-      // Unknown plugin id, or the plugin is currently disabled. 404 — do not
-      // leak the existence of the disk path via a different status code.
+      // Unknown authority, an authority invalidated by an unload, or a plugin
+      // that is currently disabled. 404 — do not leak the existence of the disk
+      // path via a different status code.
       return new Response("Not Found", {
         status: 404,
         headers: buildPluginErrorHeaders(),
@@ -1221,18 +1282,27 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
       }
 
       const mimeType = getMimeType(realFile);
+      // The renderer reads a view module's own text over fetch() to compile its
+      // Tailwind classes before the view mounts (#12220). Tag loads and ESM
+      // imports never consult this; a cross-origin fetch() does, and the scheme
+      // is corsEnabled, so without the echo the read fails. Scoped to the
+      // trusted app document exactly as daintree-file:// is — that document
+      // already imports these same bytes as a module, so this grants it nothing
+      // it did not have, and grants a browser panel hosting a remote site
+      // nothing at all.
+      const corsOrigin = trustedAppCorsOrigin(request);
       const ifModifiedSince = request.headers.get("If-Modified-Since");
       if (isNotModified(ifModifiedSince, fileStats.mtime)) {
         return new Response(null, {
           status: 304,
-          headers: buildPluginHeaders(mimeType, realFile, fileStats),
+          headers: buildPluginHeaders(mimeType, realFile, fileStats, corsOrigin),
         });
       }
 
       const buffer = await fileHandle.readFile();
       return new Response(buffer, {
         status: 200,
-        headers: buildPluginHeaders(mimeType, realFile, fileStats),
+        headers: buildPluginHeaders(mimeType, realFile, fileStats, corsOrigin),
       });
     } catch (err) {
       console.error("[MAIN] plugin protocol read failed:", candidatePath, err);
@@ -1248,8 +1318,8 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
 }
 
 /**
- * Register app://, daintree-file://, daintree-html://, daintree-pdf:// and
- * plugin:// protocol handlers on a specific session.
+ * Register app://, daintree-file://, daintree-html://, daintree-pdf://,
+ * daintree-media:// and plugin:// protocol handlers on a specific session.
  * Safe to call multiple times — skips sessions that are already configured.
  * Used for per-project session partitions that don't inherit the default session's handlers.
  *
@@ -1267,8 +1337,9 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
   ses.protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
   ses.protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
-  if (cachedGetPluginDir) {
-    ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
+  ses.protocol.handle("daintree-media", createDaintreeMediaProtocolHandler());
+  if (cachedPluginRootResolver) {
+    ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginRoot));
   }
 }
 
@@ -1317,19 +1388,23 @@ export function registerDaintreePdfProtocol(): void {
   protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
 }
 
+export function registerDaintreeMediaProtocol(): void {
+  protocol.handle("daintree-media", createDaintreeMediaProtocolHandler());
+}
+
 // Stable indirection so the live `plugin://` resolver can be swapped after the
 // deferred PluginService import settles (#10322) without re-registering the
 // handler. Both the default-session handler and per-session handlers are wired
-// to this function once; it reads `cachedGetPluginDir` at request time, so a
-// later `setPluginDirResolver` is picked up live — no `protocol.unhandle`/
+// to this function once; it reads `cachedPluginRootResolver` at request time,
+// so a later `setPluginDirResolver` is picked up live — no `protocol.unhandle`/
 // re-`handle` (which would open a micro-tick `ERR_UNKNOWN_URL_SCHEME` gap).
-function resolvePluginDir(pluginId: string): string | undefined {
-  return cachedGetPluginDir ? cachedGetPluginDir(pluginId) : undefined;
+function resolvePluginRoot(authority: string): string | undefined {
+  return cachedPluginRootResolver ? cachedPluginRootResolver(authority) : undefined;
 }
 
-export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
-  cachedGetPluginDir = getPluginDir;
-  protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
+export function registerPluginProtocol(getPluginRoot: GetPluginRootByAuthority): void {
+  cachedPluginRootResolver = getPluginRoot;
+  protocol.handle("plugin", createPluginProtocolHandler(resolvePluginRoot));
 }
 
 /**
@@ -1340,17 +1415,18 @@ export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
  *
  * Ordering is load-bearing (#11728): the deferred `plugin-service` task must
  * call this immediately after importing the singleton and BEFORE `initialize()`
- * — not after it. `getPluginDir` is a plain map lookup, safe to install at any
+ * — not after it. The resolver is a plain map lookup, safe to install at any
  * time, whereas waiting for `initialize()` leaves the placeholder live across
  * the whole scan, during which the first plugin already publishes an addressable
  * `plugin://` componentPath. A 404 served in that window is permanent for that
  * specifier in the renderer's module map. The
- * handler delegates through `resolvePluginDir`, which reads `cachedGetPluginDir`
- * live, so the swap reaches every handler already registered (default session
- * plus any per-session handlers wired during `createWindow`).
+ * handler delegates through `resolvePluginRoot`, which reads
+ * `cachedPluginRootResolver` live, so the swap reaches every handler already
+ * registered (default session plus any per-session handlers wired during
+ * `createWindow`).
  */
-export function setPluginDirResolver(getPluginDir: GetPluginDir): void {
-  cachedGetPluginDir = getPluginDir;
+export function setPluginDirResolver(getPluginRoot: GetPluginRootByAuthority): void {
+  cachedPluginRootResolver = getPluginRoot;
 }
 
 /**

@@ -34,6 +34,9 @@ export const KNOWN_LOGGER_NAMES = [
   "main:default",
   "main:Main",
   "main:IPC",
+  "main:PluginService",
+  "main:ProjectPluginController",
+  "main:ProjectPluginWatcher",
   "main:PtyClient",
   "main:WorkspaceHostProcess",
 

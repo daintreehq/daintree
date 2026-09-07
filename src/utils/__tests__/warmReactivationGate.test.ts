@@ -27,24 +27,17 @@ describe("notifyWarmReactivationComplete", () => {
     if (cb) cb(0);
   }
 
-  it("fires the IPC only after two animation frames, not one", () => {
+  it("fires the IPC synchronously without waiting for an animation frame", () => {
+    // The view is undrawn behind the anti-flash bridge, where frames arrive at
+    // ~2 Hz, so a frame-deferred signal would run the gate into its hard timeout.
     notifyWarmReactivationComplete();
-    expect(notifyWarmViewPainted).not.toHaveBeenCalled();
-
-    flushFrame();
-    expect(notifyWarmViewPainted).not.toHaveBeenCalled();
-
-    flushFrame();
     expect(notifyWarmViewPainted).toHaveBeenCalledTimes(1);
+    expect(rafQueue).toHaveLength(0);
   });
 
   it("swallows a rejected IPC promise without throwing", () => {
     notifyWarmViewPainted.mockReturnValue(Promise.reject(new Error("bridge down")));
-    notifyWarmReactivationComplete();
-    expect(() => {
-      flushFrame();
-      flushFrame();
-    }).not.toThrow();
+    expect(() => notifyWarmReactivationComplete()).not.toThrow();
   });
 
   it("fires synchronously when requestAnimationFrame is unavailable", () => {

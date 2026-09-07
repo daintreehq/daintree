@@ -1,7 +1,7 @@
 /**
  * ESLint rule: no-raw-radius
  *
- * Keeps corner radii on the `--radius-*` scale. `src/index.css` derives every
+ * Keeps corner radii on the `--radius-*` scale. `src/styles/design-contract.css` derives every
  * step from one base — `--radius: calc(0.625rem * var(--theme-radius-scale, 1))`
  * — so a theme can scale the whole app's corners at once. A hardcoded bracket
  * value opts that element out silently.
@@ -21,7 +21,7 @@
  * Not flagged:
  *   - the named scale `rounded-xs` … `rounded-3xl`, which IS the token scale:
  *     `@theme inline` compiles `rounded-md` to `calc(var(--radius) - 2px)`. Stops
- *     at `3xl` because that is where `src/index.css` stops redefining; Tailwind's
+ *     at `3xl` because that is where the design contract stops redefining; Tailwind's
  *     stock `rounded-4xl` is a fixed 2rem that no theme can scale.
  *   - any arbitrary radius that reads a custom property — `rounded-[var(--radius-md)]`
  *     (the codebase's prevailing idiom) and v4's `rounded-(length:--radius-md)`
@@ -53,7 +53,7 @@ const SIDES = new Set([
   "es",
   "ee",
 ]);
-/** The steps `src/index.css` actually redefines from `--radius`. */
+/** The steps `src/styles/design-contract.css` actually redefines from `--radius`. */
 const NAMED_SCALE = /^(?:xs|sm|md|lg|xl|2xl|3xl)$/;
 const SHAPE = /^(?:full|none)$/;
 

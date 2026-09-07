@@ -179,7 +179,8 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubTerminalRestored);
 
-  // Resume records captured by the pty-host (trash expiry). Main is the
+  // Resume records captured by the pty-host (trash expiry, natural agent
+  // exit, `/quit` demotion). Main is the
   // journal's single writer — the pty-host writing the file itself would race
   // main's own close-path writes (two processes, two write queues, one file)
   // — so persist here through the exactly-once journal funnel, keyed by the

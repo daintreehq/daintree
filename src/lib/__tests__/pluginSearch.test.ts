@@ -13,6 +13,9 @@ function makePlugin(overrides: {
   capabilities?: PluginCapability[];
 }): LoadedPluginInfo {
   return {
+    instanceId: overrides.name,
+    origin: "global",
+    projectId: null,
     manifest: {
       name: overrides.name,
       version: "1.0.0",

@@ -1,3 +1,4 @@
+import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
 import React, { useCallback } from "react";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
@@ -17,6 +18,7 @@ import { GridScrollbar, GRID_SCROLLBAR_GUTTER_PX } from "./GridScrollbar";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
 import { ContentGridEmptyState } from "./ContentGridEmptyState";
+import { ProjectSurfaceFrame } from "@/components/Plugin/ProjectSurfaceFrame";
 import type { ContentGridContext } from "./useContentGridContext";
 
 // Non-scroll row floor: the small minimum a row shrinks to before the grid has
@@ -79,6 +81,7 @@ export function ContentGridDefault({
         )}
       >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+        <ProjectPluginTrustBanner />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
         <div className="relative flex-1 min-h-0">
@@ -143,25 +146,33 @@ export function ContentGridDefault({
               >
                 {ctx.isEmpty && !ctx.showPlaceholder ? (
                   <div className="col-span-full row-span-full">
-                    {ctx.emptyContent ?? (
-                      <ContentGridEmptyState
-                        hasLaunchTarget={ctx.hasActiveWorktree}
-                        hasProjectContext={ctx.projectName !== null}
-                        hasWorktrees={ctx.worktreeMap.size > 0}
-                        isWorktreeInitialized={ctx.isWorktreeInitialized}
-                        activeWorktreeName={ctx.activeWorktreeName}
-                        activeWorktreeId={ctx.activeWorktreeId}
-                        activeWorktreeBranch={ctx.activeWorktreeBranch}
-                        activeWorktreeIsDetached={ctx.activeWorktreeIsDetached}
-                        activeWorktreeHead={ctx.activeWorktreeHead}
-                        activeWorktreePath={ctx.activeWorktreePath}
-                        workspaceName={ctx.projectName}
-                        projectEmoji={ctx.projectEmoji}
-                        showProjectPulse={ctx.showProjectPulse}
-                        projectIconSvg={ctx.projectIconSvg}
-                        defaultCwd={ctx.defaultCwd}
-                      />
-                    )}
+                    {/*
+                      Passthrough unless a project plugin claims this surface
+                      (§7.8), in which case it adds the one control that swaps
+                      between the plugin's canvas and the host's launcher — so a
+                      claimed surface can never strand the user.
+                    */}
+                    <ProjectSurfaceFrame>
+                      {ctx.emptyContent ?? (
+                        <ContentGridEmptyState
+                          hasLaunchTarget={ctx.hasActiveWorktree}
+                          hasProjectContext={ctx.projectName !== null}
+                          hasWorktrees={ctx.worktreeMap.size > 0}
+                          isWorktreeInitialized={ctx.isWorktreeInitialized}
+                          activeWorktreeName={ctx.activeWorktreeName}
+                          activeWorktreeId={ctx.activeWorktreeId}
+                          activeWorktreeBranch={ctx.activeWorktreeBranch}
+                          activeWorktreeIsDetached={ctx.activeWorktreeIsDetached}
+                          activeWorktreeHead={ctx.activeWorktreeHead}
+                          activeWorktreePath={ctx.activeWorktreePath}
+                          workspaceName={ctx.projectName}
+                          projectEmoji={ctx.projectEmoji}
+                          showProjectPulse={ctx.showProjectPulse}
+                          projectIconSvg={ctx.projectIconSvg}
+                          defaultCwd={ctx.defaultCwd}
+                        />
+                      )}
+                    </ProjectSurfaceFrame>
                   </div>
                 ) : (
                   <LayoutGroup id="main-grid">

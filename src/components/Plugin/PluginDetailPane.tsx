@@ -7,6 +7,7 @@ import {
 import { PluginIconTile } from "./pluginIcons";
 import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
+import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -16,6 +17,10 @@ import {
 } from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import {
+  usePluginRuntimeStatus,
+  usePluginRuntimeStatusStore,
+} from "@/store/pluginRuntimeStatusStore";
 import { systemClient } from "@/clients/systemClient";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -217,7 +222,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   );
 }
 
-type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers";
+type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers" | "logs";
 
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
@@ -255,6 +260,10 @@ export function PluginDetailPane({
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
+  const initRuntimeStatus = usePluginRuntimeStatusStore((s) => s.init);
+  useEffect(() => initRuntimeStatus(), [initRuntimeStatus]);
+  const runtimeStatus = usePluginRuntimeStatus(plugin.instanceId);
+  const devStatus = runtimeStatus?.dev ?? null;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
@@ -264,6 +273,12 @@ export function PluginDetailPane({
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
+  // Read here rather than inside the tab body: the Logs tab is earned by
+  // content like every other tab past Overview (#11302), and the pane cannot
+  // decide whether to offer it without already knowing the buffer is non-empty.
+  // No owning project to pass: `LoadedPluginInfo` carries only the manifest id.
+  // The project-owned pane is `ProjectPluginDetailPane`, and it does scope.
+  const logs = usePluginLogs(plugin.manifest.name);
 
   // URL-installed plugins have an upstream to re-fetch and compare against;
   // file-installed plugins and built-ins don't, so the button stays disabled
@@ -289,6 +304,9 @@ export function PluginDetailPane({
     // Only plugins that actually contribute MCP servers get the runtime tab —
     // it surfaces subprocess health and restart, which is meaningless otherwise.
     ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
+    // Same rule, applied to the log buffer: a plugin that has logged nothing
+    // offers no Logs tab rather than an empty one (#12214).
+    ...(logs.lines && logs.lines.length > 0 ? [{ id: "logs", label: "Logs" }] : []),
   ];
 
   // Selecting a *different* plugin remounts this subtree (the scroll wrapper is
@@ -332,13 +350,36 @@ export function PluginDetailPane({
               {plugin.blocklisted !== true && plugin.disabled === true && (
                 <span className={BADGE_CLASS}>Disabled</span>
               )}
-              {plugin.devMode && <span className={BADGE_CLASS}>Dev</span>}
+              {plugin.devMode && (
+                // The live generation, not just "Dev": it is the one fact that
+                // says whether the running backend and the mounted view came
+                // out of the same build (#12277).
+                <span className={BADGE_CLASS}>
+                  {runtimeStatus?.viewGeneration != null
+                    ? `Dev · gen ${runtimeStatus.viewGeneration}`
+                    : "Dev"}
+                </span>
+              )}
               {restartRequired && (
                 <span className={`${BADGE_CLASS} text-text-secondary`}>Restart required</span>
               )}
             </div>
             {plugin.manifest.tagline && (
               <p className="text-sm text-text-secondary mt-1">{plugin.manifest.tagline}</p>
+            )}
+            {devStatus?.watcher === "degraded" && (
+              // Hot reload being dead looks exactly like "my rebuild changed
+              // nothing", so it has to say so somewhere the author will look.
+              <div
+                className="flex items-start gap-1 text-2xs text-status-warning mt-1"
+                role="status"
+              >
+                <AlertTriangle className="w-3 h-3 mt-px shrink-0" aria-hidden="true" />
+                <span>
+                  Hot reload stopped watching this plugin. Restart <code>daintree-plugin dev</code>{" "}
+                  to resume.
+                </span>
+              </div>
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
               <div className="text-2xs text-daintree-text/40 mt-1">
@@ -470,6 +511,8 @@ export function PluginDetailPane({
       {currentTab === "mcp-servers" && hasMcpServers && (
         <PluginMcpServersSection pluginId={plugin.manifest.name} declared={mcpServers} />
       )}
+
+      {currentTab === "logs" && <PluginLogsSection {...logs} />}
     </div>
   );
 }

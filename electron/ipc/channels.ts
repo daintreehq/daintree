@@ -347,10 +347,14 @@ export const CHANNELS = {
   GIT_COMMIT: "git:commit",
   GIT_PUSH: "git:push",
   GIT_PULL_REBASE: "git:pull-rebase",
+  GIT_FETCH: "git:fetch",
   GIT_FORCE_PUSH_WITH_LEASE: "git:force-push-with-lease",
   GIT_LIST_REMOTE_COMMITS: "git:list-remote-commits",
   GIT_LIST_PUSH_COMMITS: "git:list-push-commits",
   GIT_LIST_REBASE_COMMITS: "git:list-rebase-commits",
+  GIT_LIST_BASE_INTEGRATION_COMMITS: "git:list-base-integration-commits",
+  GIT_REBASE_ONTO_BASE: "git:rebase-onto-base",
+  GIT_MERGE_BASE_INTO_BRANCH: "git:merge-base-into-branch",
   GIT_PUSH_PROGRESS: "git:push-progress",
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
@@ -414,6 +418,7 @@ export const CHANNELS = {
   WEBVIEW_RELOAD_IGNORING_CACHE: "webview:reload-ignoring-cache",
   WEBVIEW_GET_SCROLL_POSITION: "webview:get-scroll-position",
   WEBVIEW_CAPTURE_SCREENSHOT: "webview:capture-screenshot",
+  WEBVIEW_SET_DEVICE_EMULATION: "webview:set-device-emulation",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
   WEBVIEW_GET_NAVIGATION_HISTORY: "webview:get-navigation-history",
@@ -503,6 +508,8 @@ export const CHANNELS = {
 
   CODEX_LIST_SUBAGENTS: "codex:list-subagents",
   CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
+  CODEX_RESOLVE_RESUME_LATEST_SESSION: "codex:resolve-resume-latest-session",
+  CODEX_FIND_SESSIONS: "codex:find-sessions",
 
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
@@ -560,6 +567,7 @@ export const CHANNELS = {
   HELP_PEEK_PENDING_HIBERNATION: "help:peek-pending-hibernation",
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
   HELP_RESTORE_PENDING_HIBERNATION: "help:restore-pending-hibernation",
+  HELP_LIST_PENDING_HIBERNATION_SLOTS: "help:list-pending-hibernation-slots",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 
@@ -984,14 +992,41 @@ export const CHANNELS = {
   PLUGIN_KEYBINDINGS: "plugin:keybindings",
   PLUGIN_CONTEXT_MENU_ITEMS: "plugin:context-menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
+  PLUGIN_VALIDATE_MANIFEST: "plugin:validate-manifest",
   PLUGIN_ACTIONS_GET: "plugin:actions-get",
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
+  /**
+   * Project surfaces (§7.8) claimed in the SENDER's project. Never takes a
+   * project id from the caller — a renderer asking for another project's
+   * surfaces is the leak project scope exists to prevent.
+   */
+  PLUGIN_PROJECT_SURFACES_GET: "plugin:project-surfaces-get",
+  /** Project-local plugins: the sender project's rows, valid and invalid alike. */
+  PLUGIN_PROJECT_LIST: "plugin:project-list",
+  /** Project-local plugins: record the trust decision for the SENDER's project. */
+  PLUGIN_PROJECT_SET_TRUST: "plugin:project-set-trust",
+  /** Project-local plugins: one-click activation of a staged plugin. */
+  PLUGIN_PROJECT_ACTIVATE_STAGED: "plugin:project-activate-staged",
+  /** Project-local plugins: manual re-scan of the sender project's plugins folder. */
+  PLUGIN_PROJECT_RELOAD: "plugin:project-reload",
+  /** Project-local plugins: switch one plugin off (or back on) on its own, without touching folder trust. */
+  PLUGIN_PROJECT_SET_MUTED: "plugin:project-set-muted",
+  /** Installed plugins: the sender project's per-project visibility overlay. */
+  PLUGIN_PROJECT_VISIBILITY_GET: "plugin:project-visibility-get",
+  /** Installed plugins: hide or show one installed plugin in the SENDER's project. */
+  PLUGIN_PROJECT_VISIBILITY_SET: "plugin:project-visibility-set",
+  /** Installed plugins: whether one plugin is hidden in projects that have not decided. */
+  PLUGIN_VISIBILITY_DEFAULT_SET: "plugin:visibility-default-set",
   /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
+  /** Per-instance runtime health snapshot, for a renderer store hydrating after it subscribed. */
+  PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
+  /** Retire a plugin's backend generation and start a fresh one (panel recovery). */
+  PLUGIN_RESTART_WORKER: "plugin:restart-worker",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */

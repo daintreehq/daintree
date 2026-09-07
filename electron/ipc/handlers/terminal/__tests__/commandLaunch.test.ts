@@ -149,6 +149,91 @@ describe("buildCommandLaunchShell", () => {
     });
   });
 
+  describe("shell support allowlist", () => {
+    it("rejects fish, which ends in 'sh' but has neither trap nor $?", () => {
+      setPlatform("linux");
+
+      expect(buildCommandLaunchShell("claude", "/usr/bin/fish")).toBeNull();
+      expect(buildCommandLaunchShell("npm run dev", "/usr/bin/fish", "exit")).toBeNull();
+    });
+
+    it("accepts dash and ash through the non-login -i -c form", () => {
+      setPlatform("linux");
+
+      for (const shell of ["/bin/dash", "/bin/ash"]) {
+        const result = buildCommandLaunchShell("claude", shell);
+        expect(result?.args.slice(0, 2)).toEqual(["-i", "-c"]);
+        expect(result?.args[2]).not.toContain("-l");
+      }
+    });
+  });
+
+  // The dev-preview pane owns its whole terminal and needs the PTY to end when
+  // its command does, carrying the command's own status out (#12295).
+  describe("exit mode", () => {
+    it("ends a zsh wrapper with a bare exit instead of exec'ing a new shell", () => {
+      setPlatform("linux");
+
+      const result = buildCommandLaunchShell("npm run dev", "/bin/zsh", "exit");
+
+      expect(result?.args[0]).toBe("-lic");
+      expect(result?.args[1]).toBe("trap : INT\nnpm run dev\nexit");
+      expect(result?.args[1]).not.toContain("exec");
+    });
+
+    it("keeps the interactive -i -c form for plain sh", () => {
+      setPlatform("linux");
+
+      const result = buildCommandLaunchShell("npm run dev", "/bin/sh", "exit");
+
+      expect(result?.args.slice(0, 2)).toEqual(["-i", "-c"]);
+      expect(result?.args[2]).toBe("trap : INT\nnpm run dev\nexit");
+    });
+
+    it("preserves compound shell syntax verbatim", () => {
+      setPlatform("linux");
+
+      const result = buildCommandLaunchShell(
+        "PORT=3000 npm run dev && echo up",
+        "/bin/bash",
+        "exit"
+      );
+
+      expect(result?.args[1]).toContain("PORT=3000 npm run dev && echo up");
+    });
+
+    it("defaults to keep-open so agent launches are unaffected", () => {
+      setPlatform("linux");
+
+      expect(buildCommandLaunchShell("claude", "/bin/zsh")?.args[1]).toContain(
+        "exec '/bin/zsh' -l"
+      );
+    });
+
+    it("drops -NoExit and maps PowerShell status onto the exit code", () => {
+      setPlatform("win32");
+
+      const result = buildCommandLaunchShell("npm run dev", "pwsh.exe", "exit");
+
+      expect(result?.args).not.toContain("-NoExit");
+      const script = decodePowerShellEncodedCommand(result?.args[2] ?? "");
+      expect(script).toContain("npm run dev");
+      // $LASTEXITCODE alone is stale for cmdlet failures, so $? gates it.
+      expect(script).toContain("if ($?) { exit 0 }");
+      expect(script).toContain("if ($LASTEXITCODE) { exit $LASTEXITCODE }");
+      expect(script).toContain("OutputEncoding");
+    });
+
+    it("uses cmd /C so the shell exits with ERRORLEVEL, keeping the UTF-8 codepage", () => {
+      setPlatform("win32");
+
+      const result = buildCommandLaunchShell("npm run dev", "cmd.exe", "exit");
+
+      expect(result?.args[0]).toBe("/C");
+      expect(result?.args[1]).toBe("chcp 65001 >NUL & npm run dev");
+    });
+  });
+
   describe("common edge cases", () => {
     it("returns null for empty commands on all platforms", () => {
       setPlatform("win32");

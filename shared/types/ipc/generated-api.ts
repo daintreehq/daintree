@@ -75,12 +75,18 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["clipboard:write-text"]["result"]>;
   };
   codex: {
+    findSessions(
+      ...args: IpcInvokeMap["codex:find-sessions"]["args"]
+    ): Promise<IpcInvokeMap["codex:find-sessions"]["result"]>;
     listSubagents(
       ...args: IpcInvokeMap["codex:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;
     readSubagentTranscript(
       ...args: IpcInvokeMap["codex:read-subagent-transcript"]["args"]
     ): Promise<IpcInvokeMap["codex:read-subagent-transcript"]["result"]>;
+    resolveResumeLatestSession(
+      ...args: IpcInvokeMap["codex:resolve-resume-latest-session"]["args"]
+    ): Promise<IpcInvokeMap["codex:resolve-resume-latest-session"]["result"]>;
   };
   commands: {
     execute(
@@ -252,6 +258,9 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["gemini:get-status"]["args"]
     ): Promise<IpcInvokeMap["gemini:get-status"]["result"]>;
   };
+  git: {
+    fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
+  };
   help: {
     getFolderPath(
       ...args: IpcInvokeMap["help:get-folder-path"]["args"]
@@ -259,6 +268,9 @@ export interface GeneratedElectronAPI {
     getPinnedActionContext(
       ...args: IpcInvokeMap["help:get-pinned-action-context"]["args"]
     ): Promise<IpcInvokeMap["help:get-pinned-action-context"]["result"]>;
+    listPendingHibernationSlots(
+      ...args: IpcInvokeMap["help:list-pending-hibernation-slots"]["args"]
+    ): Promise<IpcInvokeMap["help:list-pending-hibernation-slots"]["result"]>;
     markTerminal(
       ...args: IpcInvokeMap["help:mark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:mark-terminal"]["result"]>;
@@ -469,6 +481,9 @@ export interface GeneratedElectronAPI {
     activateForView(
       ...args: IpcInvokeMap["plugin:activate-for-view"]["args"]
     ): Promise<IpcInvokeMap["plugin:activate-for-view"]["result"]>;
+    activateStagedProjectPlugin(
+      ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
@@ -517,9 +532,21 @@ export interface GeneratedElectronAPI {
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    getProjectPlugins(
+      ...args: IpcInvokeMap["plugin:project-list"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-list"]["result"]>;
+    getProjectPluginVisibility(
+      ...args: IpcInvokeMap["plugin:project-visibility-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-visibility-get"]["result"]>;
+    getProjectSurfaces(
+      ...args: IpcInvokeMap["plugin:project-surfaces-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-surfaces-get"]["result"]>;
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
+    getRuntimeStatuses(
+      ...args: IpcInvokeMap["plugin:runtime-statuses-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:runtime-statuses-get"]["result"]>;
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
@@ -556,9 +583,15 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    reloadProjectPlugins(
+      ...args: IpcInvokeMap["plugin:project-reload"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-reload"]["result"]>;
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
+    restartWorker(
+      ...args: IpcInvokeMap["plugin:restart-worker"]["args"]
+    ): Promise<IpcInvokeMap["plugin:restart-worker"]["result"]>;
     revealSecretSetting(
       ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;
@@ -574,6 +607,18 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
+    setPluginVisibilityDefault(
+      ...args: IpcInvokeMap["plugin:visibility-default-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:visibility-default-set"]["result"]>;
+    setProjectPluginMuted(
+      ...args: IpcInvokeMap["plugin:project-set-muted"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-set-muted"]["result"]>;
+    setProjectPluginTrust(
+      ...args: IpcInvokeMap["plugin:project-set-trust"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-set-trust"]["result"]>;
+    setProjectPluginVisibility(
+      ...args: IpcInvokeMap["plugin:project-visibility-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-visibility-set"]["result"]>;
     setSettingValue(
       ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;
@@ -592,6 +637,9 @@ export interface GeneratedElectronAPI {
     validateActionIds(
       ...args: IpcInvokeMap["plugin:validate-action-ids"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
+    validateManifest(
+      ...args: IpcInvokeMap["plugin:validate-manifest"]["args"]
+    ): Promise<IpcInvokeMap["plugin:validate-manifest"]["result"]>;
   };
   pluginCapability: {
     acknowledgeConsent(
@@ -779,6 +827,9 @@ export interface GeneratedElectronAPI {
     goToHistoryIndex(
       ...args: IpcInvokeMap["webview:go-to-history-index"]["args"]
     ): Promise<IpcInvokeMap["webview:go-to-history-index"]["result"]>;
+    setDeviceEmulation(
+      ...args: IpcInvokeMap["webview:set-device-emulation"]["args"]
+    ): Promise<IpcInvokeMap["webview:set-device-emulation"]["result"]>;
   };
   windowChrome: {
     setBannerSeverity(

@@ -79,6 +79,7 @@ import type {
   ProjectSwitchOutgoingState,
   ProjectWorktreeLoadStatusPayload,
   ProjectFocusOnActivateIntent,
+  ProjectSwitchTrace,
 } from "./project.js";
 import type { FleetSnapshot } from "./fleet.js";
 import type {
@@ -612,7 +613,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: ProjectFocusOnActivateIntent },
+      options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace },
     ];
     result: Project;
   };
@@ -641,7 +642,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: ProjectCloseResult;
   };
   "project:reopen": {
-    args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];
+    args: [
+      projectId: string,
+      outgoingState?: ProjectSwitchOutgoingState,
+      options?: { trace?: ProjectSwitchTrace },
+    ];
     result: Project;
   };
   "project:get-stats": {
@@ -1201,7 +1206,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "webview:get-console-properties": {
-    args: [webContentsId: number, objectId: string];
+    args: [webContentsId: number, paneId: string, rowId: number, objectId: string];
     result: import("./webviewConsole.js").CdpGetPropertiesResult;
   };
   "webview:reload-ignoring-cache": {
@@ -1209,8 +1214,9 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "webview:get-scroll-position": {
+    // `null` means the read failed; `0` means the page is genuinely at the top.
     args: [webContentsId: number];
-    result: number;
+    result: number | null;
   };
 
   // Demo mode channels (dev-only, gated by --demo-mode flag)
@@ -1442,7 +1448,7 @@ export interface IpcEventMap {
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
   "agent:state-transition-dropped": AgentStateTransitionDroppedPayload;
-  "agent:all-clear": { timestamp: number };
+  "agent:all-clear": { timestamp: number; shouldFlash: boolean };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
   "agent:fallback-triggered": AgentFallbackTriggeredPayload;
@@ -1863,12 +1869,14 @@ export interface IpcEventMap {
   // renderer re-runs its terminal redraw here — the wake fan-out driven by
   // visibilitychange/resume ran while the view was still occluded, where
   // Chromium culls the paint, so it can fail to stick until the user clicks.
-  "app:view-revealed": void;
+  // Carries the switch trace id so the incoming renderer's perf marks join the
+  // same `project_switch.*` trace main is emitting; absent on the rollback send.
+  "app:view-revealed": { switchId?: string } | undefined;
   // Fired by ProjectViewManager the moment it re-attaches a cached view (warm
   // switch). A detached setVisible(false) view receives no visibilitychange or
   // resume event on reattach, so this is the renderer's deterministic trigger
   // to run the wake fan-out whose completion releases the warm paint gate.
-  "app:view-warm-activated": void;
+  "app:view-warm-activated": { switchId?: string } | undefined;
   "app:view-cached": void;
 
   // Privacy events
@@ -1968,6 +1976,36 @@ export interface IpcEventMap {
   // Plugin provenance record changed (main → renderer). Signal-only — the
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
+
+  // Live health of one plugin instance — worker lifecycle plus dev session
+  // (main → renderer, #12277/#12278). Carries the whole per-instance snapshot,
+  // so the receiver never has to reconstruct which generation is live from a
+  // sequence of notifications; a `null` status means the instance is no longer
+  // tracked. Sent via `broadcastToProjectRenderers` for a project-local
+  // instance so a project's backend errors and paths stay in its own views;
+  // an app-global instance widens to the full broadcast.
+  "plugin:runtime-status-changed": import("../plugin.js").PluginRuntimeStatusChangedEvent;
+
+  // A project's `.daintree/plugins/` folder holds valid manifests and has no
+  // trust decision on record (main → renderer, project-scoped). The ONLY signal
+  // that may open the project-plugin trust dialog: the controller alone knows
+  // whether a prompt is due, and it never re-emits after a decision is stored.
+  "plugin:project-trust-prompt": import("../plugin.js").ProjectPluginTrustPromptEvent;
+
+  // Full snapshot of a project's own plugins and its trust state (main →
+  // renderer, project-scoped). Emitted on every open, trust change and staged
+  // activation, so the plugin manager renders from the push rather than
+  // refetching.
+  "plugin:project-plugins-changed": import("../plugin.js").ProjectPluginsChangedEvent;
+
+  // A manifest id this trusted project has never had appeared and was staged
+  // rather than run (main → renderer, project-scoped). Fires once per new id.
+  "plugin:project-plugin-staged": import("../plugin.js").ProjectPluginStagedEvent;
+
+  // The per-project visibility overlay for INSTALLED plugins changed (main →
+  // renderer, project-scoped). Carries the whole overlay so the settings tab
+  // renders from the push rather than refetching.
+  "plugin:project-plugin-visibility-changed": import("../plugin.js").ProjectPluginVisibilityChangedEvent;
 
   // The project's git remote table changed (main → renderer, #11155) — e.g.
   // `git remote add origin`. Signal-only and project-scoped: the renderer drops
@@ -2120,6 +2158,14 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Plugin instance runtime health: worker lifecycle + dev session (global
+  // broadcast for an app-global instance, project-scoped send for a project one)
+  | "plugin:runtime-status-changed"
+  // Project-local plugin trust + inventory (project-scoped send)
+  | "plugin:project-trust-prompt"
+  | "plugin:project-plugins-changed"
+  | "plugin:project-plugin-staged"
+  | "plugin:project-plugin-visibility-changed"
   // Project's git remotes changed — re-resolve the forge provider (global broadcast)
   | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)

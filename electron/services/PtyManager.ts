@@ -5,6 +5,7 @@ import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
+import type { LineageKillSource } from "./pty/ProcessTreeKiller.js";
 import type { DetectionResult } from "./ProcessDetector.js";
 import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
 import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
@@ -31,6 +32,10 @@ import {
   type PtyManagerEvents,
   MAX_PRESERVED_TERMINAL_SNAPSHOTS,
 } from "./pty/index.js";
+// From ./pty/types.js rather than the ./pty/index.js barrel above: the
+// PtyManager unit tests mock that barrel wholesale, which would leave this
+// undefined and fire the budget timer on the next tick.
+import { GRACEFUL_KILL_TERMINAL_BUDGET_MS } from "./pty/types.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
@@ -73,6 +78,7 @@ export class PtyManager extends EventEmitter {
   private agentStateService: AgentStateService;
   private ptyPool: PtyPool | null = null;
   private processTreeCache: ProcessTreeCache | null = null;
+  private lineageLedger: LineageKillSource | null = null;
   private imagePathProbe: ImagePathProbe | null = null;
   private analysisWorkerPool: AnalysisWorkerPool | null = null;
   private activeProjectId: string | null = null;
@@ -110,6 +116,10 @@ export class PtyManager extends EventEmitter {
 
   setProcessTreeCache(cache: ProcessTreeCache): void {
     this.processTreeCache = cache;
+  }
+
+  setLineageLedger(ledger: LineageKillSource | null): void {
+    this.lineageLedger = ledger;
   }
 
   setImagePathProbe(probe: ImagePathProbe): void {
@@ -497,6 +507,7 @@ export class PtyManager extends EventEmitter {
           ptyPool: this.ptyPool,
           sabModeEnabled: this.sabModeEnabled,
           processTreeCache: this.processTreeCache,
+          lineageLedger: this.lineageLedger,
           imagePathProbe: this.imagePathProbe,
           analysisWorkerPool: this.analysisWorkerPool,
         },
@@ -726,7 +737,11 @@ export class PtyManager extends EventEmitter {
       void (async () => {
         try {
           const { sessionId } = await this.gracefulKill(termId);
-          if (sessionId && info?.launchAgentId) {
+          // The assistant's overlay terminal must never produce a resume
+          // record (#12183). It cannot reach the trash today — the renderer
+          // routes `removeOnExit` panels straight to removal — but that
+          // invariant lives a process away from the record that states it.
+          if (sessionId && info?.launchAgentId && info.isAssistantTerminal !== true) {
             // Best-effort branch stamp for resume sanity checks. The pty-host
             // has FS access but no WorkspaceClient, so resolve directly from
             // git with a short timeout; never let it block or fail the close.
@@ -1119,10 +1134,22 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Gracefully kill all terminals for a project, capturing session IDs.
+   *
+   * Each terminal is bounded on its own rather than the batch sharing one
+   * deadline. `Promise.all` doesn't settle until the slowest member does, so a
+   * pane whose teardown drifts past its internal budget used to hold every
+   * sibling's already-captured id hostage until the caller gave up and threw
+   * the whole project's results away (#12180). A pane that runs out of time now
+   * costs its own capture and nothing else.
+   *
+   * `onTerminalSettled` reports each result the moment it lands. The aggregate
+   * below is all-or-nothing across an IPC boundary; a caller on the far side
+   * uses this to keep whatever arrived before its own deadline.
    */
   async gracefulKillByProject(
     projectId: string,
-    options?: { preserveSession?: boolean }
+    options?: { preserveSession?: boolean },
+    onTerminalSettled?: (result: { id: string; agentSessionId: string | null }) => void
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const terminalIds = this.registry.getForProject(projectId);
     if (terminalIds.length === 0) return [];
@@ -1131,22 +1158,72 @@ export class PtyManager extends EventEmitter {
 
     const results = await Promise.all(
       terminalIds.map(async (terminalId) => {
+        const result = await this.gracefulKillWithinBudget(terminalId, options);
         try {
-          const { sessionId } = await this.gracefulKill(terminalId, options);
-          return { id: terminalId, agentSessionId: sessionId };
+          onTerminalSettled?.(result);
         } catch (error) {
-          logError(`Failed to graceful-kill terminal ${terminalId}`, error);
-          try {
-            this.kill(terminalId, "graceful-kill-fallback", options);
-          } catch {
-            // already dead
-          }
-          return { id: terminalId, agentSessionId: null };
+          // A throwing reporter must not cost the capture it was reporting.
+          logError(`Graceful-kill progress report failed for terminal ${terminalId}`, error);
         }
+        return result;
       })
     );
 
     return results;
+  }
+
+  /**
+   * One terminal's slot in {@link gracefulKillByProject}, capped at
+   * GRACEFUL_KILL_TERMINAL_BUDGET_MS.
+   *
+   * Timing out abandons the wait, not the teardown, and kills on the way out —
+   * mirroring the single-terminal timeout in `PtyClient.gracefulKill`. Leaving
+   * the kill to the abandoned chain would have been enough to reap the pane
+   * eventually, but not before this method returned, and callers read the
+   * acknowledged teardown as licence to delete a project's restoration state
+   * (#11340). The kill has to have been issued for every terminal by the time
+   * the aggregate resolves.
+   *
+   * Double-killing is not a hazard: `kill` re-reads the registry and no-ops on a
+   * terminal that is already gone, and `gracefulShutdown` latches its own
+   * teardown, so whichever path lands second does nothing.
+   */
+  private gracefulKillWithinBudget(
+    terminalId: string,
+    options?: { preserveSession?: boolean }
+  ): Promise<{ id: string; agentSessionId: string | null }> {
+    const settled: Promise<{ id: string; agentSessionId: string | null }> = this.gracefulKill(
+      terminalId,
+      options
+    )
+      .then(({ sessionId }) => ({ id: terminalId, agentSessionId: sessionId }))
+      .catch((error: unknown) => {
+        logError(`Failed to graceful-kill terminal ${terminalId}`, error);
+        try {
+          this.kill(terminalId, "graceful-kill-fallback", options);
+        } catch {
+          // already dead
+        }
+        return { id: terminalId, agentSessionId: null };
+      });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      settled,
+      new Promise<{ id: string; agentSessionId: string | null }>((resolve) => {
+        timer = setTimeout(() => {
+          logWarn(`Graceful kill outran its budget for terminal ${terminalId}; killing`);
+          try {
+            this.kill(terminalId, "graceful-kill-timeout", options);
+          } catch {
+            // already dead
+          }
+          resolve({ id: terminalId, agentSessionId: null });
+        }, GRACEFUL_KILL_TERMINAL_BUDGET_MS);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   /**

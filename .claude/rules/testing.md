@@ -53,4 +53,6 @@ On PRs and pushes: `npm run check`, vitest in 4 shards, and build + preload-back
 
 Budget and perf scripts are intentionally out of CI pre-1.0 (dormancy note in `ci.yml`). `test-ratio` runs on PRs but is informational and always exits 0.
 
-Cron workflows exist for `test-ratio`, `performance`, `pattern-discovery` and `stale-quarantine`. What must **not** come back is a cron **E2E/nightly test** run that opens issues — that was deliberately replaced by the on-demand `stabilize` workflow. `nightly-publish.yml` is a build/publish job for the nightly update channel, not a test run.
+**Performance benchmarks never run automatically.** `performance.yml` was deleted: no cron, no dispatch, no PR job. `scripts/perf/run.ts` requires `--scenario` with exactly one id, so there is no whole-matrix run to schedule. Do not add one back; the suite gates nothing, so a scheduled sweep produces numbers with no reader. Benchmarking work goes through `.agents/skills/optimize`, which a human invokes — a bare `npm run perf` gives you a reading, not a result.
+
+Cron workflows exist for `test-ratio`, `pattern-discovery` and `stale-quarantine`. What must **not** come back is a cron **E2E/nightly test** run that opens issues — that was deliberately replaced by the on-demand `stabilize` workflow. `nightly-publish.yml` is a build/publish job for the nightly update channel, not a test run.

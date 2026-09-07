@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
-import { watch as fsWatch, type FSWatcher } from "node:fs";
+import { watchShared } from "../FileObservationService.js";
+import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
@@ -8,6 +9,11 @@ import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, type HostGitFactory } from "./pluginHostGit.js";
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "./projectPluginIdentity.js";
+import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
 import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProcessManager.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
@@ -15,7 +21,11 @@ import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
 import type { PluginUIPromptDispatcher } from "./PluginUIPromptDispatcher.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
-import { assertStorageKey, type PluginStorageManager } from "./PluginStorageManager.js";
+import {
+  assertStorageKey,
+  type ExplicitStorageTarget,
+  type PluginStorageManager,
+} from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 
@@ -31,7 +41,8 @@ import {
   unregisterFileDecorationProviderImpl,
   scopeMatchesPattern,
 } from "../fileDecorationRegistry.js";
-import { broadcastToRenderer } from "../../ipc/utils.js";
+import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
+import { isAppError } from "../../utils/errorTypes.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
@@ -49,6 +60,9 @@ import type { PluginDiagnosticsLogLine } from "../../../shared/types/ipc/pluginD
 import type {
   PluginIpcHandler,
   PluginHostApi,
+  PluginIdentity,
+  PluginWorktreesResult,
+  PluginWorktreesUnavailableReason,
   PluginActionContribution,
   PluginActionDescriptor,
   PluginChannelSchema,
@@ -56,6 +70,7 @@ import type {
   ActionHandler,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginHostCallOptions,
   PluginInputBoxOptions,
   PluginConfirmOptions,
   BuiltInPluginCapability,
@@ -81,6 +96,7 @@ import type {
   PluginGitCommitOptions,
   PluginGitCommitResult,
   PluginPanelBadge,
+  PluginHostBinding,
 } from "../../../shared/types/plugin.js";
 import type {
   LoadedPlugin,
@@ -104,6 +120,36 @@ const MAX_FILE_DECORATION_PATHS = 1000;
  * omitted disables debouncing entirely (fire on every change).
  */
 const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
+
+/**
+ * The slice of a `WorkspaceClient` worktree event a plugin subscription reads.
+ * Only the owning project's path matters here — it is what lets a project-bound
+ * host drop another project's worktree churn instead of waking on all of it.
+ */
+export interface PluginWorktreeEventPayload {
+  projectPath?: string;
+}
+
+/**
+ * Compare two project paths the way the workspace-host pool keys them
+ * (`path.resolve`, plus win32's case-insensitive filesystem) so a binding's
+ * realpath-resolved root matches the path an event carries.
+ */
+function isSameProjectPath(a: string, b: string): boolean {
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+/**
+ * Is this the frozen `PROJECT_VIEW_UNAVAILABLE` rejection a bound renderer
+ * round-trip raises? The read-only catalog surface is documented as resolving
+ * empty rather than throwing when no renderer is available, so it swallows
+ * exactly this failure — and nothing else, which would mask real bugs.
+ */
+function isProjectViewUnavailable(error: unknown): boolean {
+  return isAppError(error) && error.code === "PROJECT_VIEW_UNAVAILABLE";
+}
 
 /**
  * Validate the `items` passed to `host.showQuickPick` and return a structurally
@@ -198,6 +244,22 @@ function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOpt
 }
 
 /**
+ * A worktree read the factory's dependencies performed, keeping the reason it
+ * came back with nothing (#12174).
+ *
+ * The internal twin of {@link PluginWorktreesResult}: same discriminant, but
+ * carrying raw `WorktreeSnapshot`s, which the factory projects through
+ * `toPluginWorktreeSnapshot` before a plugin ever sees them. `plugin-unloaded`
+ * is excluded because only the factory can observe it.
+ */
+export type PluginWorktreeSnapshotFetchResult =
+  | { status: "ok"; projectId: string; snapshots: WorktreeSnapshot[] }
+  | {
+      status: "unavailable";
+      reason: Exclude<PluginWorktreesUnavailableReason, "plugin-unloaded">;
+    };
+
+/**
  * Live collaborators and shared registries `createHost` and the fs/git/process/
  * clipboard API builders read and write. Every Map/Set/collaborator field here
  * is the SAME live reference `PluginService` holds — never a snapshot — so the
@@ -225,7 +287,26 @@ export interface PluginHostFactoryDeps {
   getHostGitFactory: () => HostGitFactory | undefined;
   getProcessManager: () => PluginProcessManager;
   declaredCapabilities: (pluginId: string) => Set<BuiltInPluginCapability>;
-  fetchAllWorktreeSnapshots: () => Promise<WorktreeSnapshot[]>;
+  /**
+   * Worktree snapshots for the host's project, carrying why there are none and
+   * which project the ones there are belong to (#12174).
+   *
+   * Result-shaped rather than `WorktreeSnapshot[]` because `[]` is the same
+   * answer for "this project has no worktrees" and for five ways of having no
+   * answer at all, and the host API has to be able to tell a plugin apart. The
+   * `plugin-unloaded` reason is not reachable here — liveness is the factory's
+   * own concern, checked around this call — so it is excluded from the shape.
+   */
+  fetchWorktreeSnapshotsResult: () => Promise<PluginWorktreeSnapshotFetchResult>;
+  /**
+   * The same read for one named project, for a project-bound host. Reads the
+   * workspace host that owns `projectRoot` directly instead of the focused
+   * window's, and reports `project-unavailable` once that project closes.
+   */
+  fetchWorktreeSnapshotsForProjectResult: (
+    projectId: string,
+    projectRoot: string
+  ) => Promise<PluginWorktreeSnapshotFetchResult>;
   recordPluginLog: (
     boundPlugin: LoadedPlugin,
     pluginId: string,
@@ -234,6 +315,8 @@ export interface PluginHostFactoryDeps {
     fields?: Record<string, unknown>
   ) => void;
   serializePluginBadges: (pluginId: string) => Record<string, PluginPanelBadge>;
+  /** User-facing name for a plugin id, for surfaces that name a plugin to a person. */
+  pluginDisplayName: (pluginId: string) => string;
   pluginDataDir: (pluginId: string) => string;
   isPathUnder: (root: string, candidate: string) => boolean;
   expandAllowedPathEntries: (
@@ -243,7 +326,7 @@ export interface PluginHostFactoryDeps {
   subscribeWorktreeEvent: (
     pluginId: string,
     event: WorkspaceWorktreeEvent,
-    handler: () => void
+    handler: (payload?: PluginWorktreeEventPayload) => void
   ) => () => void;
   registerHandler: (
     pluginId: string,
@@ -291,11 +374,132 @@ function trackPluginDisposer(
   return dispose;
 }
 
+/**
+ * Build one plugin's host object.
+ *
+ * `binding` names the project this host acts for and is captured here, once —
+ * every closure below reads the captured values, never the focused project
+ * view, so "which project?" is answered at construction rather than at call
+ * time. An unbound binding (`projectId: null`) is the app-global default for
+ * installed and builtin plugins and leaves every surface exactly as it was.
+ */
 export function createHost(
   deps: PluginHostFactoryDeps,
-  pluginId: string
+  pluginId: string,
+  binding: PluginHostBinding
 ): { host: PluginHostApi; revoke: () => void } {
   let revoked = false;
+  const { projectId: boundProjectId, projectRoot: boundProjectRoot } = binding;
+
+  /**
+   * The worktree set this host may see, with the reason it may see none.
+   *
+   * Unbound stays ambient on purpose: an app-global plugin has no project of
+   * its own, so the focused window's worktrees are the only set its
+   * argument-less getters can mean — which is exactly why the result names the
+   * project it landed on, so a plugin can notice when focus moved under it.
+   */
+  const fetchWorktreeSnapshotsResult = async (): Promise<PluginWorktreeSnapshotFetchResult> => {
+    if (boundProjectId === null) return deps.fetchWorktreeSnapshotsResult();
+    // Bound with no root is a malformed binding. Fail closed rather than fall
+    // back to the ambient read, which would hand this plugin whichever project
+    // happens to be focused — the confused-deputy bug the binding exists for.
+    if (boundProjectRoot === null) {
+      return { status: "unavailable", reason: "project-unavailable" };
+    }
+    const result = await deps.fetchWorktreeSnapshotsForProjectResult(
+      boundProjectId,
+      boundProjectRoot
+    );
+    // Belt and braces on the binding, enforced here rather than in one getter so
+    // every surface downstream of this read inherits it: a dependency answering
+    // for another project would be the confused deputy (#11297) wearing the new
+    // shape, and it must not reach `getWorktreeStatus`, the worktree
+    // subscriptions or the default spawn cwd either.
+    if (result.status === "ok" && result.projectId !== boundProjectId) {
+      return { status: "unavailable", reason: "project-unavailable" };
+    }
+    return result;
+  };
+
+  /**
+   * The array-shaped read the pre-#12174 surfaces still use. Every unavailable
+   * reason flattens back to `[]` here, which is the fail-closed sentinel those
+   * surfaces are built on: `${worktree}` and `${project}` allowlist roots drop
+   * so containment denies (#9492), `getWorktreeStatus` answers `null`, and the
+   * default spawn cwd falls back rather than pointing into another project.
+   *
+   * Not every worktree-derived surface routes through here — worktree-scoped
+   * *storage* resolves its target through `resolveBoundWorktreeTarget`, which
+   * reads the projected `getWorktreesResult` so it can name one worktree rather
+   * than flatten the set (#12229). Unbound storage skips both and stays on the
+   * manager's own app-global lookup.
+   */
+  const fetchWorktreeSnapshots = async (): Promise<WorktreeSnapshot[]> => {
+    const result = await fetchWorktreeSnapshotsResult();
+    return result.status === "ok" ? result.snapshots : [];
+  };
+
+  /**
+   * Renderer push for this host: the bound project's views only.
+   *
+   * Unbound reaches every renderer on purpose — an app-global plugin's panels,
+   * badges and toasts belong to no single project. The bound path widens to a
+   * full broadcast only while no project view is registered anywhere (boot, or
+   * a window that never routes through ProjectViewManager); in that state there
+   * is no other project's view for it to reach.
+   */
+  const pushToRenderers: (channel: string, ...args: unknown[]) => void =
+    boundProjectId === null
+      ? broadcastToRenderer
+      : (channel, ...args) => broadcastToProjectRenderers(boundProjectId, channel, ...args);
+
+  /**
+   * Does a worktree event belong to the bound project? Unbound hosts see every
+   * project's events by design. Fails open when the payload carries no project
+   * path: the snapshots the callback then delivers are already project-scoped,
+   * so an unrecognised payload costs a redundant callback, never another
+   * project's data.
+   *
+   * A bound-but-rootless binding is malformed and drops every event, matching
+   * `fetchWorktreeSnapshots` — waking the plugin app-wide to hand it the empty
+   * list that path already returns would be pure noise.
+   */
+  const isEventForBoundProject = (payload?: PluginWorktreeEventPayload): boolean => {
+    if (boundProjectId !== null && boundProjectRoot === null) return false;
+    if (boundProjectRoot === null) return true;
+    const projectPath = payload?.projectPath;
+    if (typeof projectPath !== "string" || projectPath.length === 0) return true;
+    return isSameProjectPath(projectPath, boundProjectRoot);
+  };
+
+  /**
+   * Does an agent transition belong to the bound project? Unbound hosts observe
+   * every agent by design — that is what `agent:read` has always meant.
+   *
+   * Fails CLOSED, unlike the worktree predicate: the event carries no
+   * project-scoped payload for the callback to re-derive, so delivering one we
+   * cannot attribute would hand a bound plugin another project's agent state
+   * outright. The routing id is read off the raw event; the plugin-facing
+   * projection deliberately drops it (see `toPluginAgentSnapshot`).
+   */
+  /**
+   * The project root a `"project"`-scoped settings or storage call targets.
+   *
+   * Unbound stays `null`, which both managers read as "use the app-global
+   * active project" — the only thing an installed or builtin plugin can mean.
+   * A bound-but-rootless binding is malformed and resolves to `""`, which they
+   * reject outright: falling through to the ambient read there would hand the
+   * plugin whichever project happens to be focused.
+   */
+  const boundScopeRoot: string | null = boundProjectId === null ? null : (boundProjectRoot ?? "");
+
+  const isAgentEventForBoundProject = (payload: AgentStateChangePayload): boolean => {
+    if (boundProjectId === null) return true;
+    const terminalId = (payload as { terminalId?: unknown }).terminalId;
+    if (typeof terminalId !== "string" || terminalId.length === 0) return false;
+    return getPtyClient()?.getTerminalProjectId(terminalId) === boundProjectId;
+  };
   // The LoadedPlugin this host is bound to. recordPluginLog compares against
   // the live instance so a stale host (post-unload, or after a same-id
   // reload) can't write into the current session's log buffer.
@@ -310,9 +514,125 @@ export function createHost(
   // onDidChangeAgentState. The host keeps no pre-subscription history, so
   // getAgentState() returns null until the first transition is observed.
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
+  /**
+   * The availability- and scope-aware worktree read behind
+   * {@link PluginHostApi.getWorktreesResult}, and the single source the
+   * `[]`/`null`-shaped `getWorktrees` and `getActiveWorktree` project from, so
+   * the three can never disagree about what this host can see (#12174).
+   */
+  const getWorktreesResult = async (): Promise<PluginWorktreesResult> => {
+    if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
+    try {
+      const result = await fetchWorktreeSnapshotsResult();
+      // Re-checked after the await: an unload (or a same-id reload) that landed
+      // while the read was in flight makes these snapshots the previous
+      // instance's, so they are discarded rather than handed to whatever still
+      // holds this stale host.
+      if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
+      if (result.status !== "ok") return { status: "unavailable", reason: result.reason };
+      // Projection is inside the boundary too: toPluginWorktreeSnapshot throws
+      // on a malformed snapshot, and this method's contract is to answer with
+      // data rather than reject into whatever timer called it.
+      return {
+        status: "ok",
+        projectId: result.projectId,
+        worktrees: result.snapshots.map(toPluginWorktreeSnapshot),
+      };
+    } catch {
+      return isBound()
+        ? { status: "unavailable", reason: "fetch-failed" }
+        : { status: "unavailable", reason: "plugin-unloaded" };
+    }
+  };
+
+  // Identity is derived once, here, from the id and binding this host was built
+  // with. Deriving it host-side — through the canonical parser that owns the key
+  // format — is the whole point: it is what lets a plugin stop splitting its own
+  // id apart to find its manifest id or its project (#12211).
+  const manifestId = pluginManifestIdFromInstanceKey(pluginId);
+  // Origin comes from the KEY, not the binding. The key states what the plugin
+  // *is*; the binding states which project this host acts for, and the two
+  // disagreeing is a malformed binding, not a global plugin. Reading origin off
+  // the binding would silently downgrade such a host to "global" and hand back
+  // a dotted id that aliases a project kind onto a global one — the exact
+  // collision `toRuntimePanelKindId` refuses to mint.
+  const pluginInfo: PluginIdentity = Object.freeze({
+    instanceId: pluginId,
+    manifestId,
+    origin:
+      projectIdFromPluginInstanceKey(pluginId) === null
+        ? ("global" as const)
+        : ("project" as const),
+    projectId: boundProjectId,
+    projectRoot: boundProjectRoot,
+  });
+
+  /**
+   * The worktree a `"worktree"`-scoped storage call targets (#12229).
+   *
+   * The project-root counterpart, `boundScopeRoot`, is fixed for the host's
+   * lifetime; the active worktree is not — the user switches it while the host
+   * stays alive — so this resolves per call rather than once at construction.
+   *
+   * Deliberately reads `getWorktreesResult`, the same project-filtered source
+   * `getActiveWorktree` projects from, so the two agree about which worktree is
+   * active at the moment either resolves. (Only at that moment: calls straddling
+   * a switch see different worktrees, which is the point of resolving per call.)
+   * Every unavailable reason (including a projection that threw, and an unload
+   * caught by that method's own liveness re-checks) collapses to `""`, which the
+   * manager rejects: for a filesystem target, failing closed beats salvaging a
+   * path out of a snapshot set the binding boundary already called malformed.
+   *
+   * Unbound returns `undefined` so the manager keeps its app-global lookup —
+   * an installed or builtin plugin has no project of its own, so the active
+   * worktree is the only thing its worktree scope can mean.
+   */
+  const resolveBoundWorktreeTarget = async (): Promise<string | undefined> => {
+    if (boundProjectId === null) return undefined;
+    const result = await getWorktreesResult();
+    if (result.status !== "ok") return "";
+    const active = result.worktrees.find((w) => w.isCurrent)?.path;
+    // The projection copies `path` straight off the workspace host's snapshot
+    // without validating it, and this is the one consumer that turns it into a
+    // filesystem root. A non-string would throw out of `path.join`, turning
+    // `storage.get`'s documented quiet "no target" into a rejection; a relative
+    // one would resolve against Electron's cwd, outside every project.
+    return typeof active === "string" && path.isAbsolute(active) ? active : "";
+  };
+
+  /**
+   * The target a storage call resolves against. Only `"worktree"` scope pays for
+   * the project-filtered snapshot read — `"user"` and `"project"` need nothing
+   * beyond the static root, and they are the hot path.
+   */
+  const storageTargetFor = async (scope: PluginStorageScope): Promise<ExplicitStorageTarget> =>
+    scope === "worktree"
+      ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
+      : { projectRoot: boundScopeRoot };
+
   const host: PluginHostApi = {
     get pluginId() {
       return pluginId;
+    },
+    pluginInfo,
+    panelKindId: (bareId: string) => {
+      if (typeof bareId !== "string" || bareId.length === 0) {
+        throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
+      }
+      const qualified = toRuntimePanelKindId(
+        { origin: pluginInfo.origin, pluginId: manifestId, kindId: bareId },
+        boundProjectId
+      );
+      // Only reachable for a project-owned host with no project in its binding,
+      // or an id carrying the `/` the qualified form delimits on. Both would
+      // otherwise mint an id that resolves to no registered kind, so say so
+      // rather than hand back something that silently opens nothing.
+      if (qualified === null) {
+        throw new Error(
+          `Plugin "${pluginId}" panelKindId: cannot qualify panel kind "${bareId}" for this plugin`
+        );
+      }
+      return qualified;
     },
     registerAction: (descriptor, handler) => {
       if (revoked) {
@@ -418,7 +738,7 @@ export function createHost(
       // transport — broadcastToRenderer, postToPanel, and the process stream
       // share the `plugin:{pluginId}:{channel}` channel and one `plugin.on`
       // subscriber receives all three.
-      broadcastToRenderer(`plugin:${pluginId}:${channel}`, { panelId: null, payload });
+      pushToRenderers(`plugin:${pluginId}:${channel}`, { panelId: null, payload });
       return Promise.resolve();
     },
     // The post-activation-safe sibling of broadcastToRenderer: same
@@ -453,27 +773,24 @@ export function createHost(
         }
       }
       const targetPanelId = panelId ?? null;
-      broadcastToRenderer(`plugin:${pluginId}:${channel}`, { panelId: targetPanelId, payload });
+      pushToRenderers(`plugin:${pluginId}:${channel}`, { panelId: targetPanelId, payload });
       return Promise.resolve();
     },
     getActiveWorktree: async () => {
-      if (!isBound()) return null;
-      const snapshots = await deps.fetchAllWorktreeSnapshots();
-      if (!isBound()) return null;
-      const active = snapshots.find((s) => s.isCurrent === true);
-      return active ? toPluginWorktreeSnapshot(active) : null;
+      const result = await getWorktreesResult();
+      if (result.status !== "ok") return null;
+      return result.worktrees.find((w) => w.isCurrent) ?? null;
     },
     getWorktrees: async () => {
-      if (!isBound()) return [];
-      const snapshots = await deps.fetchAllWorktreeSnapshots();
-      if (!isBound()) return [];
-      return snapshots.map(toPluginWorktreeSnapshot);
+      const result = await getWorktreesResult();
+      return result.status === "ok" ? result.worktrees : [];
     },
+    getWorktreesResult,
     getWorktreeStatus: async (path, options) => {
       options?.signal?.throwIfAborted();
       if (!isBound()) return null;
       if (typeof path !== "string" || path.length === 0) return null;
-      const snapshots = await deps.fetchAllWorktreeSnapshots();
+      const snapshots = await fetchWorktreeSnapshots();
       options?.signal?.throwIfAborted();
       if (!isBound()) return null;
       const match = snapshots.find((s) => s.path === path);
@@ -521,8 +838,22 @@ export function createHost(
       // inject into a torn-down session.
       await ensureCapabilityConsent(deps, pluginId, "agent:input");
       if (!isBound()) return;
-      const terminalId = await resolveActiveAgentTerminalId();
+      const terminalId = await resolveActiveAgentTerminalId(boundProjectId);
       if (!isBound()) return;
+      if (terminalId === null) {
+        // Bound host with no agent of its own: stay silent rather than reach
+        // for whatever agent is focused. The user consented to this plugin
+        // talking to its project's agent, never to another project's.
+        if (boundPlugin) {
+          deps.recordPluginLog(
+            boundPlugin,
+            pluginId,
+            "warn",
+            "sendToActiveAgent: no agent terminal is available in this plugin's project"
+          );
+        }
+        return;
+      }
       const ptyClient = getPtyClient();
       if (!ptyClient) {
         throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
@@ -543,10 +874,14 @@ export function createHost(
       }
       // Subscription wired synchronously (revoke guard already held above);
       // only the disposer return value is wrapped in a resolved promise.
-      const dispose = deps.subscribeWorktreeEvent(pluginId, "worktree-activated", async () => {
+      const dispose = deps.subscribeWorktreeEvent(pluginId, "worktree-activated", async (event) => {
+        // A bound host must not wake on another project activating a worktree:
+        // "active" means active within its own project, so a foreign event is
+        // not a change it can observe at all.
+        if (!isEventForBoundProject(event)) return;
         if (!deps.plugins.has(pluginId)) return;
         try {
-          const snapshots = await deps.fetchAllWorktreeSnapshots();
+          const snapshots = await fetchWorktreeSnapshots();
           // Re-check after the async fetch so a racing unloadPlugin()
           // doesn't fire the callback into a disposed plugin closure.
           if (!deps.plugins.has(pluginId)) return;
@@ -578,7 +913,7 @@ export function createHost(
       const runEmit = async (): Promise<void> => {
         if (!deps.plugins.has(pluginId)) return;
         try {
-          const snapshots = await deps.fetchAllWorktreeSnapshots();
+          const snapshots = await fetchWorktreeSnapshots();
           if (!deps.plugins.has(pluginId)) return;
           callback(snapshots.map(toPluginWorktreeSnapshot));
         } catch (err) {
@@ -589,16 +924,21 @@ export function createHost(
         }
       };
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      // A foreign project's churn is dropped before the debounce timer is even
+      // armed, so a bound host's trailing callback can't be pushed out
+      // indefinitely by worktree traffic in a project it cannot see.
       const emit =
         debounceMs > 0
-          ? (): void => {
+          ? (event?: PluginWorktreeEventPayload): void => {
+              if (!isEventForBoundProject(event)) return;
               if (debounceTimer) clearTimeout(debounceTimer);
               debounceTimer = setTimeout(() => {
                 debounceTimer = null;
                 void runEmit();
               }, debounceMs);
             }
-          : (): void => {
+          : (event?: PluginWorktreeEventPayload): void => {
+              if (!isEventForBoundProject(event)) return;
               void runEmit();
             };
       // Fires on both add/update and remove so plugins' cached lists stay
@@ -637,6 +977,7 @@ export function createHost(
       // getAgentState() can serve it without re-deriving state.
       const failures = createListenerFailureState();
       const handler = (payload: AgentStateChangePayload): void => {
+        if (!isAgentEventForBoundProject(payload)) return;
         if (!deps.plugins.has(pluginId)) return;
         invokeTrackedListener(
           failures,
@@ -696,6 +1037,44 @@ export function createHost(
         teardown.unsub?.()
       );
       teardown.dispose = dispose;
+      return Promise.resolve(dispose);
+    },
+    onDidWake: (callback) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidWake called after activate() returned or timed out`
+        );
+      }
+      // No capability gate: the payload is the machine's own suspend/resume
+      // timing and nothing else — no workspace, user, or cross-plugin data. It
+      // is also strictly less than every renderer window already receives
+      // unconditionally on the same wake (#12175).
+      const failures = createListenerFailureState();
+      const handler = (payload: { sleepDuration: number; timestamp: number }): void => {
+        // Deliberately NOT filtered by the host's project binding, unlike
+        // `onDidChangeAgentState`: a wake is machine-scoped, so every loaded
+        // instance of the plugin must hear it, including one bound to a project
+        // whose window is not focused — which is exactly the stale-state case
+        // this event exists for.
+        if (!deps.plugins.has(pluginId)) return;
+        invokeTrackedListener(
+          failures,
+          pluginId,
+          "onDidWake",
+          () =>
+            callback(
+              Object.freeze({
+                sleepDuration: payload.sleepDuration,
+                timestamp: payload.timestamp,
+              })
+            ),
+          () => dispose()
+        );
+      };
+      // No replay on subscribe: a wake is a one-shot pulse with no resting
+      // state to hand a late subscriber.
+      const unsub = events.on("sys:wake", handler);
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
       return Promise.resolve(dispose);
     },
     registerForgeProvider: (descriptor, impl) => {
@@ -855,7 +1234,7 @@ export function createHost(
         );
         narrowed = undefined;
       }
-      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      pushToRenderers(CHANNELS.EVENTS_PUSH, {
         name: "plugin:decorations-changed",
         payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
       });
@@ -901,7 +1280,7 @@ export function createHost(
         }
         panelMap.set(panelId, validated);
       }
-      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      pushToRenderers(CHANNELS.EVENTS_PUSH, {
         name: "plugin:panel-badges-changed",
         payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
       });
@@ -920,16 +1299,21 @@ export function createHost(
             .join("; ")}`
         );
       }
-      // Provenance: prefix the message with the plugin id so users can see
-      // which plugin raised the toast. pluginId is bound to the host closure
-      // at activation and cannot be spoofed.
+      // Provenance: prefix the message with the plugin's name so users can see
+      // which plugin raised the toast. Resolved host-side from the pluginId
+      // bound to this closure at activation, so it still cannot be spoofed —
+      // but it prints the manifest's display name rather than the raw id,
+      // which for a project-owned plugin is an instance key no user should be
+      // shown (#12211).
       //
-      // rateLimitKey scopes the rate-limit bucket per plugin+type. Without it
-      // plugin toasts fall into the global type-keyed bucket and a burst of
-      // unrelated system toasts could silently suppress a plugin's toast.
-      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      // rateLimitKey keeps the raw id: it is a bucket key, never rendered, and
+      // two plugins may legitimately share a display name. It scopes the
+      // rate-limit bucket per plugin+type — without it plugin toasts fall into
+      // the global type-keyed bucket and a burst of unrelated system toasts
+      // could silently suppress a plugin's toast.
+      pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: parsed.data.type,
-        message: `${pluginId}: ${parsed.data.message}`,
+        message: `${deps.pluginDisplayName(pluginId)}: ${parsed.data.message}`,
         duration: parsed.data.durationMs,
         rateLimitKey: `plugin:${pluginId}:${parsed.data.type}`,
       });
@@ -951,7 +1335,11 @@ export function createHost(
           },
         };
       }
-      return deps.dispatcher.sendDispatchToRenderer(actionId, args);
+      // A bound dispatch reaches only its own project's renderer and rejects
+      // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
+      // unbound stays ambient, since an app-global plugin's action belongs
+      // wherever the user is looking.
+      return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
     },
     // Built-in action catalog (#10561). NOT revoke-guarded for the same reason
     // as dispatch: plugins introspect from post-activation callbacks/timers.
@@ -963,11 +1351,25 @@ export function createHost(
     actions: {
       list: async () => {
         if (!deps.plugins.has(pluginId)) return [];
-        return deps.dispatcher.sendActionsListToRenderer();
+        try {
+          return await deps.dispatcher.sendActionsListToRenderer(boundProjectId);
+        } catch (err) {
+          // A bound host whose project has no live view is the catalog's
+          // documented "no renderer available" case, not an error — this
+          // surface never throws, and the worker proxy already collapses a
+          // failure here into the same empty answer.
+          if (isProjectViewUnavailable(err)) return [];
+          throw err;
+        }
       },
       get: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return null;
-        return deps.dispatcher.sendActionsGetToRenderer(actionId);
+        try {
+          return await deps.dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
+        } catch (err) {
+          if (isProjectViewUnavailable(err)) return null;
+          throw err;
+        }
       },
       // canDispatch derives locally from get() — no extra round-trip. A null
       // entry (unknown id, or a restricted action the renderer projects away)
@@ -975,7 +1377,12 @@ export function createHost(
       // plugin can warn before dispatch() returns CONFIRMATION_REQUIRED.
       canDispatch: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return "restricted";
-        const entry = await deps.dispatcher.sendActionsGetToRenderer(actionId);
+        const entry = await deps.dispatcher
+          .sendActionsGetToRenderer(actionId, boundProjectId)
+          .catch((err: unknown) => {
+            if (isProjectViewUnavailable(err)) return null;
+            throw err;
+          });
         if (!entry) return "restricted";
         if (entry.danger === "confirm") return "confirm";
         // Fail closed: only an explicit "safe" entry is dispatchable without a
@@ -993,34 +1400,49 @@ export function createHost(
     // so authoring mistakes surface loudly (mirrors showToast).
     showQuickPick: (async (
       items: PluginQuickPickItem[],
-      options?: PluginQuickPickOptions
+      options?: PluginQuickPickOptions,
+      callOptions?: PluginHostCallOptions
     ): Promise<PluginQuickPickItem | PluginQuickPickItem[] | undefined> => {
       if (!deps.plugins.has(pluginId)) return undefined;
       const validItems = validateQuickPickItems(pluginId, items);
-      const value = await deps.promptDispatcher.requestPrompt(pluginId, {
-        kind: "quickPick",
-        items: validItems,
-        options: sanitizeQuickPickOptions(options),
-      });
+      // Bound: the prompt lands in the owning project's view even when it is
+      // not the visible one, so the user finds it on switching back, and
+      // rejects when that project has no view at all. Unbound is deliberately
+      // ambient — an app-global plugin's prompt belongs in front of whoever is
+      // looking.
+      const value = await deps.promptDispatcher.requestPrompt(
+        pluginId,
+        {
+          kind: "quickPick",
+          items: validItems,
+          options: sanitizeQuickPickOptions(options),
+        },
+        boundProjectId,
+        callOptions?.signal
+      );
       return value as PluginQuickPickItem | PluginQuickPickItem[] | undefined;
     }) as PluginHostApi["showQuickPick"],
-    showInputBox: async (options) => {
+    showInputBox: async (options, callOptions) => {
       if (!deps.plugins.has(pluginId)) return undefined;
-      const value = await deps.promptDispatcher.requestPrompt(pluginId, {
-        kind: "inputBox",
-        options: sanitizeInputBoxOptions(options),
-      });
+      const value = await deps.promptDispatcher.requestPrompt(
+        pluginId,
+        { kind: "inputBox", options: sanitizeInputBoxOptions(options) },
+        boundProjectId,
+        callOptions?.signal
+      );
       return value as string | undefined;
     },
-    showConfirm: async (options) => {
+    showConfirm: async (options, callOptions) => {
       if (!deps.plugins.has(pluginId)) return false;
       if (!options || typeof options !== "object" || typeof options.title !== "string") {
         throw new Error(`Plugin "${pluginId}" showConfirm: options.title must be a string`);
       }
-      const value = await deps.promptDispatcher.requestPrompt(pluginId, {
-        kind: "confirm",
-        options: sanitizeConfirmOptions(options),
-      });
+      const value = await deps.promptDispatcher.requestPrompt(
+        pluginId,
+        { kind: "confirm", options: sanitizeConfirmOptions(options) },
+        boundProjectId,
+        callOptions?.signal
+      );
       return value === true;
     },
     // NOT revoke-guarded for the same reason as showToast/dispatch: plugins
@@ -1045,7 +1467,7 @@ export function createHost(
     // capability gate at the dispatch boundary). Liveness is plugin membership
     // — once the plugin unloads `spawn` rejects and outstanding processes are
     // torn down by `killAll` in unloadPlugin.
-    process: buildProcessApi(deps, pluginId),
+    process: buildProcessApi(deps, pluginId, fetchWorktreeSnapshots),
     // Host-mediated, scope-contained filesystem + git surfaces (fs-API
     // containment unit). NOT revoke-guarded — plugins read/write from
     // post-activation timers and callbacks. Every path argument is realpath-
@@ -1083,7 +1505,11 @@ export function createHost(
           );
         }
         const effectiveScope = declaredScope ?? scope ?? "user";
-        const filePath = deps.settings.resolveSettingsFilePath(pluginId, effectiveScope);
+        const filePath = deps.settings.resolveSettingsFilePath(
+          pluginId,
+          effectiveScope,
+          boundScopeRoot
+        );
         // Project scope with no active project: read resolves to undefined
         // rather than throwing, matching the "unset key" return.
         if (!filePath) return undefined;
@@ -1104,7 +1530,7 @@ export function createHost(
         }
         deps.settings.assertSettingSerializable(pluginId, key, value);
         deps.settings.assertSettingDeclared(pluginId, key, scope);
-        const filePath = deps.settings.resolveSettingsFilePath(pluginId, scope);
+        const filePath = deps.settings.resolveSettingsFilePath(pluginId, scope, boundScopeRoot);
         if (!filePath) {
           throw new Error(
             `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
@@ -1152,7 +1578,11 @@ export function createHost(
         scope: PluginStorageScope = "user"
       ): Promise<T | undefined> => {
         assertStorageKey(pluginId, "get", key);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope);
+        const filePath = await deps.storage.resolveStorageFilePath(
+          pluginId,
+          scope,
+          await storageTargetFor(scope)
+        );
         // No active project/worktree (or unset key): read resolves to undefined
         // rather than throwing, matching the "unset key" return.
         if (!filePath || !isBound()) return undefined;
@@ -1170,7 +1600,11 @@ export function createHost(
           );
         }
         deps.storage.assertStorageSerializable(pluginId, key, value);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope);
+        const filePath = await deps.storage.resolveStorageFilePath(
+          pluginId,
+          scope,
+          await storageTargetFor(scope)
+        );
         // Re-check liveness after the async resolve so a racing unloadPlugin()
         // doesn't write into a torn-down plugin's storage file.
         if (!isBound()) return;
@@ -1185,7 +1619,11 @@ export function createHost(
       },
       delete: async (key: string, scope: PluginStorageScope = "user"): Promise<void> => {
         assertStorageKey(pluginId, "delete", key);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope);
+        const filePath = await deps.storage.resolveStorageFilePath(
+          pluginId,
+          scope,
+          await storageTargetFor(scope)
+        );
         // Missing target or unloaded plugin: a delete is a no-op rather than a
         // throw (matching the "already absent" return of the store).
         if (!filePath || !isBound()) return;
@@ -1233,7 +1671,11 @@ export function createHost(
  * `PERMISSION_REQUIRED:` prefix (the same prefix `useHostChannel` already
  * discriminates on).
  */
-function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginProcessApi {
+function buildProcessApi(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  fetchWorktreeSnapshots: () => Promise<WorktreeSnapshot[]>
+): PluginProcessApi {
   const spawn = async (
     command: string,
     options?:
@@ -1295,7 +1737,7 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
     // against the project the user is in, then fall back to the host cwd.
     let cwd = typeof options?.cwd === "string" && options.cwd.length > 0 ? options.cwd : undefined;
     if (cwd === undefined) {
-      const active = await deps.fetchAllWorktreeSnapshots();
+      const active = await fetchWorktreeSnapshots();
       cwd = active.find((s) => s.isCurrent === true)?.path;
     }
     // Re-check membership after the async cwd resolution so a racing unload
@@ -1417,45 +1859,60 @@ async function ensureCapabilityConsent(
   // capability disclosure and likewise skip JIT consent.
   if (plugin.isBuiltin) return;
   const displayName = plugin.manifest.displayName ?? plugin.manifest.name;
+  // The scope is taken from the instance's own binding, not from a parameter
+  // and not from focus. `ensureAllowed`'s scope argument is optional, so nothing
+  // in the type system would have caught omitting it — and omitting it keys
+  // every grant under `"global"`, which would let one project's approval of
+  // `shell:exec` answer for a different project's copy of the same plugin id.
+  const scopeKey = plugin.binding?.projectId ?? "global";
   await getPluginCapabilityConsentService().ensureAllowed(
     pluginId,
     displayName,
     capability,
-    plugin.manifest.capabilities ?? []
+    plugin.manifest.capabilities ?? [],
+    scopeKey
   );
 }
 
 /**
  * Resolve the terminal id of the "active agent" for `host.sendToActiveAgent`
  * (#10558). Centralised here so plugins stop reinventing `terminal.list`-based
- * selection heuristics that drift. Scopes strictly to the active project when
- * one is set — it never crosses a project boundary, since "the active agent"
- * the user consented to is the one in front of them; only when no project is
- * active (e.g. before any project loads) does it consider all terminals. Ranks
- * focused/visible agent (`activityTier: "active"`) first, then a `waiting`
- * agent, then the most recently active by output — with a deterministic id
- * tiebreak. Terminals with no agent or in an ended state (`exited` /
- * `completed`, or no live PTY) are excluded.
+ * selection heuristics that drift. Ranks focused/visible agent
+ * (`activityTier: "active"`) first, then a `waiting` agent, then the most
+ * recently active by output — with a deterministic id tiebreak. Terminals with
+ * no agent or in an ended state (`exited` / `completed`, or no live PTY) are
+ * excluded.
  *
- * @throws {Error} `NO_ACTIVE_AGENT:` when no eligible agent terminal exists.
+ * `boundProjectId` is the host's binding. Bound: only that project's terminals
+ * are eligible, and `null` comes back when it has none, so the caller can
+ * no-op instead of injecting into a project the user never consented to.
+ * Unbound (`null`): deliberately ambient — it scopes to whatever project the
+ * PTY host last saw focused, since "the active agent" an app-global plugin
+ * means is the one in front of the user, and considers all terminals only when
+ * no project is active at all (e.g. before any project loads).
+ *
+ * @throws {Error} `NO_ACTIVE_AGENT:` when the terminal host is unavailable, or
+ *   when an unbound host finds no eligible agent terminal.
  */
-async function resolveActiveAgentTerminalId(): Promise<string> {
+async function resolveActiveAgentTerminalId(boundProjectId: string | null): Promise<string | null> {
   const ptyClient = getPtyClient();
   if (!ptyClient) {
     throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
   }
   const all = await ptyClient.getAllTerminalsAsync();
-  const activeProjectId = ptyClient.getActiveProjectId();
   type Term = (typeof all)[number];
   const eligible = (t: Term): boolean =>
     Boolean(t.detectedAgentId ?? t.launchAgentId) &&
     t.hasPty !== false &&
     t.agentState !== "exited" &&
     t.agentState !== "completed";
-  // Scope to the active project; never cross into another project's terminals.
-  const pool = activeProjectId != null ? all.filter((t) => t.projectId === activeProjectId) : all;
+  // Scope to the bound project, or to the focused one; never cross into another
+  // project's terminals.
+  const scopeProjectId = boundProjectId ?? ptyClient.getActiveProjectId();
+  const pool = scopeProjectId != null ? all.filter((t) => t.projectId === scopeProjectId) : all;
   const candidates = pool.filter(eligible);
   if (candidates.length === 0) {
+    if (boundProjectId !== null) return null;
     throw new Error(
       "NO_ACTIVE_AGENT: no agent terminal is available to receive input in the current project"
     );
@@ -1545,6 +2002,19 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       // read itself (Node honors it) as well as the boundary checks above.
       return fs.readFile(resolved, { encoding: "utf-8", signal: options?.signal });
     },
+    readFileBytes: async (filePath, options) => {
+      options?.signal?.throwIfAborted();
+      requireLoaded("readFileBytes");
+      requireAnyReadCap("readFileBytes");
+      const { resolved, rootClass } = await containWithClass(filePath);
+      requireLoaded("readFileBytes");
+      requireReadCapForClass("readFileBytes", rootClass);
+      const buffer = await fs.readFile(resolved, { signal: options?.signal });
+      // Copy out of Node's pooled Buffer allocator: a small read shares its
+      // backing ArrayBuffer with unrelated reads, so handing the view straight
+      // to a plugin would expose whatever else the pool holds.
+      return new Uint8Array(buffer);
+    },
     writeFile: async (filePath, contents) => {
       requireLoaded("writeFile");
       const writeCap = requireWriteCap("writeFile");
@@ -1602,10 +2072,59 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       options?.signal?.throwIfAborted();
       requireLoaded("readdir");
       requireAnyReadCap("readdir");
-      const { resolved, rootClass } = await containWithClass(dirPath);
+      const { resolved, rootClass, root } = await containWithClass(dirPath);
       options?.signal?.throwIfAborted();
       requireLoaded("readdir");
       requireReadCapForClass("readdir", rootClass);
+
+      if (options?.detail === true) {
+        // The same listing the built-in file browser renders, rather than a
+        // second implementation of ordering and symlink classification that
+        // would drift from it. Scoped to the allowed root that admitted this
+        // path, so `targetKind: "external"` means "outside what this plugin may
+        // read" — the classification a plugin actually needs.
+        // The DECLARED root is the base, not its realpath: `getFileTree`
+        // resolves the real one itself and uses both, and its symlink
+        // classification gates the raw link target lexically against the
+        // declared prefix first. Handing it an already-realpathed base makes
+        // every link written with the declared prefix (`/var/...` where the real
+        // path is `/private/var/...`) read as "external". The relative dir is
+        // still measured from the real root, because `resolved` is realpathed.
+        //
+        // This does mean the declared root is traversed a second time, after
+        // authorization — so a declared root that is itself a symlink, swapped
+        // between the two, would list the new target. That window grants a
+        // plugin nothing: its `main` runs un-sandboxed and can read either
+        // directory through raw `node:fs` regardless (see the honest-scope note
+        // in docs/plugins/host-api.md). Closing it properly needs `getFileTree`
+        // to take the traversal base and the classification spelling
+        // separately, which is a change to a surface the file browser shares.
+        const realRoot = await fs.realpath(root);
+        options?.signal?.throwIfAborted();
+        const nodes = await fileTreeService.getFileTree(root, path.relative(realRoot, resolved));
+        options?.signal?.throwIfAborted();
+        return nodes.map((node): PluginFsDirEntry => {
+          const symlink = node.symlink;
+          return {
+            name: node.name,
+            isDirectory: node.isDirectory,
+            // A link is described by what it resolves to, exactly as
+            // `isDirectory` already is — so a link that resolves to nothing
+            // readable (broken, out of scope, unclassifiable) is neither a file
+            // nor a directory. Reporting `!isDirectory` here would have called
+            // every dangling link a regular file and invited a plugin to read
+            // it.
+            isFile: symlink ? symlink.targetKind === "file" : !node.isDirectory,
+            isSymbolicLink: symlink !== undefined,
+            ...(node.size !== undefined && { size: node.size }),
+            ...(node.mtimeMs !== undefined && { mtimeMs: node.mtimeMs }),
+            ...(symlink && {
+              symlink: { target: symlink.target, targetKind: symlink.targetKind },
+            }),
+          };
+        });
+      }
+
       const entries = await fs.readdir(resolved, { withFileTypes: true });
       return entries.map((e): PluginFsDirEntry => ({
         name: e.name,
@@ -1650,14 +2169,19 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       for (const c of contained) requireReadCapForClass("watch", c.rootClass);
       const resolvedTargets = contained.map((c) => c.resolved);
 
-      const watchers: FSWatcher[] = [];
+      // One native watcher per resolved path, shared across every plugin (and
+      // every other subscriber) that wants it — five plugins watching one
+      // worktree previously meant five `fs.watch` handles for identical events.
+      // Containment and capability checks above still run per plugin; only the
+      // watcher underneath is shared.
+      const releases: Array<() => void> = [];
       let disposed = false;
       const dispose = (): void => {
         if (disposed) return;
         disposed = true;
-        for (const w of watchers) {
+        for (const release of releases) {
           try {
-            w.close();
+            release();
           } catch {
             // best-effort
           }
@@ -1667,31 +2191,25 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
 
       try {
         for (const resolved of resolvedTargets) {
-          const watcher = fsWatch(resolved, { persistent: false }, (_event, filename) => {
-            if (disposed || !deps.plugins.has(pluginId)) return;
-            const changed =
-              typeof filename === "string" && filename.length > 0
-                ? path.join(resolved, filename)
-                : resolved;
-            try {
-              callback(changed);
-            } catch (err) {
-              console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
-            }
-          });
-          watcher.on("error", (err) => {
-            console.error(`[PluginService] plugin "${pluginId}" fs.watch error:`, err);
-          });
-          watchers.push(watcher);
+          releases.push(
+            watchShared(resolved, (changed) => {
+              if (disposed || !deps.plugins.has(pluginId)) return;
+              try {
+                callback(changed);
+              } catch (err) {
+                console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
+              }
+            })
+          );
         }
       } catch (err) {
-        // A later path's fsWatch threw (e.g. ENOENT) after earlier watchers
-        // were created — close them so a partial failure doesn't leak FDs
-        // (dispose isn't registered in pluginFsWatchers yet, so teardown
-        // wouldn't catch them).
-        for (const w of watchers) {
+        // A later path's watch threw (e.g. ENOENT) after earlier subscriptions
+        // were taken — release them so a partial failure doesn't leak a
+        // reference and pin a shared watcher open (dispose isn't registered in
+        // pluginFsWatchers yet, so teardown wouldn't catch them).
+        for (const release of releases) {
           try {
-            w.close();
+            release();
           } catch {
             // best-effort
           }
@@ -1859,13 +2377,16 @@ async function containToDeclaredRoots(
   deps: PluginHostFactoryDeps,
   pluginId: string,
   targetPath: string
-): Promise<{ resolved: string; rootClass: FsRootClass }> {
+): Promise<{ resolved: string; rootClass: FsRootClass; root: string }> {
   const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
   let lastErr: unknown;
   for (const entry of entries) {
     try {
       const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
-      return { resolved, rootClass: entry.rootClass };
+      // The matching root travels with the result so a caller that needs to
+      // reason about scope — a detailed listing classifying whether a symlink
+      // leaves it — does not have to rediscover which root allowed the path.
+      return { resolved, rootClass: entry.rootClass, root: entry.path };
     } catch (err) {
       lastErr = err;
     }

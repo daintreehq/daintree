@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpConfirmDialog } from "../McpConfirmDialog";
 import {
@@ -52,6 +52,14 @@ function enqueue(
     sessionOrigin?: "help" | "assistant-pane" | "external";
     argsSummary?: string;
     subject?: string;
+    typedNameTarget?: string;
+    selectableTargets?: {
+      id: string;
+      name: string;
+      worktree?: string;
+      kindLabel: string;
+      agentRunning: boolean;
+    }[];
   } = {}
 ) {
   return requestMcpConfirmation({
@@ -68,8 +76,27 @@ function enqueue(
     ...(overrides.preview ? { preview: overrides.preview } : {}),
     ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
     ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
+    ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
+    ...(overrides.selectableTargets
+      ? {
+          selectableTargets: overrides.selectableTargets,
+          selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
+        }
+      : {}),
   });
 }
+
+const BATCH_TARGETS = [
+  {
+    id: "t1",
+    name: "claude · api",
+    worktree: "feature/x",
+    kindLabel: "Claude",
+    agentRunning: true,
+  },
+  { id: "t2", name: "zsh", worktree: "feature/x", kindLabel: "Terminal", agentRunning: false },
+  { id: "t3", name: "vitest", kindLabel: "Terminal", agentRunning: false },
+];
 
 const PENDING_PROBE_MS = 20;
 
@@ -99,6 +126,299 @@ describe("McpConfirmDialog", () => {
     __resetMcpConfirmStoreForTesting();
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  describe("selectable target checklist (#12123)", () => {
+    it("starts with every target checked and names the count on the confirm button", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
+        render(<McpConfirmDialog />);
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+
+        const boxes = screen.getAllByRole("checkbox");
+        expect(boxes).toHaveLength(3);
+        for (const box of boxes) expect(box.getAttribute("aria-checked")).toBe("true");
+        expect(screen.getByText("3 of 3 selected")).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Kill 3 terminals" })).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("tells two identically-titled targets apart by id", () => {
+      void enqueue({
+        actionTitle: "Kill terminals",
+        selectableTargets: [
+          {
+            id: "panel-aaa111",
+            name: "zsh",
+            worktree: "feature/x",
+            kindLabel: "Terminal",
+            agentRunning: false,
+          },
+          {
+            id: "panel-bbb222",
+            name: "zsh",
+            worktree: "feature/x",
+            kindLabel: "Terminal",
+            agentRunning: false,
+          },
+        ],
+      });
+      render(<McpConfirmDialog />);
+
+      // Same title, same worktree, same kind — without the id the two rows are
+      // one checkbox as far as anyone reading them is concerned.
+      expect(screen.getByRole("checkbox", { name: /aaa111/ })).toBeTruthy();
+      expect(screen.getByRole("checkbox", { name: /bbb222/ })).toBeTruthy();
+    });
+
+    it("lengthens the shown id when two targets share a tail", () => {
+      void enqueue({
+        actionTitle: "Kill terminals",
+        selectableTargets: [
+          { id: "alpha-cafe01", name: "zsh", kindLabel: "Terminal", agentRunning: false },
+          { id: "bravo-cafe01", name: "zsh", kindLabel: "Terminal", agentRunning: false },
+        ],
+      });
+      render(<McpConfirmDialog />);
+
+      // A fixed six-character tail would render both rows as "…cafe01" — the
+      // same failure as showing no id, wearing the appearance of a fix.
+      const names = screen
+        .getAllByRole("checkbox")
+        .map((box) => box.getAttribute("aria-labelledby"))
+        .map((id) => (id === null ? "" : (document.getElementById(id)?.textContent ?? "")));
+      expect(names).toHaveLength(2);
+      expect(names[0]).not.toBe(names[1]);
+    });
+
+    it("names each target by its own row so the boxes are told apart", () => {
+      void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
+      render(<McpConfirmDialog />);
+
+      // The row text is the checkbox's accessible name — worktree, kind and the
+      // running-agent badge included.
+      expect(
+        screen.getByRole("checkbox", { name: /claude · api/ }).getAttribute("aria-label")
+      ).toBe(null);
+      expect(screen.getByRole("checkbox", { name: /Agent running/ })).toBeTruthy();
+      expect(screen.getByRole("checkbox", { name: /feature\/x · Terminal/ })).toBeTruthy();
+    });
+
+    it("approves only the rows left checked, in display order", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue({
+          actionTitle: "Kill terminals",
+          selectableTargets: BATCH_TARGETS,
+        });
+        render(<McpConfirmDialog />);
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+
+        act(() => {
+          fireEvent.click(screen.getByRole("checkbox", { name: /zsh/ }));
+        });
+        expect(screen.getByRole("button", { name: "Kill 2 terminals" })).toBeTruthy();
+
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Kill 2 terminals" }));
+        });
+
+        await expect(pending).resolves.toEqual({
+          decision: "approved",
+          selectedTargetIds: ["t1", "t3"],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("singularises the button when one target is left", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
+        render(<McpConfirmDialog />);
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+
+        act(() => {
+          fireEvent.click(screen.getByRole("checkbox", { name: /zsh/ }));
+          fireEvent.click(screen.getByRole("checkbox", { name: /vitest/ }));
+        });
+
+        expect(screen.getByRole("button", { name: "Kill 1 terminal" })).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("refuses to approve an empty selection and says why", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
+        render(<McpConfirmDialog />);
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+
+        act(() => {
+          for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
+        });
+
+        const confirmBtn = screen.getByRole("button", { name: "Kill 0 terminals" });
+        expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
+        expect(screen.getByText(/Nothing selected/)).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("is a dialog, not an alertdialog, because the list is interactive", () => {
+      void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
+      render(<McpConfirmDialog />);
+
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
+
+    it("does not carry one batch's unchecked rows into the next promoted request", async () => {
+      vi.useFakeTimers();
+      try {
+        const first = enqueue({
+          requestId: "a",
+          actionTitle: "Kill terminals",
+          selectableTargets: BATCH_TARGETS,
+        });
+        const second = enqueue({
+          requestId: "b",
+          actionTitle: "Kill terminals",
+          selectableTargets: BATCH_TARGETS,
+        });
+        render(<McpConfirmDialog />);
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+
+        act(() => {
+          fireEvent.click(screen.getByRole("checkbox", { name: /zsh/ }));
+        });
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Kill 2 terminals" }));
+        });
+        await expect(first).resolves.toEqual({
+          decision: "approved",
+          selectedTargetIds: ["t1", "t3"],
+        });
+
+        // The second request is now current. Its rows must all be checked again.
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+        expect(screen.getByRole("button", { name: "Kill 3 terminals" })).toBeTruthy();
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Kill 3 terminals" }));
+        });
+        await expect(second).resolves.toEqual({
+          decision: "approved",
+          selectedTargetIds: ["t1", "t2", "t3"],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports no selection when the request is cancelled", async () => {
+      const pending = enqueue({
+        actionTitle: "Kill terminals",
+        selectableTargets: BATCH_TARGETS,
+      });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+
+      await expect(pending).resolves.toEqual({ decision: "rejected" });
+    });
+  });
+
+  /**
+   * The D3 typed-name gate for an agent-dispatched force delete (#12115).
+   *
+   * The store field is set by the bridge from the renderer's own worktree
+   * record; the dialog's only job is to hand it to `ConfirmDialog` on the
+   * destructive arm, where the union admits it.
+   */
+  it("holds a force delete behind the typed-name gate until the name matches", async () => {
+    vi.useFakeTimers();
+    try {
+      void enqueue({ actionTitle: "Delete worktree", typedNameTarget: "feature/x" });
+      render(<McpConfirmDialog />);
+
+      // Past the cooldown, which independently disables the button — without
+      // this the assertion would pass with the gate removed entirely.
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+
+      const confirmBtn = screen.getByRole("button", {
+        name: "Delete worktree",
+      }) as HTMLButtonElement;
+      const input = screen.getByLabelText("Type feature/x to confirm") as HTMLInputElement;
+      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "feature/" } });
+      });
+      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "feature/x" } });
+      });
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders no typed-name gate for a dispatch the bridge did not gate", () => {
+    vi.useFakeTimers();
+    try {
+      // An absent target must approve on zero keystrokes — and an EMPTY one
+      // must too, rather than rendering an input nobody can satisfy (#7493 is
+      // the inverse: an empty target silently disabling the gate that was
+      // supposed to be there, which is why the bridge refuses to emit one).
+      void enqueue({ actionTitle: "Delete worktree" });
+      render(<McpConfirmDialog />);
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+
+      expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
+      const confirmBtn = screen.getByRole("button", { name: "Delete worktree" });
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("never attaches the gate to a non-destructive dispatch", () => {
+    // `ConfirmDialog` coerces `typedNameTarget` away off the destructive
+    // variant, and the dialog only passes it on that arm — belt and braces,
+    // because a safe read-only dispatch demanding a typed name is nonsense.
+    void enqueue({ actionTitle: "List worktrees", danger: "safe", typedNameTarget: "feature/x" });
+    render(<McpConfirmDialog />);
+
+    expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
   });
 
   it("labels the confirm button with the action title, not a generic verb", () => {
@@ -301,7 +621,7 @@ describe("McpConfirmDialog", () => {
         confirmBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
 
-      await expect(pA).resolves.toBe("approved");
+      await expect(pA).resolves.toEqual({ decision: "approved" });
 
       await expectStillPending(pB);
     } finally {
@@ -366,7 +686,7 @@ describe("McpConfirmDialog", () => {
       act(() => {
         firstBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
-      await expect(pA).resolves.toBe("approved");
+      await expect(pA).resolves.toEqual({ decision: "approved" });
 
       // Item B is now promoted into the same mounted dialog — its cooldown
       // must arm afresh so a click meant for A can't approve B.
@@ -421,7 +741,7 @@ describe("McpConfirmDialog", () => {
       act(() => {
         aBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
-      await expect(pA).resolves.toBe("approved");
+      await expect(pA).resolves.toEqual({ decision: "approved" });
 
       // B is now visible; a click landing immediately (before its cooldown
       // elapses) must not approve it.
@@ -580,7 +900,7 @@ describe("McpConfirmDialog", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
 
-      await expect(p).resolves.toBe("timeout");
+      await expect(p).resolves.toEqual({ decision: "timeout" });
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -635,7 +955,7 @@ describe("McpConfirmDialog", () => {
       act(() => {
         btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
-      await expect(p).resolves.toBe("approved");
+      await expect(p).resolves.toEqual({ decision: "approved" });
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();

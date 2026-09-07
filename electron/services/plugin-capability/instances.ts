@@ -8,8 +8,8 @@ let consentServiceInstance: PluginCapabilityConsentService | null = null;
 /**
  * JIT plugin-capability grant store singleton. Wired to the
  * `pluginCapabilityConsent` electron-store slice (plaintext, matching the
- * `pluginMcpConsent` precedent — grants hold no secrets, only a `(pluginId,
- * capability)` pair and a timestamp).
+ * `pluginMcpConsent` precedent — grants hold no secrets, only a `(scopeKey,
+ * pluginId, capability)` triple and a timestamp).
  */
 export function getPluginCapabilityConsentStore(): PluginCapabilityConsentStore {
   if (!consentStoreInstance) {

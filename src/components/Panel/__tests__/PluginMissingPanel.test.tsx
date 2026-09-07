@@ -12,9 +12,21 @@ describe("PluginMissingPanel", () => {
     expect(screen.getByText("Plugin unavailable")).toBeDefined();
   });
 
-  it("falls back to the first dotted segment of kind when pluginId is absent", () => {
+  it("recovers an unscoped plugin name from kind when pluginId is absent", () => {
     render(<PluginMissingPanel kind="legacy-plugin.panel" onRemove={() => {}} />);
     expect(screen.getByText("legacy-plugin")).toBeDefined();
+  });
+
+  it("recovers a dotted manifest id from kind rather than its first segment", () => {
+    render(<PluginMissingPanel kind="daintree.github.prs" onRemove={() => {}} />);
+    expect(screen.getByText("daintree.github")).toBeDefined();
+  });
+
+  it("recovers the manifest id from a project-qualified kind", () => {
+    render(
+      <PluginMissingPanel kind="project:project-7/acme.dashboard/overview" onRemove={() => {}} />
+    );
+    expect(screen.getByText("acme.dashboard")).toBeDefined();
   });
 
   it("falls back to the full kind string when there is no dot", () => {
