@@ -43,6 +43,8 @@ import { registerWorkspaceHandlers } from "../workspace.js";
 import {
   registerProjectView,
   unregisterProjectView,
+  registerCachedViewWebContents,
+  unregisterCachedViewWebContents,
   getRegisteredProjectViews,
 } from "../../../window/webContentsRegistry.js";
 import type { WorkspaceListEntry } from "../../../../shared/types/ipc/workspace.js";
@@ -71,6 +73,18 @@ function createWebContents(): MockWebContents {
 function openView(workspaceId: string): MockWebContents {
   const wc = createWebContents();
   registerProjectView(workspaceId, wc as unknown as WebContents);
+  return wc;
+}
+
+/**
+ * A view that has been DEACTIVATED but still holds a live renderer — what a
+ * project backgrounded by a switch in its window looks like. It is the case a
+ * foreground-only live check would miss, so the flag has to be built on
+ * something that still counts it.
+ */
+function cacheView(workspaceId: string): MockWebContents {
+  const wc = openView(workspaceId);
+  registerCachedViewWebContents(wc as unknown as WebContents);
   return wc;
 }
 
@@ -106,6 +120,7 @@ describe("workspace:list", () => {
     // Drain the module-level registry between tests — it is real state that
     // would otherwise leak live views from one case into the next.
     for (const { webContents } of getRegisteredProjectViews()) {
+      unregisterCachedViewWebContents(webContents.id);
       unregisterProjectView(webContents.id);
     }
     webContentsById.clear();
@@ -166,11 +181,13 @@ describe("workspace:list", () => {
     scratchStoreMock.getAllScratches.mockReturnValue([
       scratch(SCRATCH_OPEN, "Scratch", "/scratches/one"),
     ]);
-    // Two different windows' views plus a scratch: a per-window
-    // `ProjectViewManager` check or a foreground-only union would miss at least
-    // one of these.
     openView(PROJECT_OPEN);
-    openView(PROJECT_CACHED);
+    // Deactivated but still resident — a foreground-only union
+    // (`collectActiveProjectIds`) reports this one closed, which is the bug
+    // this flag has to avoid.
+    cacheView(PROJECT_CACHED);
+    // Scratches register through the same path as projects, so one lookup has
+    // to cover both id spaces.
     openView(SCRATCH_OPEN);
 
     const byId = new Map((await list()).map((e) => [e.workspaceId, e.hasLiveView]));
@@ -241,6 +258,28 @@ describe("workspace:list", () => {
 
   it("returns an empty catalog rather than failing when nothing is registered", async () => {
     await expect(list()).resolves.toEqual([]);
+  });
+
+  it("lists a project whose folder is gone rather than probing the filesystem", async () => {
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([
+      project(PROJECT_CLOSED, "Deleted", "/repos/moved-away"),
+    ]);
+
+    // Discovery reports what is recorded. Probing would turn a catalog read
+    // into a filesystem walk and would drop exactly the relocated projects the
+    // tool exists to make addressable.
+    const [entry] = await list();
+    expect(entry.path).toBe("/repos/moved-away");
+  });
+
+  it("propagates a store failure instead of reporting an empty catalog", async () => {
+    projectStoreMock.getAllProjectIdentities.mockImplementation(() => {
+      throw new Error("db unavailable");
+    });
+
+    // An empty catalog is a real answer — "this id is wrong" is read off it —
+    // so a failed read must never be able to impersonate one.
+    await expect(list()).rejects.toThrow("db unavailable");
   });
 
   it("unregisters its channel on cleanup", () => {

@@ -336,7 +336,7 @@ Use the Event Inspector (Developer Tools) to view action history in real-time.
 
 ## Action Categories
 
-`category` is a free-form string on the definition; the live set is whatever the definitions declare. Today that is 26 values — grep `category: "` under `src/services/actions/definitions/` for the current list. The ones you will meet most:
+`category` is a free-form string on the definition; the live set is whatever the definitions declare — grep `category: "` under `src/services/actions/definitions/` for the current list, and see `CANONICAL_CATEGORIES` in `actionMetadata.test.ts` for the gate a new one has to pass. The ones you will meet most:
 
 | Category | Description | Example Actions |
 | --- | --- | --- |
