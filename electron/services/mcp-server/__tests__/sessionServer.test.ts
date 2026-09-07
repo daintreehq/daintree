@@ -6204,7 +6204,14 @@ describe("session-scoped resource ownership (#11909)", () => {
       makeManifestEntry("worktree.createWithRecipe"),
       makeManifestEntry("recipe.run"),
       makeManifestEntry("agent.launch"),
-      makeManifestEntry("terminal.list"),
+      // With an outputSchema, so an `owned` listing exercises the
+      // structuredContent block as well as the JSON text body — the two read
+      // one `outcome.value`, and a filter applied to only one of them would
+      // otherwise go unnoticed here.
+      {
+        ...makeManifestEntry("terminal.list"),
+        outputSchema: { type: "object", properties: { terminals: { type: "array" } } },
+      },
     ];
   }
 
@@ -6943,23 +6950,45 @@ describe("session-scoped resource ownership (#11909)", () => {
       return payloadOf<{ terminals: Array<{ id: string }> }>(result).terminals.map((t) => t.id);
     }
 
+    function structuredOf(result: unknown): Record<string, unknown> | undefined {
+      return (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+    }
+
     it("returns only what this session created, and consumes the flag before dispatch", async () => {
-      const { store, server, dispatchAction } = harness("s-owned", { "terminal.list": LISTING });
+      const appendAuditRecord = vi.fn();
+      const { store, server, dispatchAction } = harness(
+        "s-owned",
+        { "terminal.list": LISTING },
+        { appendAuditRecord }
+      );
       store.resourceOwnership.record("s-owned", [{ kind: "terminal", id: "terminal-mine" }]);
 
       const result = await callTool(server, {
         name: "terminal.list",
-        arguments: { owned: true, location: "grid" },
+        arguments: { owned: true, location: "grid", worktreeId: "wt-1" },
       });
 
       expect(listedIds(result)).toEqual(["terminal-mine"]);
+      // Text body and structuredContent read one filtered value; a filter
+      // reaching only one of them would leak the full listing to the other.
+      expect(structuredOf(result)).toEqual({
+        terminals: [{ id: "terminal-mine", title: "our agent" }],
+      });
       // The strip is half of one mechanism, not a tidy-up: the renderer
       // refuses any `owned` it receives, so forwarding it would fail the very
       // calls the filter exists to serve. Every other argument survives.
       expect(dispatchAction).toHaveBeenCalledWith(
         "terminal.list",
-        { location: "grid" },
+        { location: "grid", worktreeId: "wt-1" },
         expect.anything()
+      );
+      // The audit record reports what the caller asked for, not the rewritten
+      // copy — the rewrite is an implementation detail of serving the request.
+      expect(appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "terminal.list",
+          args: { owned: true, location: "grid", worktreeId: "wt-1" },
+        })
       );
     });
 
@@ -7059,9 +7088,10 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(result.isError).toBe(true);
       expect(errorText(result)).toContain("renderer said no");
+      expect(errorText(result)).toContain("EXECUTION_ERROR");
     });
 
-    it("fails closed on a payload shape it does not recognise", async () => {
+    it("fails the call on a payload shape it cannot read, rather than reporting nothing owned", async () => {
       const { store, server } = harness("s-shape", {
         "terminal.list": { result: { ok: true, result: { terminals: "not-an-array" } } },
       });
@@ -7069,10 +7099,45 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
 
-      // Nothing validates this payload between here and the client, so an
-      // unrecognised shape is a denial: returning it would answer "which of
-      // these did I create?" with "all of them".
-      expect(payloadOf<{ terminals: unknown[] }>(result).terminals).toEqual([]);
+      // An empty list is a substantive answer here — it is what a client acts
+      // on when it decides it left nothing behind — so an unreadable listing
+      // must not be able to produce one.
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESULT_VALIDATION_ERROR");
+    });
+
+    it("filters a listing whose ownership came from a real creation over HTTP", async () => {
+      // Every other case seeds the ledger by hand. This one drives the whole
+      // round trip — create, then list owned — so the recording hook's
+      // liveness guard, which checks SSE and HTTP session membership
+      // separately, cannot start recognising only one transport unnoticed.
+      const store = makeStore();
+      seedLiveSession(store, "s-http", "external", "http");
+      store.sessionOriginMap.set("s-http", "external");
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockImplementation((actionId: string) => {
+          if (actionId === "terminal.new") {
+            return Promise.resolve({
+              result: { ok: true, result: { terminalId: "terminal-new" } },
+            });
+          }
+          return Promise.resolve({
+            result: {
+              ok: true,
+              result: { terminals: [{ id: "terminal-new" }, { id: "terminal-users-own" }] },
+            },
+          });
+        }),
+        requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+        getCachedManifest: vi.fn(() => ownedManifest()),
+      });
+      const server = createSessionServer("s-http", deps);
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(listedIds(result)).toEqual(["terminal-new"]);
     });
   });
 });

@@ -121,19 +121,13 @@ describe("terminal.list owned input contract (#12308)", () => {
     const schema = listEntry(registerAll())?.inputSchema;
 
     expect(schema).toMatchObject({
-      properties: { owned: { type: "boolean", description: expect.any(String) } },
+      // The tool description has no room for the field's semantics, so an
+      // empty `.describe()` would ship the argument undocumented.
+      properties: { owned: { type: "boolean", description: expect.stringMatching(/\S/) } },
     });
     // Optional in the published contract: a client holding a cached tools/list
     // that never sends the field must keep getting today's behaviour.
     expect(schema?.required ?? []).not.toContain("owned");
-  });
-
-  it("keeps the argument's semantics out of the 400-byte tool description", () => {
-    const description = listEntry(registerAll())?.description ?? "";
-    // The description already sits at 384 of its 400 bytes, so the field's
-    // meaning has to live in `.describe()` — where it reaches a client anyway.
-    expect(Buffer.byteLength(description, "utf8")).toBeLessThanOrEqual(400);
-    expect(description).not.toContain("owned");
   });
 
   it("refuses a real dispatch rather than answering it with the full list", async () => {

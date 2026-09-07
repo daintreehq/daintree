@@ -1640,7 +1640,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means none are open, not a failure.",
+      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     enabled: true,
     id: "terminal.list",
     inputSchema: {
@@ -1660,7 +1660,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         owned: {
           description:
-            "Restricts the listing to terminals this MCP session created, the set the owned-cleanup tools act on. A reconnected session owns nothing, so it lists none.",
+            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none.",
           type: "boolean",
         },
       },

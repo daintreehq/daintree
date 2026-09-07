@@ -29,7 +29,7 @@ export function registerTerminalQueryActions(
     id: "terminal.list",
     title: "List Terminals",
     description:
-      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means none are open, not a failure.",
+      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -52,7 +52,7 @@ export function registerTerminalQueryActions(
           .boolean()
           .optional()
           .describe(
-            "Restricts the listing to terminals this MCP session created, the set the owned-cleanup tools act on. A reconnected session owns nothing, so it lists none."
+            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none."
           ),
       })
       .optional(),
@@ -64,20 +64,15 @@ export function registerTerminalQueryActions(
         location?: "grid" | "dock" | "trash" | "background";
         owned?: boolean;
       };
-      // `owned` is answered in main and never here (#12308). Which session
-      // created a panel is main-process state keyed by the MCP transport
-      // session id, and the renderer deliberately never sees that id
-      // (`resourceOwnership.ts`) — so main consumes the flag and intersects the
-      // result on the way back, and this `run()` only ever receives it from a
-      // dispatch path that has no ownership authority at all.
+      // `owned` is answered in main and never here (#12308): ownership is
+      // keyed by the MCP session id, which the renderer deliberately never
+      // sees. Main consumes the flag, so a value reaching `run()` came from a
+      // dispatch path with no ownership authority — and answering it with the
+      // unfiltered list would report every panel as this caller's own.
       //
-      // Refusing rather than ignoring is the point. Returning the unfiltered
-      // list to a caller that asked "which of these did I create?" answers it
-      // with "all of them", which is the quiet no-op this argument exists to
-      // avoid. Any defined value is refused, `false` included: the renderer
-      // cannot honour the argument in either direction, and a strip in main
-      // that stopped working would otherwise surface as a wrong answer instead
-      // of a failed call.
+      // `false` is refused too. The renderer cannot honour the argument in
+      // either direction, and refusing both is what makes a broken strip in
+      // main fail loudly instead of quietly returning the wrong set.
       if (owned !== undefined) {
         throw new Error(
           "terminal.list `owned` filters on the MCP session that created each terminal, which only the Daintree host can resolve. A direct dispatch cannot answer it — call the tool over MCP, or omit the argument."

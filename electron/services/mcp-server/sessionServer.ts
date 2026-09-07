@@ -194,17 +194,19 @@ function prepareTerminalListDispatch(
 /**
  * Intersect a `terminal.list` result with what this session created (#12308).
  *
- * Rebuilt from the renderer's rows rather than spread, and an unrecognised
- * shape is a denial rather than a pass-through — the same terms
- * `filterIntrospectionResultForSession` sets, for the same reason: nothing
- * validates this payload between here and the client, so returning a shape
- * this function did not understand would answer "which of these did I create?"
- * with "all of them".
+ * The payload is rebuilt from the renderer's rows rather than spread, so no
+ * field this function did not understand rides along.
  *
- * Rows are kept, never manufactured. A ledger record whose panel the user has
- * since closed simply does not appear, because the listing is what says a
- * panel exists and the ledger only says who created it — reading the ledger as
- * the source of rows would report panels that are gone.
+ * An unreadable payload fails the call rather than emptying it, which is where
+ * this parts company with `filterIntrospectionResultForSession`: there an
+ * empty list IS the denial, while here it is a substantive answer — "you
+ * created none of these" is what a client acts on when it decides it has
+ * nothing to clean up. Reporting that from a listing nothing could read would
+ * be the wrong answer rather than a cautious one.
+ *
+ * Rows are kept, never manufactured: a ledger record with no matching row in
+ * the listing yields nothing, because the listing is what says which panels
+ * exist and the ledger only says who created them.
  */
 function filterTerminalListToOwned(
   result: import("../../../shared/types/actions.js").ActionDispatchResult,
@@ -212,11 +214,20 @@ function filterTerminalListToOwned(
 ): import("../../../shared/types/actions.js").ActionDispatchResult {
   if (!result.ok) return result;
   const payload = result.result as { terminals?: unknown } | null | undefined;
-  const rows = Array.isArray(payload?.terminals) ? payload.terminals : [];
+  if (!Array.isArray(payload?.terminals)) {
+    return {
+      ok: false,
+      error: {
+        code: "RESULT_VALIDATION_ERROR",
+        message:
+          "terminal.list returned a listing that could not be intersected with this session's ownership records.",
+      },
+    };
+  }
   return {
     ok: true,
     result: {
-      terminals: rows.filter((row) => {
+      terminals: payload.terminals.filter((row) => {
         const id = (row as { id?: unknown } | null | undefined)?.id;
         return typeof id === "string" && owns(id);
       }),
@@ -1830,9 +1841,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // returned rather than from anything the caller said (#11909).
           // Reads `envelope.result`, not `outcome.value`: the filters above
           // rewrite results for the discovery tools and for an `owned`
-          // listing, and the ledger must observe the unnarrowed truth —
-          // narrowing a result by the ledger and then feeding it back would
-          // make the ledger an input to itself. Recorded for every tier
+          // listing, and the ledger must observe the unnarrowed truth.
+          // Recorded for every tier
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
