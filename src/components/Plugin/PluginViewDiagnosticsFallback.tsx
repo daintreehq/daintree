@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { TriangleAlert } from "lucide-react";
 import { buildPluginViewDiagnostics } from "@/components/Plugin/buildPluginViewDiagnostics";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 
 export interface PluginViewDiagnosticsFallbackProps {
   /**
@@ -70,6 +71,11 @@ export function PluginViewDiagnosticsFallback({
   onRequestClose,
 }: PluginViewDiagnosticsFallbackProps) {
   const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
+  const documentDiagnostics = useSyncExternalStore(
+    pluginDocumentRuntime.subscribe,
+    pluginDocumentRuntime.getSnapshot
+  );
+  const needsDocumentReload = documentDiagnostics.some((item) => item.pluginId === pluginId);
 
   // Built once, here, so the rendered pane and the copied report can never
   // diverge — the label claiming redaction has to describe both.
@@ -176,17 +182,19 @@ export function PluginViewDiagnosticsFallback({
       </dl>
 
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={resetError}
-          data-testid="plugin-view-diagnostics-retry"
-          className={cn(
-            BUTTON_BASE,
-            "bg-status-error text-surface-canvas hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)]"
-          )}
-        >
-          Try again
-        </button>
+        {!needsDocumentReload && (
+          <button
+            type="button"
+            onClick={resetError}
+            data-testid="plugin-view-diagnostics-retry"
+            className={cn(
+              BUTTON_BASE,
+              "bg-status-error text-surface-canvas hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)]"
+            )}
+          >
+            Try again
+          </button>
+        )}
         {onRequestClose && (
           // No confirmation: the grid/dock close trashes the panel, which the
           // trash bin restores — a D0 reversible action, same as the header's

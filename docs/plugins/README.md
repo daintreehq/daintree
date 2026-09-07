@@ -41,6 +41,7 @@ The two entry points are at the top of this page. Everything below is reference 
 | [Contribution points](./contribution-points.md) | All sixteen contribution types — shape, example, status, project-scope availability |
 | [Host API](./host-api.md) | The runtime `host` object your `activate()` receives, the calling conventions, and the renderer hooks |
 | [Patterns](./patterns.md) | The working patterns a real plugin is made of: pull then push, watch and badge, open files, launch an agent, own the canvas |
+| [Document packages](./document-packages.md) | Share npm editor adapters once per document, with exact build matching and explicit trust limits |
 | [Views](./views.md) | What a view gets in the DOM, the tokens to style with, media, and what doesn't work inline |
 | [Development loop](./dev-loop.md) | The `daintree-plugin` CLI, hot reload, debugging, testing |
 
