@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useMemo } from "react";
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { DiffSubject } from "../diffContentCache";
@@ -21,12 +22,20 @@ vi.mock("@/store/preferencesStore", () => ({
     selector({ diffIgnoreWhitespace: false }),
 }));
 
-function subject(filePath: string): DiffSubject {
-  return { source: "working-tree", worktreePath: "/repo", filePath, status: "modified" };
-}
-
 const PATCH_A = "diff --git a/a.ts b/a.ts\nindex 83db48f..bf269f4 100644";
 const PATCH_B = "diff --git a/vendor/sub b/vendor/sub\nindex ada605e..029ae62 160000";
+
+/**
+ * The hook depends on its subject by identity ("callers must memoize them"), so
+ * a fresh object each render would rebuild `fetchDiff` and refetch forever.
+ */
+function useSubject(filePath: string): DiffSubject {
+  return useMemo(
+    () =>
+      ({ source: "working-tree", worktreePath: "/repo", filePath, status: "modified" }) as const,
+    [filePath]
+  );
+}
 
 beforeEach(() => {
   requestDiffMock.mockReset();
@@ -41,23 +50,39 @@ describe("useDiffContent", () => {
       content: s.filePath === "a.ts" ? PATCH_A : PATCH_B,
     }));
 
-    const { result, rerender } = renderHook(({ file }) => useDiffContent(subject(file)), {
-      initialProps: { file: "a.ts" },
-    });
+    // Recorded during render: the offending pairing existed for exactly one
+    // commit, which an assertion made after `act` has flushed would miss.
+    const seen: Array<{ file: string; content: string | undefined }> = [];
+    const { result, rerender } = renderHook(
+      ({ file }) => {
+        const value = useDiffContent(useSubject(file));
+        seen.push({ file, content: value.content });
+        return value;
+      },
+      { initialProps: { file: "a.ts" } }
+    );
     await waitFor(() => expect(result.current.content).toBe(PATCH_A));
 
     rerender({ file: "vendor/sub" });
-    // The synchronous read after retargeting: A's patch must already be gone,
-    // not merely replaced once an effect runs.
-    expect(result.current.content).toBeUndefined();
-
     await waitFor(() => expect(result.current.content).toBe(PATCH_B));
+
+    expect(seen.some((r) => r.file === "vendor/sub" && r.content === PATCH_A)).toBe(false);
+    expect(seen.some((r) => r.file === "a.ts" && r.content === PATCH_B)).toBe(false);
   });
 
-  it("reports a failed fetch as ERROR for the subject it failed on", async () => {
+  it("fetches once per subject rather than looping on its own output", async () => {
+    requestDiffMock.mockResolvedValue({ content: PATCH_A });
+
+    const { result } = renderHook(() => useDiffContent(useSubject("a.ts")));
+    await waitFor(() => expect(result.current.content).toBe(PATCH_A));
+
+    expect(requestDiffMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a failed fetch as ERROR", async () => {
     requestDiffMock.mockRejectedValue(new Error("git exploded"));
 
-    const { result } = renderHook(() => useDiffContent(subject("a.ts")));
+    const { result } = renderHook(() => useDiffContent(useSubject("a.ts")));
 
     await waitFor(() => expect(result.current.content).toBe("ERROR"));
   });

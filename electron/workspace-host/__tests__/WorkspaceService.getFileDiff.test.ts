@@ -245,6 +245,25 @@ describe("WorkspaceService.getFileDiff", () => {
     expect(event.error).toBeUndefined();
   });
 
+  it("refuses to call an untracked directory NO_CHANGES", async () => {
+    // An embedded repository shows as `?? vendor/sub/` and has no index entry,
+    // so the tracked diff would come back empty — reporting that as "no
+    // changes" would claim something this request cannot know (#12309).
+    const { readFile } = await import("fs/promises");
+    vi.mocked(readFile).mockRejectedValueOnce(
+      Object.assign(new Error("illegal operation on a directory"), { code: "EISDIR" })
+    );
+
+    await service.getFileDiff("req-sub-4", "/test/repo", "vendor/sub", "untracked");
+
+    const event = mockSendEvent.mock.calls
+      .map((call) => call[0])
+      .find((e) => e.requestId === "req-sub-4");
+    expect(event.error).toBeTruthy();
+    expect(event.diff).not.toBe("NO_CHANGES");
+    expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
   it("still rethrows a non-directory read failure on an added file", async () => {
     const { readFile } = await import("fs/promises");
     vi.mocked(readFile).mockRejectedValueOnce(

@@ -24,9 +24,12 @@ function modeAfter(line: string, prefix: string): string | null {
  * (a plain deletion) does the old side answer.
  *
  * Deliberately derived from the patch the pane already holds rather than
- * carried alongside the file's status: every read this gates is downstream of
- * `hasDiff`, so the patch is always on hand by the time the answer is needed —
- * for a restored panel and a direct open just as much as a live one.
+ * carried alongside the file's status: the whole-file and rendered-layout reads
+ * are both downstream of `hasDiff`, so the patch is always on hand by the time
+ * either asks — for a restored panel and a direct open just as much as a live
+ * one. The media previews are the exception: they key off the extension alone
+ * and mount before any patch lands, so a submodule directory named `*.png` gets
+ * the right viewer only once its patch arrives.
  */
 export function isGitlinkPatch(diffText: string | undefined): boolean {
   if (!diffText) return false;

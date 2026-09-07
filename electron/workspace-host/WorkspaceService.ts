@@ -4755,11 +4755,16 @@ export class WorkspaceService {
         // submodule's own checkout, so there is no file to inline. Git already
         // knows how to describe it (`new file mode 160000`), so fall through to
         // the tracked path rather than failing the request (#12309).
+        //
+        // Only for `added`: an untracked directory has no index entry, so the
+        // tracked diff would come back empty and report NO_CHANGES — which
+        // claims something the request cannot know.
         let buffer: Buffer | null = null;
         try {
           buffer = await readFile(absolutePath);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+          const isDirectory = (error as NodeJS.ErrnoException).code === "EISDIR";
+          if (!isDirectory || status !== "added") throw error;
         }
 
         if (buffer !== null) {

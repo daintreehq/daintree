@@ -482,7 +482,10 @@ export function DiffPane({
   // A submodule's path is its checkout directory, so every mode below that
   // would read or preview the file on disk has to stand down (#12309). Read
   // from the patch rather than the change set because the patch is the one
-  // thing guaranteed present: every read this gates is downstream of `hasDiff`.
+  // thing guaranteed present by the time the whole-file and rendered-layout
+  // reads ask — both are downstream of `hasDiff`. The media modes below are
+  // not, so they correct themselves when the patch lands rather than never
+  // being wrong.
   const isGitlink = hasDiff && isGitlinkPatch(content);
 
   const isImageMode = Boolean(
