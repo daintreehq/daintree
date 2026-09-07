@@ -1291,17 +1291,21 @@ export function FilePane({
               {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
             </p>
             {/* An unsupported format is deterministic — retrying the same
-                extension can never succeed, so the action would be dead. */}
-            {!isUnsupportedVideoFilePath(filePath) && !isUnsupportedAudioFilePath(filePath) && (
-              <button
-                type="button"
-                onClick={() => loadFile("explicit")}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-primary bg-border-default hover:bg-daintree-border/80 rounded transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Retry
-              </button>
-            )}
+                extension can never succeed, so the action would be dead. A
+                directory is the same: it never becomes a readable file
+                (#12309). */}
+            {errorCode !== "NOT_A_FILE" &&
+              !isUnsupportedVideoFilePath(filePath) &&
+              !isUnsupportedAudioFilePath(filePath) && (
+                <button
+                  type="button"
+                  onClick={() => loadFile("explicit")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-primary bg-border-default hover:bg-daintree-border/80 rounded transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Retry
+                </button>
+              )}
           </div>
         )}
 

@@ -337,6 +337,18 @@ index 1a2b3c4..5d6e7f8 100644
       expect(rangeIdx).toBeGreaterThan(eooIdx);
     });
 
+    it("pins --submodule=short on a per-file diff so diff.submodule can't reshape it", async () => {
+      // A user's `diff.submodule=log` replaces the gitlink patch with a commit
+      // summary that is not a unified diff at all (#12309).
+      gitClientMock.raw.mockResolvedValue("diff --git a/vendor/sub b/vendor/sub\n");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test", "vendor/sub");
+
+      const args = gitClientMock.raw.mock.calls[0][0] as string[];
+      expect(args).toContain("--submodule=short");
+    });
+
     it("returns file list for two-dot range", async () => {
       gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\nA\tsrc/new.ts\n");
 

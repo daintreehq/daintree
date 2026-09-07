@@ -31,8 +31,14 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   // Surfaces `wrapLines` so the auto/override resolution is observable from the
   // prop the viewer actually receives, not just from the toolbar's pressed state.
-  DiffViewer: (props: { wrapLines?: boolean }) => (
-    <div data-testid="diff-viewer-mock" data-wrap-lines={String(props.wrapLines)} />
+  // `diff` rides along so a test can prove the viewer received the patch it
+  // names, not merely that something mounted.
+  DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => (
+    <div
+      data-testid="diff-viewer-mock"
+      data-wrap-lines={String(props.wrapLines)}
+      data-diff={props.diff}
+    />
   ),
   FULL_FILE_MAX_LINES: 5000,
 }));
@@ -1307,12 +1313,14 @@ index ada605e..029ae62 160000
     ).toBe(false);
   });
 
-  it("still renders the commit-pair patch", () => {
+  it("still hands the viewer the commit-pair patch", () => {
     preferences.diffFullFile = true;
     seedGitlink();
     renderPane();
 
-    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    // Refusing the full-file scope must not cost the patch that IS renderable.
+    const viewer = screen.getByTestId("diff-viewer-mock");
+    expect(viewer.getAttribute("data-diff")).toContain("Subproject commit");
   });
 
   it("leaves an ordinary file's Full file scope alone", () => {
@@ -1346,6 +1354,41 @@ index ada605e..029ae62 160000
     const describedBy = layoutGroup.getAttribute("aria-describedby");
     if (!describedBy) throw new Error("layout group carries no aria-describedby");
     expect(document.getElementById(describedBy)?.textContent).toMatch(/submodule/i);
+  });
+
+  it("shows a folder read failure without a Retry that cannot work", () => {
+    // Belt and braces: the guard above stops the read being issued, but any
+    // residual path that still reaches a directory must not offer a retry.
+    preferences.diffFullFile = true;
+    useDiffFileSourceMock.mockReturnValue({ source: undefined, errorCode: "NOT_A_FILE" });
+    useDiffContentMock.mockReturnValue({
+      content: `diff --git a/a.ts b/a.ts\nindex 83db48f..bf269f4 100644`,
+      stale: false,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    renderPane();
+
+    expect(screen.getByText("This is a folder, not a file")).toBeTruthy();
+    expect(
+      [...document.querySelectorAll("button")].some((button) => button.textContent === "Retry")
+    ).toBe(false);
+  });
+
+  it("keeps Retry for a read failure that a refresh could clear", () => {
+    preferences.diffFullFile = true;
+    useDiffFileSourceMock.mockReturnValue({ source: undefined, errorCode: "PERMISSION" });
+    useDiffContentMock.mockReturnValue({
+      content: `diff --git a/a.ts b/a.ts\nindex 83db48f..bf269f4 100644`,
+      stale: false,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    renderPane();
+
+    expect(
+      [...document.querySelectorAll("button")].some((button) => button.textContent === "Retry")
+    ).toBe(true);
   });
 
   it("does not treat an image-suffixed submodule as an image", () => {

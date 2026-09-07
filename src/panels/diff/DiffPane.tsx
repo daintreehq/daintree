@@ -487,10 +487,10 @@ export function DiffPane({
 
   const isImageMode = Boolean(
     filePath &&
-      fileStatus &&
-      !isGitlink &&
-      isImageDiffCandidate(filePath) &&
-      panel?.diffSource !== "base-branch"
+    fileStatus &&
+    !isGitlink &&
+    isImageDiffCandidate(filePath) &&
+    panel?.diffSource !== "base-branch"
   );
   // Media shows only the current working-tree version (no side-by-side diff —
   // the media pipeline has no cheap "old vs new" comparison), so unlike

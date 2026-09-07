@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isGitlinkPatch } from "../gitlinkPatch";
 
-// Every fixture below is real `git diff` output, captured from a scratch
+// The gitlink fixtures are real `git diff` output, captured from a scratch
 // repository with a submodule rather than written from memory — the type-change
 // shape in particular is not the one it looks like it should be.
 
@@ -97,10 +97,7 @@ index 0000000..ada605e
     expect(
       isGitlinkPatch(`diff --git a/run.sh b/run.sh
 old mode 100644
-new mode 100755
-index 83db48f..83db48f
---- a/run.sh
-+++ b/run.sh`)
+new mode 100755`)
     ).toBe(false);
   });
 
@@ -112,7 +109,7 @@ index 83db48f..83db48f
 index 83db48f..bf269f4 100644
 --- a/docs/submodules.md
 +++ b/docs/submodules.md
-@@ -1,4 +1,5 @@
+@@ -1,3 +1,4 @@
  A submodule patch looks like this:
 -index abc..def 160000
 +new file mode 160000
