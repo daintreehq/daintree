@@ -1962,8 +1962,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           );
         }
 
-        // A renderer was reached and reported a failure, so the target is known
-        // and worth reporting — unlike the pre-dispatch errors above.
+        // A renderer was reached, so the target is known and worth reporting —
+        // unlike the pre-dispatch errors above. The failure is usually the
+        // renderer's own, but an `owned` listing main could not read fails
+        // here too (#12308), after a dispatch that itself succeeded.
         return withResolvedWorkspace(
           buildToolError({
             code: outcome.value.error.code,
