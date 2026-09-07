@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { TriangleAlert } from "lucide-react";
 import { buildPluginViewDiagnostics } from "@/components/Plugin/buildPluginViewDiagnostics";
 import { cn } from "@/lib/utils";
@@ -71,11 +71,9 @@ export function PluginViewDiagnosticsFallback({
   onRequestClose,
 }: PluginViewDiagnosticsFallbackProps) {
   const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
-  const documentDiagnostics = useSyncExternalStore(
-    pluginDocumentRuntime.subscribe,
-    pluginDocumentRuntime.getSnapshot
-  );
-  const needsDocumentReload = documentDiagnostics.some((item) => item.pluginId === pluginId);
+  // Only a refusal the document runtime itself issued is unrecoverable by a
+  // remount; an unrelated render error in the same plugin keeps its retry.
+  const needsDocumentReload = pluginDocumentRuntime.errorSource(error) !== undefined;
 
   // Built once, here, so the rendered pane and the copied report can never
   // diverge — the label claiming redaction has to describe both.

@@ -306,6 +306,11 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
           configFile: false,
           root,
           logLevel: "error",
+          // Library builds deliberately leave process.env.NODE_ENV alone, and
+          // the outer build never transforms an emitted asset, so an adapter
+          // dependency using that idiom would throw "process is not defined"
+          // in the renderer.
+          define: { "process.env.NODE_ENV": JSON.stringify("production") },
           plugins: [daintreePlugin()],
           build: {
             write: false,
@@ -318,7 +323,8 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
               onLog: (level, log, defaultHandler) => {
                 // Rolldown can replace missing dynamic imports with throw-stubs,
                 // which otherwise pass the self-contained output check below.
-                if (log.code === "UNRESOLVED_IMPORT") this.error(log);
+                if (log.code === "UNRESOLVED_IMPORT" || log.code === "UNRESOLVED_ENTRY")
+                  this.error(log);
                 defaultHandler(level, log);
               },
               output: { codeSplitting: false, minify: true, comments: { legal: true } },
@@ -341,7 +347,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
         }
         if (!chunk || chunk.type !== "chunk") this.error(`No JavaScript emitted for ${name}`);
         for (const id of Object.keys(chunk.modules))
-          if (!id.startsWith("\0")) this.addWatchFile(id);
+          if (!id.startsWith("\0")) this.addWatchFile(id.replace(/[?#].*$/, ""));
         const buildId = createHash("sha256").update(chunk.code).digest("hex");
         const reference = this.emitFile({
           type: "asset",

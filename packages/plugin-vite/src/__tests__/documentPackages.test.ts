@@ -165,4 +165,71 @@ describe("document package build boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("fails the adapter build on an optional unresolved dependency even though the view builds", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "daintree-package-optional-"));
+    try {
+      // Lexxy's Active Storage shape: a caught dynamic import of a package that
+      // is not installed. Rolldown would otherwise inline a throw-stub and pass
+      // the self-contained check.
+      await writeFile(
+        path.join(root, "adapter.js"),
+        'export const upload = () => import("@fixture/optional-dependency").catch(() => null);\nexport const ready = true;'
+      );
+      await writeFile(
+        path.join(root, "view.js"),
+        'export { default as loadEditor } from "virtual:daintree-document-package/editor";'
+      );
+      await expect(
+        build({
+          configFile: false,
+          root,
+          logLevel: "silent",
+          plugins: [
+            daintreePlugin({
+              documentPackages: { editor: { entry: "adapter.js", version: "1.0.0" } },
+            }),
+          ],
+          build: { write: false, lib: { entry: path.join(root, "view.js"), formats: ["es"] } },
+        })
+      ).rejects.toThrow(/optional-dependency/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces process.env.NODE_ENV inside the retained adapter", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "daintree-package-env-"));
+    try {
+      await writeFile(path.join(root, "adapter.js"), "export const mode = process.env.NODE_ENV;");
+      await writeFile(
+        path.join(root, "view.js"),
+        'export { default as loadEditor } from "virtual:daintree-document-package/editor";'
+      );
+      const result = await build({
+        configFile: false,
+        root,
+        logLevel: "silent",
+        plugins: [
+          daintreePlugin({
+            documentPackages: { editor: { entry: "adapter.js", version: "1.0.0" } },
+          }),
+        ],
+        build: {
+          write: false,
+          minify: false,
+          lib: { entry: path.join(root, "view.js"), formats: ["es"] },
+        },
+      });
+      const outputs = Array.isArray(result) ? result : [result];
+      const adapter = outputs
+        .flatMap((output) => ("output" in output ? output.output : []))
+        .find((file) => file.type === "asset" && file.fileName.endsWith(".js"));
+      if (adapter?.type !== "asset") throw new Error("Missing adapter asset");
+      expect(String(adapter.source)).not.toContain("process.env");
+      expect(String(adapter.source)).toMatch(/production/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

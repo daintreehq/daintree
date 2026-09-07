@@ -55,8 +55,12 @@ export function createPluginDocumentRuntime(
   }
 
   function sourceForStack(stack?: string): PluginSource | undefined {
-    for (const match of stack?.matchAll(/plugin:\/\/[^\s)]+/g) ?? []) {
-      return sourceForUrl(match[0].replace(/:\d+(?::\d+)?$/, ""));
+    // Only frame lines count: an error *message* quoting another plugin's URL
+    // must not re-attribute the error to that plugin.
+    for (const line of stack?.split("\n") ?? []) {
+      if (!/^\s*at\s/.test(line)) continue;
+      const match = /plugin:\/\/[^\s)]+/.exec(line);
+      if (match) return sourceForUrl(match[0].replace(/:\d+(?::\d+)?$/, ""));
     }
     return undefined;
   }
@@ -124,7 +128,9 @@ export function createPluginDocumentRuntime(
       ) {
         const message = `${descriptor.name} is already loaded with a different version or build. Reload this project window to replace it.`;
         report({ pluginId: source.pluginId, message, owner: previous.owner, attempted: source });
-        throw new Error(message);
+        const refused = new Error(message);
+        attributedErrors.set(refused, source);
+        throw refused;
       }
       previous.consumers.add(source.pluginId);
       for (const diagnostic of diagnostics) {
@@ -133,6 +139,7 @@ export function createPluginDocumentRuntime(
         }
       }
       return previous.promise.catch((error: unknown) => {
+        if (typeof error === "object" && error !== null) attributedErrors.set(error, source);
         report({
           pluginId: source.pluginId,
           message: `${descriptor.name} failed to load. Reload this project window before trying again.`,
@@ -142,12 +149,18 @@ export function createPluginDocumentRuntime(
         throw error;
       });
     }
-    if (packages.size >= 128)
-      throw new Error("Document package limit reached; reload this project window");
+    if (packages.size >= 128) {
+      const message = "Document package limit reached. Reload this project window to replace it.";
+      report({ pluginId: source.pluginId, message, attempted: source });
+      const refused = new Error(message);
+      attributedErrors.set(refused, source);
+      throw refused;
+    }
     // Publish before invoking any code, including synchronous importer callbacks.
     const promise = Promise.resolve()
       .then(() => importer(entry.href))
       .catch((error: unknown) => {
+        if (typeof error === "object" && error !== null) attributedErrors.set(error, source);
         report({
           pluginId: source.pluginId,
           message: `${descriptor.name} failed to load. Reload this project window before trying again.`,
@@ -178,7 +191,7 @@ export function createPluginDocumentRuntime(
       try {
         Reflect.apply(nativeDefine, this, args);
       } catch (error) {
-        if (existing) {
+        if (existing && error instanceof DOMException && error.name === "NotSupportedError") {
           const owner = registrations.get(name);
           if (attempted || owner) {
             const diagnostic: PluginDocumentDiagnostic = {

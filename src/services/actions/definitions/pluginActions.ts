@@ -37,8 +37,13 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       dangerRationale:
         "Replaces the whole project document, discarding every view's in-memory state — unsaved edits included — for all panels in the window, not just the plugin that needs it.",
       scope: "renderer",
-      run: async () => {
-        if (await pluginDocumentRuntime.requestReloadConfirmation()) {
+      run: async (_args, ctx) => {
+        // An MCP caller has already cleared the host confirmation; a second
+        // dialog would let a cancel return ok:true with nothing reloaded.
+        if (
+          ctx?.hostConfirmed === true ||
+          (await pluginDocumentRuntime.requestReloadConfirmation())
+        ) {
           await window.electron.window.reload();
         }
       },

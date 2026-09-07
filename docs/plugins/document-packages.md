@@ -23,7 +23,9 @@ export default defineConfig({
     }),
   ],
   build: {
-    lib: { entry: "src/panel.tsx", formats: ["es"], fileName: "panel" },
+    // A function name pins the extension: a bare "panel" becomes panel.mjs
+    // without "type": "module" in package.json, and the manifest says panel.js.
+    lib: { entry: "src/panel.tsx", formats: ["es"], fileName: () => "panel.js" },
   },
 });
 ```
@@ -56,7 +58,7 @@ declare module "virtual:daintree-document-package/@acme/markdown-editor" {
 
 Do not statically import the editor's runtime into the panel as well. Keep class-keyed extensions, custom nodes, commands, and mount/dispose integration inside the adapter. Pass document text, callbacks, and per-instance options across the boundary. Create one editor instance per panel; sharing the module must not share the panels' documents or undo history.
 
-`plugin-vite` runs a separate browser build with no inherited application config, hashes the complete emitted JavaScript with SHA-256, emits `document-packages/<name>/<hash>.js`, and generates the loader. Only the host's React import-map specifiers may remain external. Code splitting is disabled, CSS or secondary output assets are rejected, and adapter source dependencies are added to the outer build's watch list. Keep plain, root-scoped CSS in the view build; the host runtime supplies Tailwind utilities from rendered DOM, including markup produced by npm packages. Tailwind's automatic `node_modules` source exclusion is therefore not a blocker here.
+`plugin-vite` runs a separate browser build with no inherited Vite configuration (root `.env` files, `tsconfig`, and PostCSS discovery still apply), hashes the complete emitted JavaScript with SHA-256, emits `document-packages/<name>/<hash>.js`, and generates the loader. Only the host's React import-map specifiers may remain external. Code splitting is disabled, CSS or secondary output assets are rejected, and adapter source dependencies are added to the outer build's watch list. Keep plain, root-scoped CSS in the view build; the host runtime supplies Tailwind utilities from rendered DOM, including markup produced by npm packages. Tailwind's automatic `node_modules` source exclusion is therefore not a blocker here.
 
 The adapter must not later fetch files relative to its original plugin authority. That authority is invalidated when the provider unloads. Bundled dynamic imports are folded into the adapter; arbitrary runtime `fetch`, workers, and constructed asset URLs remain the author's responsibility. A library requiring such files needs a separate lifetime design before it can be a document package.
 
@@ -74,13 +76,13 @@ For custom build tooling, `loadDocumentPackage<T>(import.meta.url, descriptor)` 
 | Provider unloads or hot-reloads | Already loaded exports remain resident; no new authority is retained or made addressable |
 | Project window reloads | Package cache, custom elements, and warnings reset; the next request selects a provider again |
 
-The first request wins only among byte-identical, version-identical adapters. There is no highest-version selection, silent compatibility fallback, or live library upgrade. Matching versions with different transitive dependency resolutions produce different hashes and are intentionally refused. Ship the same adapter source and lockfile across consumers. Each plugin archive still contains its adapter asset; deduplication saves module evaluation and runtime identity, not archive download size.
+The first request wins only among byte-identical, version-identical adapters. There is no highest-version selection, silent compatibility fallback, or live library upgrade. Matching versions whose transitive dependency resolutions change the emitted JavaScript produce different hashes and are intentionally refused; the host compares the descriptor it is handed and never recomputes the hash itself. Ship the same adapter source and lockfile across consumers. Each plugin archive still contains its adapter asset; deduplication saves module evaluation and runtime identity, not archive download size.
 
 Plugin scope separates module state, not browser-global names. Two private adapters that both define `lexxy-editor` still conflict. Use document scope for a deliberately shared global-registering editor. Two incompatible editor versions cannot coexist under the same custom-element names in this document; they require separate documents.
 
 ## Lexxy, Trix, and Markdown
 
-Trix 2.1.19 guards its custom-element definitions; `@37signals/lexxy` 0.9.31 registers ten names unconditionally from a timer, so its import can resolve before the registration error occurs. A skipping shim would leave new integration code paired with old classes, so Daintree observes `customElements.define` without suppressing or replacing the native outcome. Known plugin source frames provide plugin/generation attribution, including deferred callbacks; unknown callers remain unknown. The original constructor and exception are preserved. When the conflict originates in a retained adapter, every known consumer receives the warning, including consumers that load later.
+Trix 2.1.19 guards its custom-element definitions; `@37signals/lexxy` 0.9.31 registers ten names unconditionally from a timer, so its import can resolve before the registration error occurs. A skipping shim would leave new integration code paired with old classes, so Daintree observes `customElements.define` without suppressing or replacing the native outcome. Known plugin source frames provide plugin/generation attribution, including deferred callbacks; unknown callers remain unknown. The original constructor and exception are preserved. When the conflict originates in a retained adapter, every known consumer receives the warning, including consumers that load later. A document keeps at most 256 distinct diagnostics and 128 retained packages; past either cap the runtime refuses further loads and points at a window reload.
 
 Mounted views get a document-local warning without losing their content. Failed views with a document warning omit the misleading remount retry. Global errors with known plugin sources enter the local error store as plugin errors and carry `plugin-renderer-error`, plugin ID, and generation tags in renderer telemetry. This is diagnostic attribution, not an authenticated security identity; trusted same-document code can spoof stacks or change globals.
 

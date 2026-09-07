@@ -207,3 +207,48 @@ describe("reload confirmation", () => {
     expect(runtime.getReloadConfirmation()).toBeNull();
   });
 });
+
+describe("attribution precision", () => {
+  it("ignores plugin URLs quoted in the error message and reads only frame lines", () => {
+    const runtime = createPluginDocumentRuntime();
+    runtime.registerView("acme.first", first);
+    runtime.registerView("acme.second", second);
+    const stack = `Error: could not load ${second}\n    at ${first}:1:2\n    at ${second}:3:4`;
+    expect(runtime.sourceForStack(stack)).toMatchObject({ pluginId: "acme.first" });
+    expect(runtime.sourceForStack(`Error: see ${second}`)).toBeUndefined();
+  });
+
+  it("does not diagnose a duplicate when a taken name throws for another reason", () => {
+    const runtime = createPluginDocumentRuntime();
+    runtime.registerView("acme.first", first);
+    const restore = runtime.observe(customElements);
+    const name = `test-${crypto.randomUUID()}`;
+    try {
+      customElements.define(name, class extends HTMLElement {});
+      // Argument conversion runs before the duplicate-name check, so a
+      // poisoned options bag fails for a reason that is not a conflict.
+      const poisoned = {
+        get extends(): string {
+          throw new RangeError("boom");
+        },
+      };
+      expect(() => customElements.define(name, class extends HTMLElement {}, poisoned)).toThrow(
+        RangeError
+      );
+      expect(runtime.getSnapshot()).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("attributes the runtime's own refusals so a view fallback can tell them apart", async () => {
+    const importer = vi.fn(async () => ({}));
+    const runtime = createPluginDocumentRuntime(importer);
+    runtime.registerView("acme.first", first);
+    runtime.registerView("acme.second", second);
+    await runtime.load(first, descriptor);
+    const refused = await runtime.load(second, { ...descriptor, version: "2.0.0" }).catch((e) => e);
+    expect(runtime.errorSource(refused)).toMatchObject({ pluginId: "acme.second" });
+    expect(runtime.errorSource(new Error("unrelated"))).toBeUndefined();
+  });
+});

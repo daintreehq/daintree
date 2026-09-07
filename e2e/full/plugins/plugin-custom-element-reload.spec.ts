@@ -76,6 +76,7 @@ async function writePlugin(
   await writeFile(
     path.join(root, "adapter.js"),
     `
+    globalThis.__adapterEvaluations = (globalThis.__adapterEvaluations ?? 0) + 1;
     export class Editor extends HTMLElement { static build = ${JSON.stringify(packageMarker)}; }
     export const ready = new Promise(resolve => setTimeout(() => {
       customElements.define("dt-shared-editor", Editor);
@@ -194,7 +195,8 @@ test("attributes native conflicts, shares a package across plugins and reloads, 
           (window as unknown as { originalEditor: CustomElementConstructor }).originalEditor
       )
     ).toBe(true);
-    await expect(page.getByText("Plugins need a window reload").first()).toBeVisible();
+    await expect(page.getByText("Plugins need a window reload")).toHaveCount(1);
+    await expect(page.getByText("Plugins need a window reload")).toBeVisible();
     expect(
       await page.evaluate(
         () => (customElements.get("dt-raw-editor") as unknown as { build: string }).build
@@ -212,6 +214,22 @@ test("attributes native conflicts, shares a package across plugins and reloads, 
         () => (customElements.get("dt-shared-editor") as unknown as { build: string }).build
       )
     ).toBe("PACKAGE-1");
+
+    // Refused before evaluation: the replacement adapter's module body never ran.
+    expect(
+      await page.evaluate(
+        () => (globalThis as unknown as { __adapterEvaluations: number }).__adapterEvaluations
+      )
+    ).toBe(1);
+    // The refusal itself surfaces as an attributed rejection: the fixture retains
+    // the loader promise at module scope, so it settles before the mount effect
+    // attaches its catch. Anything else here is unexpected.
+    expect(
+      pageErrors.filter(
+        (error) =>
+          !error.includes('"dt-raw-editor"') && !error.includes("different version or build")
+      )
+    ).toEqual([]);
 
     // Align both consumers, then exercise the actual banner recovery action.
     await writePlugin(fixture.dir, "acme.first", "BUILD-3", true, "PACKAGE-2");

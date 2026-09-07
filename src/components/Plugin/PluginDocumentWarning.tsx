@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { TriangleAlert } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -10,6 +10,7 @@ import { actionService } from "@/services/ActionService";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 
 function affectedPlugins(diagnostics: readonly PluginDocumentDiagnostic[]): string {
   return [
@@ -71,16 +72,36 @@ export function usePluginDocumentNotifications() {
     pluginDocumentRuntime.getSnapshot
   );
   const projectId = useProjectStore((state) => state.currentProject?.id);
+  // Each diagnostic is a new snapshot, but the inbox entry only changes when
+  // the set of affected plugins does; re-notifying archives the previous entry
+  // and churns unrelated history off the 200-entry cap.
+  const lastSummary = useRef<string | null>(null);
   useEffect(() => {
-    if (!projectId || diagnostics.length === 0) return;
+    if (!projectId) return;
+    const key = `plugin-document:${projectId}`;
+    if (diagnostics.length === 0) {
+      // A reload replaces the document but not the persisted inbox, so the
+      // previous document's entry would keep claiming a reload is needed.
+      const { entries, archiveEntry } = useNotificationHistoryStore.getState();
+      for (const entry of entries) {
+        if (entry.supersedeKey === key && entry.archivedAt === null) archiveEntry(entry.id);
+      }
+      lastSummary.current = null;
+      return;
+    }
+    const summary = affectedPlugins(diagnostics);
+    if (summary === lastSummary.current) return;
+    lastSummary.current = summary;
     notify({
       type: "warning",
       title: "Plugins need a window reload",
-      message: `${affectedPlugins(diagnostics)}: save edits, then reload this project window to replace plugin registrations.`,
+      message: `${summary}: save edits, then reload this project window to replace plugin registrations.`,
       priority: "low",
-      supersedeKey: `plugin-document:${projectId}`,
+      supersedeKey: key,
       context: { projectId, eventKind: "recovery" },
-      action: { label: "Review reload", onClick: requestReload },
+      // The inbox keeps only actions carrying an actionId; an onClick-only
+      // action vanishes from the one surface this low-priority entry has.
+      action: { label: "Review reload", actionId: "plugin.reloadWindow", onClick: requestReload },
     });
   }, [diagnostics, projectId]);
 }
