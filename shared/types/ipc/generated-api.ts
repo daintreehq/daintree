@@ -836,4 +836,9 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["window-chrome:set-banner-severity"]["args"]
     ): Promise<IpcInvokeMap["window-chrome:set-banner-severity"]["result"]>;
   };
+  workspace: {
+    list(
+      ...args: IpcInvokeMap["workspace:list"]["args"]
+    ): Promise<IpcInvokeMap["workspace:list"]["result"]>;
+  };
 }

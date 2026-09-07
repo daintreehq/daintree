@@ -311,7 +311,14 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // rather than quietly no-oped. That distinction is the whole reason the tools
   // exist, and a caller that misses it will hand them ids from `terminal.list`
   // and read the refusals as a bug.
-  const MAX_EXTERNAL_TOTAL_BYTES = 10_300;
+  // 10_300 → 10_700 for #12307's `workspace.list`, whose description is 359 B
+  // against the 400 B per-description ceiling. The 120 B floor means no new
+  // tool fits inside the old ceiling's 184 B of headroom at any wording, so
+  // this is the cost of the tool rather than of its prose. What the prose has
+  // to carry is the correction the issue turned on: a view being open is not
+  // what tells a wrong id from a closed workspace — absence from the list is —
+  // and a caller that misses it goes back to hashing paths.
+  const MAX_EXTERNAL_TOTAL_BYTES = 10_700;
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
@@ -347,7 +354,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // per-description ceiling, and the prose names the capability without
   // restating the schema, so there is nothing to tighten. This is the measured
   // total of all 167 descriptions, not a rounded allowance.
-  const MAX_COHORT_TOTAL_BYTES = 52_553;
+  // 52_553 → 52_912 for #12307's `workspace.list`, the same 359 B one cohort
+  // out: it is admitted at workbench as well as external, since the external
+  // tier must never reach past what the in-app assistant already can. Again the
+  // measured total, not a rounded allowance.
+  const MAX_COHORT_TOTAL_BYTES = 52_912;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

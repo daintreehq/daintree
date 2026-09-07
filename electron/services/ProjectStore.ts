@@ -1209,6 +1209,33 @@ export class ProjectStore {
     return this.updateProject(projectId, updates);
   }
 
+  /**
+   * Every project's identity fields, and nothing else (#12307).
+   *
+   * Deliberately not `getAllProjects()`, which reconciles row statuses and
+   * opens a write-locking IMMEDIATE transaction to persist the repairs. That is
+   * the right behavior for the app's own project list and the wrong behavior
+   * for workspace discovery, which an external MCP client can call at will —
+   * a read that takes a write lock is not one to expose on that surface
+   * (#10913). Nothing here needs reconciling: an id, a path and a name are
+   * recorded facts, not derived state.
+   *
+   * Unfiltered on purpose. `status` is lifecycle, not deletion — a closed or
+   * missing project is still a workspace a caller may want to bind to, and a
+   * removed one has no row at all.
+   */
+  getAllProjectIdentities(): Array<{ id: string; path: string; name: string }> {
+    const db = getSharedDb();
+    return db
+      .select({
+        id: projectsTable.id,
+        path: projectsTable.path,
+        name: projectsTable.name,
+      })
+      .from(projectsTable)
+      .all();
+  }
+
   getAllProjects(): Project[] {
     const db = getSharedDb();
     const rows = db

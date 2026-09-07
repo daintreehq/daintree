@@ -15,6 +15,11 @@ export const WORKBENCH_TIER_TOOLS = [
   "mcp.surface",
 
   "project.getAll",
+  // Discovery counterpart to `project.getAll` that also covers scratches and
+  // reports cross-window view presence (#12307). Admitted here as well as
+  // externally: the external tier must never reach past what the in-app
+  // assistant already can.
+  "workspace.list",
   "project.getCurrent",
   "project.getSettings",
   "project.getStats",

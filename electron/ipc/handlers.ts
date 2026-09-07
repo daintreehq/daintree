@@ -11,6 +11,7 @@ import { registerAgentCliHandlers } from "./handlers/agentCli.js";
 import { registerProjectCrudHandlers } from "./handlers/projectCrud/index.js";
 import { registerProjectRelocationHandlers } from "./handlers/projectRelocation.js";
 import { registerProjectHistoryHandlers } from "./handlers/projectHistory.js";
+import { registerWorkspaceHandlers } from "./handlers/workspace.js";
 import { registerProjectSleepHandlers } from "./handlers/projectSleep.js";
 import { registerProjectRecipesHandlers } from "./handlers/projectRecipes.js";
 import { registerProjectPresetsHandlers } from "./handlers/projectPresets.js";
@@ -149,6 +150,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectCrudHandlers(deps));
     register(() => registerProjectRelocationHandlers(deps));
     register(() => registerProjectHistoryHandlers(deps));
+    register(() => registerWorkspaceHandlers());
     register(() => registerProjectSleepHandlers(deps));
     register(() => registerProjectRecipesHandlers(deps));
     register(() => registerProjectPresetsHandlers(deps));

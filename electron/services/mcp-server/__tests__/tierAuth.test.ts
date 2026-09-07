@@ -591,10 +591,28 @@ describe("external tool surface budget (#11585)", () => {
   // after itself — rather than two independent conveniences, and neither
   // widens what the caller can reach: both act only on resources the session
   // itself created.
-  const EXTERNAL_BUDGET_MAX = 28;
+  //
+  // 28 → 29 for #12307's `workspace.list`. The one argument the binding
+  // mechanism already accepts and nothing outside Daintree can answer: ids are
+  // minted here, survive folder moves, and fall back to `randomBytes(32)` on
+  // collision, so the hash external clients were deriving them with is not a
+  // lookup. Raising the ceiling is the decision this budget exists to force
+  // into the open, and it buys a shipped mechanism its missing key.
+  const EXTERNAL_BUDGET_MAX = 29;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
+  });
+
+  // Workspace discovery is the one tool on this surface a caller cannot
+  // substitute for, so it gets its own assertion rather than riding on the
+  // count. The external tier must also never reach past the in-app assistant,
+  // which is the half of #10712 that is easy to forget: the two allowlists are
+  // separate files and only a test keeps them from drifting.
+  it("admits workspace discovery externally and in-app alike (#12307)", () => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain("workspace.list");
+    expect(isTierPermitted("external", "workspace.list")).toBe(true);
+    expect(isTierPermitted("workbench", "workspace.list")).toBe(true);
   });
 
   // Guards the opposite failure: a bad merge or an over-eager cut emptying the

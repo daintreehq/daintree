@@ -81,6 +81,8 @@ By default an external client's calls land in whichever Daintree window you focu
 
 The plain **Copy MCP config** button is unchanged and still follows focus, so existing configs keep working exactly as before.
 
+A client that wants to drive several projects doesn't need a config per project. Connect once with no `Daintree-Workspace-Id` and call `workspace.list`: it returns every project and scratch Daintree knows about — open or not — as `{ workspaceId, path, name, kind, hasLiveView }`, and the `workspaceId` is what the header binds to. Pick by `path` and open one bound session per workspace from there. Do not derive an id by hashing a path: that is only how a brand-new project's id is minted, so it misses any project that has moved, and `mintProjectId` falls back to a random id on collision. `hasLiveView` says whether a view is open, not whether an id is valid — an id absent from the listing is the wrong id, and a structurally valid unknown one connects fine and only fails on the calls after it.
+
 Two things to know about a scoped client: it connects whether or not the project is open, but its calls only run while that project is open in exactly one window (a closed or duplicated project fails each call with a message naming which, and the same call works once you fix it — no reconnect), and confirm-gated tools such as `recipe.run` are not part of its tool surface — nobody is watching a background project to approve the dialog, so those calls are refused up front rather than hanging until they time out. Run those from Daintree, or connect an unscoped client for them.
 
 ### Keeping a connection working

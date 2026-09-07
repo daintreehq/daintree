@@ -1921,6 +1921,53 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
   },
   {
     band: "reversible",
+    category: "workspace",
+    danger: "safe",
+    description:
+      "List every project and scratch Daintree knows about, open or not, so a client can look up a workspace id rather than derive one by hashing a path. workspaceId is what the Daintree-Workspace-Id header binds to; kind is project or scratch. hasLiveView says whether a view is open, not whether an id is valid — absence from this list is what makes an id wrong.",
+    enabled: true,
+    id: "workspace.list",
+    kind: "query",
+    name: "workspace.list",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        workspaces: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              workspaceId: {
+                type: "string",
+              },
+              path: {
+                type: "string",
+              },
+              name: {
+                type: "string",
+              },
+              kind: {
+                type: "string",
+                enum: ["project", "scratch"],
+              },
+              hasLiveView: {
+                type: "boolean",
+              },
+            },
+            required: ["workspaceId", "path", "name", "kind", "hasLiveView"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["workspaces"],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "List Workspaces",
+  },
+  {
+    band: "reversible",
     category: "worktree",
     danger: "safe",
     description:
