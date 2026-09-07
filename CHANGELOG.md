@@ -1,5 +1,124 @@
 # Changelog
 
+## [0.35.0] - 2026-09-07
+
+Projects can ship their own plugins. A plugin dropped in `.daintree/plugins/` loads only while that project is open, behind a per-project trust prompt, and plugin views get Tailwind and the app's own theme tokens as their styling contract. Alongside that: Markdown diffs can be read as rendered prose with word-level change marks, the worktree card grew a full Git menu, and switching back to an open project got roughly eight times faster.
+
+### Features
+
+**Plugins**
+
+- A project can ship its own plugins in `.daintree/plugins/<name>/` — they load only while that project is open, behind a per-project trust banner that defaults to off (#12114, #12219)
+- A Project → Plugins settings tab manages a project's own plugins and per-project enablement of installed ones, with a `local` scope for uncommitted per-machine choices (#12225)
+- Plugin views style themselves with Tailwind, compiled at runtime against the app's theme tokens and scoped so plugin CSS cannot leak into host chrome (#12227)
+- File browsing is shared plugin infrastructure: one watcher serves every plugin, `host.fs.readdir` returns detailed listings, and a headless file-tree module is published for authors (#12198)
+- Plugins get a machine wake signal and a status-discriminated worktree read, so they can tell a real mismatch from a transient one after sleep or a project switch (#12186, #12191)
+- The launcher, right-click menu and panel palette label a panel kind's origin — Plugin or Project plugin (#12273)
+- Plugin-authoring agents get `plugin.validate`, `plugin.diagnostics`, a `daintree-plugin doctor` command, a published `plugin.json` schema, and per-plugin log tabs (#12222)
+
+**Worktrees and git**
+
+- The worktree card gains a Git submenu — Fetch and Fetch and prune, Pull and rebase, Push, Force push with lease, Rebase onto base and Merge base in, with Continue and Abort mid-operation — each previewing its real commit set and saying why it is unavailable (#12098, #12099, #12100)
+- Worktrees in repos with submodules are populated on create, and deleting one refuses to discard commits that exist only in that worktree's submodule store (#12089)
+
+**Diffs and files**
+
+- Markdown diffs get a rendered layout — block-level insert, delete and modify treatment, with word- and sentence-level marks inside edited passages (#12173, #12184)
+- Line wrap is a real toggle across the file panel, diff panel and cross-worktree compare, defaulting on for prose and off for code (#12172)
+- Rendered documents get a reading text-size control, independent of window zoom (#12138)
+- Copy file contents joins the file viewer toolbar and the file row menu (#12148)
+- HTML files get a source view, matching Markdown (#12208)
+- The file row menu nests its copies and plugin items into submenus, and Insert file reference says why it is disabled (#12209, #12210)
+
+**Assistant**
+
+- A project runs up to three concurrent Assistant sessions, each with its own conversation, worktree binding and capability approvals, fronted by an always-visible tab strip (#12111, #12194)
+- Every lane of a project shares one session folder, so opening a second lane no longer costs a fresh workspace-trust and MCP approval prompt (#12194)
+
+**Codex**
+
+- A restored Codex pane with no saved session id resumes the exact conversation `codex resume --last` would pick, and a Find session action on the restart banner reopens a lost conversation from disk (#12193, #12200)
+
+**MCP**
+
+- The worktree and forge tool surface reports what it really does: a real batch PR lookup, a discriminated recipe source union, and post-create setup status via `worktree.waitUntilReady` (#12157)
+- Out-of-tier tools are reported as visible-but-unavailable rather than denied outright, and routine worktree cleanup no longer requires elevating the whole session (#12139, #12140)
+- A confirm-dialog approval covers a whole recipe run, so an approved multi-terminal recipe starts the terminals the human actually approved (#12271)
+- Batch terminal kill raises one checklist confirmation instead of one dialog per terminal (#12141)
+
+**Launcher**
+
+- Customize toolbar moves into the More section, and every launcher row — plugin and user-defined agents, Review, File Viewer, recipes — can be pinned to the toolbar (#12226, #12228)
+
+### Bug Fixes
+
+**Plugins**
+
+- Plugin calls — dispatch, settings, storage, filesystem roots and worktree-scoped storage — acted on whichever project had focus rather than the plugin's own (#12114, #12245)
+- Sleeping or idle-closing a project now actually stops its plugins; timers, workers and watchers kept running behind a project the UI showed as closed (#12224, #12246)
+- A crashed, timed-out or disposed plugin worker reports to its panel with a recovery action instead of leaving a frozen view (#12291, #12293)
+- A malformed worker message can no longer crash the app, and installed plugin commands run in the plugin's own worker rather than the main process (#12289, #12292)
+- Plugin diagnostics reports scrub the whole report — only the stack trace was redacted before, not the message, which can carry tokens or credentialed URLs (#12287)
+- A plugin panel's saved layout is no longer pinned to the project id that created it (#12288)
+- Unparseable manifests, failed trust saves and mid-session plugin creation no longer fail silently, and project plugins stop leaking their raw instance key into labels and errors (#12219, #12221, #12247, #12248)
+
+**Dev Preview**
+
+- The dev command's own exit is observed rather than the shell's, unsticking "starting" and "installing" states and reviving a dead crash-guard and restart path (#12303)
+- Readiness reports what it actually saw, on a real deadline, and a recoverable 5xx no longer latches the outage overlay across probes (#12300, #12305)
+- A redirect or typed URL crossing the proxy origin keeps its route instead of dropping back to the proxy root (#12302)
+- Device emulation and console capture take effect and report real state instead of silently no-opping (#12304)
+
+**Notifications**
+
+- Sound and the all-clear flash default off on a fresh install — the earlier attempt migrated existing installs but left the code-level default on, so fresh installs still played (#12199, #12201)
+- The all-clear sound and flash obey quiet hours, session mute and OS Do Not Disturb, and sound no longer fires once per open project or wakes backgrounded renderers (#12188, #12190)
+
+**Sessions and terminals**
+
+- Session-resume data survives quit and exit: a slow terminal no longer discards its project's captured siblings, a manually exited Codex session is journaled, and closing or sleeping a project captures the Assistant's own session (#12192, #12195, #12196)
+- The Assistant's terminal no longer masquerades as a resumable ordinary pane (#12197)
+- Detached processes an agent backgrounds — reparented to PID 1 — are reaped when their terminal closes instead of surviving the app (#12204)
+
+**MCP and actions**
+
+- Terminal kill and restart, batch kill-all and close-all, and forced worktree delete honour the real host confirmation, closing a silent no-op after approval, a way to spend one grant on an unbounded sweep, and a bypass of the typed-name delete gate (#12126, #12128, #12131)
+- Forge issue creation, comments and reopen confirm against the real title, body and labels instead of a generic `<string: N chars>` disclosure (#12143)
+- MCP session authentication no longer lets an unauthenticated caller name and revoke another session; dependency findings drop from 17 affected packages to 5 (#12254)
+- An agent declaring MCP wiring Daintree does not implement is refused at launch rather than reporting a connection with nothing wired (#12270)
+- Tier grant buttons describe what they actually grant and for how long (#12130)
+- Audit records carry a tool call's real start time, so concurrent and serial calls can be told apart (#12127)
+
+**Interface**
+
+- Bulk-deleting worktrees no longer strands an unscrollable row, and the changed-files list gets its own surface with folder grouping (#12097, #12106)
+- The sync tooltip separates ahead and behind counts instead of running them together as `origin/develop82` (#12112)
+- Dialog bodies stop reserving a scrollbar gutter macOS overlay scrollbars never take, which had pushed header and footer out of line with the form (#12105)
+- A duplicated panel lands next to its source rather than at the end of the list (#12104)
+- Collapsed worktree cards get per-kind alarm icons and a smaller status tick, both legible under forced colors (#12096)
+- The unified diff's horizontal scrollbar stays reachable mid-file, and its gutter marker prints only on the owning side (#12107, #12259)
+- Select All scopes to the focused document rather than the whole app (#12146)
+- Media playback survives a project being revealed again instead of resetting to zero (#12166)
+- File browser glyphs no longer garble after a project switch, and the tree refreshes only the directories a change touched (#12202, #12266)
+- The diagnostics dock reflows the panel grid when it takes its height (#12267)
+- GitHub bulk selection is reachable with nothing ticked, pasted and spaced number lists read as a lookup, and the dropdown skeleton matches the loaded row (#12129, #12132, #12301)
+- An in-repo recipe write that would strip unsupported content raises a conflict instead of silently overwriting (#12269)
+
+### Performance
+
+- Switching back to an open project no longer waits on animation frames throttled to roughly 2fps on a hidden view: warm-switch reveal drops from 64ms to 8ms at p50, and focus returns to the terminal you left (#12169)
+- Idle windows stop sustaining a 1.6s git spawn loop — 230 `git.exe` spawns in 6.4 minutes at idle, from a watcher that went dark on a transient error and never recovered (#12064, #12145, #12161, #12257)
+- Windows process-census polling talks to one long-lived PowerShell instead of starting a fresh one every 1.5–15s (#12265)
+- The Review Hub and diff shelf virtualize past 80 files: a 2,000-file review mounts in 26ms instead of 2.1s, and reselecting a file is 98–99% faster (#12258)
+- The file search cache behind `@`-mentions stops treating a 10-second pause as staleness, and idle indexes are freed after a minute rather than retained (#12253)
+- Superseded diff tokenize jobs are dropped before reaching the single-threaded worker rather than after they return (#12250)
+- A 60-second GPU-process memory purge running against every cached project view is removed — it never reclaimed renderer memory, and is the leading suspect behind file browser glyph corruption after a switch (#12187)
+- Snapshotting a session after an agent's turn stops serializing and writing the same scrollback twice (#12252)
+- Bursts of project-state writes fold into a single save, cutting save count by up to 90% (#12256)
+- Repository discovery in CopyTree runs in parallel, speeding large bundles by 6–8% (#12151)
+- Media previews stream from a standard scheme instead of loading the whole file into memory before the first frame (#12249)
+- A long tail of hot-path work: PTY resume and viewport analysis, action manifest projection, sidebar facet counting, secret scrubbing, SQLite statement reuse, store migrations, notification routing, theme conversion caching, IPC payload sizes and topology debounce (#12137, #12142, #12144, #12147, #12149, #12150, #12152, #12153, #12155, #12158, #12159, #12160, #12162, #12163, #12164, #12167, #12168)
+
 ## [0.34.0] - 2026-08-30
 
 A refinement release. Nearly every dialog and panel in the app went through a design pass, and the colour system underneath them was rebuilt: the legacy `daintree-*` vocabulary and the fifteen-step opacity ramp are retired onto semantic tokens, green no longer stands for "everything is fine", and status marks survive Windows High Contrast. Alongside that, Claude Code and Codex subagents became inspectable from the terminal header, the fleet overview learned to say when an agent has gone quiet, and the push and rebase confirms started previewing the commits they will actually touch.
