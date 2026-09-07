@@ -105,3 +105,42 @@ describe("terminal.list isFocused field", () => {
     expect(items[0]?.agentId).toBe("claude");
   });
 });
+
+describe("terminal.list owned argument (#12308)", () => {
+  function seedPanels(): void {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: ["term-a", "term-b"],
+      panelsById: {
+        "term-a": { id: "term-a", kind: "terminal", location: "grid" },
+        "term-b": { id: "term-b", kind: "terminal", location: "grid" },
+      },
+    });
+  }
+
+  it("refuses a direct dispatch that asks for owned terminals", async () => {
+    seedPanels();
+
+    // Which session created a panel is main-process state the renderer never
+    // sees, so `run()` has no way to answer this and the unfiltered list would
+    // be read as "you own all of these" — the quiet no-op the argument exists
+    // to avoid.
+    await expect(callList(setupActions(), { owned: true })).rejects.toThrow(/owned/);
+    expect(panelStoreMock.getState).not.toHaveBeenCalled();
+  });
+
+  it("refuses owned:false too, because it cannot honour the argument either way", async () => {
+    seedPanels();
+
+    // A main-side strip that stopped working would otherwise surface as a
+    // wrong answer on the `true` path and silence on the `false` one.
+    await expect(callList(setupActions(), { owned: false })).rejects.toThrow(/owned/);
+  });
+
+  it("lists normally when owned is omitted", async () => {
+    seedPanels();
+
+    const items = await callList(setupActions(), { location: "grid" });
+    expect(items.map((t) => t.id)).toEqual(["term-a", "term-b"]);
+  });
+});

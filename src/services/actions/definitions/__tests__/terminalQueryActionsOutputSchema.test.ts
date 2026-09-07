@@ -107,3 +107,55 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(outputSchema(service, "terminal.sendCommand")).toBeUndefined();
   });
 });
+
+// #12308 — `owned` is advertised on the tool but answered in main, against the
+// MCP session's ownership ledger. These go through the real ActionService so
+// they exercise the published input schema and the dispatch path a caller that
+// bypasses main would actually take.
+describe("terminal.list owned input contract (#12308)", () => {
+  function listEntry(service: ActionService) {
+    return service.get("terminal.list" as ActionId);
+  }
+
+  it("advertises owned as an optional boolean with its own description", () => {
+    const schema = listEntry(registerAll())?.inputSchema;
+
+    expect(schema).toMatchObject({
+      properties: { owned: { type: "boolean", description: expect.any(String) } },
+    });
+    // Optional in the published contract: a client holding a cached tools/list
+    // that never sends the field must keep getting today's behaviour.
+    expect(schema?.required ?? []).not.toContain("owned");
+  });
+
+  it("keeps the argument's semantics out of the 400-byte tool description", () => {
+    const description = listEntry(registerAll())?.description ?? "";
+    // The description already sits at 384 of its 400 bytes, so the field's
+    // meaning has to live in `.describe()` — where it reaches a client anyway.
+    expect(Buffer.byteLength(description, "utf8")).toBeLessThanOrEqual(400);
+    expect(description).not.toContain("owned");
+  });
+
+  it("refuses a real dispatch rather than answering it with the full list", async () => {
+    // Every non-MCP caller — the in-app assistant, a keybinding, a plugin, a
+    // test — converges on this method, and `run()` cannot tell them apart. An
+    // unfiltered list here would be a wrong answer, not a missing feature.
+    for (const source of ["agent", "user", "plugin"] as const) {
+      const result = await registerAll().dispatch(
+        "terminal.list" as ActionId,
+        { owned: true },
+        { source }
+      );
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error.message).toMatch(/owned/);
+    }
+  });
+
+  it("rejects a non-boolean owned at schema validation", async () => {
+    // Main forwards a non-boolean untouched precisely so this gate sees it,
+    // instead of a strip laundering it into a legal request.
+    const result = await registerAll().dispatch("terminal.list" as ActionId, { owned: "yes" });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error.code).toBe("VALIDATION_ERROR");
+  });
+});

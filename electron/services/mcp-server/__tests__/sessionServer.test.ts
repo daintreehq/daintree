@@ -6204,6 +6204,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       makeManifestEntry("worktree.createWithRecipe"),
       makeManifestEntry("recipe.run"),
       makeManifestEntry("agent.launch"),
+      makeManifestEntry("terminal.list"),
     ];
   }
 
@@ -6920,6 +6921,158 @@ describe("session-scoped resource ownership (#11909)", () => {
         { terminalId: "terminal-1" },
         expect.anything()
       );
+    });
+  });
+
+  describe("terminal.list owned filter (#12308)", () => {
+    /** A view holding one panel this session made and two it did not. */
+    const LISTING = {
+      result: {
+        ok: true,
+        result: {
+          terminals: [
+            { id: "terminal-mine", title: "our agent" },
+            { id: "terminal-users-own", title: "the user's shell" },
+            { id: "terminal-other-session", title: "another client's agent" },
+          ],
+        },
+      },
+    };
+
+    function listedIds(result: { content: unknown }): string[] {
+      return payloadOf<{ terminals: Array<{ id: string }> }>(result).terminals.map((t) => t.id);
+    }
+
+    it("returns only what this session created, and consumes the flag before dispatch", async () => {
+      const { store, server, dispatchAction } = harness("s-owned", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-owned", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true, location: "grid" },
+      });
+
+      expect(listedIds(result)).toEqual(["terminal-mine"]);
+      // The strip is half of one mechanism, not a tidy-up: the renderer
+      // refuses any `owned` it receives, so forwarding it would fail the very
+      // calls the filter exists to serve. Every other argument survives.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.list",
+        { location: "grid" },
+        expect.anything()
+      );
+    });
+
+    it("lists everything when owned is false or omitted", async () => {
+      const { store, server, dispatchAction } = harness("s-unowned", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-unowned", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const explicit = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: false },
+      });
+      const omitted = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      // `false` means "do not narrow", never "the ones I did not create".
+      expect(listedIds(explicit)).toEqual([
+        "terminal-mine",
+        "terminal-users-own",
+        "terminal-other-session",
+      ]);
+      expect(listedIds(omitted)).toEqual(listedIds(explicit));
+      // Consumed in both directions — the renderer cannot honour either value.
+      expect(dispatchAction).toHaveBeenNthCalledWith(1, "terminal.list", {}, expect.anything());
+    });
+
+    it("scopes ownership to the session, so a reconnected client sees none of its old panels", async () => {
+      const { store, deps, server } = harness("s-before", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-before", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      // A reconnect is a new session id over the same live panels, and #12308
+      // deliberately does not carry the ledger across one: the honest answer
+      // is an empty list, which is what lets a client report what it left
+      // behind instead of guessing.
+      seedLiveSession(store, "s-after", "external");
+      store.sessionOriginMap.set("s-after", "external");
+      const reconnected = createSessionServer("s-after", deps);
+
+      const before = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+      const after = await callTool(reconnected, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+
+      expect(listedIds(before)).toEqual(["terminal-mine"]);
+      expect(listedIds(after)).toEqual([]);
+    });
+
+    it("does not read a worktree record as terminal ownership", async () => {
+      const { store, server } = harness("s-kind", { "terminal.list": LISTING });
+      // The ledger keys on kind as well as id, and a listing must not inherit
+      // authority granted over a different taxonomy.
+      store.resourceOwnership.record("s-kind", [{ kind: "worktree", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(listedIds(result)).toEqual([]);
+    });
+
+    it("never manufactures a row for a record whose panel is gone", async () => {
+      const { store, server } = harness("s-stale", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-stale", [
+        { kind: "terminal", id: "terminal-mine" },
+        { kind: "terminal", id: "terminal-the-user-closed" },
+      ]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      // The listing says what exists; the ledger only says who created it.
+      expect(listedIds(result)).toEqual(["terminal-mine"]);
+    });
+
+    it("leaves a non-boolean owned in place for the renderer's own validation", async () => {
+      const { server, dispatchAction } = harness("s-bad-arg", { "terminal.list": LISTING });
+
+      await callTool(server, { name: "terminal.list", arguments: { owned: "yes" } });
+
+      // Consuming it would launder an out-of-contract request into a legal one
+      // and answer it with the unfiltered list.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.list",
+        { owned: "yes" },
+        expect.anything()
+      );
+    });
+
+    it("passes a failed listing through untouched", async () => {
+      const { store, server } = harness("s-fail", {
+        "terminal.list": {
+          result: { ok: false, error: { code: "EXECUTION_ERROR", message: "renderer said no" } },
+        },
+      });
+      store.resourceOwnership.record("s-fail", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("renderer said no");
+    });
+
+    it("fails closed on a payload shape it does not recognise", async () => {
+      const { store, server } = harness("s-shape", {
+        "terminal.list": { result: { ok: true, result: { terminals: "not-an-array" } } },
+      });
+      store.resourceOwnership.record("s-shape", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      // Nothing validates this payload between here and the client, so an
+      // unrecognised shape is a denial: returning it would answer "which of
+      // these did I create?" with "all of them".
+      expect(payloadOf<{ terminals: unknown[] }>(result).terminals).toEqual([]);
     });
   });
 });

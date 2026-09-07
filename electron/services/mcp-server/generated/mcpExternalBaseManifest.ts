@@ -1658,6 +1658,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["grid", "dock", "trash", "background"],
         },
+        owned: {
+          description:
+            "Restricts the listing to terminals this MCP session created, the set the owned-cleanup tools act on. A reconnected session owns nothing, so it lists none.",
+          type: "boolean",
+        },
       },
     },
     kind: "query",
