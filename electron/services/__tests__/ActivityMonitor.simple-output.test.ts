@@ -862,6 +862,40 @@ describe("ActivityMonitor", () => {
       const plainOptions = buildActivityMonitorOptions(undefined, {});
       expect(plainOptions.simpleOutputVolumeRecovery).toBeUndefined();
     });
+
+    it.each(["busy", "idle"] as const)(
+      "ignores sustained Grok idle redraws when initially %s",
+      (initialState) => {
+        const onStateChange = vi.fn();
+        const visible = ["READY", "Worked for 3.7s", "minimal · /help", "❯"];
+        const monitor = new ActivityMonitor("grok-redraw", 1000, onStateChange, {
+          ...buildActivityMonitorOptions("grok", {
+            getVisibleLines: () => visible,
+            getCursorLine: () => "❯",
+          }),
+          initialState,
+        });
+        monitor.startPolling();
+
+        // Grok 1.0.13 emits this frame after answering: SGR resets, a Kitty
+        // image deletion, and cursor placement, with no visible text change.
+        const redraw =
+          "\x1b[?2026h\x1b[?2026h\x1b[m\x1b[m\x1b[m\x1b[0m" +
+          "\x1b_Ga=d,d=i,i=1,q=2\x1b\\\x1b[25;3H\x1b[?2026l";
+        for (let i = 0; i < 300; i += 1) {
+          monitor.onData(redraw);
+          vi.advanceTimersByTime(100);
+        }
+
+        expect(monitor.getState()).toBe("idle");
+        expect(
+          onStateChange.mock.calls.filter(
+            (call) => call[2] === "busy" && call[3]?.trigger === "output"
+          )
+        ).toHaveLength(0);
+        monitor.dispose();
+      }
+    );
   });
 
   describe("notifySubmission (hybrid input bar)", () => {
