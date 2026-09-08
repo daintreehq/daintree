@@ -225,9 +225,6 @@ export {
   validateGitHubToken,
 } from "./GitHubToken.js";
 
-// Token orchestration
-export { setTokenAndSync, clearTokenAndSync } from "./GitHubTokenOrchestrator.js";
-
 // Repo context
 export {
   parseGitHubRepoUrl,

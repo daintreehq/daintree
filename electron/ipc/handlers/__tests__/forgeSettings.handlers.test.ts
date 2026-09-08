@@ -743,4 +743,220 @@ describe("registerForgeSettingsHandlers", () => {
     await expect(clearCredential(null, "acme.gitea")).resolves.toBeUndefined();
     expect(storeMock.set).toHaveBeenCalledWith("forgeCredentials", {});
   });
+
+  // ── Credential change re-probes token health (#12325) ──
+
+  /**
+   * Minimal `healthEvents` capability. `refreshTokenHealth` is the only member
+   * the handlers touch; the other two are present so the fixture matches the
+   * shape a real provider registers.
+   */
+  function makeHealthEvents(refreshTokenHealth: ReturnType<typeof vi.fn>) {
+    return {
+      getTokenHealth: vi.fn(() => ({ status: "unhealthy", tokenVersion: 1, checkedAt: 1 })),
+      onTokenHealthChanged: vi.fn(() => () => {}),
+      refreshTokenHealth,
+    };
+  }
+
+  it("setCredential forces a token-health re-probe after delivering the credential (#12325)", async () => {
+    registerGiteaProvider();
+    const order: string[] = [];
+    const validateToken = vi.fn().mockResolvedValue({ valid: true });
+    const setCredentials = vi.fn(() => {
+      order.push("setCredentials");
+    });
+    const refreshTokenHealth = vi.fn(() => {
+      order.push("refreshTokenHealth");
+    });
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken,
+      setCredentials,
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await setCredential(null, "acme.gitea", { token: "secret-token" });
+
+    // `force` skips the provider's focus cooldown; the probe itself still
+    // decides the verdict, so the banner never clears off validateToken alone.
+    expect(refreshTokenHealth).toHaveBeenCalledTimes(1);
+    expect(refreshTokenHealth).toHaveBeenCalledWith({ force: true });
+    // The impl must hold the new credential before it is asked to probe with it.
+    expect(order).toEqual(["setCredentials", "refreshTokenHealth"]);
+  });
+
+  it("setCredential does not re-probe token health when validation fails", async () => {
+    registerGiteaProvider();
+    const refreshTokenHealth = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: false, error: "Bad token" }),
+      setCredentials: vi.fn(),
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await setCredential(null, "acme.gitea", { token: "nope" });
+
+    expect(refreshTokenHealth).not.toHaveBeenCalled();
+  });
+
+  it("setCredential resolves without waiting for the async probe to settle", async () => {
+    registerGiteaProvider();
+    let settled = false;
+    const refreshTokenHealth = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            settled = true;
+            resolve();
+          }, 0);
+        })
+    );
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+      setCredentials: vi.fn(),
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    const result = await setCredential(null, "acme.gitea", { token: "secret-token" });
+
+    expect(result).toEqual({ valid: true });
+    expect(refreshTokenHealth).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+  });
+
+  it("setCredential survives a provider whose refreshTokenHealth rejects", async () => {
+    registerGiteaProvider();
+    const refreshTokenHealth = vi.fn().mockRejectedValue(new Error("probe exploded"));
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+      setCredentials: vi.fn(),
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    // The rejection is contained: the save still reports success and the
+    // workspace push still runs. An escaping rejection would be an unhandled
+    // rejection in main, which is worse than the sync throw a bare try catches.
+    await expect(setCredential(null, "acme.gitea", { token: "secret-token" })).resolves.toEqual({
+      valid: true,
+    });
+    expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", {
+      kind: "bearer",
+      value: "secret-token",
+    });
+  });
+
+  it("setCredential survives a provider whose refreshTokenHealth throws synchronously", async () => {
+    registerGiteaProvider();
+    const refreshTokenHealth = vi.fn(() => {
+      throw new Error("probe exploded");
+    });
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+      setCredentials: vi.fn(),
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await expect(setCredential(null, "acme.gitea", { token: "secret-token" })).resolves.toEqual({
+      valid: true,
+    });
+    expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", {
+      kind: "bearer",
+      value: "secret-token",
+    });
+  });
+
+  it("setCredential succeeds for a provider that omits the healthEvents capability", async () => {
+    registerGiteaProvider();
+    // A forge-neutral host must not require the optional capability.
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+      setCredentials: vi.fn(),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await expect(setCredential(null, "acme.gitea", { token: "secret-token" })).resolves.toEqual({
+      valid: true,
+    });
+  });
+
+  it("setCredential tolerates healthEvents without the optional refreshTokenHealth", async () => {
+    registerGiteaProvider();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+      setCredentials: vi.fn(),
+      healthEvents: {
+        getTokenHealth: vi.fn(() => ({ status: "unknown", tokenVersion: -1, checkedAt: 0 })),
+        onTokenHealthChanged: vi.fn(() => () => {}),
+      },
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await expect(setCredential(null, "acme.gitea", { token: "secret-token" })).resolves.toEqual({
+      valid: true,
+    });
+  });
+
+  it("clearCredential forces a token-health re-probe after clearing the impl (#12325)", async () => {
+    storeMock._data["forgeCredentials"] = { "acme.gitea": JSON.stringify({ token: "a" }) };
+    const order: string[] = [];
+    const setCredentials = vi.fn(() => {
+      order.push("setCredentials");
+    });
+    const refreshTokenHealth = vi.fn(() => {
+      order.push("refreshTokenHealth");
+    });
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      setCredentials,
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const clearCredential = findHandler("forge:clear-credential");
+
+    await clearCredential(null, "acme.gitea");
+
+    expect(refreshTokenHealth).toHaveBeenCalledWith({ force: true });
+    expect(order).toEqual(["setCredentials", "refreshTokenHealth"]);
+  });
+
+  it("clearCredential re-probes even when nothing was stored under that provider", async () => {
+    // The store can be empty while the impl still holds in-memory auth — and a
+    // stale unhealthy verdict — from a save the store no longer reflects.
+    storeMock._data["forgeCredentials"] = {};
+    const refreshTokenHealth = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      setCredentials: vi.fn(),
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const clearCredential = findHandler("forge:clear-credential");
+
+    await clearCredential(null, "acme.gitea");
+
+    expect(refreshTokenHealth).toHaveBeenCalledWith({ force: true });
+  });
+
+  it("clearCredential survives a provider whose refreshTokenHealth rejects", async () => {
+    storeMock._data["forgeCredentials"] = { "acme.gitea": JSON.stringify({ token: "a" }) };
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      setCredentials: vi.fn(),
+      healthEvents: makeHealthEvents(vi.fn().mockRejectedValue(new Error("probe exploded"))),
+    });
+    registerForgeSettingsHandlers();
+    const clearCredential = findHandler("forge:clear-credential");
+
+    await expect(clearCredential(null, "acme.gitea")).resolves.toBeUndefined();
+    expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", null);
+  });
 });
