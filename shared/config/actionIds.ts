@@ -278,6 +278,7 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.validate",
   "plugin.diagnostics",
   "plugin.reloadProject",
+  "plugin.reloadWindow",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -542,6 +543,7 @@ export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 // compile-time drift guard: renaming or removing any of these built-ins breaks
 // the build instead of silently leaving a stale entry here (#8341).
 export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
+  "plugin.reloadWindow",
   "terminal.sendCommand",
   "terminal.paste",
   "project.runCheck",

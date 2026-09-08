@@ -871,6 +871,7 @@ describe("duplicate registrations", () => {
  * named ones still do.
  */
 const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
+  "plugin.reloadWindow",
   "git.push",
   "git.pullRebase",
   "git.rebaseOntoBase",
@@ -937,6 +938,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
  * in source — runs via `npm run check:confirm-wiring`.
  */
 const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
+  "plugin.reloadWindow",
   "app.importConfig",
   "terminal.kill",
   "terminal.killAll",

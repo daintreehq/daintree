@@ -1,4 +1,7 @@
 import { builtinModules } from "node:module";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { build } from "vite";
 import type { Plugin } from "vite";
 
 /**
@@ -190,6 +193,17 @@ const CONTRACT_POINTER =
 export type DaintreeBuildTarget = "browser" | "node";
 
 export interface DaintreePluginOptions {
+  /** Explicit, separately bundled adapters imported with virtual:daintree-document-package/<name>. */
+  readonly documentPackages?: Readonly<
+    Record<
+      string,
+      {
+        readonly entry: string;
+        readonly version: string;
+        readonly scope?: "plugin" | "document";
+      }
+    >
+  >;
   /**
    * Extra externals to merge with the preset. Useful when a plugin needs to
    * externalize additional host-provided modules (e.g. a future shared
@@ -241,8 +255,14 @@ export interface DaintreePluginOptions {
 export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
   const extras = options.externals ?? [];
   const target = options.target ?? "browser";
+  const documentPackages = options.documentPackages ?? {};
+  const packagePrefix = "virtual:daintree-document-package/";
+  const packageModules = new Map<string, string>();
+  let root = process.cwd();
 
   if (target === "node") {
+    if (Object.keys(documentPackages).length)
+      throw new Error("Document packages require a browser target");
     return {
       name: "daintree-plugin-vite",
       config: () => ({
@@ -266,6 +286,93 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
 
   return {
     name: "daintree-plugin-vite",
+    async buildStart() {
+      packageModules.clear();
+      for (const [name, descriptor] of Object.entries(documentPackages)) {
+        if (
+          !/^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(name) ||
+          !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(descriptor.version) ||
+          (descriptor.scope !== undefined &&
+            descriptor.scope !== "plugin" &&
+            descriptor.scope !== "document")
+        ) {
+          this.error(`Invalid document package descriptor: ${name}`);
+        }
+        const entry = path.resolve(root, descriptor.entry);
+        this.addWatchFile(entry);
+        // An independent build prevents class-keyed dependencies being factored
+        // into chunks shared with the reloading view graph.
+        const result = await build({
+          configFile: false,
+          root,
+          logLevel: "error",
+          // Library builds deliberately leave process.env.NODE_ENV alone, and
+          // the outer build never transforms an emitted asset, so an adapter
+          // dependency using that idiom would throw "process is not defined"
+          // in the renderer.
+          define: { "process.env.NODE_ENV": JSON.stringify("production") },
+          plugins: [daintreePlugin()],
+          build: {
+            write: false,
+            // Remove source-path region comments so identical npm builds in
+            // different plugin directories retain the same content identity.
+            minify: true,
+            target: "esnext",
+            lib: { entry, formats: ["es"], fileName: "package" },
+            rolldownOptions: {
+              onLog: (level, log, defaultHandler) => {
+                // Rolldown can replace missing dynamic imports with throw-stubs,
+                // which otherwise pass the self-contained output check below.
+                if (log.code === "UNRESOLVED_IMPORT" || log.code === "UNRESOLVED_ENTRY")
+                  this.error(log);
+                defaultHandler(level, log);
+              },
+              output: { codeSplitting: false, minify: true, comments: { legal: true } },
+            },
+          },
+        });
+        const outputs = Array.isArray(result) ? result : [result];
+        const files = outputs.flatMap((output) => ("output" in output ? output.output : []));
+        const chunk = files[0];
+        if (
+          files.length !== 1 ||
+          chunk?.type !== "chunk" ||
+          chunk.imports.some((id) => !isHostMappedSpecifier(id)) ||
+          (chunk?.type === "chunk" &&
+            chunk.dynamicImports.some((id) => id !== chunk.fileName && !isHostMappedSpecifier(id)))
+        ) {
+          this.error(
+            `Document package ${name} must be one self-contained JavaScript bundle (only host React imports are allowed). Keep CSS in the view build.`
+          );
+        }
+        if (!chunk || chunk.type !== "chunk") this.error(`No JavaScript emitted for ${name}`);
+        for (const id of Object.keys(chunk.modules))
+          if (!id.startsWith("\0")) this.addWatchFile(id.replace(/[?#].*$/, ""));
+        const buildId = createHash("sha256").update(chunk.code).digest("hex");
+        const reference = this.emitFile({
+          type: "asset",
+          fileName: `document-packages/${name}/${buildId}.js`,
+          source: chunk.code,
+        });
+        packageModules.set(
+          name,
+          `export default function loadDocumentPackage() {
+          const bridge = globalThis.__daintreeDocumentPackagesV1;
+          if (!bridge) return Promise.reject(new Error("This Daintree host doesn't support document packages"));
+          return bridge.load(import.meta.url, { ...${JSON.stringify({ name, version: descriptor.version, scope: descriptor.scope, buildId })}, entryUrl: import.meta.ROLLUP_FILE_URL_${reference} });
+        }`
+        );
+      }
+    },
+    load(id) {
+      if (id.startsWith(`\0${packagePrefix}`)) {
+        const name = id.slice(packagePrefix.length + 1);
+        const code = packageModules.get(name);
+        if (!code) this.error(`Document package ${name} wasn't built`);
+        return code;
+      }
+      return null;
+    },
     config: () => ({
       build: {
         rollupOptions: {
@@ -277,6 +384,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
     // once Vite has merged every source of configuration, so this is the first
     // point at which "is Tailwind wired into this build" has a true answer.
     configResolved(resolved) {
+      root = resolved.root;
       const offender = resolved.plugins.find((plugin) => isTailwindPluginName(plugin.name));
       if (offender) {
         throw new Error(
@@ -316,6 +424,12 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
     // mapped specifiers so the `external` config above still externalizes them,
     // and for non-React ids so normal resolution proceeds.
     resolveId(id) {
+      if (id.startsWith(packagePrefix)) {
+        const name = id.slice(packagePrefix.length);
+        if (!Object.hasOwn(documentPackages, name))
+          this.error(`Undeclared document package: ${name}`);
+        return `\0${id}`;
+      }
       if (isReactSpecifier(id) && !isHostMappedSpecifier(id)) {
         throw new Error(
           `[daintree-plugin-vite] "${id}" is externalized as React but the Daintree host ` +

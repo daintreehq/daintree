@@ -219,7 +219,7 @@ Three behaviours are worth knowing while you iterate:
 
 What survives a reload: your `settings` values and everything in `host.storage`, because both are files keyed by identity rather than by process — and any panel state written with `PanelViewProps.persistState`, which is stored on the panel record alongside the layout rather than in the plugin process, so it outlives the worker entirely. What does not: module-scope state in your worker, and React state in your views. Design for a remount, exactly as for an installed plugin. [patterns.md](./patterns.md#what-survives-what) has the full matrix.
 
-Each reload mints a fresh view-module generation so the renderer actually re-imports your bundle rather than returning the module already in its cache. Each generation is a permanent module record in that renderer (Chromium has no eviction API), so a very long authoring session in one project accumulates them; closing and reopening the project view clears it.
+Each reload mints a fresh view-module generation so the renderer actually re-imports your bundle rather than returning the module already in its cache. Each generation is a permanent module record in that renderer (Chromium has no eviction API), so a very long authoring session in one project accumulates them; closing and reopening the project view clears it. Re-running your module body against browser globals that outlive it has consequences of its own — see [Views → Global registration survives reload](./views.md#global-registration-survives-reload).
 
 ## Layouts and missing plugins
 

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 
 export interface PluginViewDiagnosticsFallbackProps {
   /**
@@ -70,6 +71,9 @@ export function PluginViewDiagnosticsFallback({
   onRequestClose,
 }: PluginViewDiagnosticsFallbackProps) {
   const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
+  // Only a refusal the document runtime itself issued is unrecoverable by a
+  // remount; an unrelated render error in the same plugin keeps its retry.
+  const needsDocumentReload = pluginDocumentRuntime.errorSource(error) !== undefined;
 
   // Built once, here, so the rendered pane and the copied report can never
   // diverge — the label claiming redaction has to describe both.
@@ -176,17 +180,19 @@ export function PluginViewDiagnosticsFallback({
       </dl>
 
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={resetError}
-          data-testid="plugin-view-diagnostics-retry"
-          className={cn(
-            BUTTON_BASE,
-            "bg-status-error text-surface-canvas hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)]"
-          )}
-        >
-          Try again
-        </button>
+        {!needsDocumentReload && (
+          <button
+            type="button"
+            onClick={resetError}
+            data-testid="plugin-view-diagnostics-retry"
+            className={cn(
+              BUTTON_BASE,
+              "bg-status-error text-surface-canvas hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)]"
+            )}
+          >
+            Try again
+          </button>
+        )}
         {onRequestClose && (
           // No confirmation: the grid/dock close trashes the panel, which the
           // trash bin restores — a D0 reversible action, same as the header's

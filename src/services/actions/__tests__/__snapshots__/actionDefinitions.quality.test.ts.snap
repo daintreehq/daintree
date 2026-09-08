@@ -3270,6 +3270,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "plugins",
+    "danger": "confirm",
+    "dangerRationale": "Replaces the whole project document, discarding every view's in-memory state — unsaved edits included — for all panels in the window, not just the plugin that needs it.",
+    "description": "Replace the project document to clear plugin package and custom-element registrations. Asks for confirmation because unsaved view state may be lost.",
+    "examples": undefined,
+    "id": "plugin.reloadWindow",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Reload window for plugins",
+  },
+  {
+    "category": "plugins",
     "danger": "safe",
     "dangerRationale": undefined,
     "description": "Check a plugin.json on disk against the schema Daintree actually loads with, and get back every rejection paired with the field path that caused it. The rules differ by where a plugin lives, so the reply names which set was applied and whether that came from the location on disk or from what the manifest claims about itself. Warnings are advisory and never stop a plugin loading.",

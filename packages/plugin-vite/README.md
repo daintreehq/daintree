@@ -26,3 +26,26 @@ The plugin sets `build.rollupOptions.external` to:
 ```
 
 The regex form is load-bearing — `external: ["react"]` only matches the literal `"react"` and silently bundles `react/jsx-runtime` into plugin output.
+
+## Document packages
+
+Use `documentPackages` for libraries that register document globals, such as Lexxy and Trix. Each entry builds independently into one content-addressed JavaScript asset; the virtual import exports an asynchronous loader. Matching document-scoped packages execute once across plugins and hot reloads. Different versions or bundle hashes are refused until the project window reloads.
+
+```ts
+daintreePlugin({
+  documentPackages: {
+    "@acme/markdown-editor": {
+      entry: "src/editor-adapter.ts",
+      version: "1.0.0",
+      scope: "document",
+    },
+  },
+});
+```
+
+```ts
+import loadEditor from "virtual:daintree-document-package/@acme/markdown-editor";
+const editor = await loadEditor();
+```
+
+The default scope is `"plugin"`; use `"document"` explicitly when cooperating trusted plugins must share global registration. This is a module-lifetime boundary, not a security sandbox. Keep the complete editor integration in the adapter, styles in the view build, and per-panel state in per-instance objects. See [the full contract and security recommendations](../../docs/plugins/document-packages.md).

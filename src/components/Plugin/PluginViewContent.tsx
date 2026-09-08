@@ -31,6 +31,7 @@ import {
   usePluginRuntimeStatusStore,
 } from "@/store/pluginRuntimeStatusStore";
 import { PluginViewRuntimeStatus } from "@/components/Plugin/PluginViewRuntimeStatus";
+import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { presentWorkerStatus, useWorkerStall } from "@/components/Plugin/pluginWorkerPresentation";
 import {
   PLUGIN_STYLE_ROOT_PROPS,
@@ -338,6 +339,7 @@ export function makePluginViewContent(
             recoveryComponentPath = recovered;
           }
           const viewPath = recoveryComponentPath ?? componentPath;
+          pluginDocumentRuntime.registerView(pluginId, viewPath);
           try {
             const module: unknown = await import(/* @vite-ignore */ viewPath);
             // Awaited AFTER the import, so the two run concurrently, but before

@@ -37,6 +37,7 @@ import {
   onRecoverableError,
 } from "./utils/reactRootErrorCallbacks";
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
+import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -54,6 +55,7 @@ async function bootstrap() {
   void initRendererSentry();
 
   cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
+  installPluginDocumentRuntime();
 
   applyDefaultAppTheme(document.documentElement);
 

@@ -1,6 +1,8 @@
 import { captureRendererException } from "@/utils/rendererSentry";
 import { useErrorStore, type ErrorType } from "@/store/errorStore";
 import { logError } from "@/utils/logger";
+import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import {
   getErrorMessage,
   classifyError,
@@ -85,7 +87,15 @@ export function reportRendererGlobalError(
     const stack = getStack(rawError);
     const correlationId = crypto.randomUUID();
 
-    const source = kind === "unhandledrejection" ? "Renderer Promise Rejection" : "Renderer Error";
+    const pluginSource =
+      pluginDocumentRuntime.errorSource(rawError) ??
+      pluginDocumentRuntime.sourceForStack(stack) ??
+      (metadata.filename ? pluginDocumentRuntime.sourceForUrl(metadata.filename) : undefined);
+    const source = pluginSource
+      ? `Plugin Error (${pluginManifestIdFromInstanceKey(pluginSource.pluginId)})`
+      : kind === "unhandledrejection"
+        ? "Renderer Promise Rejection"
+        : "Renderer Error";
 
     let details = stack ?? "";
     if (metadata.filename) {
@@ -114,7 +124,19 @@ export function reportRendererGlobalError(
     }
 
     captureRendererException(rawError instanceof Error ? rawError : new Error(message), {
-      tags: { source: kind === "unhandledrejection" ? "renderer-rejection" : "renderer-error" },
+      tags: {
+        source: pluginSource
+          ? "plugin-renderer-error"
+          : kind === "unhandledrejection"
+            ? "renderer-rejection"
+            : "renderer-error",
+        ...(pluginSource
+          ? {
+              pluginId: pluginSource.pluginId,
+              pluginGeneration: pluginSource.generation ?? "unknown",
+            }
+          : {}),
+      },
       extra: {
         correlationId,
         filename: metadata.filename,

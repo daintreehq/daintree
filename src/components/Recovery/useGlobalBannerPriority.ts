@@ -4,6 +4,8 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
+import { useSyncExternalStore } from "react";
+import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import {
   useMissingPrerequisiteStore,
   selectMissingPrerequisiteVisible,
@@ -16,6 +18,7 @@ export type GlobalBannerSlot =
   | "restore-confirmation"
   | "missing-prerequisite"
   | "forge-token"
+  | "plugin-document"
   | "cloud-sync"
   | "rosetta"
   | null;
@@ -27,6 +30,7 @@ export type GlobalBannerSlot =
 //   restore-confirmation — informational "session recovered" toast-banner
 //   missing-prerequisite — a fatal tool (Git, Node) isn't installed (#11763)
 //   forge-token        — a forge provider's credentials expired; auth failure, panel data broken
+//   plugin-document    — plugin registrations need document replacement
 //   cloud-sync         — project sits in a synced folder; environmental warning
 //   rosetta            — x64 build translated on Apple Silicon; permanent perf warning
 // Watchdog sits below host-crash because a live host failure is more urgent
@@ -65,6 +69,10 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   const cloudSyncService = useCloudSyncBannerStore((s) => s.service);
   const rosettaVisible = useRosettaBannerStore((s) => s.visible);
   const prerequisiteVisible = useMissingPrerequisiteStore(selectMissingPrerequisiteVisible);
+  const documentDiagnostics = useSyncExternalStore(
+    pluginDocumentRuntime.subscribe,
+    pluginDocumentRuntime.getSnapshot
+  );
 
   if (backendStatus !== "connected") return "host-crash";
   if (watchdogStatus === "disabled") return "watchdog-disabled";
@@ -72,6 +80,7 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   if (restoreVisible) return "restore-confirmation";
   if (prerequisiteVisible) return "missing-prerequisite";
   if (tokenUnhealthy) return "forge-token";
+  if (documentDiagnostics.length > 0) return "plugin-document";
   if (cloudSyncService !== null) return "cloud-sync";
   if (rosettaVisible) return "rosetta";
   return null;
