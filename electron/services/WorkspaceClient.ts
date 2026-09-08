@@ -1121,7 +1121,8 @@ export class WorkspaceClient extends EventEmitter {
     rootPath: string,
     prNumber: number,
     headRefName: string,
-    remoteName?: string
+    remoteName?: string,
+    refspec?: string
   ): Promise<void> {
     const host = this.pool.resolveHostForPath(rootPath);
     if (!host) throw new Error("No workspace host for project");
@@ -1133,6 +1134,7 @@ export class WorkspaceClient extends EventEmitter {
       prNumber,
       headRefName,
       remoteName,
+      refspec,
     });
   }
 

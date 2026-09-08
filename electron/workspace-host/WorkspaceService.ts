@@ -4610,22 +4610,26 @@ export class WorkspaceService {
    * "couldn't find remote ref". Defaults to `origin` when the caller can't
    * resolve one, which is the pre-fix behavior.
    *
-   * The refspec itself stays GitHub-shaped (`pull/<n>/head`, also served by
-   * Gitea and Forgejo). GitLab's `merge-requests/<n>/head` and Bitbucket's
-   * variants would need per-provider refspec mapping — a separate gap this
-   * doesn't claim to close.
+   * `refspec` is the complete `src:dst` pair the forge provider built, also
+   * resolved in main (#12324) — the host must not know forge ref shapes.
+   * Omitted falls back to the GitHub-shaped `pull/<n>/head`, which Gitea and
+   * Forgejo also serve and which was the only shape before #12324. GitLab's
+   * `refs/merge-requests/<n>/head` arrives through this parameter.
    */
   async fetchPRBranch(
     requestId: string,
     rootPath: string,
     prNumber: number,
     headRefName: string,
-    remoteName?: string
+    remoteName?: string,
+    refspec?: string
   ): Promise<void> {
     try {
       const git = await createAuthenticatedGit(rootPath);
       const remote = remoteName && remoteName.length > 0 ? remoteName : "origin";
-      await git.raw(["fetch", remote, `pull/${prNumber}/head:${headRefName}`]);
+      const effectiveRefspec =
+        refspec && refspec.length > 0 ? refspec : `pull/${prNumber}/head:${headRefName}`;
+      await git.raw(["fetch", remote, effectiveRefspec]);
       this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
     } catch (error) {
       const gitReason = classifyGitError(error);

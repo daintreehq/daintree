@@ -377,6 +377,67 @@ describe("worktree.createWithRecipe", () => {
     expect(worktreeClientMock.create).not.toHaveBeenCalled();
   });
 
+  it("PR path names the branch and a way forward, keeping the git reason", async () => {
+    // The agent gets no banner and no retry affordance, so the raw
+    // "couldn't find remote ref" has to be wrapped into something it can act
+    // on — without losing the only part that says why (#12324).
+    forgeClientMock.getPR.mockResolvedValue({
+      number: 42,
+      headRef: "contrib/x",
+      title: "x",
+      url: "u",
+    });
+    worktreeClientMock.fetchPRBranch.mockRejectedValue(
+      new Error("fatal: couldn't find remote ref pull/42/head")
+    );
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
+      /Couldn't fetch branch "contrib\/x" for pull request #42/
+    );
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
+      /source\.kind="existingBranch"/
+    );
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
+      /couldn't find remote ref pull\/42\/head/
+    );
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+  });
+
+  it("PR path keeps the original error as the cause", async () => {
+    forgeClientMock.getPR.mockResolvedValue({
+      number: 42,
+      headRef: "contrib/x",
+      title: "x",
+      url: "u",
+    });
+    const original = new Error("git fetch failed");
+    worktreeClientMock.fetchPRBranch.mockRejectedValue(original);
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toMatchObject({
+      cause: original,
+    });
+  });
+
+  it("PR path survives a rejection that is not an Error", async () => {
+    // Electron's structured clone strips the Error prototype across IPC, so
+    // the wrap must read `{ message }` duck-typed values too.
+    forgeClientMock.getPR.mockResolvedValue({
+      number: 42,
+      headRef: "contrib/x",
+      title: "x",
+      url: "u",
+    });
+    worktreeClientMock.fetchPRBranch.mockRejectedValue({ message: "cloned failure" });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
+      /cloned failure/
+    );
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+  });
+
   // This used to be a runtime throw inside run(), which meant the advertised
   // schema said the call was valid and only a dispatch could teach otherwise.
   // It is a schema rejection now, so assert it where it actually lives.

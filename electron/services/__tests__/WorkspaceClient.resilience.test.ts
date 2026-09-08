@@ -2085,6 +2085,47 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(hostBReqs).toHaveLength(0);
     });
 
+    it("carries the resolved remote and refspec on the fetch-pr-branch request", async () => {
+      // Both are resolved in main so the workspace host stays forge-neutral
+      // (#11747, #12324); dropping either here silently reverts the fetch to
+      // `origin pull/<n>/head`.
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const fetchPromise = client.fetchPRBranch(
+        "/project-a",
+        42,
+        "feature/x",
+        "upstream",
+        "refs/merge-requests/42/head:feature/x"
+      );
+      await tick();
+      const req = h(0).getLastRequest()! as any;
+      expect(req.type).toBe("fetch-pr-branch");
+      expect(req.remoteName).toBe("upstream");
+      expect(req.refspec).toBe("refs/merge-requests/42/head:feature/x");
+      h(0).resolveRequest(req.requestId, {});
+
+      await fetchPromise;
+    });
+
+    it("omits both when the caller resolved neither", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const fetchPromise = client.fetchPRBranch("/project-a", 42, "feature/x");
+      await tick();
+      const req = h(0).getLastRequest()! as any;
+      expect(req.type).toBe("fetch-pr-branch");
+      expect(req.remoteName).toBeUndefined();
+      expect(req.refspec).toBeUndefined();
+      h(0).resolveRequest(req.requestId, {});
+
+      await fetchPromise;
+    });
+
     it("resolves child paths to parent project host", async () => {
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);

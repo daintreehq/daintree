@@ -1146,6 +1146,31 @@ export interface ForgeProviderImpl {
    * doesn't support PR-file deep-links.
    */
   buildPRFileUrl?(repo: RepoRef, number: number, path: string): string;
+  /**
+   * Optional. Build the refspec that fetches a pull request's head into the
+   * local branch `headRefName`, for the fallback checkout path that runs when
+   * the head branch isn't already known locally (a fork PR, or one never
+   * fetched). Returns the complete `src:dst` pair — the provider knows its own
+   * ref hierarchy, so the host never reconstructs a forge-shaped ref.
+   *
+   * Omit the field to accept the host's GitHub-shaped default,
+   * `pull/<n>/head:<headRefName>`, which Gitea and Forgejo also serve. GitLab
+   * would return `refs/merge-requests/${prNumber}/head:${headRefName}` — fully
+   * qualified, since `merge-requests/` is not a hierarchy git expands on its
+   * own. `prNumber` is the project-scoped number the PR's URL shows (GitLab's
+   * `iid`), not a forge-global id.
+   *
+   * Return `null` when the forge exposes no fetchable PR-head ref at all
+   * (Bitbucket Cloud) — the host then reports that rather than attempting a
+   * fetch that cannot succeed. Throwing is not a way to signal this: the host
+   * treats a throw as "capability unknown" and falls back to the default.
+   *
+   * The returned refspec must not force-update (no leading `+`); the host
+   * rejects one that does and falls back. Note the PR-head ref is not
+   * guaranteed to be permanent — GitLab prunes merged/closed MR refs after
+   * roughly two weeks, so an old PR can stop being fetchable.
+   */
+  buildPRHeadRefspec?(prNumber: number, headRefName: string): string | null;
 
   // Mutations — providers that don't support a mutation throw "Not supported".
   /**

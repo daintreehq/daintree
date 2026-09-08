@@ -224,6 +224,60 @@ export async function resolveForgeRemoteNameForCwd(cwd: string): Promise<string 
   return null;
 }
 
+/**
+ * The provider-shaped refspec that fetches a PR's head into `headRefName`, for
+ * the checkout fallback that runs when the head branch isn't already local
+ * (#12324). Resolved here, next to the remote name, so the workspace host never
+ * gains a forge-provider dependency.
+ *
+ * Three outcomes, and the difference between the last two is the whole point:
+ *
+ *  - a string — the provider's refspec, used verbatim.
+ *  - `null` — the provider says this forge has no fetchable PR-head ref at all
+ *    (Bitbucket Cloud). The caller reports that instead of fetching.
+ *  - `undefined` — we could not find out. No provider is registered for this
+ *    repo, none is installed, the plugin failed to activate, the capability is
+ *    absent, or the builder threw or returned something unusable. The caller
+ *    falls back to the GitHub-shaped default, which is exactly the pre-#12324
+ *    behavior — a repo whose PR fetch worked before must never start failing
+ *    because a *capability lookup* did (#10192).
+ *
+ * Unlike {@link resolveForgeRemoteNameForCwd} this does activate the provider:
+ * the builder lives on the implementation, and there is no manifest-level
+ * declaration to read instead. Deciding the refspec from whichever plugins
+ * happen to be warm would make the same repo fetch differently run to run. The
+ * cost is bounded — activation is coalesced by PluginService, and the caller
+ * is about to do a network fetch regardless.
+ *
+ * Callers must resolve the remote name BEFORE calling this. That call fails
+ * closed on a stale or unverifiable remote, and this function's catch-all would
+ * otherwise swallow the same failure into a silent GitHub-shaped fallback.
+ */
+export async function resolvePRHeadRefspecForCwd(
+  cwd: string,
+  prNumber: number,
+  headRefName: string
+): Promise<string | null | undefined> {
+  let refspec: string | null;
+  try {
+    const { impl } = await resolveForCwd(cwd);
+    // Truthiness, never `in`: a capability explicitly set to `undefined` still
+    // satisfies `in` and would be called as a non-function.
+    if (!impl.buildPRHeadRefspec) return undefined;
+    refspec = impl.buildPRHeadRefspec(prNumber, headRefName);
+  } catch {
+    return undefined;
+  }
+  if (refspec === null) return null;
+  // The value goes straight into `git fetch` argv, so a provider bug must not
+  // become a surprising local-ref write. A `+` prefix would silently turn a
+  // fetch that has never force-updated into one that clobbers the destination.
+  if (typeof refspec !== "string") return undefined;
+  const trimmed = refspec.trim();
+  if (!trimmed || trimmed.startsWith("+") || !trimmed.includes(":")) return undefined;
+  return trimmed;
+}
+
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {
   if (typeof cwd !== "string" || !cwd) {
     throw new Error("Invalid working directory");

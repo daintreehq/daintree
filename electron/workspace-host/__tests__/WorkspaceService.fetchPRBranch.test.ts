@@ -157,6 +157,87 @@ describe("WorkspaceService.fetchPRBranch", () => {
     expect(mockSimpleGit.raw).toHaveBeenCalledWith(["fetch", "origin", "pull/7/head:feature/x"]);
   });
 
+  it("uses the provider's refspec verbatim when main resolved one", async () => {
+    mockSimpleGit.raw.mockResolvedValueOnce("");
+
+    // GitLab publishes MR heads under a different hierarchy than GitHub's
+    // `pull/<n>/head`, so the shape has to come from the provider (#12324).
+    await service.fetchPRBranch(
+      "req-gitlab",
+      "/test/root",
+      42,
+      "feature/my-branch",
+      "upstream",
+      "refs/merge-requests/42/head:feature/my-branch"
+    );
+
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
+      "fetch",
+      "upstream",
+      "refs/merge-requests/42/head:feature/my-branch",
+    ]);
+  });
+
+  it("combines a resolved refspec with the origin remote default", async () => {
+    mockSimpleGit.raw.mockResolvedValueOnce("");
+
+    await service.fetchPRBranch(
+      "req-gitlab-origin",
+      "/test/root",
+      7,
+      "feature/x",
+      undefined,
+      "refs/merge-requests/7/head:feature/x"
+    );
+
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
+      "fetch",
+      "origin",
+      "refs/merge-requests/7/head:feature/x",
+    ]);
+  });
+
+  it("falls back to the GitHub-shaped refspec when none was resolved", async () => {
+    // The whole compatibility guarantee: a repo that fetched before #12324
+    // must issue byte-identical argv when no provider capability resolves.
+    mockSimpleGit.raw.mockResolvedValueOnce("");
+
+    await service.fetchPRBranch(
+      "req-no-refspec",
+      "/test/root",
+      42,
+      "feature/x",
+      "upstream",
+      undefined
+    );
+
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith(["fetch", "upstream", "pull/42/head:feature/x"]);
+  });
+
+  it("reports a failed provider-shaped fetch with the same classification", async () => {
+    mockSimpleGit.raw.mockRejectedValueOnce(
+      new Error("fatal: couldn't find remote ref refs/merge-requests/999/head")
+    );
+
+    await service.fetchPRBranch(
+      "req-gitlab-miss",
+      "/test/root",
+      999,
+      "gone",
+      "origin",
+      "refs/merge-requests/999/head:gone"
+    );
+
+    expect(mockSendEvent).toHaveBeenCalledWith({
+      type: "fetch-pr-branch-result",
+      requestId: "req-gitlab-miss",
+      success: false,
+      error: "fatal: couldn't find remote ref refs/merge-requests/999/head",
+      gitReason: "pathspec-invalid",
+      recoveryAction: undefined,
+    });
+  });
+
   it("should fetch PR branch using createAuthenticatedGit and emit success", async () => {
     const { createAuthenticatedGit } = await import("../../utils/hardenedGit.js");
     const { createHardenedGit } = await import("../../utils/hardenedGit.js");
