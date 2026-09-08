@@ -1058,9 +1058,11 @@ describe("FileLinksAddon", () => {
       vi.mocked(systemClient.openInEditor).mockRejectedValue(new Error("no editor configured"));
 
       link!.activate(makeClick({ metaKey: true }), link!.text);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The fallback awaits a dynamic import, so a single macrotask is not a
+      // completion barrier — wait for the observable call instead.
+      await vi.waitFor(() => expect(systemClient.openInEditor).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
 
-      expect(systemClient.openInEditor).toHaveBeenCalledTimes(1);
       // The fallback has to carry the project id too, or it launches whatever
       // editor discovery finds first instead of the configured one (#12327).
       expect(systemClient.openInEditor).toHaveBeenCalledWith({
@@ -1069,7 +1071,6 @@ describe("FileLinksAddon", () => {
         col: undefined,
         projectId: PROJECT_ID,
       });
-      expect(notify).toHaveBeenCalledTimes(1);
       const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
       expect(payload.message).toContain("no editor configured");
     });
@@ -1136,10 +1137,9 @@ describe("FileLinksAddon", () => {
       );
 
       link!.activate(makeClick({ metaKey: true }), link!.text);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(systemClient.openInEditor).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
 
-      expect(systemClient.openInEditor).toHaveBeenCalledTimes(1);
-      expect(notify).toHaveBeenCalledTimes(1);
       const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
       expect(payload.message).toContain("Path is not a valid file");
     });

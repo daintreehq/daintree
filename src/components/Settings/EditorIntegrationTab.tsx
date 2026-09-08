@@ -282,7 +282,7 @@ export function EditorIntegrationTab() {
 
             {testResult === "ok" && (
               <span className="flex items-center gap-1 text-xs text-status-success">
-                <CheckCircle className="w-3.5 h-3.5" /> Editor launched
+                <CheckCircle className="w-3.5 h-3.5" /> Open requested
               </span>
             )}
             {testResult === "error" && (

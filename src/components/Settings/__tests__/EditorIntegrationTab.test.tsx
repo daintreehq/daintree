@@ -85,15 +85,16 @@ describe("EditorIntegrationTab", () => {
     fireEvent.click(testButton);
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Testing…" })).toBeDefined());
-    expect(screen.queryByText("Editor launched")).toBeNull();
+    expect(screen.queryByText("Open requested")).toBeNull();
 
     await act(async () => {
       settle();
     });
 
-    // "launched" is what we observed — a spawned process. Whether a window
-    // appeared is not something this path can verify.
-    await waitFor(() => expect(screen.getByText("Editor launched")).toBeDefined());
+    // All this path verifies is that the request was handled. The chain can
+    // end in a fallback editor, or in shell.openPath, so naming an editor
+    // would claim more than was observed.
+    await waitFor(() => expect(screen.getByText("Open requested")).toBeDefined());
   });
 
   it("surfaces a failed launch instead of a success message", async () => {
@@ -103,6 +104,6 @@ describe("EditorIntegrationTab", () => {
     fireEvent.click(testButton);
 
     await waitFor(() => expect(screen.getByText("Failed to open")).toBeDefined());
-    expect(screen.queryByText("Editor launched")).toBeNull();
+    expect(screen.queryByText("Open requested")).toBeNull();
   });
 });

@@ -366,7 +366,53 @@ describe("EditorService.openFile", () => {
 
     // Promise settlement is the only channel this path uses, so an
     // event-only implementation would hang here rather than fail.
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0]?.[0]).toBe("/bin/broken-editor");
     expect(shell.openPath).toHaveBeenCalledWith("/absolute/path/file.ts");
+  });
+
+  it("holds the fallback until the launch verdict arrives, rather than assuming success", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const children = mockLaunches("manual");
+
+    const { shell } = await import("electron");
+    vi.mocked(shell.openPath).mockResolvedValue("");
+
+    const openFile = await loadOpenFile();
+    const pending = openFile("/absolute/path/file.ts", undefined, undefined, CUSTOM_EDITOR);
+
+    await vi.waitFor(() => expect(children).toHaveLength(1));
+    // Nothing has reported either way yet, so nothing downstream may run.
+    expect(shell.openPath).not.toHaveBeenCalled();
+
+    children[0]!.rejectLaunch();
+    await pending;
+
+    expect(shell.openPath).toHaveBeenCalledWith("/absolute/path/file.ts");
+  });
+
+  it("exhausts every candidate when they all fail asynchronously, then surfaces the shell error", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    process.env.VISUAL = "code";
+    process.env.EDITOR = "subl --wait";
+    mockLaunches("enoent");
+
+    const { shell } = await import("electron");
+    vi.mocked(shell.openPath).mockResolvedValue("Access denied");
+
+    const openFile = await loadOpenFile();
+    await expect(
+      openFile("/absolute/path/file.ts", undefined, undefined, CUSTOM_EDITOR)
+    ).rejects.toThrow("Failed to open file: Access denied");
+
+    // Configured editor, then $VISUAL, then $EDITOR, then the macOS handler —
+    // an async failure must not stop the chain at any link.
+    expect(execaMock.execa.mock.calls.map((call) => call[0])).toEqual([
+      "/bin/broken-editor",
+      "code",
+      "subl",
+      "open",
+    ]);
   });
 
   it("counts a spawn that later exits nonzero as launched — exit status is not observed", async () => {

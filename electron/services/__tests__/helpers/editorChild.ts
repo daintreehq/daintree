@@ -16,14 +16,20 @@ export type ChildBehaviour =
   /** execa's early-error dummy child: no events whatsoever, still rejects. */
   | "early-error"
   /** Exited 0 before anything observed 'spawn'. */
-  | "resolved";
+  | "resolved"
+  /** Nothing happens until the test drives it — see `ChildDouble` controls. */
+  | "manual";
 
 export interface ChildDouble {
   unref: Mock;
   catch: Mock;
   then: Mock;
   once: Mock;
+  on: Mock;
   listenerCount: (event: string) => number;
+  /** Drive a "manual" child from the test, one channel at a time. */
+  emitSpawn: () => void;
+  rejectLaunch: (error?: Error) => void;
 }
 
 export function makeChildDouble(behaviour: ChildBehaviour): ChildDouble {
@@ -31,11 +37,18 @@ export function makeChildDouble(behaviour: ChildBehaviour): ChildDouble {
   // A plain registry rather than an EventEmitter: emitting 'error' with no
   // listener would throw synchronously, which is the very failure shape these
   // doubles exist to rule out.
+  const once = new WeakSet<() => void>();
+  const register = (event: string, listener: () => void, removeAfterCall: boolean) => {
+    const registered = listeners.get(event) ?? new Set<() => void>();
+    registered.add(listener);
+    listeners.set(event, registered);
+    if (removeAfterCall) once.add(listener);
+  };
   const emit = (event: string) => {
     const registered = listeners.get(event);
     if (!registered) return;
     for (const listener of [...registered]) {
-      registered.delete(listener);
+      if (once.has(listener)) registered.delete(listener);
       listener();
     }
   };
@@ -54,12 +67,18 @@ export function makeChildDouble(behaviour: ChildBehaviour): ChildDouble {
       promise.then(onFulfilled, onRejected)
     ),
     once: vi.fn((event: string, listener: () => void) => {
-      const registered = listeners.get(event) ?? new Set<() => void>();
-      registered.add(listener);
-      listeners.set(event, registered);
+      register(event, listener, true);
+      return child;
+    }),
+    // Present so an event-only implementation written against `on` registers
+    // here and hangs, rather than dying on a missing method and looking fixed.
+    on: vi.fn((event: string, listener: () => void) => {
+      register(event, listener, false);
       return child;
     }),
     listenerCount: (event: string) => listeners.get(event)?.size ?? 0,
+    emitSpawn: () => emit("spawn"),
+    rejectLaunch: (error = new Error("spawn ENOENT")) => rejectPromise(error),
   };
 
   // Deferred by one microtask so the caller has attached its listeners first —
@@ -83,6 +102,8 @@ export function makeChildDouble(behaviour: ChildBehaviour): ChildDouble {
         break;
       case "resolved":
         resolvePromise();
+        break;
+      case "manual":
         break;
     }
   });

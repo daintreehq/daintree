@@ -352,9 +352,14 @@ describe("ReviewHub", () => {
     openInEditorMock.mockReset().mockResolvedValue(undefined);
     // Deliberately unlike the fixture worktree id — a worktree id is not a
     // project id, and only the project id loads the preferred-editor setting.
-    useProjectStore.setState({
-      currentProject: { id: REVIEW_PROJECT_ID, name: "review", path: "/repo" } as Project,
-    });
+    const project: Project = {
+      id: REVIEW_PROJECT_ID,
+      name: "review",
+      path: "/repo",
+      emoji: "🌳",
+      lastOpened: 0,
+    };
+    useProjectStore.setState({ currentProject: project });
     stageFileMock.mockReset().mockResolvedValue(undefined);
     unstageFileMock.mockReset().mockResolvedValue(undefined);
     stageFilesMock.mockReset().mockResolvedValue(undefined);
