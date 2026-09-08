@@ -773,12 +773,16 @@ class FileLink implements ILink {
           { path: this._absolutePath, line: this._line, col: this._col },
           { source: "user" }
         )
-        .then((result) => {
+        .then(async (result) => {
           if (result.ok) return;
+          // Lazy import: projectStore pulls in TerminalInstanceService, which
+          // imports this module — a static import would close that cycle.
+          const { useProjectStore } = await import("@/store/projectStore");
           return systemClient.openInEditor({
             path: this._absolutePath,
             line: this._line,
             col: this._col,
+            projectId: useProjectStore.getState().currentProject?.id,
           });
         })
         .catch((error) => {

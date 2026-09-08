@@ -39,6 +39,7 @@ import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useProjectStore } from "@/store/projectStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
@@ -1201,7 +1202,12 @@ export function ReviewHubContent({
       try {
         const base = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
         const tail = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
-        const payload: { path: string; line?: number } = { path: `${base}/${tail}` };
+        const payload: { path: string; line?: number; projectId?: string } = {
+          path: `${base}/${tail}`,
+          // Read at click time rather than subscribing — without it the main
+          // process never loads the project's preferred-editor setting.
+          projectId: useProjectStore.getState().currentProject?.id,
+        };
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
           payload.line = line;
         }

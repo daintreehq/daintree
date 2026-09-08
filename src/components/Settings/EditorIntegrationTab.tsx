@@ -131,7 +131,10 @@ export function EditorIntegrationTab() {
       // Open the active project's root to test the editor integration. It is a
       // known-to-exist path inside an allowed root, so it passes the main-process
       // path-containment guard (homeDir would now be rejected as outside-root).
-      await window.electron.system.openInEditor({ path: activeProjectPath });
+      await window.electron.system.openInEditor({
+        path: activeProjectPath,
+        projectId: activeProjectId,
+      });
       if (!isMountedRef.current) return;
       setTestResult("ok");
     } catch {
@@ -279,7 +282,7 @@ export function EditorIntegrationTab() {
 
             {testResult === "ok" && (
               <span className="flex items-center gap-1 text-xs text-status-success">
-                <CheckCircle className="w-3.5 h-3.5" /> Editor opened
+                <CheckCircle className="w-3.5 h-3.5" /> Editor launched
               </span>
             )}
             {testResult === "error" && (

@@ -5,7 +5,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
-import type { WorktreeState } from "@shared/types";
+import type { WorktreeState, Project } from "@shared/types";
+import { useProjectStore } from "@/store/projectStore";
+
+const REVIEW_PROJECT_ID = "proj-review-1";
 
 const {
   getStagingStatusMock,
@@ -347,6 +350,11 @@ describe("ReviewHub", () => {
     scanConflictMarkersMock.mockReset().mockResolvedValue([]);
     checkoutOursTheirsMock.mockReset().mockResolvedValue(undefined);
     openInEditorMock.mockReset().mockResolvedValue(undefined);
+    // Deliberately unlike the fixture worktree id — a worktree id is not a
+    // project id, and only the project id loads the preferred-editor setting.
+    useProjectStore.setState({
+      currentProject: { id: REVIEW_PROJECT_ID, name: "review", path: "/repo" } as Project,
+    });
     stageFileMock.mockReset().mockResolvedValue(undefined);
     unstageFileMock.mockReset().mockResolvedValue(undefined);
     stageFilesMock.mockReset().mockResolvedValue(undefined);
@@ -569,6 +577,7 @@ describe("ReviewHub", () => {
       await waitFor(() => {
         expect(openInEditorMock).toHaveBeenCalledWith({
           path: `${WORKTREE_PATH}/src/app.ts`,
+          projectId: REVIEW_PROJECT_ID,
         });
       });
     });
@@ -595,6 +604,7 @@ describe("ReviewHub", () => {
         expect(openInEditorMock).toHaveBeenCalledWith({
           path: `${WORKTREE_PATH}/src/app.ts`,
           line: 17,
+          projectId: REVIEW_PROJECT_ID,
         });
       });
     });

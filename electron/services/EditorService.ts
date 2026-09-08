@@ -358,7 +358,20 @@ export async function openFile(
       child.unref();
       // Suppress unhandled async rejection from the detached process
       child.catch(() => {});
-      return true;
+      // execa never throws synchronously for a broken command — ENOENT and
+      // EACCES surface only as an async rejection, and its early-error path
+      // hands back a dummy child that emits no events at all. Racing "spawned"
+      // against the promise settling reads both channels, so a missing binary
+      // reports failure and the fallback chain gets its turn. It cannot hang:
+      // the promise always settles on the failure paths, and a GUI editor that
+      // outlives us wins on 'spawn' long before its promise would settle.
+      return await Promise.race([
+        new Promise<boolean>((resolve) => child.once("spawn", () => resolve(true))),
+        child.then(
+          () => true,
+          () => false
+        ),
+      ]);
     } catch {
       return false;
     }
