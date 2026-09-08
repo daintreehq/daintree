@@ -359,7 +359,10 @@ if (!gotTheLock) {
   async function createWindow(
     initialProjectPath?: string | null,
     initialProjectId?: string,
-    opts?: { revealMode?: "show" | "showInactive" }
+    opts?: {
+      revealMode?: "show" | "showInactive";
+      backgroundProjectIds?: readonly string[];
+    }
   ): Promise<CreateWindowResult> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
@@ -655,6 +658,7 @@ if (!gotTheLock) {
       initialProjectId,
       projectViewManager: pvm,
       initialAppView: appView,
+      backgroundProjectIds: opts?.backgroundProjectIds,
     });
 
     // The process is exiting, or the window never reached the registry and has
@@ -780,7 +784,15 @@ if (!gotTheLock) {
       // targeted launch is NOT read-only: opening one folder from the CLI or
       // Finder is a genuine one-window session the user asked for, so the
       // manifest should describe it.
-      initOpenWindowsTracker({ registry: windowRegistry, readOnly: launchIntent === "recovery" });
+      initOpenWindowsTracker({
+        registry: windowRegistry,
+        readOnly: launchIntent === "recovery",
+        // The manifest has to see projects whose agents outlived their renderer
+        // — LRU eviction destroys the view and leaves the PTYs running, so a
+        // view-only capture drops exactly the long-running projects a relaunch
+        // most needs back (#12320).
+        liveWorkspaceIds: () => getPtyClient()?.getLiveWorkspaceIds() ?? new Set<string>(),
+      });
 
       const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
         ? readOpenWindowsManifestSync()
@@ -817,8 +829,19 @@ if (!gotTheLock) {
           });
       }
 
+      // Whether this launch brings back more than one project per window.
+      // Computed here, once, because both inputs live here: the launch intent
+      // (a targeted or recovery launch never fans out) and the user's opt-out.
+      // Windows are handed a background list only when it holds, so no code
+      // downstream carries a second copy of the policy.
+      const restoreLiveProjects =
+        shouldRestoreWindowFleet(launchIntent) && store.get("sessionRestore")?.enabled !== false;
+      const fleetRecords = restoreLiveProjects
+        ? restoreRecords
+        : restoreRecords.map(({ projectId }) => ({ projectId }));
+
       await restoreWindowFleet({
-        records: restoreRecords,
+        records: fleetRecords,
         hadManifest,
         fallbackProjectId: lastActiveProjectId ?? undefined,
         createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),

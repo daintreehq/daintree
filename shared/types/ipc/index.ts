@@ -5,6 +5,7 @@ export * from "./system.js";
 export * from "./project.js";
 export * from "./forge.js";
 export * from "./hibernation.js";
+export * from "./sessionRestore.js";
 export * from "./idleTerminals.js";
 export * from "./idleBackgroundAutoClose.js";
 export * from "./systemSleep.js";

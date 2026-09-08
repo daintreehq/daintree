@@ -219,9 +219,13 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       const records = parseOpenWindowsManifest(row?.value ?? null);
       if (records.length === 0) return NO_MANIFEST;
 
+      // Background workspaces are validated alongside foreground ones, in the
+      // same two queries: an id that reaches the restore loop unvalidated is an
+      // id that can cold-start a view for a workspace that no longer exists
+      // (#12320).
       const workspaceIds = [
-        ...new Set(records.map((r) => r.projectId).filter((id) => id !== null)),
-      ];
+        ...new Set(records.flatMap((r) => [r.projectId, ...(r.backgroundProjectIds ?? [])])),
+      ].filter((id): id is string => id !== null);
       if (workspaceIds.length === 0) return { hadManifest: true, records };
 
       // Positively shaped on both sides, so an id that is neither reaches no

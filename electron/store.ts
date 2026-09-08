@@ -91,6 +91,15 @@ export interface StoreSchema {
     enabled: boolean;
     inactiveThresholdHours: number;
   };
+  /**
+   * Whether a relaunch brings back every project that was live, or only the one
+   * each window was showing (#12320). Read once in main before the window fleet
+   * is rebuilt, so the renderer is never asked and a disabled setting costs
+   * nothing at startup.
+   */
+  sessionRestore: {
+    enabled: boolean;
+  };
   idleTerminalNotify: {
     enabled: boolean;
     thresholdMinutes: number;
@@ -619,6 +628,13 @@ const storeOptions = {
     hibernation: {
       enabled: false,
       inactiveThresholdHours: 24,
+    },
+    // Defaults ON, unlike the opt-in lifecycle toggles around it: every editor
+    // that restores a session at all does it without being asked, and the cost
+    // here is bounded by the warm-view ceiling rather than by how many projects
+    // the user has.
+    sessionRestore: {
+      enabled: true,
     },
     idleTerminalNotify: {
       enabled: true,

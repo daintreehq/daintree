@@ -71,6 +71,61 @@ describe("PtyClient projectId assignment", () => {
     return client;
   };
 
+  describe("getLiveWorkspaceIds (#12320)", () => {
+    /**
+     * The open-window manifest needs this because a project's agents outlive
+     * its renderer: LRU eviction destroys the view and leaves the PTYs
+     * running, so a manifest built from views alone drops exactly the
+     * long-running projects a relaunch most needs to bring back.
+     */
+    it("reports every workspace that owns a tracked terminal, deduplicated", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t3", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+
+      expect(client.getLiveWorkspaceIds()).toEqual(new Set(["project-a", "project-b"]));
+    });
+
+    it("keeps a workspace while any of its terminals survives", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+
+      mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+
+      expect(client.getLiveWorkspaceIds().has("project-a")).toBe(true);
+    });
+
+    it("drops a workspace once its last terminal exits", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+
+      expect(client.getLiveWorkspaceIds().has("project-a")).toBe(false);
+    });
+
+    it("contributes nothing for a terminal with no owning workspace", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/tmp", cols: 80, rows: 24 });
+
+      expect(client.getLiveWorkspaceIds()).toEqual(new Set());
+    });
+
+    it("answers without sending anything to the host", () => {
+      // The manifest is written from the shutdown chain's synchronous prefix,
+      // where an async round trip has no chance to answer before the process
+      // ends.
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      mockChild.postMessage.mockClear();
+
+      client.getLiveWorkspaceIds();
+
+      expect(mockChild.postMessage).not.toHaveBeenCalled();
+    });
+  });
+
   it("defaults spawn() projectId to activeProjectId when omitted", () => {
     const client = createClient();
     client.setActiveProject(1, "project-a");

@@ -64,6 +64,14 @@ export interface PaintGate {
 
 export type EvictionReason = "lru" | "pressure" | "limit-change";
 
+/**
+ * How a wait for a view's `session-restore:view-hydrated` signal ended
+ * (#12320). `"timeout"` is a failure, not a slow success: the renderer never
+ * reported that it restored its panels, so its saved agents may never have
+ * been respawned.
+ */
+export type ViewHydrationOutcome = "hydrated" | "timeout" | "cancelled";
+
 export interface ViewEntry {
   view: WebContentsView;
   projectId: string;

@@ -290,6 +290,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       performanceMode: false,
     },
     hibernation: { enabled: false, inactiveThresholdHours: 24 },
+    sessionRestore: { enabled: true },
     idleTerminalNotify: { enabled: true, thresholdMinutes: 60 },
     idleTerminalDismissals: {},
     idleTerminalNotifiedAt: {},

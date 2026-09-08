@@ -1735,6 +1735,29 @@ export class PtyClient extends EventEmitter {
     return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
   }
 
+  /**
+   * Workspaces that currently own at least one tracked terminal (#12320).
+   *
+   * The open-window manifest needs this because a project's agents outlive its
+   * renderer: `evictStaleViews` destroys the view, the PTYs keep running, and
+   * the project then appears in no `ProjectViewManager` at all. Building the
+   * manifest from views alone would silently drop exactly the long-running
+   * projects a relaunch most needs to bring back.
+   *
+   * Synchronous and local by design — it reads the same `pendingSpawns` map
+   * `getTerminalProjectId` does. The manifest is written from the shutdown
+   * chain's synchronous prefix, where an async round trip to the pty-host has
+   * no chance to answer before the process ends.
+   */
+  getLiveWorkspaceIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const options of this.pendingSpawns.values()) {
+      const projectId = options?.projectId;
+      if (typeof projectId === "string" && projectId.length > 0) ids.add(projectId);
+    }
+    return ids;
+  }
+
   trash(id: string): void {
     void getTrashedPidTracker()
       .persistTrashed(id, this.terminalPids.get(id))

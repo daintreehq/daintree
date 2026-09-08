@@ -45,6 +45,30 @@ vi.mock("electron", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   createLogger: vi.fn(() => loggerMethods),
+  // `relaunchApp` (reached from the mitigation paths since #12320) logs through
+  // these. A factory mock that omits them hands back `undefined` and throws at
+  // call time rather than at collection.
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+const shutdownMock = vi.hoisted(() => ({
+  result: "started" as "started" | "already-shutting-down" | "unavailable",
+  onSettled: null as null | ((outcome: "clean" | "dirty") => void),
+}));
+
+// GPU mitigations now restart through the shutdown coordinator, so the chain
+// that captures every agent's `--resume` session runs before the exit (#12320).
+vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
+  startShutdown: (_initiator: string, onSettled: (outcome: "clean" | "dirty") => void) => {
+    shutdownMock.onSettled = onSettled;
+    if (shutdownMock.result === "started") {
+      // Settle synchronously: these tests assert the mitigation reaches the
+      // exit, not the chain's own internals (covered in shutdown.test.ts).
+      onSettled("clean");
+    }
+    return shutdownMock.result;
+  },
 }));
 
 const telemetryServiceMock = vi.hoisted(() => ({
@@ -96,6 +120,8 @@ describe("GpuCrashMonitorService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    shutdownMock.result = "started";
+    shutdownMock.onSettled = null;
     Object.keys(appListeners).forEach((k) => delete appListeners[k]);
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gpu-crash-test-"));
     appMock.getPath.mockReturnValue(tmpDir);

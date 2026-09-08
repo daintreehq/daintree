@@ -21,6 +21,7 @@ export {
 } from "./projectClient";
 export { globalEnvClient, invalidateGlobalEnvCache } from "./globalEnvClient";
 export { scratchClient } from "./scratchClient";
+export { sessionRestoreClient } from "./sessionRestoreClient";
 export { slashCommandsClient } from "./slashCommandsClient";
 export { systemClient } from "./systemClient";
 export { terminalClient } from "./terminalClient";

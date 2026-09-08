@@ -383,6 +383,9 @@ export const CHANNELS = {
   PORTAL_TAB_EVICTED: "portal:tab-evicted",
   PORTAL_TABS_EVICTED: "portal:tabs-evicted",
 
+  SESSION_RESTORE_GET_CONFIG: "session-restore:get-config",
+  SESSION_RESTORE_UPDATE_CONFIG: "session-restore:update-config",
+  SESSION_RESTORE_VIEW_HYDRATED: "session-restore:view-hydrated",
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
   HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",

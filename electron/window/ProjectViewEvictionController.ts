@@ -122,6 +122,40 @@ export function evictDeadView(
 }
 
 /** Returns the number of views actually evicted — 0 means nothing was eligible. */
+/**
+ * Whether this window can afford to boot one more background renderer, and why
+ * not when it can't (#12320).
+ *
+ * Admission before creation, deliberately, rather than the create-then-evict
+ * shape `switchTo` uses. A user switch has to happen whatever the cost, so
+ * overshooting the cap for a moment and letting the deferred `evictStaleViews`
+ * repair it is the right trade there. A background restore has no such claim:
+ * overshooting would mean spawning a renderer only for the LRU sweep to
+ * destroy one — possibly the one just restored — which converts a memory
+ * budget into renderer churn.
+ *
+ * Reads the same numbers the eviction pass converges toward, so restore and
+ * reclaim cannot disagree: the configured cap, and the pressure ladder's
+ * target when a policy and a reading are both available. The cap counts the
+ * active view, so a window at the ceiling reports `"capacity"` rather than
+ * evicting a sibling to make room — a project the user is rotating through is
+ * worth more than one the previous session left cold.
+ */
+export function backgroundRestoreCapacity(
+  host: ProjectViewManager
+): "available" | "capacity" | "pressure" {
+  const availableMb = getAvailableMemoryMb();
+  const policy = host.memoryPressurePolicy;
+  const { level, targetMax } =
+    policy != null && availableMb != null
+      ? memoryPressureTarget(availableMb, policy, host.maxCachedViews)
+      : { level: "none" as const, targetMax: host.maxCachedViews };
+
+  if (host.views.size >= host.maxCachedViews) return "capacity";
+  if (host.views.size >= targetMax) return level === "none" ? "capacity" : "pressure";
+  return "available";
+}
+
 export function evictStaleViews(
   host: ProjectViewManager,
   reason: EvictionReason,

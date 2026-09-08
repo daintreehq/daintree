@@ -29,8 +29,17 @@ import { performSwitch } from "./ProjectViewSwitchController.js";
 import { cleanupEntry } from "./ProjectViewLifecycleController.js";
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
+import {
+  restoreInBackground,
+  type BackgroundRestoreResult,
+} from "./ProjectViewRestoreController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
-import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
+import type {
+  PaintGate,
+  PaintGateOutcome,
+  ViewEntry,
+  ViewHydrationOutcome,
+} from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
 import type {
   ProjectFocusOnActivateIntent,
@@ -296,6 +305,23 @@ export class ProjectViewManager {
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
   evictionTimestamps = new Map<string, number>();
+  /**
+   * In-flight background restores, keyed by project id (#12320). Registered
+   * before the job's first await so a switch racing it always sees it.
+   */
+  backgroundRestores = new Map<
+    string,
+    { controller: AbortController; promise: Promise<BackgroundRestoreResult> }
+  >();
+  /**
+   * Pending `app:view-hydrated` waiters, keyed by webContents id.
+   *
+   * Separate from {@link hydratedWebContentsIds}, which latches signals that
+   * arrived before anyone waited — hydration can complete on the same tick the
+   * load settles, and a dropped signal would strand a restore on its timeout.
+   */
+  private hydrationWaiters = new Map<number, () => void>();
+  private hydratedWebContentsIds = new Set<number>();
   efficiencyFreezeEnabled = false;
   private efficiencyFreezeTimer: NodeJS.Timeout | null = null;
   private backgroundResizeTimer: NodeJS.Timeout | null = null;
@@ -757,6 +783,161 @@ export class ProjectViewManager {
     }
   }
 
+  /**
+   * Bring a project back live in the background — a registered, loaded, never
+   * visible view whose own hydration respawns its agents with `--resume`
+   * (#12320). See ProjectViewRestoreController for why it must be a real
+   * renderer and why it must never be attached or activated.
+   *
+   * Deliberately NOT enqueued on `switchChain`: a restore can take tens of
+   * seconds, and queuing it there would put every user switch behind it. The
+   * two are reconciled by {@link abandonBackgroundRestore} instead.
+   *
+   * Concurrent calls for the same project share one job.
+   */
+  restoreInBackground(
+    projectId: string,
+    projectPath: string,
+    opts: { lastUsed: number } = { lastUsed: Date.now() }
+  ): Promise<BackgroundRestoreResult> {
+    const existing = this.backgroundRestores.get(projectId);
+    if (existing) return existing.promise;
+
+    const controller = new AbortController();
+    const promise = restoreInBackground(this, projectId, projectPath, {
+      signal: controller.signal,
+      lastUsed: opts.lastUsed,
+    }).finally(() => {
+      // Only if still ours: an abandon-then-restart for the same project would
+      // otherwise have the first job's cleanup delete the second job's entry.
+      if (this.backgroundRestores.get(projectId)?.controller === controller) {
+        this.backgroundRestores.delete(projectId);
+      }
+    });
+    this.backgroundRestores.set(projectId, { controller, promise });
+    return promise;
+  }
+
+  /**
+   * Abandon an in-flight background restore for `projectId`, tearing down the
+   * half-built view it left behind. Returns true when there was one.
+   *
+   * Called by `performSwitch` before it inspects the view map. A restore that
+   * has not finished loading leaves a `"loading"` entry there, and the cached
+   * fast path does not check readiness — it would activate a view that has
+   * never painted, behind a warm paint gate that can never release, and strand
+   * the user on a blank frame. The user's switch outranks the restore racing
+   * it, so the entry is dropped and the ordinary cold path runs.
+   *
+   * Synchronous: the switch must not await a boot it just cancelled.
+   */
+  abandonBackgroundRestore(projectId: string): boolean {
+    const job = this.backgroundRestores.get(projectId);
+    if (!job) return false;
+    this.backgroundRestores.delete(projectId);
+    job.controller.abort();
+    const entry = this.views.get(projectId);
+    if (entry && entry.state === "loading") {
+      try {
+        // The Electron 41+ `webContents` getter reads back undefined for a
+        // destroyed view, and reading `.id` off it throws — a teardown racing
+        // this abandon must not take the switch down with it.
+        const wcId = entry.view.webContents?.id;
+        if (wcId !== undefined) this.settleViewHydrated(wcId);
+      } catch {
+        // Nothing left to settle against.
+      }
+      cleanupEntry(this, projectId);
+    }
+    return true;
+  }
+
+  /** Abandon every in-flight restore — window teardown, app quit, dispose. */
+  cancelBackgroundRestores(): void {
+    for (const projectId of Array.from(this.backgroundRestores.keys())) {
+      this.abandonBackgroundRestore(projectId);
+    }
+    for (const settle of Array.from(this.hydrationWaiters.values())) settle();
+    this.hydrationWaiters.clear();
+    this.hydratedWebContentsIds.clear();
+  }
+
+  /**
+   * The view reported `app:view-hydrated` — panels restored and saved agent
+   * terminals respawned. Latched when nobody is waiting yet, because hydration
+   * routinely completes on the same tick the load settles.
+   */
+  signalViewHydrated(webContentsId: number): void {
+    const settle = this.hydrationWaiters.get(webContentsId);
+    if (settle) {
+      settle();
+      return;
+    }
+    this.hydratedWebContentsIds.add(webContentsId);
+  }
+
+  /**
+   * Resolve when `webContentsId` reports hydration, its abort signal fires, or
+   * the timeout expires.
+   *
+   * Never rejects, but the three outcomes are NOT interchangeable and the
+   * caller must branch on them: a timeout means the renderer never said it had
+   * restored its panels, so its agents may not have respawned. Treating that as
+   * success would park a half-booted view as `"cached"` — throttled, purge
+   * scheduled, and indistinguishable from a healthy one until the user switches
+   * to it and finds it blank.
+   */
+  waitForViewHydrated(
+    webContentsId: number,
+    opts: { timeoutMs: number; signal?: AbortSignal }
+  ): Promise<ViewHydrationOutcome> {
+    if (this.hydratedWebContentsIds.delete(webContentsId)) return Promise.resolve("hydrated");
+    if (opts.signal?.aborted) return Promise.resolve("cancelled");
+
+    return new Promise<ViewHydrationOutcome>((resolve) => {
+      let settled = false;
+      const settle = (outcome: ViewHydrationOutcome): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        opts.signal?.removeEventListener("abort", onAbort);
+        if (this.hydrationWaiters.get(webContentsId) === settleAsSignalled) {
+          this.hydrationWaiters.delete(webContentsId);
+        }
+        resolve(outcome);
+      };
+      // Distinct closures per outcome: the map stores the "a signal arrived"
+      // one, so an external settle (teardown, abandon) cannot be mistaken for
+      // the renderer having actually reported.
+      const settleAsSignalled = (): void => settle("hydrated");
+      const onAbort = (): void => settle("cancelled");
+      const timer = setTimeout(() => {
+        logWarn("projectview.background-restore.hydration-timeout", {
+          webContentsId,
+          waitedMs: opts.timeoutMs,
+        });
+        settle("timeout");
+      }, opts.timeoutMs);
+      timer.unref?.();
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
+      this.hydrationWaiters.set(webContentsId, settleAsSignalled);
+    });
+  }
+
+  /**
+   * Drop a pending hydration wait whose view is going away, and forget any
+   * latched signal for it.
+   *
+   * Called from ordinary entry cleanup as well as the restore paths: every
+   * foreground cold start also reports hydration, and with no waiter listening
+   * that id latches. Without this the latch set grows by one per cold switch
+   * for the life of the window.
+   */
+  settleViewHydrated(webContentsId: number): void {
+    this.hydrationWaiters.get(webContentsId)?.();
+    this.hydratedWebContentsIds.delete(webContentsId);
+  }
+
   getAllViews(): ViewEntry[] {
     return Array.from(this.views.values());
   }
@@ -1161,6 +1342,10 @@ export class ProjectViewManager {
 
   dispose(): void {
     this.disposed = true;
+    // Before any teardown below: an in-flight restore holds a half-built entry
+    // and a pending hydration wait, both of which must settle against a live
+    // manager rather than be found dead by their own continuations.
+    this.cancelBackgroundRestores();
 
     for (const cleanup of this.agentCacheCleanup) cleanup();
     this.agentCacheCleanup = [];

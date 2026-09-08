@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   ChevronRight,
+  History,
   Moon,
   ShieldBan,
   KeyRound,
@@ -26,6 +27,7 @@ import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
+  SessionRestoreConfig,
   IdleTerminalNotifyConfig,
   IdleBackgroundAutoCloseConfig,
   CliAvailability,
@@ -138,6 +140,10 @@ export function GeneralTab({
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
+  const [sessionRestoreConfig, setSessionRestoreConfig] = useState<SessionRestoreConfig | null>(
+    null
+  );
+  const [isSessionRestoreSaving, setIsSessionRestoreSaving] = useState(false);
   const [idleNotifyConfig, setIdleNotifyConfig] = useState<IdleTerminalNotifyConfig | null>(null);
   const [isIdleNotifySaving, setIsIdleNotifySaving] = useState(false);
   const [idleAutoCloseConfig, setIdleAutoCloseConfig] =
@@ -334,6 +340,23 @@ export function GeneralTab({
       });
 
     actionService
+      .dispatch("sessionRestore.getConfig", undefined, { source: "user" })
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
+        setSessionRestoreConfig(result.result as SessionRestoreConfig);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        // Its own catch, not the shared `configError`: that banner reads
+        // "Failed to load hibernation settings", and a card that simply does
+        // not render is a better failure than a wrong explanation.
+        logError("Failed to load session restore config", error);
+      });
+
+    actionService
       .dispatch("idleTerminalNotify.getConfig", undefined, { source: "user" })
       .then((result) => {
         if (cancelled) return;
@@ -489,6 +512,46 @@ export function GeneralTab({
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
+      }
+    }
+  };
+
+  const handleSessionRestoreToggle = async () => {
+    if (!sessionRestoreConfig || isSessionRestoreSaving) return;
+    const prev = sessionRestoreConfig;
+    setSessionRestoreConfig({ enabled: !prev.enabled });
+    setIsSessionRestoreSaving(true);
+    try {
+      const result = await actionService.dispatch(
+        "sessionRestore.updateConfig",
+        { enabled: !prev.enabled },
+        { source: "user" }
+      );
+      if (!isMountedRef.current) return;
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      setSessionRestoreConfig(result.result as SessionRestoreConfig);
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      setSessionRestoreConfig(prev);
+      logError("Failed to update session restore config", error);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Project restore couldn't be updated.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleSessionRestoreToggle(),
+          },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
+    } finally {
+      if (isMountedRef.current) {
+        setIsSessionRestoreSaving(false);
       }
     }
   };
@@ -850,6 +913,25 @@ export function GeneralTab({
               })()
             )}
           </SettingsSection>
+
+          {sessionRestoreConfig && (
+            <SettingsSection
+              icon={History}
+              title="Startup"
+              description="What comes back when Daintree restarts."
+              id="general-session-restore"
+            >
+              <SettingsSwitchCard
+                icon={History}
+                title="Restore live projects"
+                subtitle="Bring back every project that was running, not just the one each window was showing"
+                isEnabled={sessionRestoreConfig.enabled}
+                onChange={() => void handleSessionRestoreToggle()}
+                ariaLabel="Restore Live Projects Toggle"
+                disabled={isSessionRestoreSaving}
+              />
+            </SettingsSection>
+          )}
 
           {updatesManagedByStore ? (
             <SettingsSection

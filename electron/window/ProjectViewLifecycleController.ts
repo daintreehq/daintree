@@ -43,7 +43,19 @@ import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 export const CACHED_VIEW_PURGE_DELAY_MS = 20_000;
 const CACHED_VIEW_PURGE_INTERVAL_MS = 60_000;
 
-export function deactivateEntry(host: ProjectViewManager, current: ViewEntry): void {
+/**
+ * @param opts.preserveLastUsed Keep the entry's existing `lastUsed` instead of
+ *   stamping now. Background restore (#12320) is the only caller that needs it:
+ *   parking a project the *previous* session left cold must not mint a fresh
+ *   recency for it, or the least recently used project — restored last — would
+ *   end up scoring as the most recent and evict the ones the user actually
+ *   rotates through.
+ */
+export function deactivateEntry(
+  host: ProjectViewManager,
+  current: ViewEntry,
+  opts: { preserveLastUsed?: boolean } = {}
+): void {
   if (host.win.isDestroyed()) return;
 
   // Stale-entry guard: destroyView (HibernationService runs outside
@@ -79,7 +91,7 @@ export function deactivateEntry(host: ProjectViewManager, current: ViewEntry): v
     // non-critical
   }
   current.state = "cached";
-  current.lastUsed = Date.now();
+  if (!opts.preserveLastUsed) current.lastUsed = Date.now();
 
   // Throttle background view to reduce CPU and allow Chromium to reclaim memory
   if (!current.view.webContents.isDestroyed()) {
@@ -485,6 +497,11 @@ export function cleanupEntry(host: ProjectViewManager, projectId: string): void 
     // — so this only wakes subscribers to re-read, and never writes a reason
     // the pass did not have.
     notifyWorkspaceViewsChanged(projectId);
+    // Every cold start reports hydration, foreground ones included. With no
+    // waiter listening that id latches, and nothing else ever removes it — so
+    // without this the latch set grows by one per cold switch for the life of
+    // the window (#12320).
+    host.settleViewHydrated(wcId);
     forgetBlinkSample(wcId);
     forgetEluSample(wcId);
     forgetRendererTerminalDiagnostics(wcId);
