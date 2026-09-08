@@ -66,6 +66,18 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     },
   },
   {
+    id: "antigravity-ide",
+    name: "Antigravity IDE",
+    binaries: ["antigravity-ide"],
+    extraDirs: () =>
+      macAppBundleDirs([{ name: "Antigravity IDE", subPath: "Contents/Resources/app/bin" }]),
+    buildArgs(filePath, line, col) {
+      const target =
+        line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
+      return ["--goto", target];
+    },
+  },
+  {
     id: "zed",
     name: "Zed",
     binaries: ["zed"],

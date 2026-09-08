@@ -43,6 +43,7 @@ export const editorConfigNamespace = defineIpcNamespace({
           "vscode-insiders",
           "cursor",
           "windsurf",
+          "antigravity-ide",
           "zed",
           "neovim",
           "webstorm",

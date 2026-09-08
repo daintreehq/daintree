@@ -93,6 +93,40 @@ describe("EditorService adversarial", () => {
     expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
   });
 
+  it("launches Antigravity IDE from its bundle, passing the spaced launcher path unquoted", async () => {
+    const launcher = "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide";
+    setPlatform("darwin");
+    process.env.PATH = "";
+    mockExistingFiles([launcher]);
+    const child = { unref: vi.fn(), catch: vi.fn() };
+    execaMock.execa.mockReturnValue(child);
+
+    const { openFile } = await loadModule();
+    await openFile("/repo with spaces/src/app.ts", 12, 5, { id: "antigravity-ide" });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    const [binary, args, options] = execaMock.execa.mock.calls[0];
+    expect(binary).toBe(launcher);
+    expect(args).toEqual(["--goto", "/repo with spaces/src/app.ts:12:5"]);
+    expect(options).toMatchObject({ detached: true, stdio: "ignore", cleanup: false });
+    expect(child.unref).toHaveBeenCalledTimes(1);
+    expect(child.catch).toHaveBeenCalledWith(expect.any(Function));
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("omits the column from the Antigravity IDE --goto target when only a line is given", async () => {
+    const launcher = "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide";
+    setPlatform("darwin");
+    process.env.PATH = "";
+    mockExistingFiles([launcher]);
+
+    const { openFile } = await loadModule();
+    await openFile("/repo/src/app.ts", 12, undefined, { id: "antigravity-ide" });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0][1]).toEqual(["--goto", "/repo/src/app.ts:12"]);
+  });
+
   it("custom template tokenizes before substitution — file path with spaces stays one arg", async () => {
     const { openFile } = await loadModule();
 

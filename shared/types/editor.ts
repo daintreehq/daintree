@@ -3,6 +3,7 @@ export type KnownEditorId =
   | "vscode-insiders"
   | "cursor"
   | "windsurf"
+  | "antigravity-ide"
   | "zed"
   | "neovim"
   | "webstorm"

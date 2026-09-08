@@ -22,6 +22,7 @@ vi.mock("../../../services/EditorService.js", () => ({ discover: discoverMock })
 import { registerEditorConfigHandlers } from "../editorConfig.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
+import type { KnownEditorId } from "../../../../shared/types/editor.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -85,6 +86,35 @@ describe("editorConfig IPC adversarial", () => {
         editor: { id: "custom", customCommand: "", customTemplate: "{file}" },
       })
     ).rejects.toThrow(/customCommand/);
+  });
+
+  it("setConfig accepts every id in the KnownEditorId union", async () => {
+    // The runtime allowlist is hand-maintained and separate from KnownEditorId, so a
+    // new editor can pass typechecking and still be rejected at Save time.
+    const knownIds: KnownEditorId[] = [
+      "vscode",
+      "vscode-insiders",
+      "cursor",
+      "windsurf",
+      "antigravity-ide",
+      "zed",
+      "neovim",
+      "webstorm",
+      "sublime",
+    ];
+
+    for (const id of knownIds) {
+      projectStoreMock.saveProjectSettings.mockClear();
+      await getHandler(CHANNELS.EDITOR_SET_CONFIG)(fakeEvent(), {
+        projectId: "p1",
+        editor: { id },
+      });
+
+      const saved = projectStoreMock.saveProjectSettings.mock.calls[0][1] as {
+        preferredEditor: { id: string };
+      };
+      expect(saved.preferredEditor.id).toBe(id);
+    }
   });
 
   it("setConfig rejects unknown editor id", async () => {
