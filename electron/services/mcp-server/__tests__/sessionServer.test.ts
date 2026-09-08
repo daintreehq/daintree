@@ -6038,8 +6038,8 @@ describe("workspace-bound external sessions (#11789)", () => {
     it("serves the binding resource without dispatching or probing the route (#12313)", async () => {
       // The exemption the issue asked for, obtained by construction rather than
       // by a special case: this read touches no renderer, so there is no route
-      // for `assertBoundRouteReachable` to be protecting. If it ever grew a
-      // dispatch it would start failing exactly when it is needed most.
+      // for a residency probe to be protecting. If it ever grew a dispatch it
+      // would start failing exactly when it is needed most.
       const dispatchAction = vi
         .fn()
         .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found"));
@@ -6058,9 +6058,10 @@ describe("workspace-bound external sessions (#11789)", () => {
       })) as { contents: Array<{ text: string; mimeType: string }> };
 
       expect(dispatchAction).not.toHaveBeenCalled();
-      // `assertBoundRouteReachable` probes through `requestManifest`, so an
+      // A residency probe would resolve through `requestManifest`, so an
       // untouched manifest is what proves the exemption is structural rather
-      // than a branch that could be reordered back into the path.
+      // than a branch that could be reordered back into the path — the check
+      // that keeps standing now that #12316 removed the probe itself.
       expect(deps.requestManifest).not.toHaveBeenCalled();
       const state = JSON.parse(read.contents[0].text);
       expect(state.workspaceId).toBe(WORKSPACE);
