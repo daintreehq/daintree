@@ -235,6 +235,11 @@ export class McpServerService {
           confirmed,
           sessionOrigin
         ),
+      // Deliberately not this session's own route (#12315): a reveal runs in
+      // the view that is being replaced, in the window that already holds the
+      // destination workspace.
+      revealOwnedRun: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
+        this.bridge.revealOwnedRun(workspaceId, actionId, args, confirmed, sessionOrigin),
       resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),

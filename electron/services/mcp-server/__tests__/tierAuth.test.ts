@@ -598,7 +598,16 @@ describe("external tool surface budget (#11585)", () => {
   // collision, so the hash external clients were deriving them with is not a
   // lookup. Raising the ceiling is the decision this budget exists to force
   // into the open, and it buys a shipped mechanism its missing key.
-  const EXTERNAL_BUDGET_MAX = 29;
+  //
+  // 29 → 30 for #12315's `terminal.revealOwned`. The last direction in the
+  // orchestration loop with no route: a client can launch an agent, drive it,
+  // read it and dispose of it, and still cannot bring the user to it. What
+  // makes this worth a slot rather than the two cheaper-looking shapes is that
+  // neither of those works — a `focus` argument would be the first exception to
+  // the unconditional `focusPolicy: "preserve"`, and `panel.focus` here would
+  // select a panel inside a cached view and report success. Ownership is what
+  // keeps the cost bounded: it reveals only a panel this session created.
+  const EXTERNAL_BUDGET_MAX = 30;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);

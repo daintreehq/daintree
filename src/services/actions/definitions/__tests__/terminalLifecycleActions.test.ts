@@ -1538,3 +1538,44 @@ describe("host-attested confirmation (#12120)", () => {
     expect(pendingDestructiveStoreMock.state.clear).toHaveBeenCalled();
   });
 });
+
+describe("terminal.revealOwned (#12315)", () => {
+  function definition(): AnyActionDefinition {
+    const actions: ActionRegistry = new Map();
+    registerTerminalLifecycleActions(actions, {} as ActionCallbacks);
+    const factory = actions.get("terminal.revealOwned");
+    if (!factory) throw new Error("terminal.revealOwned is not registered");
+    return factory() as AnyActionDefinition;
+  }
+
+  it("refuses a direct renderer dispatch", async () => {
+    // The authorization is the MCP session's ownership ledger, which is
+    // main-process state the renderer cannot see and must never be told. A
+    // renderer that could run this would be answering "am I allowed?" about
+    // itself.
+    await expect(definition().run({ terminalId: "p1" }, {} as never)).rejects.toThrow(
+      /main-process path/
+    );
+  });
+
+  it("stays out of the palette, since nothing there could dispatch it", () => {
+    expect(definition().palette?.mode).toBe("hidden");
+  });
+
+  it("is banded safe, which is what keeps it reachable by a bound session", () => {
+    // Load-bearing rather than cosmetic: `isWithheldFromBoundSession` withholds
+    // `confirm` entries from workspace-bound external sessions, and a bound
+    // session is precisely the caller this tool exists for. Revealing is also
+    // reversible — nothing is destroyed and the user can switch back.
+    expect(definition().danger).toBe("safe");
+  });
+
+  it("requires a non-empty terminal id with no focused-panel fallback", () => {
+    // The focused panel is by definition already in front of the user, and it
+    // is rarely one this session owns.
+    const schema = definition().argsSchema;
+    expect(schema?.safeParse({ terminalId: "" }).success).toBe(false);
+    expect(schema?.safeParse({}).success).toBe(false);
+    expect(schema?.safeParse({ terminalId: "terminal-1" }).success).toBe(true);
+  });
+});

@@ -318,7 +318,17 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // to carry is the correction the issue turned on: a view being open is not
   // what tells a wrong id from a closed workspace — absence from the list is —
   // and a caller that misses it goes back to hashing paths.
-  const MAX_EXTERNAL_TOTAL_BYTES = 10_700;
+  // 10_700 → 10_800 for #12315's `terminal.revealOwned`. The surface stood at
+  // 10_477, so 223 B were free and its 264 B description does not fit — this is
+  // one of the few raises where a shorter wording COULD have stayed under the
+  // old ceiling, and the 100 B is spent deliberately rather than by necessity.
+  // What the prose has to carry is two things nothing else here does: that
+  // calling it takes the user somewhere, so it is not a way to report progress,
+  // and that it reaches only panels this connection created, so ids from
+  // `terminal.list` are not targets. Cutting either one buys 40 B and costs a
+  // caller that uses the tool to announce itself, or reads every ownership
+  // refusal as a bug.
+  const MAX_EXTERNAL_TOTAL_BYTES = 10_800;
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
@@ -358,7 +368,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // out: it is admitted at workbench as well as external, since the external
   // tier must never reach past what the in-app assistant already can. Again the
   // measured total, not a rounded allowance.
-  const MAX_COHORT_TOTAL_BYTES = 52_912;
+  // 52_912 → 53_176 for #12315's `terminal.revealOwned`, carried on the action
+  // tier for that same subset invariant — the external surface may not reach
+  // past the assistant's. Its 264 B is the whole of the increase, so this stays
+  // the measured total rather than an allowance.
+  const MAX_COHORT_TOTAL_BYTES = 53_176;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

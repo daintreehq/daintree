@@ -159,25 +159,48 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   PROJECT_RUN_CHECK_TOOL,
 ]);
 /**
- * The session-scoped cleanup tools (#11909), and the action each one delegates
+ * The session-scoped `*Owned` tools (#11909), and the action each one delegates
  * to once ownership checks out.
  *
  * They run here rather than as ordinary renderer actions because the thing they
  * authorize against — which session created which resource — is main-process
  * state keyed by the MCP transport session id. The renderer never sees that id
- * and must not: handing it over would make "am I allowed to close this?" a
+ * and must not: handing it over would make "am I allowed to act on this?" a
  * question the caller's own dispatch could answer about itself.
  *
- * Delegation, not reimplementation. The check happens here; the close and the
- * delete are the shipped actions, dispatched under their own ids so
- * `terminal.close`'s trash/recovery behaviour and `worktree.delete`'s D2
- * confirmation with its real file-count preview
- * (`resolveMcpConfirmPreviewTarget` in `useMcpBridge`, which matches on the
- * literal action id) apply unchanged.
+ * Delegation, not reimplementation. The check happens here; the close, the
+ * delete and the reveal are the shipped actions, dispatched under their own ids
+ * so `terminal.close`'s trash/recovery behaviour, `worktree.delete`'s D2
+ * confirmation with its real file-count preview (`resolveMcpConfirmPreviewTarget`
+ * in `useMcpBridge`, which matches on the literal action id) and
+ * `pilot.openRun`'s switch-then-focus-intent sequence all apply unchanged.
+ *
+ * `releasesOwnership` splits the two things an owned tool can be. Cleanup ends
+ * the resource, so the record goes with it; a reveal only navigates to one that
+ * is still running, and dropping the record there would cost the session the
+ * authority to reveal it a second time — or to clean it up at all.
  */
-const OWNED_CLEANUP_TOOLS: Record<
+const OWNED_RESOURCE_TOOLS: Record<
   string,
-  { resourceKind: OwnedResourceKind; delegateTo: string; idArg: string }
+  {
+    resourceKind: OwnedResourceKind;
+    delegateTo: string;
+    idArg: string;
+    /**
+     * The delegate's own name for the id, where it differs from the public one.
+     * Arguments are rebuilt rather than forwarded, so without this the id
+     * simply would not reach an action that spells it differently.
+     */
+    delegateIdArg?: string;
+    releasesOwnership: boolean;
+    /**
+     * Whether this tool's job is to bring the user to the resource. Only a
+     * reveal sets it, and only a reveal may: it is the single place on the
+     * external surface that deliberately moves the user, so it alone routes
+     * through the active view and raises that view's window.
+     */
+    reveals?: boolean;
+  }
 > = {
   // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
   // and guards comparisons against it with a lint rule, and an ownership
@@ -186,11 +209,26 @@ const OWNED_CLEANUP_TOOLS: Record<
     resourceKind: "terminal",
     delegateTo: "terminal.close",
     idArg: "terminalId",
+    releasesOwnership: true,
   },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
     delegateTo: "worktree.delete",
     idArg: "worktreeId",
+    releasesOwnership: true,
+  },
+  // The panel is still the session's after it has been revealed, so this is the
+  // one entry that keeps its record. `pilot.openRun` spells the id `runId`, and
+  // the workspace it should travel to is supplied from the ledger rather than
+  // left to default: the reveal runs in the view the user is looking at, which
+  // is rarely the one holding the panel (#12315).
+  "terminal.revealOwned": {
+    resourceKind: "terminal",
+    delegateTo: "pilot.openRun",
+    idArg: "terminalId",
+    delegateIdArg: "runId",
+    releasesOwnership: false,
+    reveals: true,
   },
 };
 
@@ -289,7 +327,7 @@ function closedIdsInclude(result: unknown, id: string): boolean {
 }
 
 /**
- * The resource id an `*Owned` cleanup call names, or `undefined` when the
+ * The resource id an `*Owned` call names, or `undefined` when the
  * argument is missing, the wrong type, or blank.
  *
  * Read here rather than trusting the renderer's schema validation, because the
@@ -392,6 +430,28 @@ export interface SessionServerDeps {
     args: unknown,
     confirmed?: boolean
   ) => Promise<DispatchEnvelope>;
+  /**
+   * Take the user to a run, and bring the window it lands in with them
+   * (#12315), reporting whether that window actually came forward.
+   *
+   * `terminal.revealOwned` is the only caller, and it needs this rather than
+   * `dispatchAction` for a reason that is easy to get backwards. A bound
+   * session's dispatches land in its own workspace's view — exactly the view a
+   * reveal is trying to bring forward — so the reveal would ask a cached,
+   * detached renderer to switch to itself, and the visible view it replaced
+   * would be detached with nothing to persist its drafts. The bridge picks the
+   * view being replaced instead, in the window that already holds the
+   * destination, and raises that same window once the dispatch lands.
+   *
+   * Optional: without it a reveal falls back to the ordinary dispatch, which is
+   * the right target for every session except a bound one, and raises nothing.
+   */
+  revealOwnedRun?: (
+    workspaceId: string | undefined,
+    actionId: string,
+    args: unknown,
+    confirmed?: boolean
+  ) => Promise<{ envelope: DispatchEnvelope; raised: boolean }>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -881,10 +941,64 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
-    // other tool and for a refused cleanup, so neither of those paths can
+    // other tool and for a refused call, so neither of those paths can
     // accidentally rewrite an action id or drop an ownership record (#11909).
-    const ownedCleanup = OWNED_CLEANUP_TOOLS[actionId];
+    const ownedResource = OWNED_RESOURCE_TOOLS[actionId];
     let ownedResourceId: string | undefined;
+
+    /**
+     * Dispatch the real action an `*Owned` tool stands in for, with arguments
+     * rebuilt from scratch rather than forwarded (#11909).
+     *
+     * Rebuilding is the enforcement: the renderer validates against
+     * `worktree.delete`'s schema, which still accepts `force`, `deleteBranch`
+     * and `closeTerminals`, so anything the caller sent beyond the id would
+     * otherwise pass straight through the narrower tool that deliberately omits
+     * them. It is also what lets a delegate spell the id differently —
+     * `pilot.openRun` takes `runId` where the public tool takes `terminalId`.
+     *
+     * A reveal differs in both of the ways that matter (#12315). It carries the
+     * destination workspace, read from the ledger record main wrote when the
+     * panel was created — trusted state, never the caller's argument, and the
+     * only thing that says where an unbound session's panel actually lives. And
+     * it routes through the active view rather than this session's own, because
+     * the view that switches has to be the view on screen.
+     */
+    const dispatchOwnedResourceAction = async (
+      entry: (typeof OWNED_RESOURCE_TOOLS)[string],
+      resourceId: string
+    ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
+      const delegateArgs: Record<string, unknown> = {
+        [entry.delegateIdArg ?? entry.idArg]: resourceId,
+      };
+      if (entry.reveals !== true) {
+        return {
+          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          raised: true,
+        };
+      }
+      const revealWorkspaceId =
+        sessionStore.resourceOwnership.get(sessionId, entry.resourceKind, resourceId)
+          ?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
+      // Omitted rather than guessed when neither is known: `pilot.openRun`
+      // falls back to the executing view's own workspace, which is where the
+      // panel is if the client never left it — the only honest default here.
+      if (revealWorkspaceId !== undefined) {
+        delegateArgs.workspaceId = revealWorkspaceId;
+      }
+      if (deps.revealOwnedRun === undefined) {
+        return {
+          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          raised: true,
+        };
+      }
+      return deps.revealOwnedRun(
+        revealWorkspaceId,
+        entry.delegateTo,
+        delegateArgs,
+        dispatchConfirmed
+      );
+    };
 
     /**
      * Fold a completed dispatch into the session's ownership ledger (#11909):
@@ -898,19 +1012,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * being gone. `terminal.close` reports an empty `closedIds` when it found
      * nothing to close, and dropping the record on that would let one no-op
      * call revoke the session's authority over a panel that is still running.
+     * A non-releasing owned tool — a reveal — returns before any of that:
+     * navigating to a panel is not a claim that it stopped existing (#12315).
      */
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void => {
-      if (ownedCleanup !== undefined) {
+      if (ownedResource !== undefined) {
+        if (!ownedResource.releasesOwnership) return;
         if (ownedResourceId === undefined || !envelope.result.ok) return;
         if (
-          ownedCleanup.resourceKind === "terminal" &&
+          ownedResource.resourceKind === "terminal" &&
           !closedIdsInclude(envelope.result.result, ownedResourceId)
         ) {
           return;
         }
         sessionStore.resourceOwnership.release(
           sessionId,
-          ownedCleanup.resourceKind,
+          ownedResource.resourceKind,
           ownedResourceId
         );
         return;
@@ -1451,17 +1568,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // hook that fires before any other awaiter sees the resolved result.
     const dispatchPromise: Promise<CallToolResultLike> = (async () => {
       try {
-        // Ownership gate for the `*Owned` cleanup tools (#11909). Placed at the
+        // Ownership gate for the `*Owned` tools (#11909). Placed at the
         // very top of the IIFE: a session that does not own the named resource
         // is refused here, before the activity strip is told a call started,
         // before any confirmation is raised, and — the acceptance criterion
         // that matters — before anything reaches a renderer, so a refused call
         // cannot have mutated a panel or a worktree.
-        if (ownedCleanup !== undefined) {
-          const resourceId = readOwnedResourceId(args, ownedCleanup.idArg);
+        if (ownedResource !== undefined) {
+          const resourceId = readOwnedResourceId(args, ownedResource.idArg);
           if (resourceId === undefined) {
             const message =
-              `Action '${actionId}' requires a non-empty '${ownedCleanup.idArg}' naming a resource ` +
+              `Action '${actionId}' requires a non-empty '${ownedResource.idArg}' naming a resource ` +
               `this session created.`;
             outcome = {
               kind: "result",
@@ -1471,7 +1588,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           const record = sessionStore.resourceOwnership.get(
             sessionId,
-            ownedCleanup.resourceKind,
+            ownedResource.resourceKind,
             resourceId
           );
           // One message for "never existed", "another session's", and "the
@@ -1490,8 +1607,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             record.workspaceId !== boundWorkspaceId;
           if (record === undefined || workspaceMismatch) {
             const message =
-              `No ${ownedCleanup.resourceKind} with id '${resourceId}' was created by this session, so ` +
-              `'${actionId}' will not act on it. This tool only cleans up resources this ` +
+              `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
+              `'${actionId}' will not act on it. This tool only acts on resources this ` +
               `connection created; ids from listings may belong to the user, another client, or a plugin.`;
             outcome = {
               kind: "result",
@@ -1933,22 +2050,26 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
 
         try {
-          // An `*Owned` cleanup that cleared the gate above delegates to the
-          // real action under its own id, with arguments rebuilt from scratch
-          // rather than forwarded (#11909). Rebuilding is the enforcement: the
-          // renderer validates against `worktree.delete`'s schema, which still
-          // accepts `force`, `deleteBranch` and `closeTerminals`, so anything
-          // the caller sent beyond the id would otherwise pass straight
-          // through the narrower tool that deliberately omits them.
-          const envelope = listPaging
-            ? await collectListPages()
-            : ownedCleanup !== undefined && ownedResourceId !== undefined
-              ? await dispatchAction(
-                  ownedCleanup.delegateTo,
-                  { [ownedCleanup.idArg]: ownedResourceId },
-                  dispatchConfirmed
-                )
-              : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
+          // An `*Owned` tool that cleared the gate above delegates to the real
+          // action under its own id, with arguments rebuilt from scratch rather
+          // than forwarded (#11909). Rebuilding is the enforcement: the renderer
+          // validates against `worktree.delete`'s schema, which still accepts
+          // `force`, `deleteBranch` and `closeTerminals`, so anything the caller
+          // sent beyond the id would otherwise pass straight through the
+          // narrower tool that deliberately omits them. It is also what lets a
+          // delegate spell the id differently — `pilot.openRun` takes `runId`
+          // where the public tool takes `terminalId` (#12315).
+          // `raised` answers the second half of a reveal — whether a window
+          // actually came forward — and is vacuously true for everything else.
+          const { envelope, raised } =
+            listPaging || ownedResource === undefined || ownedResourceId === undefined
+              ? {
+                  envelope: listPaging
+                    ? await collectListPages()
+                    : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed),
+                  raised: true,
+                }
+              : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
           // Narrow renderer-computed results against this session before
           // anything downstream reads them: the effective action surface for
           // the registry-enumerating tools (#11525), and the ownership ledger
@@ -1984,6 +2105,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           recordDispatchOwnership(envelope);
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           dispatchedWorkspace = envelope.dispatchedWorkspace;
+          // A raise that did not happen is reported, not swallowed (#12315).
+          // The tool's whole promise is that the user ends up looking at the
+          // panel; a client told "revealed" when no window came forward has no
+          // way to know it should tell them where the run is instead.
+          //
+          // Placed after the ledger bookkeeping above so the panel stays this
+          // session's: a reveal the user missed is not a disposal, and the
+          // obvious next move is to ask for it again.
+          if (!raised && envelope.result.ok) {
+            const message =
+              `The switch to '${ownedResourceId ?? actionId}' was accepted, but no Daintree ` +
+              `window could be brought to the front, so the user may not be looking at it. ` +
+              `Tell them where the run is rather than assuming they can see it.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "EXECUTION_ERROR", message } },
+            };
+            return buildToolError({ code: "EXECUTION_ERROR", message });
+          }
         } catch (err) {
           outcome = { kind: "throw", error: err };
           if (err instanceof McpRouteBindingError) {

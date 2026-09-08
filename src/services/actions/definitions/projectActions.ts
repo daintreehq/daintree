@@ -8,6 +8,7 @@ import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 import { usePilotStore } from "@/store/pilotStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { hasWorktreeAxis } from "@/components/Pilot/pilotRows";
@@ -82,7 +83,14 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   defaultWorktreeMode: z.string().optional(),
 };
 
-const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string() });
+// `workspaceId` is optional so the executing view's own workspace can stand in
+// for it. `terminal.revealOwned` supplies it from the ownership ledger, but the
+// ledger records it best-effort, and a reveal whose destination is unknown is
+// still better answered by "the workspace you are in" than refused outright —
+// that is where a panel is if the client never left. The click payload always
+// sends it: a row in the overview names a run in another workspace more often
+// than not.
+const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string().optional() });
 
 /**
  * The one thing a row in the agent overview promises, not kept.
@@ -296,14 +304,58 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // Parsed rather than asserted: this is the one action whose args arrive
       // from a click payload, and a parse both narrows the type and rejects a
       // malformed dispatch instead of trusting it.
-      const { runId, workspaceId } = openRunArgs.parse(args);
+      const { runId, workspaceId: requestedWorkspaceId } = openRunArgs.parse(args);
 
       // The workspace THIS view owns, not the one the app is globally pointed
-      // at. `currentProject` is replicated to every view including cached ones,
-      // and it is null outright in a scratch view — reading it here sent a run
-      // that was already on screen through a cross-workspace switch, and sent
-      // every scratch run to `switchProject`, which rejects a scratch id.
+      // at. `currentProject` is per-view — main answers `project:get-current`
+      // from the sender's own binding — and it is null outright in a scratch
+      // view, so reading it here sent a run that was already on screen through
+      // a cross-workspace switch, and sent every scratch run to
+      // `switchProject`, which rejects a scratch id.
       const currentId = getViewWorkspaceId();
+
+      const workspaceId = requestedWorkspaceId ?? currentId;
+      if (workspaceId === null) {
+        // Only reachable from a caller that omitted the workspace in a view
+        // with no workspace identity at all. Nothing can be routed from that,
+        // and guessing a destination is the failure mode this whole action
+        // exists to avoid.
+        failToOpenRun(
+          new Error("no workspace identity"),
+          "Daintree couldn't tell which workspace this run belongs to."
+        );
+      }
+
+      // A view nobody is looking at cannot take anyone anywhere, and saying so
+      // is the entire fix (#12315).
+      //
+      // `getViewWorkspaceId()` is the workspace this view was CREATED for —
+      // immutable identity, seeded at view creation — which says nothing about
+      // whether the view is the one attached to the window right now. For a
+      // click the two always agree, because the dialog only ever runs in the
+      // view the user is looking at. They come apart when an MCP session
+      // dispatches into its bound workspace: `dispatchActionForWorkspace`
+      // routes into a cached, detached, thawed background view, where the id
+      // comparison below is trivially true, so this action used to select the
+      // panel inside a view nobody could see and report success.
+      //
+      // Switching from here would be worse than refusing, not better. The view
+      // this one would replace is a DIFFERENT renderer, and only that renderer
+      // can snapshot its own drafts and layout on the way out — caching fires
+      // no `visibilitychange` for a child view, so nothing else would flush
+      // them. `terminal.revealOwned` routes to the active view for exactly that
+      // reason; anything still arriving here has no way to show a person
+      // anything, and an error it can act on beats a success it cannot.
+      //
+      // Main's cache lifecycle is the only signal that can tell the two apart:
+      // `document.visibilityState` reports "visible" forever for a detached
+      // child view.
+      if (isProjectViewCached()) {
+        failToOpenRun(
+          new Error("view is cached"),
+          "Daintree couldn't open that run — this project isn't the one on screen."
+        );
+      }
 
       // Already here: focus directly. Going through a switch would tear down
       // and rebuild a view that is already the active one.

@@ -120,6 +120,19 @@ export interface HttpLifecycleDeps {
     workspaceId: string
   ) => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
+   * Take the user to a run and bring its window with them (#12315).
+   * `terminal.revealOwned` is the only caller. It is one call rather than a
+   * dispatch plus a raise because both have to land on the same window, and
+   * only the bridge can resolve that once and hold it across the await.
+   */
+  revealOwnedRun?: (
+    workspaceId: string | undefined,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin
+  ) => Promise<{ envelope: import("./shared.js").DispatchEnvelope; raised: boolean }>;
+  /**
    * Validate a handshake workspace selector, or throw when it names no live
    * view or more than one (#11789).
    */
@@ -1590,6 +1603,24 @@ export class HttpLifecycle {
         return this.deps.requestManifest();
       };
 
+    /**
+     * The reveal route (#12315). Built here rather than forwarded raw so it
+     * carries the same captured `sessionOrigin` as `dispatchAction` below — the
+     * origin is what keeps an external client's tool call out of the
+     * assistant's provenance, and a route that skipped this closure would
+     * silently drop it.
+     *
+     * Undefined when the bridge does not offer the route, which leaves the
+     * reveal on the ordinary dispatch: the right target for every session
+     * except a bound one, and no window raise.
+     */
+    const bridgeReveal = this.deps.revealOwnedRun;
+    const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
+      bridgeReveal
+        ? (workspaceId, actionId, args, confirmed) =>
+            bridgeReveal(workspaceId, actionId, args, confirmed ?? false, sessionOrigin)
+        : undefined;
+
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
       actionId,
       args,
@@ -1819,6 +1850,7 @@ export class HttpLifecycle {
       ...(workspaceBinding ? { workspaceBinding } : {}),
       requestManifest,
       dispatchAction,
+      revealOwnedRun,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       handleSkillsSearch: this.deps.handleSkillsSearch,

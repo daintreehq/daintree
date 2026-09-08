@@ -925,6 +925,11 @@ describe("McpServerService", () => {
         description: "Move a terminal this MCP session created to trash",
       }),
       createManifestEntry({
+        id: "terminal.revealOwned" as ActionId,
+        title: "Reveal Owned Terminal",
+        description: "Bring the user to a terminal this MCP session created",
+      }),
+      createManifestEntry({
         id: "terminal.closeAll" as ActionId,
         title: "Close All Terminals",
         description: "Move all terminals to trash",
