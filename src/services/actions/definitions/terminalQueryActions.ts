@@ -29,7 +29,7 @@ export function registerTerminalQueryActions(
     id: "terminal.list",
     title: "List Terminals",
     description:
-      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means none are open, not a failure.",
+      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -48,15 +48,36 @@ export function registerTerminalQueryActions(
           .describe(
             "Restricts the listing to terminals in one place: the main grid, the sidebar dock, the trash, or the background. Omitted, trashed and backgrounded terminals are left out, so ask for those explicitly to see them."
           ),
+        owned: z
+          .boolean()
+          .optional()
+          .describe(
+            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none."
+          ),
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { worktreeId, location } = (args ?? {}) as {
+      const { worktreeId, location, owned } = (args ?? {}) as {
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
+        owned?: boolean;
       };
+      // `owned` is answered in main and never here (#12308): ownership is
+      // keyed by the MCP session id, which the renderer deliberately never
+      // sees. Main consumes the flag, so a value reaching `run()` came from a
+      // dispatch path with no ownership authority — and answering it with the
+      // unfiltered list would report every panel as this caller's own.
+      //
+      // `false` is refused too. The renderer cannot honour the argument in
+      // either direction, and refusing both is what makes a broken strip in
+      // main fail loudly instead of quietly returning the wrong set.
+      if (owned !== undefined) {
+        throw new Error(
+          "terminal.list `owned` filters on the MCP session that created each terminal, which only the Daintree host can resolve. A direct dispatch cannot answer it — call the tool over MCP, or omit the argument."
+        );
+      }
       const state = usePanelStore.getState();
       // Ephemeral panels (e.g. the Daintree Assistant's own dock terminal)
       // are tooling-internal and must not appear in the MCP-visible list,

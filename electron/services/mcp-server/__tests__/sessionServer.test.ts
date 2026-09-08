@@ -6204,6 +6204,14 @@ describe("session-scoped resource ownership (#11909)", () => {
       makeManifestEntry("worktree.createWithRecipe"),
       makeManifestEntry("recipe.run"),
       makeManifestEntry("agent.launch"),
+      // With an outputSchema, so an `owned` listing exercises the
+      // structuredContent block as well as the JSON text body — the two read
+      // one `outcome.value`, and a filter applied to only one of them would
+      // otherwise go unnoticed here.
+      {
+        ...makeManifestEntry("terminal.list"),
+        outputSchema: { type: "object", properties: { terminals: { type: "array" } } },
+      },
     ];
   }
 
@@ -6920,6 +6928,216 @@ describe("session-scoped resource ownership (#11909)", () => {
         { terminalId: "terminal-1" },
         expect.anything()
       );
+    });
+  });
+
+  describe("terminal.list owned filter (#12308)", () => {
+    /** A view holding one panel this session made and two it did not. */
+    const LISTING = {
+      result: {
+        ok: true,
+        result: {
+          terminals: [
+            { id: "terminal-mine", title: "our agent" },
+            { id: "terminal-users-own", title: "the user's shell" },
+            { id: "terminal-other-session", title: "another client's agent" },
+          ],
+        },
+      },
+    };
+
+    function listedIds(result: { content: unknown }): string[] {
+      return payloadOf<{ terminals: Array<{ id: string }> }>(result).terminals.map((t) => t.id);
+    }
+
+    function structuredOf(result: unknown): Record<string, unknown> | undefined {
+      return (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+    }
+
+    it("returns only what this session created, and consumes the flag before dispatch", async () => {
+      const appendAuditRecord = vi.fn();
+      const { store, server, dispatchAction } = harness(
+        "s-owned",
+        { "terminal.list": LISTING },
+        { appendAuditRecord }
+      );
+      store.resourceOwnership.record("s-owned", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true, location: "grid", worktreeId: "wt-1" },
+      });
+
+      expect(listedIds(result)).toEqual(["terminal-mine"]);
+      // Text body and structuredContent read one filtered value; a filter
+      // reaching only one of them would leak the full listing to the other.
+      expect(structuredOf(result)).toEqual({
+        terminals: [{ id: "terminal-mine", title: "our agent" }],
+      });
+      // The strip is half of one mechanism, not a tidy-up: the renderer
+      // refuses any `owned` it receives, so forwarding it would fail the very
+      // calls the filter exists to serve. Every other argument survives.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.list",
+        { location: "grid", worktreeId: "wt-1" },
+        expect.anything()
+      );
+      // The audit record reports what the caller asked for, not the rewritten
+      // copy — the rewrite is an implementation detail of serving the request.
+      expect(appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "terminal.list",
+          args: { owned: true, location: "grid", worktreeId: "wt-1" },
+        })
+      );
+    });
+
+    it("lists everything when owned is false or omitted", async () => {
+      const { store, server, dispatchAction } = harness("s-unowned", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-unowned", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const explicit = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: false },
+      });
+      const omitted = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      // `false` means "do not narrow", never "the ones I did not create".
+      expect(listedIds(explicit)).toEqual([
+        "terminal-mine",
+        "terminal-users-own",
+        "terminal-other-session",
+      ]);
+      expect(listedIds(omitted)).toEqual(listedIds(explicit));
+      // Consumed in both directions — the renderer cannot honour either value.
+      expect(dispatchAction).toHaveBeenNthCalledWith(1, "terminal.list", {}, expect.anything());
+    });
+
+    it("scopes ownership to the session, so a reconnected client sees none of its old panels", async () => {
+      const { store, deps, server } = harness("s-before", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-before", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      // A reconnect is a new session id over the same live panels, and #12308
+      // deliberately does not carry the ledger across one: the honest answer
+      // is an empty list, which is what lets a client report what it left
+      // behind instead of guessing.
+      seedLiveSession(store, "s-after", "external");
+      store.sessionOriginMap.set("s-after", "external");
+      const reconnected = createSessionServer("s-after", deps);
+
+      const before = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+      const after = await callTool(reconnected, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+
+      expect(listedIds(before)).toEqual(["terminal-mine"]);
+      expect(listedIds(after)).toEqual([]);
+    });
+
+    it("does not read a worktree record as terminal ownership", async () => {
+      const { store, server } = harness("s-kind", { "terminal.list": LISTING });
+      // The ledger keys on kind as well as id, and a listing must not inherit
+      // authority granted over a different taxonomy.
+      store.resourceOwnership.record("s-kind", [{ kind: "worktree", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(listedIds(result)).toEqual([]);
+    });
+
+    it("never manufactures a row for a record whose panel is gone", async () => {
+      const { store, server } = harness("s-stale", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-stale", [
+        { kind: "terminal", id: "terminal-mine" },
+        { kind: "terminal", id: "terminal-the-user-closed" },
+      ]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      // The listing says what exists; the ledger only says who created it.
+      expect(listedIds(result)).toEqual(["terminal-mine"]);
+    });
+
+    it("leaves a non-boolean owned in place for the renderer's own validation", async () => {
+      const { server, dispatchAction } = harness("s-bad-arg", { "terminal.list": LISTING });
+
+      await callTool(server, { name: "terminal.list", arguments: { owned: "yes" } });
+
+      // Consuming it would launder an out-of-contract request into a legal one
+      // and answer it with the unfiltered list.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.list",
+        { owned: "yes" },
+        expect.anything()
+      );
+    });
+
+    it("passes a failed listing through untouched", async () => {
+      const { store, server } = harness("s-fail", {
+        "terminal.list": {
+          result: { ok: false, error: { code: "EXECUTION_ERROR", message: "renderer said no" } },
+        },
+      });
+      store.resourceOwnership.record("s-fail", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("renderer said no");
+      expect(errorText(result)).toContain("EXECUTION_ERROR");
+    });
+
+    it("fails the call on a payload shape it cannot read, rather than reporting nothing owned", async () => {
+      const { store, server } = harness("s-shape", {
+        "terminal.list": { result: { ok: true, result: { terminals: "not-an-array" } } },
+      });
+      store.resourceOwnership.record("s-shape", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      // An empty list is a substantive answer here — it is what a client acts
+      // on when it decides it left nothing behind — so an unreadable listing
+      // must not be able to produce one.
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESULT_VALIDATION_ERROR");
+    });
+
+    it("filters a listing whose ownership came from a real creation over HTTP", async () => {
+      // Every other case seeds the ledger by hand. This one drives the whole
+      // round trip — create, then list owned — so the recording hook's
+      // liveness guard, which checks SSE and HTTP session membership
+      // separately, cannot start recognising only one transport unnoticed.
+      const store = makeStore();
+      seedLiveSession(store, "s-http", "external", "http");
+      store.sessionOriginMap.set("s-http", "external");
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockImplementation((actionId: string) => {
+          if (actionId === "terminal.new") {
+            return Promise.resolve({
+              result: { ok: true, result: { terminalId: "terminal-new" } },
+            });
+          }
+          return Promise.resolve({
+            result: {
+              ok: true,
+              result: { terminals: [{ id: "terminal-new" }, { id: "terminal-users-own" }] },
+            },
+          });
+        }),
+        requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+        getCachedManifest: vi.fn(() => ownedManifest()),
+      });
+      const server = createSessionServer("s-http", deps);
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(listedIds(result)).toEqual(["terminal-new"]);
     });
   });
 });

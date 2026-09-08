@@ -310,7 +310,16 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `baseBranch` on an existing-branch reuse, a `branchName` beside a pull
   // request — which runtime zod then silently stripped. The bytes buy a schema
   // that refuses the combination instead of quietly ignoring half of it.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 46_200;
+  // 46_200 → 46_400 for `terminal.list`'s `owned` filter: 191 B, 2 B of it
+  // description and 189 B the params advertising the boolean and the sentence
+  // saying what it answers — the terminals this session's own ledger recorded,
+  // so a session that reconnected owns none. Unsaid, that honest empty result
+  // reads as a broken filter and the caller falls back to the unfiltered
+  // listing, which is the fan-out the filter exists to remove. A ceiling gates;
+  // it does not instruct a rewrite, and this is the text that standard protects.
+  // The headroom went to #12312's `workspace.list`; each PR fits alone and only
+  // the landing order does not.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 46_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet

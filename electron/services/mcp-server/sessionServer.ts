@@ -154,6 +154,87 @@ const OWNED_CLEANUP_TOOLS: Record<
   },
 };
 
+/** The listing whose `owned` filter main resolves against the ledger (#12308). */
+const TERMINAL_LIST_TOOL = "terminal.list";
+
+/**
+ * Split a `terminal.list` call's `owned` flag off the arguments the renderer
+ * receives (#12308).
+ *
+ * The strip and the renderer's refusal are one mechanism rather than two
+ * independent safeguards. Ownership is main-process state keyed by the MCP
+ * session id, which the renderer never sees, so `terminal.list`'s `run()`
+ * throws on any `owned` that reaches it — forwarding the flag would fail every
+ * legitimate call. Dropping it without setting `ownedOnly` would do the
+ * opposite and answer a narrowing question with the whole list. Reading both
+ * out of one destructure is what stops those two halves drifting apart.
+ *
+ * Only an actual boolean is consumed. Anything else is left in place for the
+ * renderer's own schema validation to reject, so a bad value comes back as the
+ * validation error it is instead of being laundered into a legal request —
+ * the same restraint `readSearchLimit` applies to an out-of-contract `limit`.
+ */
+function prepareTerminalListDispatch(
+  actionId: string,
+  args: unknown
+): { dispatchArgs: unknown; ownedOnly: boolean } {
+  if (
+    actionId !== TERMINAL_LIST_TOOL ||
+    args === null ||
+    typeof args !== "object" ||
+    Array.isArray(args)
+  ) {
+    return { dispatchArgs: args, ownedOnly: false };
+  }
+  const { owned, ...rest } = args as Record<string, unknown>;
+  if (typeof owned !== "boolean") return { dispatchArgs: args, ownedOnly: false };
+  return { dispatchArgs: rest, ownedOnly: owned };
+}
+
+/**
+ * Intersect a `terminal.list` result with what this session created (#12308).
+ *
+ * The payload is rebuilt from the renderer's rows rather than spread, so no
+ * field this function did not understand rides along.
+ *
+ * An unreadable payload fails the call rather than emptying it, which is where
+ * this parts company with `filterIntrospectionResultForSession`: there an
+ * empty list IS the denial, while here it is a substantive answer — "you
+ * created none of these" is what a client acts on when it decides it has
+ * nothing to clean up. Reporting that from a listing nothing could read would
+ * be the wrong answer rather than a cautious one.
+ *
+ * Rows are kept, never manufactured: a ledger record with no matching row in
+ * the listing yields nothing, because the listing is what says which panels
+ * exist and the ledger only says who created them.
+ */
+function filterTerminalListToOwned(
+  result: import("../../../shared/types/actions.js").ActionDispatchResult,
+  owns: (terminalId: string) => boolean
+): import("../../../shared/types/actions.js").ActionDispatchResult {
+  if (!result.ok) return result;
+  const payload = result.result as { terminals?: unknown } | null | undefined;
+  if (!Array.isArray(payload?.terminals)) {
+    return {
+      ok: false,
+      error: {
+        code: "RESULT_VALIDATION_ERROR",
+        message:
+          "terminal.list returned a listing that could not be intersected with this session's ownership records.",
+      },
+    };
+  }
+  return {
+    ok: true,
+    result: {
+      terminals: payload.terminals.filter((row) => {
+        const id = (row as { id?: unknown } | null | undefined)?.id;
+        return typeof id === "string" && owns(id);
+      }),
+    },
+  };
+}
+
 /**
  * Whether a `terminal.close` result reports the named panel as actually closed.
  *
@@ -735,10 +816,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // the tool contract forbids yields a null `searchLimit` and is left alone,
     // so the renderer's own validation still rejects it rather than having the
     // over-fetch quietly rewrite it into a legal request.
-    const dispatchArgs =
+    const searchDispatchArgs =
       searchLimit !== null && args && typeof args === "object" && !Array.isArray(args)
         ? { ...(args as Record<string, unknown>), limit: ACTIONS_SEARCH_MAX_LIMIT }
         : args;
+    // `terminal.list`'s `owned` filter is decided here and taken off the
+    // forwarded copy in the same call (#12308) — see
+    // `prepareTerminalListDispatch` for why those two are inseparable. Chained
+    // off the search rewrite above rather than folded into it: the two tools
+    // are disjoint, and one rewrite that handled both would have to be re-read
+    // whenever either changed. `args` stays untouched for the audit record.
+    const { dispatchArgs, ownedOnly } = prepareTerminalListDispatch(actionId, searchDispatchArgs);
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
@@ -1725,12 +1813,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   dispatchConfirmed
                 )
               : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
-          // Narrow registry-enumerating results to this session's effective
-          // surface before anything downstream reads them (#11525). Placed
-          // ahead of the `outcome` assignment so the text content, the
-          // structuredContent block, and the audit record all observe one
-          // filtered value — and so both the pinned and unpinned dispatch
-          // paths, which converge on this call, are covered by the same gate.
+          // Narrow renderer-computed results against this session before
+          // anything downstream reads them: the effective action surface for
+          // the registry-enumerating tools (#11525), and the ownership ledger
+          // for an `owned` listing (#12308). Both narrow on session state the
+          // renderer has no access to, and both are placed ahead of the
+          // `outcome` assignment so the text content, the structuredContent
+          // block, and the audit record all observe one filtered value — and so
+          // both the pinned and unpinned dispatch paths, which converge on this
+          // call, are covered by the same gate.
           outcome = {
             kind: "result",
             value: introspectionSurface
@@ -1740,13 +1831,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   introspectionSurface.permittedActionIds,
                   introspectionSurface
                 )
-              : envelope.result,
+              : ownedOnly
+                ? filterTerminalListToOwned(envelope.result, (terminalId) =>
+                    sessionStore.resourceOwnership.owns(sessionId, "terminal", terminalId)
+                  )
+                : envelope.result,
           };
           // Ownership bookkeeping, from the envelope the action actually
           // returned rather than from anything the caller said (#11909).
-          // Reads `envelope.result`, not `outcome.value`: the introspection
-          // filter above rewrites results for the discovery tools, and the
-          // ledger must observe the unnarrowed truth. Recorded for every tier
+          // Reads `envelope.result`, not `outcome.value`: the filters above
+          // rewrite results for the discovery tools and for an `owned`
+          // listing, and the ledger must observe the unnarrowed truth.
+          // Recorded for every tier
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
@@ -1866,8 +1962,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           );
         }
 
-        // A renderer was reached and reported a failure, so the target is known
-        // and worth reporting — unlike the pre-dispatch errors above.
+        // A renderer was reached, so the target is known and worth reporting —
+        // unlike the pre-dispatch errors above. The failure is usually the
+        // renderer's own, but an `owned` listing main could not read fails
+        // here too (#12308), after a dispatch that itself succeeded.
         return withResolvedWorkspace(
           buildToolError({
             code: outcome.value.error.code,
