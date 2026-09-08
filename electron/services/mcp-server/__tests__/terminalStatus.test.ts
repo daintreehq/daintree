@@ -32,13 +32,16 @@ function deps(
   records: Record_[],
   opts: {
     serialized?: Record<string, { data: string } | null>;
-    /** Ids the pty-host reports for the bound workspace. Defaults to every record. */
+    /** Ids the pty-host reports live for the bound workspace. Defaults to every record. */
     inventory?: string[];
+    /** Main-side spawn ledger. Ids absent from it read as untracked (`null`). */
+    owners?: Record<string, string>;
   } = {}
 ) {
   const byId = new Map(records.map((r) => [r["id"] as string, r]));
   return {
     ptyClient: {
+      getTerminalProjectId: vi.fn((id: string) => opts.owners?.[id] ?? null),
       getTerminalsForProjectAsync: vi.fn(
         async () => opts.inventory ?? records.map((r) => r["id"] as string)
       ),
@@ -180,6 +183,44 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledTimes(1);
     expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledWith("mine");
     expect(result.terminals[1]?.error).toBe("Terminal not found or status unavailable");
+  });
+
+  it("still answers for a trashed terminal the inventory has already dropped", async () => {
+    // `TerminalRegistry.getForProject` excludes trash, but a caller may
+    // legitimately poll a terminal during its recovery window — and the
+    // renderer's explicit-id path answers for it. The main-side spawn ledger
+    // places it without an inventory round trip.
+    const d = deps([record({ id: "binned", isTrashed: true })], {
+      inventory: [],
+      owners: { binned: WORKSPACE },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["binned"] });
+
+    expect(result.terminals[0]?.error).toBeUndefined();
+    expect(result.terminals[0]?.terminalId).toBe("binned");
+  });
+
+  it("skips the inventory round trip when the ledger places every id", async () => {
+    const d = deps([record({ id: "a" })], { owners: { a: WORKSPACE } });
+
+    await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["a"] });
+
+    expect(d.ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
+  });
+
+  it("never routes an id the ledger places in another workspace", async () => {
+    // Settled without the inventory: a non-null foreign owner is an answer, so
+    // the id is neither looked up nor put to the inventory.
+    const d = deps([record({ id: "theirs", projectId: "ws-other" })], {
+      owners: { theirs: "ws-other" },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["theirs"] });
+
+    expect(d.ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+    expect(d.ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
+    expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
   });
 
   it("answers every row unavailable when the inventory read fails", async () => {

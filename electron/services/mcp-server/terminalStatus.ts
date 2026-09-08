@@ -62,7 +62,10 @@ type TerminalRecord = NonNullable<Awaited<ReturnType<PtyClient["getTerminalAsync
 
 export type ViewlessStatusPtyClient = Pick<
   PtyClient,
-  "getTerminalsForProjectAsync" | "getTerminalAsync" | "getSerializedStateAsync"
+  | "getTerminalProjectId"
+  | "getTerminalsForProjectAsync"
+  | "getTerminalAsync"
+  | "getSerializedStateAsync"
 >;
 
 export interface ViewlessTerminalStatusDeps {
@@ -165,7 +168,7 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
  * The non-PTY and assistant exclusions mirror `buildTerminalInventory` and the
  * renderer's own ephemeral-panel filter: tooling-internal panels — the dev
  * preview among them — must never report state to an MCP caller. The workspace
- * comparison is belt-and-braces behind the inventory scoping in
+ * comparison is belt-and-braces behind the ownership scoping in
  * {@link buildViewlessTerminalStatus}, which is what actually keeps a foreign
  * id from being looked up.
  */
@@ -207,7 +210,17 @@ function buildEntry(record: TerminalRecord): TerminalStatusEntry {
  * foreign id — and the pty fabric shards by owning project, so a foreign id
  * lands on its owner's shard while an unknown one lands on the default. The two
  * rows read identically; their latency need not, and a stalled foreign shard
- * would be the tell. Scoping first means a foreign id is never routed at all.
+ * would be the tell.
+ *
+ * Two oracles, because neither alone is both cheap and complete.
+ * `getTerminalProjectId` is a synchronous main-side read of the spawn options,
+ * so it costs nothing and — the reason it leads — it still places a *trashed*
+ * terminal, which a caller may legitimately poll during its recovery window. It
+ * returns `null` for a terminal this main process never tracked, so only what
+ * it cannot place falls through to the project's live inventory, and that RPC
+ * is skipped entirely when it places every id. The inventory in turn excludes
+ * trash (`TerminalRegistry.getForProject`), which is the gap the first oracle
+ * covers.
  *
  * Request order and duplicates are preserved — a caller zipping the answer
  * against its own id list must get one row per id it asked for. Backend reads
@@ -221,11 +234,23 @@ export async function buildViewlessTerminalStatus(
   const { terminalIds, lines, stripAnsi, includeOutput } = parseArgs(rawArgs);
   const uniqueIds = [...new Set(terminalIds)];
 
-  // One inventory read for the workspace, then only the ids it actually owns.
-  // A failed inventory folds to `[]` in `PtyClient`, which answers every row
-  // "not found or unavailable" — honest, since nothing could be observed.
-  const owned = new Set(await deps.ptyClient.getTerminalsForProjectAsync(workspaceId));
-  const lookupIds = uniqueIds.filter((id) => owned.has(id));
+  const placed = new Set<string>();
+  const unplaced: string[] = [];
+  for (const id of uniqueIds) {
+    const owner = deps.ptyClient.getTerminalProjectId(id);
+    if (owner === workspaceId) placed.add(id);
+    // `null` means untracked, not foreign — the inventory decides those. A
+    // non-null owner that is some other workspace is settled here: never
+    // looked up, so never routed at its shard.
+    else if (owner === null) unplaced.push(id);
+  }
+  if (unplaced.length > 0) {
+    // A failed inventory folds to `[]` in `PtyClient`, which leaves those rows
+    // "not found or unavailable" — honest, since nothing could be observed.
+    const inventory = new Set(await deps.ptyClient.getTerminalsForProjectAsync(workspaceId));
+    for (const id of unplaced) if (inventory.has(id)) placed.add(id);
+  }
+  const lookupIds = uniqueIds.filter((id) => placed.has(id));
 
   const records = new Map<string, TerminalRecord>();
   const fetched = await Promise.all(lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id)));

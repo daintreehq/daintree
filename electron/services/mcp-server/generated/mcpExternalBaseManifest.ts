@@ -1523,7 +1523,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               exitCode: {
                 description:
-                  "Present once the process has exited, so its absence means still running. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output.",
+                  "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output.",
                 anyOf: [
                   {
                     type: "integer",

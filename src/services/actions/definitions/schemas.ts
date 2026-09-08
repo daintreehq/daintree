@@ -477,7 +477,7 @@ export const TerminalStatusEntrySchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Present once the process has exited, so its absence means still running. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
+      "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
     ),
   spawnedAt: z
     .number()
