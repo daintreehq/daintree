@@ -327,7 +327,7 @@ function closedIdsInclude(result: unknown, id: string): boolean {
 }
 
 /**
- * The resource id an `*Owned` cleanup call names, or `undefined` when the
+ * The resource id an `*Owned` call names, or `undefined` when the
  * argument is missing, the wrong type, or blank.
  *
  * Read here rather than trusting the renderer's schema validation, because the
@@ -1568,7 +1568,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // hook that fires before any other awaiter sees the resolved result.
     const dispatchPromise: Promise<CallToolResultLike> = (async () => {
       try {
-        // Ownership gate for the `*Owned` cleanup tools (#11909). Placed at the
+        // Ownership gate for the `*Owned` tools (#11909). Placed at the
         // very top of the IIFE: a session that does not own the named resource
         // is refused here, before the activity strip is told a call started,
         // before any confirmation is raised, and — the acceptance criterion
