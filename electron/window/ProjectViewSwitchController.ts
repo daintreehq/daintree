@@ -15,6 +15,7 @@ import {
   registerAppView,
   registerProjectView,
 } from "./webContentsRegistry.js";
+import { clearWorkspaceEviction } from "../services/workspaceResidency.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { AppError } from "../utils/errorTypes.js";
 import { logInfo, logWarn } from "../utils/logger.js";
@@ -292,6 +293,11 @@ export async function performSwitch(
   host.views.set(projectId, entry);
   host.webContentsToProject.set(view.webContents.id, projectId);
   registerProjectView(projectId, view.webContents);
+  // The workspace is reachable again, so any eviction recorded against it is
+  // history (#12313). Cleared on the way back in rather than only written on
+  // the way out: a bound MCP session that subscribes and then reads has to see
+  // the reopen, not the loss it already recovered from (lesson #10821).
+  clearWorkspaceEviction(projectId);
 
   // Set up security handlers and attach to window
   setupViewHandlers(host, view, entry);

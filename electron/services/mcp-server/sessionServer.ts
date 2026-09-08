@@ -24,6 +24,7 @@ import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrant
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
+import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
 import type { AuditOutcome } from "./auditLog.js";
 import type {
   McpTier,
@@ -61,6 +62,7 @@ import {
   WORKSPACE_BINDING_CAPABILITY_KEY,
   type DispatchedWorkspaceRef,
   type McpWorkspaceBinding,
+  WORKSPACE_BINDING_RESOURCE_URI,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
@@ -2141,8 +2143,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       );
     }
     if (parsed.kind === "agentState") await assertBoundRouteReachable();
+    // `binding` deliberately skips the probe above, and needs no exemption
+    // branch to do it: it dispatches nothing, so there is no route for a probe
+    // to be protecting. That is the whole point — it is the one read a session
+    // whose workspace is gone can still make (#12313).
     try {
-      return { contents: [await readResourceContents(uri, parsed, dispatchAction)] };
+      return {
+        contents: [
+          await readResourceContents(uri, parsed, dispatchAction, workspaceBinding?.workspaceId),
+        ],
+      };
     } catch (err) {
       const routed = routeBindingMcpError(err);
       if (routed) throw routed;
@@ -2173,7 +2183,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // listener on a process-global event and would push another workspace's
     // updates at a session that cannot reach its own.
     if (parsed.kind === "agentState") await assertBoundRouteReachable();
-    subscribeResource(sessionId, server, uri, parsed, sessionStore);
+    subscribeResource(sessionId, server, uri, parsed, sessionStore, workspaceBinding?.workspaceId);
     return {};
   });
 
@@ -2258,6 +2268,25 @@ async function listConcreteResources(
 ): Promise<Array<{ uri: string; name: string; mimeType: string; description?: string }>> {
   const resources: Array<{ uri: string; name: string; mimeType: string; description?: string }> =
     [];
+  // First, and before anything that dispatches. A workspace-bound session whose
+  // view is gone cannot reach a renderer, so this is the only entry it is
+  // guaranteed to get — and it is what makes the degraded listing below honest
+  // rather than an authoritative "you have nothing" (#12313).
+  if (isResourcePermitted(tier, "binding")) {
+    resources.push({
+      uri: WORKSPACE_BINDING_RESOURCE_URI,
+      name: "This session — workspace binding",
+      mimeType: "application/json",
+      description:
+        "Whether this session's bound workspace has a live view, when eviction last took one, and whether the user asked to keep it resident.",
+    });
+  }
+  // Captured before the first await, so the decision below is a value this
+  // function already holds rather than a state read from inside a catch
+  // (lesson #10222). Its meaning is narrow: an unreachable workspace may only
+  // drop the categories that needed a renderer if the client is simultaneously
+  // being handed the resource that explains why they are missing.
+  const bindingListed = resources.length > 0;
   if (isResourcePermitted(tier, "issues")) {
     resources.push({
       uri: "daintree://project/current/issues",
@@ -2267,7 +2296,7 @@ async function listConcreteResources(
     });
   }
   if (isResourcePermitted(tier, "pulse")) {
-    const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction);
+    const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction, bindingListed);
     for (const wt of worktrees) {
       const id = readStringField(wt, ["id", "worktreeId"]);
       const label = readStringField(wt, ["branch", "name", "path"]) ?? id;
@@ -2281,7 +2310,7 @@ async function listConcreteResources(
     }
   }
   if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
-    const terminals = await tryDispatchList("terminal.list", deps.dispatchAction);
+    const terminals = await tryDispatchList("terminal.list", deps.dispatchAction, bindingListed);
     for (const term of terminals) {
       const id = readStringField(term, ["id", "terminalId"]);
       const label = readStringField(term, ["title", "name"]) ?? id;
@@ -2346,8 +2375,16 @@ function listResourceTemplates(
 async function readResourceContents(
   uri: string,
   parsed: ParsedResourceUri,
-  dispatchAction: SessionServerDeps["dispatchAction"]
+  dispatchAction: SessionServerDeps["dispatchAction"],
+  boundWorkspaceId: string | undefined
 ): Promise<{ uri: string; mimeType: string; text: string }> {
+  if (parsed.kind === "binding") {
+    // Resolved fresh on every read, from the same registry routing consults, so
+    // "this says available" and "a call would route" cannot drift (#7003 — never
+    // a cache, and never another session's or window's state).
+    const state = readWorkspaceBindingState(boundWorkspaceId ?? null);
+    return { uri, mimeType: "application/json", text: JSON.stringify(state) };
+  }
   if (parsed.kind === "pulse") {
     const envelope = await dispatchAction("git.getProjectPulse", {
       worktreeId: parsed.id,
@@ -2401,7 +2438,8 @@ async function readResourceContents(
 
 async function tryDispatchList(
   actionId: string,
-  dispatchAction: SessionServerDeps["dispatchAction"]
+  dispatchAction: SessionServerDeps["dispatchAction"],
+  bindingResourceListed: boolean
 ): Promise<unknown[]> {
   try {
     const envelope = await dispatchAction(actionId, {});
@@ -2420,6 +2458,20 @@ async function tryDispatchList(
     // have nothing" for a bound session whose workspace is simply not open —
     // the same lie the terminal handshake used to tell, in a quieter place.
     // Ordinary enumeration failures keep degrading to a partial listing.
+    //
+    // What changed in #12313 is that the listing can now say so. When the
+    // binding resource is in the response, dropping this category is not a
+    // claim about the workspace's contents — the client is holding a resource
+    // that reports the route is gone, when eviction took it, and that it will
+    // come back. Without that resource the old refusal is still the only honest
+    // answer, so the flag is checked rather than assumed.
+    //
+    // Narrowed to `WorkspaceBindingError` deliberately. A `SessionBindingError`
+    // is a dead WebContents pin: the session's identity is a destroyed view it
+    // can never re-resolve, so there is no later state in which the listing
+    // fills back in, and degrading it would promise a recovery that cannot
+    // happen. That one still refuses.
+    if (bindingResourceListed && err instanceof WorkspaceBindingError) return [];
     const routed = routeBindingMcpError(err);
     if (routed) throw routed;
     console.error(`[MCP] Failed to enumerate resources via ${actionId}:`, err);
@@ -2443,9 +2495,10 @@ function subscribeResource(
   server: Server,
   uri: string,
   parsed: ParsedResourceUri,
-  sessionStore: SessionStore
+  sessionStore: SessionStore,
+  boundWorkspaceId: string | undefined
 ): void {
-  if (parsed.kind !== "pulse" && parsed.kind !== "agentState") {
+  if (parsed.kind !== "pulse" && parsed.kind !== "agentState" && parsed.kind !== "binding") {
     throw new McpError(
       ErrorCode.InvalidRequest,
       `Subscriptions are not supported for resource '${uri}'.`
@@ -2466,7 +2519,22 @@ function subscribeResource(
   };
 
   let unsub: () => void;
-  if (parsed.kind === "agentState") {
+  if (parsed.kind === "binding") {
+    // Push is latency reduction, never the contract. The transport is built
+    // without an `eventStore` (`httpLifecycle.ts`), and the SDK's `send()`
+    // returns silently when no client is holding the standalone GET stream, so
+    // a notification can be dropped with no error anywhere — which is exactly
+    // why the read above is the authoritative half and this only says "read
+    // again" (#12313).
+    //
+    // An unbound session subscribing gets a live, permanently quiet
+    // subscription: it has no binding, so nothing can change about one. Cheaper
+    // and more predictable than refusing, and its read still answers `unbound`.
+    unsub =
+      boundWorkspaceId === undefined
+        ? () => {}
+        : onWorkspaceResidencyChanged(boundWorkspaceId, fire);
+  } else if (parsed.kind === "agentState") {
     unsub = events.on("agent:state-changed", (payload) => {
       if (payload.agentId === parsed.id) fire();
     });

@@ -1896,6 +1896,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;
   };
+  "workspace-residency:get": {
+    args: [payload: { workspaceId: string }];
+    result: boolean;
+  };
+  "workspace-residency:set": {
+    args: [payload: { workspaceId: string; keepResident: boolean }];
+    result: void;
+  };
   "workspace:list": {
     args: [];
     result: import("./workspace.js").WorkspaceListEntry[];

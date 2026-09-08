@@ -13,6 +13,10 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
+import {
+  isWorkspaceKeepResident,
+  recordWorkspaceEviction,
+} from "../services/workspaceResidency.js";
 
 /** A view eligible for eviction; the flags beyond the entry are carried into the eviction log line. */
 type EvictionCandidate = {
@@ -21,6 +25,7 @@ type EvictionCandidate = {
   activeAgent: boolean;
   liveAssistantBackend: boolean;
   boundMcpSession: boolean;
+  keepResident: boolean;
 };
 
 /**
@@ -105,6 +110,11 @@ export function evictDeadView(
     });
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
+    // After the teardown, so the ledger's own liveness check sees the settled
+    // view set (#12313). A bound MCP session learns from this that its route
+    // went away and roughly when, which is the difference between a workspace
+    // it can wait for and an id that was never right.
+    recordWorkspaceEviction(projectId, trigger);
   });
 }
 
@@ -324,9 +334,15 @@ export function evictStaleViews(
   // nothing dies with the renderer the way an assistant's process tree does,
   // and enough concurrent bound sessions would otherwise defeat the pressure
   // policy. So it yields under real pressure, just last.
+  //
+  // A workspace the *user* granted residency (#12313) is the one tier a client
+  // cannot give itself, so it outranks the bound-session ordering above and
+  // sits directly under the assistant floor. It is still not a floor: the
+  // number protected is bounded by the cap the user configured, below.
   const safeToEvict: EvictionCandidate[] = [];
   const activeAgentFallback: EvictionCandidate[] = [];
   const boundMcpSessionFallback: EvictionCandidate[] = [];
+  const residentGranted: EvictionCandidate[] = [];
   const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
     const activeAgent = hasActiveAgent(host, projectId);
@@ -335,9 +351,16 @@ export function evictStaleViews(
     // it must not reach the exclusion set above, or one broken callback would
     // pin every cached view straight through critical pressure.
     const boundMcpSession = mcp.liveBinding || mcp.unknown;
-    const base = { projectId, entry, activeAgent, boundMcpSession };
+    // Read per pass rather than cached: the grant is a live user setting, and
+    // this is also the liveness half (#11162) — the preference record is keyed
+    // by workspace id and nothing prunes it when a project is deleted, so a
+    // stale entry only ever meets this loop for a view that actually exists.
+    const keepResident = isWorkspaceKeepResident(projectId);
+    const base = { projectId, entry, activeAgent, boundMcpSession, keepResident };
     if (hasLiveAssistantBackend(host, projectId, entry)) {
       assistantProtected.push({ ...base, liveAssistantBackend: true });
+    } else if (keepResident) {
+      residentGranted.push({ ...base, liveAssistantBackend: false });
     } else if (boundMcpSession) {
       boundMcpSessionFallback.push({ ...base, liveAssistantBackend: false });
     } else if (activeAgent) {
@@ -347,11 +370,45 @@ export function evictStaleViews(
     }
   }
 
-  const candidates = [...safeToEvict, ...activeAgentFallback, ...boundMcpSessionFallback];
+  // How many granted workspaces this pass will actually hold.
+  //
+  // The whole bound is `effectiveMax - 1`: the active view is excluded from
+  // `evictable` and occupies one slot, so protected residents plus the active
+  // view can never exceed the cap. That is the "inside the configured cap"
+  // half of the issue's ask, as an invariant rather than a policy — residency
+  // alone can never carry the cache over `effectiveMax`, and the loop below
+  // always has enough candidates left to converge.
+  //
+  // It is also the whole of the "yields at critical pressure" half, with no
+  // branch anywhere: `effectiveMax` is already 1 on a forced reclaim and
+  // already `targetMax` under gradual pressure, so the slots go to zero exactly
+  // when the pressure ladder says they should and every granted view drops back
+  // into the ordinary queue. A soft band that still allows 3 views still honours
+  // 2 grants, which is the behaviour the issue thread converged on.
+  //
+  // `evictable` is LRU-ascending, so the most recently used grants are its tail
+  // — when the user has granted more workspaces than fit, the ones they have
+  // actually been working in are the ones held.
+  const residentSlots = Math.max(0, effectiveMax - 1);
+  const residentProtected = residentSlots === 0 ? [] : residentGranted.slice(-residentSlots);
+  const residentOverflow = residentGranted.slice(
+    0,
+    residentGranted.length - residentProtected.length
+  );
+
+  // Overflow grants go last: one the cap could not hold is still a view the
+  // user asked for, so it outranks every ungranted candidate — including a
+  // bound-but-quiet session's, which is ordering the client got for free.
+  const candidates = [
+    ...safeToEvict,
+    ...activeAgentFallback,
+    ...boundMcpSessionFallback,
+    ...residentOverflow,
+  ];
 
   let evictedCount = 0;
   while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
-    const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession } =
+    const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession, keepResident } =
       candidates.shift()!;
     const ageMs = Date.now() - entry.lastUsed;
     const memoryKb = memoryFor(entry);
@@ -367,12 +424,20 @@ export function evictStaleViews(
     // the pass that took its view, rather than looking like the binding broke
     // on its own.
     if (boundMcpSession) ctx.boundMcpSession = true;
+    // The user granted this workspace residency and it is being evicted anyway
+    // — the cap could not hold every grant, or pressure took the slots. Logged
+    // so the override is attributable rather than looking like the grant was
+    // ignored (#11162).
+    if (keepResident) ctx.keepResident = true;
     if (memoryKb > 0) ctx.memoryKb = memoryKb;
     if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
     if (availableMb != null) ctx.memoryAvailableMb = availableMb;
     logInfo("projectview.eviction", ctx);
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
+    // After the teardown, so the ledger's liveness check reads the settled view
+    // set — see `recordWorkspaceEviction` (#12313).
+    recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
   }
 
@@ -394,7 +459,7 @@ export function evictStaleViews(
   if (
     host.views.size > effectiveMax &&
     candidates.length === 0 &&
-    (assistantProtected.length > 0 || mcpLeasedProjectIds.size > 0)
+    (assistantProtected.length > 0 || mcpLeasedProjectIds.size > 0 || residentProtected.length > 0)
   ) {
     // `overflow` counts views over target; the two counts beside it say what is
     // holding them, so a reader can tell a pinned assistant (persistent, this
@@ -423,6 +488,12 @@ export function evictStaleViews(
       // mid-dispatch as transient when its floor outlives the call. Kept apart,
       // each count means exactly one thing.
       mcpLeasedCount: mcpLeasedProjectIds.size,
+      // Residency alone cannot cause the overflow — it is bounded by
+      // `effectiveMax - 1`, so held grants plus the active view always fit the
+      // cap. It can still be part of an over-cap cache alongside an assistant
+      // floor or a dispatch lease, and a reader tracing the extra renderers
+      // needs to see which held views were the user's own choice (#12313).
+      residentProtectedCount: residentProtected.length,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
     });
   }

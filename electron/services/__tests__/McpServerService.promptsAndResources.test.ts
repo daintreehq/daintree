@@ -896,7 +896,7 @@ describe("McpServerService", () => {
       expect(uris).not.toContain("daintree://agent/term-2/state");
     });
 
-    it("listResources still returns the static issues URI when enumeration fails", async () => {
+    it("listResources still returns the dispatch-free URIs when enumeration fails", async () => {
       const dispatchMock = vi.fn((_payload: DispatchRequest): ActionDispatchResult => ({
         ok: false,
         error: { code: "EXECUTION_ERROR", message: "no view" },
@@ -911,7 +911,14 @@ describe("McpServerService", () => {
 
       const result = await client.listResources();
       const uris = result.resources.map((r) => r.uri);
-      expect(uris).toEqual(["daintree://project/current/issues"]);
+      // Both entries answer without a renderer, so a failed enumeration cannot
+      // take them. The binding resource leads (#12313): it is the one a
+      // workspace-bound session with no live view has to be handed, since it is
+      // what tells that session why the rest of the listing is missing.
+      expect(uris).toEqual([
+        "daintree://workspace/current/binding",
+        "daintree://project/current/issues",
+      ]);
     });
 
     it("listResourceTemplates returns the four template patterns", async () => {

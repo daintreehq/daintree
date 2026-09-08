@@ -12,6 +12,7 @@ import {
   unregisterProjectView,
   unregisterWebContents,
 } from "./webContentsRegistry.js";
+import { notifyWorkspaceViewsChanged } from "../services/workspaceResidency.js";
 import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
 import { forgetRendererTerminalDiagnostics } from "../services/RendererTerminalDiagnosticsCache.js";
 import { detachRendererConsoleCapture } from "./rendererConsoleCapture.js";
@@ -479,6 +480,11 @@ export function cleanupEntry(host: ProjectViewManager, projectId: string): void 
 
     host.webContentsToProject.delete(wcId);
     unregisterProjectView(wcId);
+    // Every teardown, not just eviction (#12313). An ordinary close or a window
+    // going away also takes a bound session's route, and it is not an eviction
+    // — so this only wakes subscribers to re-read, and never writes a reason
+    // the pass did not have.
+    notifyWorkspaceViewsChanged(projectId);
     forgetBlinkSample(wcId);
     forgetEluSample(wcId);
     forgetRendererTerminalDiagnostics(wcId);

@@ -26,6 +26,7 @@ import { registerIdleTerminalHandlers } from "./handlers/idleTerminals.js";
 import { registerIdleBackgroundAutoCloseHandlers } from "./handlers/idleBackgroundAutoClose.js";
 import { registerSystemSleepHandlers } from "./handlers/systemSleep.js";
 import { registerAppVersionInfoHandlers } from "./handlers/appVersionInfo.js";
+import { registerWorkspaceResidencyHandlers } from "./handlers/workspaceResidency.js";
 import { registerOsDndHandlers } from "./handlers/osDnd.js";
 import { registerKeybindingHandlers } from "./handlers/keybinding.js";
 import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
@@ -166,6 +167,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerIdleBackgroundAutoCloseHandlers(deps));
     register(() => registerSystemSleepHandlers(deps));
     register(() => registerAppVersionInfoHandlers());
+    register(() => registerWorkspaceResidencyHandlers());
     register(() => registerOsDndHandlers(deps));
     register(() => registerKeybindingHandlers(deps));
     register(() => registerWorktreeConfigHandlers(deps));

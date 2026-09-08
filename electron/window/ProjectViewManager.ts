@@ -16,6 +16,7 @@
 import { BrowserWindow, type WebContentsView } from "electron";
 import { performance } from "node:perf_hooks";
 import { registerProjectView } from "./webContentsRegistry.js";
+import { clearWorkspaceEviction } from "../services/workspaceResidency.js";
 import { isValidScratchStateId } from "../services/projectStorePaths.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -491,6 +492,9 @@ export class ProjectViewManager {
     this.views.set(projectId, entry);
     this.webContentsToProject.set(view.webContents.id, projectId);
     registerProjectView(projectId, view.webContents);
+    // Same reopen clear as the cold-start path (#12313) — the startup view
+    // never goes through `performSwitch`, so it needs its own.
+    clearWorkspaceEviction(projectId);
     this.activeProjectId = projectId;
     // The startup view never goes through `performSwitch`, so it needs its own
     // open signal — otherwise a relaunch straight into a trusted project would
