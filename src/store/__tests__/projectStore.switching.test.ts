@@ -111,15 +111,6 @@ vi.mock("@/services/projectSwitchRendererCache", () => ({
   cancelPreparedProjectSwitchRendererCache: vi.fn(),
 }));
 
-// Main's view-cache lifecycle, which decides whether "already there" is a real
-// answer. False for every test that doesn't say otherwise — a view that was
-// never cached is the ordinary foreground one.
-const viewCached = vi.hoisted(() => ({ current: false }));
-vi.mock("@/lib/viewCacheState", () => ({
-  isProjectViewCached: () => viewCached.current,
-  subscribeProjectViewLifecycle: () => () => {},
-}));
-
 // Grids the outgoing-state builder should read, keyed by panel id. Absent =
 // non-PTY panel (or one whose xterm is gone), which `get()` reports as null.
 const mockTerminalGrids = new Map<string, { cols: number; rows: number }>();
@@ -151,7 +142,6 @@ const projectB = {
 beforeEach(() => {
   mockActiveWorktreeId = null;
   mockTerminalGrids.clear();
-  viewCached.current = false;
   vi.resetModules();
   vi.clearAllMocks();
 });
@@ -1143,44 +1133,5 @@ describe("switch busy indication (#10736)", () => {
 
     expect(useProjectStore.getState().isSwitching).toBe(true);
     expect(useProjectStore.getState().switchingToProjectId).toBe("project-c");
-  });
-});
-
-describe("switching to the workspace this view already holds (#12315)", () => {
-  it("does nothing while this view is the one on screen", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().switchProject(projectA.id);
-
-    // Tearing down and rebuilding the view the user is already looking at is
-    // the cost this guard exists to avoid.
-    expect(projectClientMock.switch).not.toHaveBeenCalled();
-  });
-
-  it("switches anyway when main has this view cached", async () => {
-    // `currentProject` is per-view — main answers `project:get-current` from the
-    // sender's own binding — so in a cached view it names that view's own
-    // workspace and the guard was refusing the one call that could bring it
-    // back. Caching is `removeChildView` + `setVisible(false)`, which changes
-    // nothing the renderer can see on its own.
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-    viewCached.current = true;
-
-    await useProjectStore.getState().switchProject(projectA.id, {
-      focusIntent: { intent: "focus-panel", panelId: "terminal-1" },
-    });
-    await Promise.resolve();
-
-    expect(projectClientMock.switch).toHaveBeenCalledWith(
-      projectA.id,
-      expect.anything(),
-      expect.objectContaining({
-        // The intent has to survive: it is the only thing that tells the
-        // revealed view which panel to focus once it has hydrated.
-        focusIntent: { intent: "focus-panel", panelId: "terminal-1" },
-      })
-    );
   });
 });

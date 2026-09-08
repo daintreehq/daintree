@@ -311,7 +311,46 @@ export function createRendererBridge(
   }
 
   /**
-   * Bring the window hosting a workspace to the front (#12315).
+   * Resolve the view a reveal should run in (#12315).
+   *
+   * The window that already holds a view for the destination workspace, at
+   * whichever project that window currently shows. Not the focused window, and
+   * not the destination's own view — both are wrong, in different ways.
+   *
+   * Not the destination's own view, because a reveal is a switch, and only the
+   * view being REPLACED can snapshot its drafts and layout on the way out.
+   * Asking the destination to switch to itself detaches the visible view with
+   * nothing to persist it, and caching fires no `visibilitychange` for a child
+   * view to catch it later.
+   *
+   * Not simply the focused window, because switching THAT window to the
+   * destination opens the workspace a second time while the original view
+   * survives elsewhere — and a workspace open in two views is `ambiguous` to
+   * `getWorkspaceWebContents`, so the reveal would break every later call the
+   * revealing session makes, its own binding included.
+   *
+   * Falls back to the active view when the workspace has no view anywhere: a
+   * workspace nothing holds cannot be duplicated, and the switch cold-starts it
+   * for whoever is asking.
+   */
+  function resolveRevealTarget(workspaceId: string | undefined): Electron.WebContents {
+    if (workspaceId !== undefined) {
+      const holders = getWebContentsForProject(workspaceId).filter((wc) => !wc.isDestroyed());
+      for (const holder of holders) {
+        const win = getWindowForWebContents(holder);
+        if (!win || win.isDestroyed()) continue;
+        const registry = getRegistry();
+        const active = registry
+          ?.getByWindowId(win.id)
+          ?.services.projectViewManager?.getActiveView()?.webContents;
+        if (active && !active.isDestroyed()) return active;
+      }
+    }
+    return getActiveProjectWebContents();
+  }
+
+  /**
+   * Take the user to a run, and bring the window it lands in with them (#12315).
    *
    * The one route on this bridge that is allowed to disturb what the user is
    * looking at, and it is a separate function for exactly that reason. Every
@@ -319,28 +358,53 @@ export function createRendererBridge(
    * side-effect free on purpose, because a bound session driving project A must
    * never move the user; relaxing either of those would apply that to all of
    * them. This one is reached only from `terminal.revealOwned`, after main has
-   * verified the panel belongs to the calling session and the delegated
-   * `pilot.openRun` has already switched the workspace.
+   * verified the panel belongs to the calling session.
    *
-   * Switching the workspace is not enough on its own: it changes which view the
-   * window shows, and does nothing at all when the window is minimised or
-   * behind another application — which is most of the time for the client this
-   * exists for, whose whole request is "put the operator in front of this".
+   * The dispatch and the raise live together here because they must agree on
+   * one window. Resolving it twice is not the same as resolving it once: the
+   * dispatch is awaited, and the user can focus another window while it is in
+   * flight, so a second lookup can raise a window the switch never touched and
+   * report that it worked.
    *
-   * Never throws, and reports whether it raised anything. It runs after the
-   * reveal has already succeeded, so a window that has since gone is a weaker
-   * outcome rather than a failed call.
+   * Switching alone would not be enough even when it lands: it changes which
+   * view a window shows and does nothing at all when that window is minimised
+   * or behind another application — which is where the client asking for this
+   * usually finds it.
    */
-  function revealWorkspaceWindow(workspaceId: string): boolean {
+  async function revealOwnedRun(
+    workspaceId: string | undefined,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin
+  ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> {
+    const target = resolveRevealTarget(workspaceId);
+    // Routed as pinned, so the view holds an eviction lease and is thawed for
+    // the duration. It is about to be swapped out by its own switch, and a
+    // response that never comes back is indistinguishable to the caller from a
+    // reveal that never happened.
+    const envelope = await dispatchActionForWebContents(
+      target.id,
+      actionId,
+      args,
+      confirmed,
+      undefined,
+      sessionOrigin
+    );
+    if (!envelope.result.ok) return { envelope, raised: false };
+
+    // The window is looked up from the view that was dispatched INTO, captured
+    // before the await. A switch replaces the view inside a window; it never
+    // moves a view between windows, so this identity outlives the dispatch.
+    const win = getWindowForWebContents(target);
+    if (!win || win.isDestroyed()) return { envelope, raised: false };
     try {
-      const win = getWindowForWebContents(getWorkspaceWebContents(workspaceId));
-      if (!win || win.isDestroyed()) return false;
       if (win.isMinimized()) win.restore();
       win.show();
       win.focus();
-      return true;
+      return { envelope, raised: true };
     } catch {
-      return false;
+      return { envelope, raised: false };
     }
   }
 
@@ -841,7 +905,7 @@ export function createRendererBridge(
     dispatchActionForWebContents,
     requestManifestForWorkspace,
     dispatchActionForWorkspace,
-    revealWorkspaceWindow,
+    revealOwnedRun,
     /**
      * Validate a handshake workspace selector and describe what it resolved to
      * (#11789). Throws {@link WorkspaceBindingError} when the workspace has no

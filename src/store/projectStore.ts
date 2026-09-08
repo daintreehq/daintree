@@ -31,7 +31,6 @@ import {
   PROJECT_OPEN_RECOVERY_LABELS,
 } from "@shared/utils/projectOpenErrors";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
-import { isProjectViewCached } from "@/lib/viewCacheState";
 import {
   clearPanelStoreForSwitchThroughAccessor,
   clearFleetArmingThroughAccessor,
@@ -821,14 +820,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   switchProject: async (projectId, options) => {
-    // "Already there, nothing to do" — true only while this view is the one on
-    // screen. `currentProject` is per-view (main answers `project:get-current`
-    // from the sender's own binding), so in a CACHED view it names that view's
-    // own workspace, and this guard would refuse the one call that could bring
-    // it back (#12315). Caching is `removeChildView` + `setVisible(false)`, so
-    // nothing in the renderer's own state changes when a view is backgrounded;
-    // main's lifecycle signal is the only thing that knows.
-    if (get().currentProject?.id === projectId && !isProjectViewCached()) return;
+    if (get().currentProject?.id === projectId) return;
     const requestId = ++projectTransitionRequestId;
     // Adopt the trace the gesture site minted (keydown/click instant), else
     // start one here so every switch is traceable, API-driven ones included.

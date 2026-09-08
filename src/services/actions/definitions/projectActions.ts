@@ -83,13 +83,13 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   defaultWorktreeMode: z.string().optional(),
 };
 
-// `workspaceId` is optional because the MCP route cannot supply it. A reveal
-// delegated by `terminal.revealOwned` is rebuilt from the id alone and lands in
-// the workspace-bound view, which IS the workspace the owned panel lives in —
-// so the executing view's own identity is the right default there, and the only
-// one main could pass without re-deriving what the routing already decided.
-// The click payload keeps sending it explicitly: a row in the overview names a
-// run in some *other* workspace far more often than not.
+// `workspaceId` is optional so the executing view's own workspace can stand in
+// for it. `terminal.revealOwned` supplies it from the ownership ledger, but the
+// ledger records it best-effort, and a reveal whose destination is unknown is
+// still better answered by "the workspace you are in" than refused outright —
+// that is where a panel is if the client never left. The click payload always
+// sends it: a row in the overview names a run in another workspace more often
+// than not.
 const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string().optional() });
 
 /**
@@ -326,28 +326,45 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         );
       }
 
-      // Already here AND on screen: focus directly. Going through a switch
-      // would tear down and rebuild a view that is already the active one.
+      // A view nobody is looking at cannot take anyone anywhere, and saying so
+      // is the entire fix (#12315).
       //
-      // `isProjectViewCached()` is the second half of that question, and it is
-      // load-bearing rather than defensive. `getViewWorkspaceId()` is the
-      // workspace this view was CREATED for — immutable identity, seeded at
-      // view creation — which says nothing about whether the view is the one
-      // attached to the window right now. For a click those two always agree,
-      // because the dialog only ever runs in the view the user is looking at.
-      // They come apart the moment an MCP session dispatches into its bound
-      // workspace: `dispatchActionForWorkspace` routes straight into a cached,
-      // detached, thawed background view, where the id comparison alone is
-      // trivially true and this branch would select the panel inside a view
-      // nobody can see and report success (#12315). Main's cache lifecycle is
-      // the only signal that can tell the two apart — `document.visibilityState`
-      // reports "visible" forever for a detached child view.
+      // `getViewWorkspaceId()` is the workspace this view was CREATED for —
+      // immutable identity, seeded at view creation — which says nothing about
+      // whether the view is the one attached to the window right now. For a
+      // click the two always agree, because the dialog only ever runs in the
+      // view the user is looking at. They come apart when an MCP session
+      // dispatches into its bound workspace: `dispatchActionForWorkspace`
+      // routes into a cached, detached, thawed background view, where the id
+      // comparison below is trivially true, so this action used to select the
+      // panel inside a view nobody could see and report success.
+      //
+      // Switching from here would be worse than refusing, not better. The view
+      // this one would replace is a DIFFERENT renderer, and only that renderer
+      // can snapshot its own drafts and layout on the way out — caching fires
+      // no `visibilitychange` for a child view, so nothing else would flush
+      // them. `terminal.revealOwned` routes to the active view for exactly that
+      // reason; anything still arriving here has no way to show a person
+      // anything, and an error it can act on beats a success it cannot.
+      //
+      // Main's cache lifecycle is the only signal that can tell the two apart:
+      // `document.visibilityState` reports "visible" forever for a detached
+      // child view.
+      if (isProjectViewCached()) {
+        failToOpenRun(
+          new Error("view is cached"),
+          "Daintree couldn't open that run — this project isn't the one on screen."
+        );
+      }
+
+      // Already here: focus directly. Going through a switch would tear down
+      // and rebuild a view that is already the active one.
       //
       // Focus BEFORE closing, and only close on success. An agent can exit
       // between the list rendering and the click, and `panel.focus` rejects on
       // a panel that no longer exists — closing first would leave the user back
       // where they started with the overview gone and nothing explaining why.
-      if (workspaceId === currentId && !isProjectViewCached()) {
+      if (workspaceId === currentId) {
         const result = await actionService.dispatch("panel.focus", { panelId: runId });
         if (result.ok) {
           // Closing a palette normally returns the keyboard to whatever opened
@@ -370,17 +387,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         );
       }
 
-      // Elsewhere — or here but cached: the switch is the only way to put a
-      // view on screen, and this context may die with it, so the target rides
-      // along as a one-shot intent that the incoming view applies once its
-      // state has hydrated. Closing first is right here: the view holding this
-      // dialog is about to be replaced.
-      //
-      // A cached view switching to its OWN workspace is not a contradiction —
-      // it is the reveal. Main's cache-hit branch re-attaches this very view,
-      // focuses it and delivers the intent to it
-      // (`ProjectViewSwitchController`), so the same call that crosses
-      // workspaces also brings a backgrounded one forward.
+      // Elsewhere: the switch is the only way across, and this context dies
+      // with it — so the target rides along as a one-shot intent that the
+      // incoming view applies once its state has hydrated. Closing first is
+      // right here: the view holding this dialog is about to be replaced.
       usePilotStore.getState().close();
       const focusIntent = { intent: "focus-panel", panelId: runId } as const;
 

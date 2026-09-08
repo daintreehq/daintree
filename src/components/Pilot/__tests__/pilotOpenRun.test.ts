@@ -222,40 +222,37 @@ describe("pilot.openRun", () => {
   });
 
   describe("when the executing view is cached (#12315)", () => {
-    it("reveals its own workspace instead of focusing where nobody is looking", async () => {
+    it("refuses instead of focusing where nobody is looking", async () => {
       // The whole bug. An MCP session bound to a workspace dispatches into that
       // workspace's view, which `getWorkspaceWebContents` resolves without
       // attaching, thawing, activating, focusing or switching anything — so the
       // executing view is cached, its own id matches the target trivially, and
-      // the local branch used to select the panel inside a view the user cannot
-      // see and report success.
+      // this used to select the panel inside a view the user cannot see and
+      // report success.
       seedCachedView(PROJECT_HERE);
 
-      await openRun({ runId: "t1", workspaceId: PROJECT_HERE });
+      await expect(openRun({ runId: "t1", workspaceId: PROJECT_HERE })).rejects.toThrow();
 
-      expect(switchProject).toHaveBeenCalledWith(PROJECT_HERE, {
-        focusIntent: { intent: "focus-panel", panelId: "t1" },
-      });
       expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", { panelId: "t1" });
+      expect(notifyMock).toHaveBeenCalledTimes(1);
     });
 
-    it("reveals a cached scratch view the same way", async () => {
-      // Scratches route through their own switch handler, and the reveal is not
-      // a project-only capability — a bound session can be pinned to either.
-      seedCachedView(SCRATCH_A);
-      seedScratches([SCRATCH_A]);
+    it("refuses a cross-workspace target too, rather than switching from the wings", async () => {
+      // Switching from a cached view is worse than refusing: the view it would
+      // replace is a different renderer, and only that renderer can snapshot
+      // its own drafts and layout on the way out. Caching fires no
+      // `visibilitychange` for a child view, so nothing else would flush them.
+      seedCachedView(PROJECT_HERE);
 
-      await openRun({ runId: "t1", workspaceId: SCRATCH_A });
+      await expect(openRun({ runId: "t9", workspaceId: PROJECT_ELSEWHERE })).rejects.toThrow();
 
-      expect(switchScratch).toHaveBeenCalledWith(SCRATCH_A, {
-        focusIntent: { intent: "focus-panel", panelId: "t1" },
-      });
-      expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", { panelId: "t1" });
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(switchScratch).not.toHaveBeenCalled();
     });
 
     it("still focuses in place once the same view is on screen", async () => {
       // The gate is two questions, not one: identity alone was wrong, and
-      // caching alone would send every in-view click through a full switch.
+      // refusing on identity alone would break every in-view click.
       seedView(PROJECT_HERE);
 
       await openRun({ runId: "t1", workspaceId: PROJECT_HERE });
@@ -267,16 +264,15 @@ describe("pilot.openRun", () => {
 
   describe("when the caller omits the workspace", () => {
     it("resolves it to the executing view's own workspace", async () => {
-      // The MCP route cannot supply one: `terminal.revealOwned` rebuilds the
-      // delegated call from the panel id alone, and the dispatch lands in the
-      // bound view, which IS the workspace the owned panel lives in.
-      seedCachedView(PROJECT_HERE);
+      // `terminal.revealOwned` supplies the workspace from the ownership
+      // ledger, which records it best-effort — so a reveal whose destination is
+      // unknown lands here, and "the workspace you are in" is where the panel is
+      // if the client never left.
+      seedView(PROJECT_HERE);
 
       await openRun({ runId: "t1" });
 
-      expect(switchProject).toHaveBeenCalledWith(PROJECT_HERE, {
-        focusIntent: { intent: "focus-panel", panelId: "t1" },
-      });
+      expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "t1" });
     });
 
     it("says so rather than guessing when the view has no workspace either", async () => {

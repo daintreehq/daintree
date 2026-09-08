@@ -194,11 +194,12 @@ const OWNED_RESOURCE_TOOLS: Record<
     delegateIdArg?: string;
     releasesOwnership: boolean;
     /**
-     * Whether a success should also bring the owning window forward. Only a
-     * reveal wants this, and only a reveal may have it: it is the single place
-     * on the external surface that deliberately moves the user.
+     * Whether this tool's job is to bring the user to the resource. Only a
+     * reveal sets it, and only a reveal may: it is the single place on the
+     * external surface that deliberately moves the user, so it alone routes
+     * through the active view and raises that view's window.
      */
-    raisesOwningWindow?: boolean;
+    reveals?: boolean;
   }
 > = {
   // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
@@ -217,17 +218,17 @@ const OWNED_RESOURCE_TOOLS: Record<
     releasesOwnership: true,
   },
   // The panel is still the session's after it has been revealed, so this is the
-  // one entry that keeps its record. `pilot.openRun` spells the id `runId` and
-  // takes an optional `workspaceId` it defaults to the executing view's own
-  // workspace — which is the bound view the owned panel lives in, so the
-  // rebuilt call carries the id alone (#12315).
+  // one entry that keeps its record. `pilot.openRun` spells the id `runId`, and
+  // the workspace it should travel to is supplied from the ledger rather than
+  // left to default: the reveal runs in the view the user is looking at, which
+  // is rarely the one holding the panel (#12315).
   "terminal.revealOwned": {
     resourceKind: "terminal",
     delegateTo: "pilot.openRun",
     idArg: "terminalId",
     delegateIdArg: "runId",
     releasesOwnership: false,
-    raisesOwningWindow: true,
+    reveals: true,
   },
 };
 
@@ -430,16 +431,27 @@ export interface SessionServerDeps {
     confirmed?: boolean
   ) => Promise<DispatchEnvelope>;
   /**
-   * Bring the window hosting a workspace to the front (#12315), reporting
-   * whether it raised anything.
+   * Take the user to a run, and bring the window it lands in with them
+   * (#12315), reporting whether that window actually came forward.
    *
-   * Reached only from `terminal.revealOwned`, after the ownership gate has
-   * cleared and the delegated `pilot.openRun` has already switched the
-   * workspace. Optional: a fixture without it leaves a reveal at "the right
-   * view is now showing", which is the weaker half of the same outcome rather
-   * than a failed call — so nothing here treats its absence as an error.
+   * `terminal.revealOwned` is the only caller, and it needs this rather than
+   * `dispatchAction` for a reason that is easy to get backwards. A bound
+   * session's dispatches land in its own workspace's view — exactly the view a
+   * reveal is trying to bring forward — so the reveal would ask a cached,
+   * detached renderer to switch to itself, and the visible view it replaced
+   * would be detached with nothing to persist its drafts. The bridge picks the
+   * view being replaced instead, in the window that already holds the
+   * destination, and raises that same window once the dispatch lands.
+   *
+   * Optional: without it a reveal falls back to the ordinary dispatch, which is
+   * the right target for every session except a bound one, and raises nothing.
    */
-  revealWorkspaceWindow?: (workspaceId: string) => boolean;
+  revealOwnedRun?: (
+    workspaceId: string | undefined,
+    actionId: string,
+    args: unknown,
+    confirmed?: boolean
+  ) => Promise<{ envelope: DispatchEnvelope; raised: boolean }>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -933,6 +945,60 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // accidentally rewrite an action id or drop an ownership record (#11909).
     const ownedResource = OWNED_RESOURCE_TOOLS[actionId];
     let ownedResourceId: string | undefined;
+
+    /**
+     * Dispatch the real action an `*Owned` tool stands in for, with arguments
+     * rebuilt from scratch rather than forwarded (#11909).
+     *
+     * Rebuilding is the enforcement: the renderer validates against
+     * `worktree.delete`'s schema, which still accepts `force`, `deleteBranch`
+     * and `closeTerminals`, so anything the caller sent beyond the id would
+     * otherwise pass straight through the narrower tool that deliberately omits
+     * them. It is also what lets a delegate spell the id differently —
+     * `pilot.openRun` takes `runId` where the public tool takes `terminalId`.
+     *
+     * A reveal differs in both of the ways that matter (#12315). It carries the
+     * destination workspace, read from the ledger record main wrote when the
+     * panel was created — trusted state, never the caller's argument, and the
+     * only thing that says where an unbound session's panel actually lives. And
+     * it routes through the active view rather than this session's own, because
+     * the view that switches has to be the view on screen.
+     */
+    const dispatchOwnedResourceAction = async (
+      entry: (typeof OWNED_RESOURCE_TOOLS)[string],
+      resourceId: string
+    ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
+      const delegateArgs: Record<string, unknown> = {
+        [entry.delegateIdArg ?? entry.idArg]: resourceId,
+      };
+      if (entry.reveals !== true) {
+        return {
+          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          raised: true,
+        };
+      }
+      const revealWorkspaceId =
+        sessionStore.resourceOwnership.get(sessionId, entry.resourceKind, resourceId)
+          ?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
+      // Omitted rather than guessed when neither is known: `pilot.openRun`
+      // falls back to the executing view's own workspace, which is where the
+      // panel is if the client never left it — the only honest default here.
+      if (revealWorkspaceId !== undefined) {
+        delegateArgs.workspaceId = revealWorkspaceId;
+      }
+      if (deps.revealOwnedRun === undefined) {
+        return {
+          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          raised: true,
+        };
+      }
+      return deps.revealOwnedRun(
+        revealWorkspaceId,
+        entry.delegateTo,
+        delegateArgs,
+        dispatchConfirmed
+      );
+    };
 
     /**
      * Fold a completed dispatch into the session's ownership ledger (#11909):
@@ -1993,15 +2059,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // narrower tool that deliberately omits them. It is also what lets a
           // delegate spell the id differently — `pilot.openRun` takes `runId`
           // where the public tool takes `terminalId` (#12315).
-          const envelope = listPaging
-            ? await collectListPages()
-            : ownedResource !== undefined && ownedResourceId !== undefined
-              ? await dispatchAction(
-                  ownedResource.delegateTo,
-                  { [ownedResource.delegateIdArg ?? ownedResource.idArg]: ownedResourceId },
-                  dispatchConfirmed
-                )
-              : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
+          // `raised` answers the second half of a reveal — whether a window
+          // actually came forward — and is vacuously true for everything else.
+          const { envelope, raised } =
+            listPaging || ownedResource === undefined || ownedResourceId === undefined
+              ? {
+                  envelope: listPaging
+                    ? await collectListPages()
+                    : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed),
+                  raised: true,
+                }
+              : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
           // Narrow renderer-computed results against this session before
           // anything downstream reads them: the effective action surface for
           // the registry-enumerating tools (#11525), and the ownership ledger
@@ -2037,22 +2105,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           recordDispatchOwnership(envelope);
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           dispatchedWorkspace = envelope.dispatchedWorkspace;
-          // The second half of a reveal (#12315). `pilot.openRun` has by now
-          // put the right view in front of the window; this puts the window in
-          // front of the user, which switching alone cannot do when Daintree is
-          // minimised or behind another application — the case the calling
-          // client is usually in.
+          // A raise that did not happen is reported, not swallowed (#12315).
+          // The tool's whole promise is that the user ends up looking at the
+          // panel; a client told "revealed" when no window came forward has no
+          // way to know it should tell them where the run is instead.
           //
-          // Keyed on the workspace the dispatch actually landed on, never the
-          // caller's argument, for the same reason the ledger is: the routing
-          // already decided where this went. A failure to raise leaves the
-          // result untouched — the view did change, and reporting an error for
-          // a window that closed in between would be the wrong half to believe.
-          if (ownedResource?.raisesOwningWindow === true && envelope.result.ok) {
-            const revealWorkspaceId = envelope.dispatchedWorkspace?.workspaceId;
-            if (revealWorkspaceId !== undefined) {
-              deps.revealWorkspaceWindow?.(revealWorkspaceId);
-            }
+          // Placed after the ledger bookkeeping above so the panel stays this
+          // session's: a reveal the user missed is not a disposal, and the
+          // obvious next move is to ask for it again.
+          if (!raised && envelope.result.ok) {
+            const message =
+              `The switch to '${ownedResourceId ?? actionId}' was accepted, but no Daintree ` +
+              `window could be brought to the front, so the user may not be looking at it. ` +
+              `Tell them where the run is rather than assuming they can see it.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "EXECUTION_ERROR", message } },
+            };
+            return buildToolError({ code: "EXECUTION_ERROR", message });
           }
         } catch (err) {
           outcome = { kind: "throw", error: err };
