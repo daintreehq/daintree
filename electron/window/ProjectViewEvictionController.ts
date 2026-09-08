@@ -110,10 +110,13 @@ export function evictDeadView(
     });
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
-    // After the teardown, so the ledger's own liveness check sees the settled
-    // view set (#12313). A bound MCP session learns from this that its route
-    // went away and roughly when, which is the difference between a workspace
-    // it can wait for and an id that was never right.
+    // After the teardown, because the write is unconditional and the liveness
+    // gate lives on the read side: `readWorkspaceBindingState` surfaces the
+    // record only while no view is live, so recording first would notify
+    // subscribers into a read that still sees this view and swallows the loss
+    // (#12313). A bound MCP session learns from this that its route went away
+    // and roughly when, which is the difference between a workspace it can wait
+    // for and an id that was never right.
     recordWorkspaceEviction(projectId, trigger);
   });
 }
@@ -434,8 +437,8 @@ export function evictStaleViews(
     logInfo("projectview.eviction", ctx);
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
-    // After the teardown, so the ledger's liveness check reads the settled view
-    // set — see `recordWorkspaceEviction` (#12313).
+    // After the teardown, because the read side is what gates the record on
+    // liveness — see `readWorkspaceBindingState` (#12313).
     recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
   }

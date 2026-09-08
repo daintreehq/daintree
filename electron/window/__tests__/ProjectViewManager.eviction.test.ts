@@ -3935,11 +3935,11 @@ describe("ProjectViewManager — user-granted workspace residency (#12313)", () 
 
   it("does not widen an overflow another protection already caused", async () => {
     // The cap bound only means anything in composition. A live assistant's
-    // floor is unconditional and already holds the cache over its cap; if
-    // residency budgeted against the raw cap it would hold a third view on top,
-    // where without the grant the pass settles at two. Held slots are counted,
-    // so the assistant still overflows as it is entitled to and the grant does
-    // not add to it.
+    // floor is unconditional and already holds the cache over its cap; a grant
+    // that could refuse eviction would hold a third view on top, where without
+    // it the pass settles at two. Because `residentGranted` only sits last in
+    // `candidates`, the grant is the one thing this pass may still take, so the
+    // assistant overflows as it is entitled to and the grant adds nothing.
     const mgr = makeManager(3);
     await seedThreeViews(mgr);
     bindLiveAssistant(mgr, "proj-b", "term-assistant");

@@ -584,10 +584,13 @@ export interface StoreSchema {
    * workspace's UUID, the same vocabulary `ProjectViewManager.views` and an MCP
    * session binding use.
    *
-   * A grant, not a floor: eviction honours at most `effectiveMax - 1` of these
-   * at a time, so residency never carries the cache over the user's configured
-   * cap, and critical pressure collapses `effectiveMax` to 1 and admits them
-   * all. The client cannot set this — only the user, through project settings.
+   * A grant, not a floor: it orders the workspace last in the eviction
+   * candidate queue, so a grant is surrendered only once every ungranted
+   * candidate is gone. That ordering is the whole mechanism — residency never
+   * carries the cache over the user's configured cap, because a candidate is
+   * always available to take, and a forced critical reclaim (`effectiveMax`
+   * collapsed to 1) takes the grants along with everything else. The client
+   * cannot set this — only the user, through project settings.
    *
    * Additive key with no numbered migration, matching `projectPluginTrust`
    * above: every read goes through `?? {}`, and only an exact `true` counts, so
