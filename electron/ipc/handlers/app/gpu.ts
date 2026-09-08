@@ -8,7 +8,7 @@ import {
   clearGpuDisabledFlag,
   clearGpuAngleFallbackFlag,
 } from "../../../services/GpuCrashMonitorService.js";
-import { closeTelemetry } from "../../../services/TelemetryService.js";
+import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 import { typedHandle } from "../../utils.js";
 
 export function registerGpuHandlers(): () => void {
@@ -40,9 +40,11 @@ export function registerGpuHandlers(): () => void {
       writeGpuDisabledFlag(userDataPath, "user");
       store.set("gpu", { hardwareAccelerationDisabled: true });
     }
-    app.relaunch();
-    await closeTelemetry();
-    app.exit(0);
+    // Session-preserving restart (#12320): captures each agent's session id and
+    // strips any inherited `--cli-path`/folder targeting, so the user comes back
+    // to the fleet they had rather than to one window on a folder they opened
+    // from the CLI hours ago.
+    relaunchApp("gpu-toggle");
   };
   handlers.push(typedHandle(CHANNELS.GPU_SET_HARDWARE_ACCELERATION, handleSetHardwareAcceleration));
 

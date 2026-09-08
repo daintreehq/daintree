@@ -767,6 +767,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["sentry:get-consent-state"]["args"]
     ): Promise<IpcInvokeMap["sentry:get-consent-state"]["result"]>;
   };
+  sessionRestore: {
+    getConfig(
+      ...args: IpcInvokeMap["session-restore:get-config"]["args"]
+    ): Promise<IpcInvokeMap["session-restore:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["session-restore:update-config"]["args"]
+    ): Promise<IpcInvokeMap["session-restore:update-config"]["result"]>;
+  };
   shortcutHints: {
     getCounts(
       ...args: IpcInvokeMap["shortcut-hints:get-counts"]["args"]

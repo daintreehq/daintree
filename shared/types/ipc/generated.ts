@@ -1571,6 +1571,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { level: "errors" | "off" | "full"; hasSeenPrompt: boolean };
   };
+  "session-restore:get-config": {
+    args: [];
+    result: import("./sessionRestore.js").SessionRestoreConfig;
+  };
+  "session-restore:update-config": {
+    args: [config: Partial<import("./sessionRestore.js").SessionRestoreConfig>];
+    result: import("./sessionRestore.js").SessionRestoreConfig;
+  };
   "shortcut-hints:get-counts": {
     args: [];
     result: Record<string, number>;

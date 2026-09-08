@@ -105,6 +105,10 @@ export const BUILT_IN_ACTION_IDS = [
   "cliAvailability.get",
   "cliAvailability.refresh",
 
+  // -- sessionRestoreActions --
+  "sessionRestore.getConfig",
+  "sessionRestore.updateConfig",
+
   // -- hibernationActions --
   "hibernation.getConfig",
   "hibernation.updateConfig",

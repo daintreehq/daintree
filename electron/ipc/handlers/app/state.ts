@@ -7,6 +7,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
 
@@ -34,7 +35,6 @@ import {
 import { readGpuDisabledFlagData } from "../../../services/gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
-import { closeTelemetry } from "../../../services/TelemetryService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
 import { typedHandle, typedHandleWithContext } from "../../utils.js";
 import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
@@ -1006,13 +1006,13 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
   const handleAppResetAndRelaunch = async () => {
     // Clear the crash-loop sentinel before relaunch so the next boot starts
-    // fresh. Mirrors the gpu.ts pattern: prepare state -> relaunch -> close
-    // telemetry -> exit. Use app.exit (not app.quit) so beforeunload listeners
-    // can't veto the restart.
+    // fresh. The restart itself goes through `relaunchApp`, which runs the
+    // capture chain (so agents come back with `--resume`) and strips inherited
+    // launch targeting — without going through `before-quit`, so the
+    // quit-confirmation dialog can still not veto a restart the user asked for
+    // (#12320).
     getCrashLoopGuard().resetForNormalBoot();
-    app.relaunch();
-    await closeTelemetry();
-    app.exit(0);
+    relaunchApp("state-reset");
   };
   handlers.push(typedHandle(CHANNELS.APP_RESET_AND_RELAUNCH, handleAppResetAndRelaunch));
 
@@ -1031,6 +1031,20 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
         deps?.projectViewManager;
       pvm?.recordFirstInteractive?.(ctx.webContentsId);
+    })
+  );
+
+  handlers.push(
+    typedHandleWithContext(CHANNELS.APP_VIEW_HYDRATED, async (ctx) => {
+      // Identity comes from the sender alone — a caller-supplied project id
+      // would let any view settle another view's restore. Same per-window
+      // resolution as APP_VIEW_PAINTED below.
+      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const pvm =
+        (senderWindow &&
+          deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
+        deps?.projectViewManager;
+      pvm?.signalViewHydrated?.(ctx.webContentsId);
     })
   );
 

@@ -368,6 +368,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `keybinding.removeOverride` | Remove Keybinding Override | safe | `actionId` |
 | `keybinding.resetAll` | Reset All Keybinding Overrides | confirm | — |
 | `keybinding.setOverride` | Set Keybinding Override | safe | `actionId`, `combo` |
+| `sessionRestore.getConfig` | Get Session Restore Config | safe | — |
+| `sessionRestore.updateConfig` | Update Session Restore Config | safe | `enabled?` |
 | `terminalConfig.get` | Get Terminal Config | safe | — |
 | `terminalConfig.setCachedProjectViews` | Set Cached Project Views | safe | `cachedProjectViews` |
 | `terminalConfig.setFontFamily` | Set Terminal Font Family | safe | `fontFamily` |

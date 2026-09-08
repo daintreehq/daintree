@@ -62,3 +62,47 @@ export function resolveLaunchIntent(signals: LaunchIntentSignals): LaunchIntent 
 export function shouldRestoreWindowFleet(intent: LaunchIntent): boolean {
   return intent === "cold";
 }
+
+const CLI_PATH_FLAG = "--cli-path";
+const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
+
+/**
+ * The inverse of the argv half of {@link resolveLaunchIntent}: an argv with
+ * every targeting token removed, so the launch it describes classifies as
+ * `"cold"` (#12320).
+ *
+ * Lives here, beside the classifier, because the two are one contract read in
+ * opposite directions — a token added to `resolveLaunchIntent` and not to this
+ * is a token that survives an app-initiated relaunch and quietly reduces the
+ * next launch to a single window.
+ *
+ * Why that matters: `app.relaunch()` hands the child process the parent's argv
+ * verbatim, so a session started with `--cli-path` or a Linux "Open in
+ * Daintree" still carries it hours later. Restarting after a GPU reset or an
+ * app-state reset would then read as "the user launched us to open this one
+ * folder" and abandon the fleet they actually had.
+ *
+ * Deliberately conservative: only the tokens the classifier reads as targeting
+ * are dropped, so switches Chromium or the user added — `--disable-gpu`,
+ * `--reset-data`, `--e2e` — survive. The in-process `pendingOpenDirPaths` /
+ * `pendingOpenFilePaths` queues need no equivalent: they do not cross a
+ * process boundary.
+ */
+export function stripLaunchTargets(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === CLI_PATH_FLAG) {
+      // Skip the operand too. Leaving it behind would turn a directory path
+      // into a bare positional argument, which is how a `.dntr` plugin archive
+      // is recognised — a folder named `x.dntr` would then be routed to the
+      // plugin installer on the very launch meant to restore a session.
+      i++;
+      continue;
+    }
+    if (arg.startsWith(CLI_PATH_PREFIX)) continue;
+    if (arg.startsWith("file://")) continue;
+    out.push(arg);
+  }
+  return out;
+}

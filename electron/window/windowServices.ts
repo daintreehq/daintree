@@ -30,6 +30,7 @@ import {
 import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { resolveRestoreWorkspace, resolveWorktreeLoadPath } from "./restoreWorkspaceBinding.js";
+import { enqueueBackgroundRestores } from "../lifecycle/projectRestore.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
 import { store } from "../store.js";
@@ -131,6 +132,13 @@ export interface SetupWindowServicesOptions {
   initialProjectId?: string;
   projectViewManager?: import("./ProjectViewManager.js").ProjectViewManager;
   initialAppView?: import("electron").WebContentsView;
+  /**
+   * Further workspaces this window had live at quit, most-recently-used first
+   * (#12320). Already gated by main: it is empty unless the launch is a plain
+   * cold one and the user has left session restore on, so this call site has no
+   * policy of its own to apply.
+   */
+  backgroundProjectIds?: readonly string[];
 }
 
 /**
@@ -694,6 +702,34 @@ export async function setupWindowServices(
     // resolved against a PVM with no active project. Converge them now (#11136).
     refreshProjectMenuState();
     notificationService.refreshTitles();
+  }
+
+  // Bring back the rest of this window's live projects (#12320) — the warm
+  // siblings, and the projects whose renderers had been evicted while their
+  // agents kept running. Each becomes a registered, never-visible view whose own
+  // hydration respawns its agents with `--resume`.
+  //
+  // Outside the registration block above, deliberately: a user switch landing
+  // during boot skips that block, and nesting this inside it would silently
+  // drop the whole pass for the one window most likely to have projects worth
+  // restoring.
+  //
+  // Enqueued, never awaited. The queue is global and drains on its own; waiting
+  // here would hold the worktree load below — and the window's own reveal —
+  // behind other projects' renderers.
+  if (opts.projectViewManager && opts.backgroundProjectIds?.length) {
+    enqueueBackgroundRestores({
+      windowId: win.id,
+      // Read lazily: the window can close between here and execution, and a
+      // captured reference would keep a disposed manager alive.
+      getManager: () => opts.projectViewManager,
+      projectIds: [...opts.backgroundProjectIds],
+      resolveWorkspacePath: (projectId) =>
+        resolveRestoreWorkspace(projectId, {
+          getProjectById: (id) => projectStore.getProjectById(id),
+          getScratchById: (id) => scratchStore.getScratchById(id),
+        }).workspace?.path ?? null,
+    });
   }
 
   // Load worktrees — prefer initialProjectPath, else restoreProject for

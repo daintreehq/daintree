@@ -25,7 +25,10 @@ import {
 } from "./skeletonCss.js";
 import { isDemoMode } from "../setup/runtimeFlags.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { registerProjectView, registerWebContents } from "./webContentsRegistry.js";
+import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
+import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 
 /**
  * Two-phase load timing, captured per call. The soft bound is observability
@@ -37,6 +40,48 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 export interface LoadViewTimings {
   softMs: number;
   hardMs: number;
+}
+
+/**
+ * Create a view and register it everywhere a project view must be known,
+ * stopping short of anything that makes it the window's *visible* view.
+ *
+ * The shared half of cold-start: the switch path follows it with
+ * `registerAppView`, `addChildView` and `activateView`; the background restore
+ * path (#12320) follows it with nothing at all. Extracted rather than
+ * reimplemented because every one of these six steps is load-bearing and the
+ * failures from skipping one are silent — an entry missing from
+ * `webContentsToProject` gives its view a null `ctx.projectId` for the rest of
+ * its life, and one missing `registerProjectView` leaves it invisible to every
+ * subsequent broadcast (#10412, #9490).
+ *
+ * The entry is deliberately left `"loading"`. A caller that has not finished
+ * booting the view must not publish it as `"cached"`: cached views are
+ * throttled, purge-scheduled and passed over by the crash handler's
+ * still-loading delegation.
+ */
+export function createRegisteredView(
+  host: ProjectViewManager,
+  projectId: string,
+  projectPath: string,
+  opts: { lastUsed?: number } = {}
+): ViewEntry {
+  const view = createView(host, projectId);
+  const entry: ViewEntry = {
+    view,
+    projectId,
+    projectPath,
+    lastUsed: opts.lastUsed ?? Date.now(),
+    state: "loading",
+    crashTimestamps: [],
+    cleanupHandlers: () => {},
+  };
+  host.views.set(projectId, entry);
+  host.webContentsToProject.set(view.webContents.id, projectId);
+  registerProjectView(projectId, view.webContents);
+  setupViewHandlers(host, view, entry);
+  registerWebContents(view.webContents, host.win);
+  return entry;
 }
 
 export function createView(host: ProjectViewManager, projectId: string): WebContentsView {

@@ -12,6 +12,7 @@ import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
 import { GPU_DISABLED_FLAG_FILENAME, writeGpuDisabledFlagFile } from "./gpuDisabledFlag.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import type { GpuDisabledReason } from "../../shared/types/ipc/app.js";
+import { relaunchApp } from "../lifecycle/appRelaunch.js";
 
 const GPU_DISABLED_FLAG = GPU_DISABLED_FLAG_FILENAME;
 const GPU_ANGLE_FALLBACK_FLAG = "gpu-angle-fallback.flag";
@@ -230,15 +231,15 @@ class GpuCrashMonitorService {
         }
         logger.warn("gpu-crash-soft-fallback", { crashCount: effectiveCount });
         writeCleanGpuMitigationMarkers("angle-fallback");
-        app.relaunch();
-        try {
-          await closeTelemetry();
-        } catch (err) {
-          logger.error("gpu-mitigation-close-telemetry-failed", err, {
-            path: "angle-fallback",
-          });
-        }
-        app.exit(0);
+        // Session-preserving restart (#12320): the mitigation is not the user's
+        // doing, so the session they lose to it is pure collateral. Captures
+        // agent sessions and strips inherited launch targeting on the way out.
+        //
+        // No telemetry close or exit here: `relaunchApp` owns both, after the
+        // capture chain settles. Doing them inline would race that chain and
+        // exit before a single agent session was persisted — the exact loss
+        // this path was changed to stop.
+        relaunchApp("gpu-mitigation");
         return;
       }
 
@@ -274,15 +275,15 @@ class GpuCrashMonitorService {
         }
         logger.warn("gpu-crash-nuclear-disable", { crashCount: effectiveCount });
         writeCleanGpuMitigationMarkers("nuclear-disable");
-        app.relaunch();
-        try {
-          await closeTelemetry();
-        } catch (err) {
-          logger.error("gpu-mitigation-close-telemetry-failed", err, {
-            path: "nuclear-disable",
-          });
-        }
-        app.exit(0);
+        // Session-preserving restart (#12320): the mitigation is not the user's
+        // doing, so the session they lose to it is pure collateral. Captures
+        // agent sessions and strips inherited launch targeting on the way out.
+        //
+        // No telemetry close or exit here: `relaunchApp` owns both, after the
+        // capture chain settles. Doing them inline would race that chain and
+        // exit before a single agent session was persisted — the exact loss
+        // this path was changed to stop.
+        relaunchApp("gpu-mitigation");
       }
     });
 

@@ -29,7 +29,11 @@ export interface RestoreWindowFleetDeps {
   fallbackProjectId: string | undefined;
   createWindow: (
     projectId: string | undefined,
-    opts?: { revealMode?: "show" | "showInactive" }
+    opts?: {
+      revealMode?: "show" | "showInactive";
+      /** Further projects this window had live, most-recently-used first (#12320). */
+      backgroundProjectIds?: readonly string[];
+    }
   ) => Promise<CreateWindowResult>;
   suppressSaves: () => void;
   resumeSaves: (persistNow: boolean) => void;
@@ -84,7 +88,13 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
   deps.suppressSaves();
   let restoredCleanly = false;
   try {
-    const primaryResult = await deps.createWindow(primaryProjectId);
+    // The primary window carries its own background list too. Its projects are
+    // the ones the user was closest to, and the queue that consumes these is
+    // global and ordered, so handing them over first is what makes "the project
+    // I was in paints first, the rest fill in behind it" hold across windows.
+    const primaryResult = await deps.createWindow(primaryProjectId, {
+      backgroundProjectIds: deps.records[0]?.backgroundProjectIds,
+    });
     if (primaryResult !== "ok") return;
 
     let backgroundClean = true;
@@ -96,7 +106,10 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
         deps.records
           .slice(1)
           .map((record) =>
-            deps.createWindow(record.projectId ?? undefined, { revealMode: "showInactive" })
+            deps.createWindow(record.projectId ?? undefined, {
+              revealMode: "showInactive",
+              backgroundProjectIds: record.backgroundProjectIds,
+            })
           )
       );
       for (const result of results) {

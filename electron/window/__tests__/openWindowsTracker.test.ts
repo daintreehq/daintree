@@ -19,15 +19,20 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 
 import {
   buildOpenWindowRecords,
+  clearPendingBackgroundRestores,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
   resetOpenWindowsTrackerForTests,
   resumeOpenWindowsSaves,
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
+  setPendingBackgroundRestores,
   suppressOpenWindowsSaves,
 } from "../openWindowsTracker.js";
-import { MAX_RESTORED_WINDOWS } from "../../services/persistence/windowManifest.js";
+import {
+  MAX_BACKGROUND_PROJECTS_PER_WINDOW,
+  MAX_RESTORED_WINDOWS,
+} from "../../services/persistence/windowManifest.js";
 import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
 
 interface FakeWindow {
@@ -36,6 +41,8 @@ interface FakeWindow {
   destroyed?: boolean;
   throwsOnRead?: boolean;
   noManager?: boolean;
+  /** Cached views this window holds, as [projectId, lastUsed] pairs (#12320). */
+  views?: Array<[string, number]>;
 }
 
 function makeCtx(win: FakeWindow): WindowContext {
@@ -56,6 +63,8 @@ function makeCtx(win: FakeWindow): WindowContext {
               if (win.throwsOnRead) throw new Error("manager disposing");
               return win.projectId;
             },
+            getAllViews: () =>
+              (win.views ?? []).map(([projectId, lastUsed]) => ({ projectId, lastUsed })),
           },
         },
     cleanup: { dispose: () => {} },
@@ -446,5 +455,138 @@ describe("freezeAndSnapshotOpenWindows", () => {
       throw new Error("db closed");
     });
     expect(() => freezeAndSnapshotOpenWindows()).not.toThrow();
+  });
+});
+
+describe("background project capture (#12320)", () => {
+  it("records a window's cached views, most-recently-used first", () => {
+    const registry = makeRegistry([
+      {
+        windowId: 1,
+        projectId: "active",
+        views: [
+          ["active", 500],
+          ["older", 100],
+          ["newer", 400],
+        ],
+      },
+    ]);
+    const records = buildOpenWindowRecords(registry);
+    expect(records[0].backgroundProjectIds).toEqual(["newer", "older"]);
+  });
+
+  it("never lists the window's own active project as a background one", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "active", views: [["active", 900]] },
+    ]);
+    expect(buildOpenWindowRecords(registry)[0]).toEqual({ projectId: "active" });
+  });
+
+  it("gives each project to exactly one window", () => {
+    // Two views for the same workspace would cold-start two renderers on the
+    // next launch, each burning a warm-cache slot.
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "a", views: [["shared", 300]] },
+      { windowId: 2, projectId: "b", views: [["shared", 900]] },
+    ]);
+    const records = buildOpenWindowRecords(registry);
+    expect(records[0].backgroundProjectIds).toEqual(["shared"]);
+    expect(records[1].backgroundProjectIds).toBeUndefined();
+  });
+
+  it("never reassigns a project that is another window's foreground", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "a", views: [["b", 900]] },
+      { windowId: 2, projectId: "b" },
+    ]);
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toBeUndefined();
+  });
+
+  it("gives the primary window live workspaces no view holds", () => {
+    // The case view-based capture cannot see: LRU eviction destroyed the
+    // renderer while the project's agents kept running.
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "a" },
+      { windowId: 2, projectId: "b" },
+    ]);
+    const records = buildOpenWindowRecords(registry, undefined, new Set(["a", "b", "evicted"]));
+    expect(records[0].backgroundProjectIds).toEqual(["evicted"]);
+    expect(records[1].backgroundProjectIds).toBeUndefined();
+  });
+
+  it("does not duplicate a live workspace that already has a view somewhere", () => {
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [["warm", 100]] }]);
+    const records = buildOpenWindowRecords(registry, undefined, new Set(["a", "warm"]));
+    expect(records[0].backgroundProjectIds).toEqual(["warm"]);
+  });
+
+  it("keeps pending restores in the manifest while they are still booting", () => {
+    // The startup save lands while the restore pass is mid-flight: those
+    // projects have neither a view nor a live terminal yet, so without the
+    // pending set the manifest would persist a fleet smaller than this launch
+    // actually restored.
+    const registry = makeRegistry([{ windowId: 1, projectId: "a" }]);
+    setPendingBackgroundRestores(1, ["queued-1", "queued-2"]);
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toEqual([
+      "queued-1",
+      "queued-2",
+    ]);
+  });
+
+  it("orders live views ahead of still-pending restores", () => {
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [["restored", 50]] }]);
+    setPendingBackgroundRestores(1, ["pending"]);
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toEqual([
+      "restored",
+      "pending",
+    ]);
+  });
+
+  it("drops pending intent once cleared", () => {
+    const registry = makeRegistry([{ windowId: 1, projectId: "a" }]);
+    setPendingBackgroundRestores(1, ["queued"]);
+    clearPendingBackgroundRestores(1);
+    expect(buildOpenWindowRecords(registry)[0]).toEqual({ projectId: "a" });
+  });
+
+  it("caps a window's background list", () => {
+    const views: Array<[string, number]> = Array.from(
+      { length: MAX_BACKGROUND_PROJECTS_PER_WINDOW + 4 },
+      (_v, i) => [`p${i}`, 1000 - i]
+    );
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", views }]);
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toHaveLength(
+      MAX_BACKGROUND_PROJECTS_PER_WINDOW
+    );
+  });
+
+  it("still records the window as a picker when its manager throws", () => {
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", throwsOnRead: true }]);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+  });
+
+  it("persists background ids through the debounced save", () => {
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [["warm", 10]] }]);
+    initOpenWindowsTracker({
+      registry,
+      readOnly: false,
+      liveWorkspaceIds: () => new Set(["a", "warm", "orphan"]),
+    });
+    scheduleOpenWindowsSave();
+    vi.advanceTimersByTime(500);
+    expect(lastWritten()[0].backgroundProjectIds).toEqual(["warm", "orphan"]);
+  });
+
+  it("falls back to view-only capture when the live-workspace source throws", () => {
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [["warm", 10]] }]);
+    initOpenWindowsTracker({
+      registry,
+      readOnly: false,
+      liveWorkspaceIds: () => {
+        throw new Error("pty client disposing");
+      },
+    });
+    saveOpenWindowsNow();
+    expect(lastWritten()[0].backgroundProjectIds).toEqual(["warm"]);
   });
 });

@@ -510,6 +510,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
     notifyWarmViewPainted(): Promise<void>;
+    /**
+     * Hydration settled — panels restored and saved agent terminals respawned
+     * (#12320). Never gated on an animation frame, unlike
+     * {@link notifyFirstInteractive}, so it is the one readiness signal a
+     * background-restored view (never attached, never composited) can send.
+     */
+    notifyViewHydrated(): Promise<void>;
     onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;

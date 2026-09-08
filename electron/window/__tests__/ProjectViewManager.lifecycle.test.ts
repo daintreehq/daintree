@@ -1018,3 +1018,163 @@ describe("ProjectViewManager — lifecycle invariants", () => {
     });
   });
 });
+
+/**
+ * Background project restore (#12320).
+ *
+ * The invariants here are the ones whose violation is silent: an attached
+ * background view gets parked mid-load by the next `pruneOrphanedChildren`
+ * sweep, an activated one takes over the window, and one that fires
+ * `onViewReady` steals the window's only PTY MessagePort from the project the
+ * user is actually looking at.
+ */
+describe("ProjectViewManager — background restore", () => {
+  beforeEach(() => {
+    nextWebContentsId = 500;
+    wcQueue.length = 0;
+    resetAppMetricsSnapshotForTesting();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    wcQueue.length = 0;
+  });
+
+  async function restore(
+    setup: ManagerSetup,
+    projectId: string,
+    opts: { lastUsed?: number; hydrate?: boolean } = {}
+  ) {
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground(projectId, `/${projectId}`, {
+      lastUsed: opts.lastUsed ?? 1_000,
+    });
+    // The hydration waiter is armed synchronously, before the first await, so
+    // a signal sent right here is exactly the same-tick case production hits.
+    if (opts.hydrate !== false) setup.manager.signalViewHydrated(wc.id);
+    const result = await promise;
+    await flushImmediates();
+    return { wc, result };
+  }
+
+  it("leaves the restored project cached, registered and not active", () => {
+    const setup = createManager();
+    return restore(setup, "proj-b").then(({ result }) => {
+      expect(result).toEqual({ status: "restored" });
+      const entry = setup.manager.views.get("proj-b");
+      expect(entry?.state).toBe("cached");
+      expect(setup.manager.activeProjectId).toBe("proj-a");
+      expect(setup.manager.getProjectIdForWebContents(entry!.view.webContents.id)).toBe("proj-b");
+    });
+  });
+
+  it("never attaches the restored view to the window", async () => {
+    // An attached non-active view is deactivated by pruneOrphanedChildren on
+    // the next switch — mid-load, before it ever hydrates.
+    const setup = createManager();
+    const { wc } = await restore(setup, "proj-b");
+    const attached = setup.win.contentView.children.filter(
+      (child) => (child as { webContents?: { id: number } }).webContents?.id === wc.id
+    );
+    expect(attached).toHaveLength(0);
+  });
+
+  it("never fires onViewReady, so the foreground keeps the window's PTY port", async () => {
+    const setup = createManager();
+    setup.onViewReady.mockClear();
+    const { wc } = await restore(setup, "proj-b");
+    const readyIds = setup.onViewReady.mock.calls.map(([arg]) => (arg as { id: number }).id);
+    expect(readyIds).not.toContain(wc.id);
+  });
+
+  it("keeps the persisted recency instead of stamping the completion time", async () => {
+    // Restored last means least recently used. Stamping now would invert the
+    // order and have the coldest project evict the ones the user rotates through.
+    const setup = createManager();
+    await restore(setup, "proj-b", { lastUsed: 42 });
+    expect(setup.manager.views.get("proj-b")?.lastUsed).toBe(42);
+  });
+
+  it("stays loading until hydration reports, then parks", async () => {
+    const setup = createManager();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground("proj-b", "/proj-b", { lastUsed: 10 });
+    await flushMicrotasks();
+    // Loaded but not hydrated: parking here would throttle and freeze a
+    // renderer that has not yet respawned its agents.
+    expect(setup.manager.views.get("proj-b")?.state).toBe("loading");
+    setup.manager.signalViewHydrated(wc.id);
+    await promise;
+    expect(setup.manager.views.get("proj-b")?.state).toBe("cached");
+  });
+
+  it("reports a project that already has a view as already-live", async () => {
+    const setup = createManager();
+    const result = await setup.manager.restoreInBackground("proj-a", "/a", { lastUsed: 1 });
+    expect(result).toEqual({ status: "already-live" });
+  });
+
+  it("shares one job between concurrent calls for the same project", async () => {
+    const setup = createManager();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const first = setup.manager.restoreInBackground("proj-b", "/proj-b", { lastUsed: 1 });
+    const second = setup.manager.restoreInBackground("proj-b", "/proj-b", { lastUsed: 1 });
+    expect(second).toBe(first);
+    setup.manager.signalViewHydrated(wc.id);
+    await first;
+  });
+
+  it("defers rather than evicting a sibling when the window is at its ceiling", async () => {
+    // The cap counts the active view, so a manager capped at 1 has no room.
+    const setup = createManager({ cachedProjectViews: 1 });
+    const result = await setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    expect(result).toEqual({ status: "deferred", reason: "capacity" });
+    expect(setup.manager.views.has("proj-b")).toBe(false);
+    expect(setup.manager.views.has("proj-a")).toBe(true);
+  });
+
+  it("abandons an in-flight restore when the user switches to that project", async () => {
+    const setup = createManager();
+    const bgWc = createMockWebContents();
+    wcQueue.push(bgWc);
+    const restorePromise = setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    await flushMicrotasks();
+    expect(setup.manager.views.get("proj-b")?.state).toBe("loading");
+
+    // The half-built entry must not be adopted by the cached fast path: it has
+    // never painted, so its warm gate could never release.
+    const switchWc = createMockWebContents();
+    wcQueue.push(switchWc);
+    const switchPromise = setup.manager.switchTo("proj-b", "/b");
+    await flushMicrotasks();
+    setup.manager.signalViewPainted(switchWc.id);
+    await switchPromise;
+    await flushImmediates();
+
+    expect(setup.manager.activeProjectId).toBe("proj-b");
+    expect(setup.manager.views.get("proj-b")?.view.webContents.id).toBe(switchWc.id);
+    await expect(restorePromise).resolves.toEqual({ status: "skipped", reason: "cancelled" });
+  });
+
+  it("cancels in-flight restores on dispose without leaving the promise pending", async () => {
+    const setup = createManager();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    await flushMicrotasks();
+    setup.manager.dispose();
+    await expect(promise).resolves.toEqual({ status: "skipped", reason: "cancelled" });
+    expect(setup.manager.backgroundRestores.size).toBe(0);
+  });
+
+  it("latches a hydration signal that arrives before anyone waits", async () => {
+    const setup = createManager();
+    setup.manager.signalViewHydrated(9999);
+    await expect(
+      setup.manager.waitForViewHydrated(9999, { timeoutMs: 60_000 })
+    ).resolves.toBeUndefined();
+  });
+});

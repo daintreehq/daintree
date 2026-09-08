@@ -108,6 +108,14 @@ export async function performSwitch(
     }
   }
 
+  // A background restore for this project is a half-built view this switch must
+  // not adopt: the cached fast path below does not check readiness, so it would
+  // activate a renderer that has never painted, behind a warm paint gate that
+  // can never release. The user's switch outranks the restore racing it — drop
+  // the entry and cold-start properly (#12320). No-op when the restore already
+  // finished, which is the common case and leaves a genuine cached view here.
+  host.abandonBackgroundRestore(projectId);
+
   // Snapshot previous state for rollback
   const previousProjectId = host.activeProjectId;
   const previousEntry = previousProjectId ? (host.views.get(previousProjectId) ?? null) : null;

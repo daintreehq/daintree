@@ -1,7 +1,8 @@
 /**
  * The open-window manifest: which project each window was showing when the app
  * last ran, so a relaunch can rebuild the whole set instead of one window
- * (#11492).
+ * (#11492), plus which further projects that window had live so the relaunch
+ * brings their agents back too rather than one project per window (#12320).
  *
  * Stored as a single JSON value under `app_state.openWindows`, alongside the
  * `currentProjectId` scalar ProjectStore already keeps there. That table is a
@@ -35,6 +36,16 @@ export const OPEN_WINDOWS_MANIFEST_VERSION = 1;
  */
 export const MAX_RESTORED_WINDOWS = 8;
 
+/**
+ * Hard cap on background projects stored per window. Deliberately larger than
+ * any machine's warm-view ceiling (5): the ceiling is a *runtime* budget that
+ * moves with RAM tier and memory pressure, so truncating to it here would burn
+ * the smaller number into the manifest and permanently lose projects the next
+ * launch had room for. Restore-time admission applies the real ceiling; this
+ * bound exists only so a corrupt or hand-edited manifest can't name thousands.
+ */
+export const MAX_BACKGROUND_PROJECTS_PER_WINDOW = 8;
+
 export interface OpenWindowRecord {
   /**
    * Stable workspace id — a project id or a scratch id — or null for a window
@@ -44,6 +55,15 @@ export interface OpenWindowRecord {
    * every stored manifest unreadable for a purely cosmetic gain.
    */
   projectId: string | null;
+  /**
+   * Further workspaces this window had live — a warm background view, or a
+   * project whose view was evicted while its agents kept running — ordered
+   * most-recently-used first (#12320). Optional and additive: the field was
+   * introduced without a version bump, so a manifest written before it reads
+   * as a window with no background projects rather than as corruption. Never
+   * contains `projectId`, and never a duplicate.
+   */
+  backgroundProjectIds?: string[];
 }
 
 export interface OpenWindowsManifest {
@@ -120,9 +140,9 @@ export function parseOpenWindowsManifest(raw: string | null | undefined): OpenWi
     // Anything that isn't a non-empty string or an explicit null is malformed.
     // Coercing it would invent a project id.
     if (projectId === null) {
-      records.push({ projectId: null });
+      records.push(withBackgroundProjectIds({ projectId: null }, entry.backgroundProjectIds));
     } else if (typeof projectId === "string" && projectId.length > 0) {
-      records.push({ projectId });
+      records.push(withBackgroundProjectIds({ projectId }, entry.backgroundProjectIds));
     }
     if (records.length >= MAX_RESTORED_WINDOWS) break;
   }
@@ -130,10 +150,58 @@ export function parseOpenWindowsManifest(raw: string | null | undefined): OpenWi
   return records;
 }
 
+/**
+ * Attach a validated background list to a record whose foreground already
+ * parsed.
+ *
+ * A malformed background field costs only itself: the window still restores,
+ * because losing the window is worse than losing which extra projects it had.
+ * That asymmetry is why this never rejects the record it is given.
+ */
+function withBackgroundProjectIds(record: OpenWindowRecord, raw: unknown): OpenWindowRecord {
+  const ids = parseBackgroundProjectIds(raw, record.projectId);
+  return ids.length > 0 ? { ...record, backgroundProjectIds: ids } : record;
+}
+
+/**
+ * Validate one window's background list: non-empty strings only, order
+ * preserved (it is the recency signal), deduplicated, never the window's own
+ * foreground workspace, capped.
+ *
+ * The foreground exclusion is enforced on read rather than trusted from the
+ * writer: a window that restores its own project twice would create a second
+ * view for a workspace the manager already has, and the duplicate would sit in
+ * the cache doing nothing but occupying a slot a real project needed.
+ */
+function parseBackgroundProjectIds(raw: unknown, foregroundId: string | null): string[] {
+  if (!Array.isArray(raw)) return [];
+
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string" || value.length === 0) continue;
+    if (value === foregroundId) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    ids.push(value);
+    if (ids.length >= MAX_BACKGROUND_PROJECTS_PER_WINDOW) break;
+  }
+  return ids;
+}
+
+/**
+ * An empty background list is omitted rather than written as `[]`, so a fleet
+ * with nothing to restore beyond its foreground projects serializes byte-for-byte
+ * as it did before #12320 — which is what keeps the pre-existing shape tests
+ * meaningful instead of merely updated.
+ */
 export function serializeOpenWindowsManifest(records: OpenWindowRecord[]): string {
   const manifest: OpenWindowsManifest = {
     version: OPEN_WINDOWS_MANIFEST_VERSION,
-    windows: records.slice(0, MAX_RESTORED_WINDOWS).map(({ projectId }) => ({ projectId })),
+    windows: records.slice(0, MAX_RESTORED_WINDOWS).map(({ projectId, backgroundProjectIds }) => {
+      const ids = parseBackgroundProjectIds(backgroundProjectIds, projectId);
+      return ids.length > 0 ? { projectId, backgroundProjectIds: ids } : { projectId };
+    }),
   };
   return JSON.stringify(manifest);
 }
@@ -152,7 +220,21 @@ export function filterRestorableWindows(
   records: OpenWindowRecord[],
   existingWorkspaceIds: ReadonlySet<string>
 ): OpenWindowRecord[] {
-  return records.filter(
-    (record) => record.projectId === null || existingWorkspaceIds.has(record.projectId)
-  );
+  return records
+    .filter((record) => record.projectId === null || existingWorkspaceIds.has(record.projectId))
+    .map((record) => {
+      // Background ids are filtered by the same rule and for the same reason,
+      // one level down: a deleted project is skipped, never substituted. A
+      // window whose whole background list was deleted still restores — it just
+      // restores the one project it was showing, which is exactly today's
+      // behaviour.
+      if (!record.backgroundProjectIds) return record;
+      const surviving = record.backgroundProjectIds.filter((id) => existingWorkspaceIds.has(id));
+      if (surviving.length === record.backgroundProjectIds.length) return record;
+      if (surviving.length === 0) {
+        const { backgroundProjectIds: _dropped, ...rest } = record;
+        return rest;
+      }
+      return { ...record, backgroundProjectIds: surviving };
+    });
 }

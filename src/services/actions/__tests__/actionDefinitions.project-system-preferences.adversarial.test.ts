@@ -883,6 +883,8 @@ describe("preferences action hardening", () => {
       "window.zoomOut",
       "window.zoomReset",
       "window.close",
+      "sessionRestore.getConfig",
+      "sessionRestore.updateConfig",
       "hibernation.getConfig",
       "hibernation.updateConfig",
       "idleTerminalNotify.getConfig",

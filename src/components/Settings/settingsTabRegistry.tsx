@@ -281,6 +281,25 @@ export const SETTINGS_REGISTRY = [
         keywords: ["update", "channel", "stable", "nightly", "releases"],
       },
       {
+        id: "general-session-restore",
+        subtab: "overview",
+        subtabLabel: "Overview",
+        section: "Startup",
+        title: "Restore live projects",
+        description:
+          "Bring back every project that was running after a restart, not just the one each window was showing.",
+        keywords: [
+          "restore",
+          "startup",
+          "session",
+          "relaunch",
+          "restart",
+          "resume",
+          "reopen",
+          "projects",
+        ],
+      },
+      {
         id: "general-hibernation",
         subtab: "hibernation",
         subtabLabel: "Hibernation",

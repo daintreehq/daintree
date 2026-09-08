@@ -478,6 +478,16 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  /**
+   * The view finished hydrating its persisted state — panels restored, saved
+   * agent terminals respawned (#12320). Unlike `app:first-interactive` this is
+   * never gated on an animation frame, so it is the only readiness signal a
+   * background-restored view (never attached, never composited) can send.
+   */
+  "app:view-hydrated": {
+    args: [];
+    result: void;
+  };
   "app:reload-config": {
     args: [];
     result: { success: boolean };
