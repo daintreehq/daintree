@@ -25,7 +25,7 @@
  */
 
 import { app } from "electron";
-import { logInfo } from "../utils/logger.js";
+import { logInfo, logWarn } from "../utils/logger.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { startShutdown } from "./shutdownCoordinator.js";
 import { stripLaunchTargets } from "./launchIntent.js";
@@ -53,10 +53,10 @@ export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset";
  * relaunch stays armed and rides it out rather than racing it.
  */
 export function relaunchApp(reason: AppRelaunchReason): void {
-  const args = stripLaunchTargets(process.argv.slice(1));
-  logInfo("app.relaunch", { reason, argCount: args.length });
-  app.relaunch({ args });
-
+  // Claim the shutdown BEFORE arming the relaunch. Electron offers no way to
+  // cancel an armed relaunch, so arming first and then being refused would
+  // leave one queued against whatever exit the current owner is heading for —
+  // including a user's deliberate Quit, which would then come back up.
   const result = startShutdown("app-relaunch", () => {
     void closeTelemetry()
       .catch(() => {
@@ -68,6 +68,17 @@ export function relaunchApp(reason: AppRelaunchReason): void {
   });
 
   if (result !== "started") {
-    logInfo("app.relaunch.deferred", { reason, result });
+    // Something else owns the exit — an in-flight quit, or an update install
+    // that is about to replace this binary. That process is ending anyway, and
+    // the caller's reason for restarting is served by it.
+    logWarn("app.relaunch.refused", { reason, result });
+    return;
   }
+
+  const args = stripLaunchTargets(process.argv.slice(1));
+  logInfo("app.relaunch", { reason, argCount: args.length });
+  // Armed once the chain is ours but before it settles: `startShutdown` carries
+  // an absolute deadline that forces the terminal action even on a wedged
+  // chain, and the relaunch only takes effect at process exit.
+  app.relaunch({ args });
 }

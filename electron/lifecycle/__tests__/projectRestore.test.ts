@@ -9,8 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const setPendingBackgroundRestores =
-  vi.fn<(windowId: number, ids: readonly string[]) => void>();
+const setPendingBackgroundRestores = vi.fn<(windowId: number, ids: readonly string[]) => void>();
 const clearPendingBackgroundRestores = vi.fn<(windowId: number) => void>();
 
 // Explicit factory rather than importOriginal(): the real tracker reaches the
@@ -152,9 +151,7 @@ describe("enqueueBackgroundRestores", () => {
     // A manifest written mid-restore must describe what is left to do, not
     // re-promise what is already back.
     const fake = createFakeManager();
-    enqueueBackgroundRestores(
-      job({ getManager: () => fake.manager, projectIds: ["a", "b", "c"] })
-    );
+    enqueueBackgroundRestores(job({ getManager: () => fake.manager, projectIds: ["a", "b", "c"] }));
     await tick();
 
     expect(setPendingBackgroundRestores.mock.calls[0]).toEqual([1, ["a", "b", "c"]]);
@@ -192,9 +189,7 @@ describe("enqueueBackgroundRestores", () => {
     // Every remaining project would hit the same wall, and their agents are
     // still running and still resumable the moment the user opens them.
     const fake = createFakeManager();
-    enqueueBackgroundRestores(
-      job({ getManager: () => fake.manager, projectIds: ["a", "b", "c"] })
-    );
+    enqueueBackgroundRestores(job({ getManager: () => fake.manager, projectIds: ["a", "b", "c"] }));
     await tick();
     fake.settle({ status: "deferred", reason: "capacity" });
     await tick();
@@ -236,9 +231,7 @@ describe("enqueueBackgroundRestores", () => {
       disposed: false,
       restoreInBackground: vi.fn(() => Promise.reject(new Error("boom"))),
     } as unknown as ProjectViewManager;
-    enqueueBackgroundRestores(
-      job({ getManager: () => throwing, projectIds: ["a", "b"] })
-    );
+    enqueueBackgroundRestores(job({ getManager: () => throwing, projectIds: ["a", "b"] }));
     await tick();
     expect(throwing.restoreInBackground).toHaveBeenCalledTimes(2);
   });
@@ -264,9 +257,7 @@ describe("cancelBackgroundRestores", () => {
     // persisting it as pending would promise the next launch a fleet this one
     // did not have.
     const fake = createFakeManager();
-    enqueueBackgroundRestores(
-      job({ getManager: () => fake.manager, projectIds: ["a", "b", "c"] })
-    );
+    enqueueBackgroundRestores(job({ getManager: () => fake.manager, projectIds: ["a", "b", "c"] }));
     await tick();
     cancelBackgroundRestores();
 
@@ -306,6 +297,79 @@ describe("restore recency", () => {
     expect(seen).toHaveLength(3);
     expect(seen[0]).toBeGreaterThan(seen[1]);
     expect(seen[1]).toBeGreaterThan(seen[2]);
+  });
+
+  it("holds the order even when a boot takes longer than the rank step", async () => {
+    // The failure this guards: reading Date.now() per project instead of a
+    // fixed epoch lets wall-clock advance beat the one-second step, so a first
+    // boot taking three seconds leaves the SECOND, older project with the
+    // newer timestamp — inverting the LRU order the manifest recorded.
+    vi.useFakeTimers();
+    try {
+      const seen: number[] = [];
+      const pending: Array<(result: RestoreResult) => void> = [];
+      const manager = {
+        disposed: false,
+        restoreInBackground: vi.fn((_id: string, _path: string, opts: { lastUsed: number }) => {
+          seen.push(opts.lastUsed);
+          return new Promise<RestoreResult>((resolve) => pending.push(resolve));
+        }),
+      } as unknown as ProjectViewManager;
+
+      enqueueBackgroundRestores(
+        job({ getManager: () => manager, projectIds: ["newest", "older"] })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The first boot takes far longer than the step between ranks.
+      await vi.advanceTimersByTimeAsync(5_000);
+      pending.shift()?.({ status: "restored" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toBeGreaterThan(seen[1]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("queue error containment", () => {
+  it("keeps draining when resolving a workspace throws", async () => {
+    // The resolver runs a synchronous database lookup. Before this boundary
+    // existed, a throw rejected `drain()` itself — which is launched
+    // fire-and-forget — killing the queue for every remaining window.
+    const fake = createFakeManager();
+    enqueueBackgroundRestores(
+      job({
+        getManager: () => fake.manager,
+        projectIds: ["explodes", "b"],
+        resolveWorkspacePath: (id) => {
+          if (id === "explodes") throw new Error("database is locked");
+          return `/${id}`;
+        },
+      })
+    );
+    await tick();
+    expect(fake.calls).toEqual(["b"]);
+  });
+
+  it("keeps draining when reading the manager throws", async () => {
+    const other = createFakeManager();
+    enqueueBackgroundRestores(
+      job({
+        windowId: 1,
+        getManager: () => {
+          throw new Error("window registry is disposing");
+        },
+        projectIds: ["a"],
+      })
+    );
+    enqueueBackgroundRestores(
+      job({ windowId: 2, getManager: () => other.manager, projectIds: ["z"] })
+    );
+    await tick();
+    expect(other.calls).toEqual(["z"]);
   });
 });
 

@@ -497,6 +497,11 @@ export function cleanupEntry(host: ProjectViewManager, projectId: string): void 
     // — so this only wakes subscribers to re-read, and never writes a reason
     // the pass did not have.
     notifyWorkspaceViewsChanged(projectId);
+    // Every cold start reports hydration, foreground ones included. With no
+    // waiter listening that id latches, and nothing else ever removes it — so
+    // without this the latch set grows by one per cold switch for the life of
+    // the window (#12320).
+    host.settleViewHydrated(wcId);
     forgetBlinkSample(wcId);
     forgetEluSample(wcId);
     forgetRendererTerminalDiagnostics(wcId);

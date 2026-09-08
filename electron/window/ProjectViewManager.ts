@@ -34,7 +34,12 @@ import {
   type BackgroundRestoreResult,
 } from "./ProjectViewRestoreController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
-import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
+import type {
+  PaintGate,
+  PaintGateOutcome,
+  ViewEntry,
+  ViewHydrationOutcome,
+} from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
 import type {
   ProjectFocusOnActivateIntent,
@@ -873,43 +878,61 @@ export class ProjectViewManager {
 
   /**
    * Resolve when `webContentsId` reports hydration, its abort signal fires, or
-   * the timeout expires. Never rejects — every outcome is the caller's to
-   * classify, and an unhandled rejection in a fire-and-forget startup pass is
-   * worse than an early park.
+   * the timeout expires.
+   *
+   * Never rejects, but the three outcomes are NOT interchangeable and the
+   * caller must branch on them: a timeout means the renderer never said it had
+   * restored its panels, so its agents may not have respawned. Treating that as
+   * success would park a half-booted view as `"cached"` — throttled, purge
+   * scheduled, and indistinguishable from a healthy one until the user switches
+   * to it and finds it blank.
    */
   waitForViewHydrated(
     webContentsId: number,
     opts: { timeoutMs: number; signal?: AbortSignal }
-  ): Promise<void> {
-    if (this.hydratedWebContentsIds.delete(webContentsId)) return Promise.resolve();
-    if (opts.signal?.aborted) return Promise.resolve();
+  ): Promise<ViewHydrationOutcome> {
+    if (this.hydratedWebContentsIds.delete(webContentsId)) return Promise.resolve("hydrated");
+    if (opts.signal?.aborted) return Promise.resolve("cancelled");
 
-    return new Promise<void>((resolve) => {
+    return new Promise<ViewHydrationOutcome>((resolve) => {
       let settled = false;
-      const settle = (): void => {
+      const settle = (outcome: ViewHydrationOutcome): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        opts.signal?.removeEventListener("abort", settle);
-        if (this.hydrationWaiters.get(webContentsId) === settle) {
+        opts.signal?.removeEventListener("abort", onAbort);
+        if (this.hydrationWaiters.get(webContentsId) === settleAsSignalled) {
           this.hydrationWaiters.delete(webContentsId);
         }
-        resolve();
+        resolve(outcome);
       };
+      // Distinct closures per outcome: the map stores the "a signal arrived"
+      // one, so an external settle (teardown, abandon) cannot be mistaken for
+      // the renderer having actually reported.
+      const settleAsSignalled = (): void => settle("hydrated");
+      const onAbort = (): void => settle("cancelled");
       const timer = setTimeout(() => {
         logWarn("projectview.background-restore.hydration-timeout", {
           webContentsId,
           waitedMs: opts.timeoutMs,
         });
-        settle();
+        settle("timeout");
       }, opts.timeoutMs);
       timer.unref?.();
-      opts.signal?.addEventListener("abort", settle, { once: true });
-      this.hydrationWaiters.set(webContentsId, settle);
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
+      this.hydrationWaiters.set(webContentsId, settleAsSignalled);
     });
   }
 
-  /** Drop a pending hydration wait whose view is going away. */
+  /**
+   * Drop a pending hydration wait whose view is going away, and forget any
+   * latched signal for it.
+   *
+   * Called from ordinary entry cleanup as well as the restore paths: every
+   * foreground cold start also reports hydration, and with no waiter listening
+   * that id latches. Without this the latch set grows by one per cold switch
+   * for the life of the window.
+   */
   settleViewHydrated(webContentsId: number): void {
     this.hydrationWaiters.get(webContentsId)?.();
     this.hydratedWebContentsIds.delete(webContentsId);

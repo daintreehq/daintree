@@ -476,9 +476,7 @@ describe("background project capture (#12320)", () => {
   });
 
   it("never lists the window's own active project as a background one", () => {
-    const registry = makeRegistry([
-      { windowId: 1, projectId: "active", views: [["active", 900]] },
-    ]);
+    const registry = makeRegistry([{ windowId: 1, projectId: "active", views: [["active", 900]] }]);
     expect(buildOpenWindowRecords(registry)[0]).toEqual({ projectId: "active" });
   });
 

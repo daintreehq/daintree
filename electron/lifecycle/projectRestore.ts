@@ -42,6 +42,16 @@ interface QueuedJob extends BackgroundRestoreJob {
    * NEWEST timestamp — exactly inverting the order the manifest recorded.
    */
   taken: number;
+  /**
+   * Recency origin, fixed when the job was queued.
+   *
+   * Load-bearing: reading `Date.now()` per project instead would let wall-clock
+   * advance beat the rank step, so a first boot that took three seconds would
+   * leave the SECOND project — the older one — with the newer timestamp. Boots
+   * take seconds; the step is one second; the clock has to be frozen for the
+   * arithmetic to mean anything.
+   */
+  epoch: number;
 }
 
 const queue: QueuedJob[] = [];
@@ -66,9 +76,17 @@ export function enqueueBackgroundRestores(job: BackgroundRestoreJob): void {
   // The queue consumes `projectIds` destructively as it drains, so it takes its
   // own copy: the caller's array is a manifest record's field, and shifting
   // items off it would edit the record the tracker persists.
-  queue.push({ ...job, projectIds: [...job.projectIds], taken: 0 });
+  queue.push({ ...job, projectIds: [...job.projectIds], taken: 0, epoch: Date.now() });
   setPendingBackgroundRestores(job.windowId, [...job.projectIds]);
-  if (!draining) void drain();
+  if (!draining) {
+    // Contained: `drain` is fire-and-forget, so a rejection escaping it would
+    // be an unhandled rejection AND would leave every queued window unserved.
+    void drain().catch((error: unknown) => {
+      logWarn("projectrestore.drain-failed", {
+        error: formatErrorMessage(error, "Background restore queue threw"),
+      });
+    });
+  }
 }
 
 /**
@@ -130,7 +148,24 @@ async function drain(): Promise<void> {
 }
 
 async function runOne(job: QueuedJob, projectId: string): Promise<void> {
-  const manager = job.getManager();
+  let manager: ProjectViewManager | undefined;
+  let projectPath: string | null;
+  try {
+    // Inside the boundary, not before it: `resolveWorkspacePath` runs a
+    // synchronous database lookup and `getManager` reads live window state.
+    // A throw from either used to reject `drain()` itself — which is launched
+    // fire-and-forget — killing the whole queue for every remaining window and
+    // leaving an unhandled rejection behind.
+    manager = job.getManager();
+    projectPath = manager && !manager.disposed ? job.resolveWorkspacePath(projectId) : null;
+  } catch (error) {
+    logWarn("projectrestore.prepare-failed", {
+      projectId,
+      error: formatErrorMessage(error, "Resolving the restore target threw"),
+    });
+    return;
+  }
+
   if (!manager || manager.disposed) {
     // The window closed while its projects waited. Its remaining jobs are
     // pointless, but the projects themselves are not this queue's to re-home.
@@ -139,7 +174,6 @@ async function runOne(job: QueuedJob, projectId: string): Promise<void> {
     return;
   }
 
-  const projectPath = job.resolveWorkspacePath(projectId);
   if (!projectPath) {
     // Deleted since the manifest was written. Skipped, never substituted —
     // the same rule the window restore follows for a deleted project.
@@ -153,7 +187,7 @@ async function runOne(job: QueuedJob, projectId: string): Promise<void> {
       // Below every live view, and stepping further back with each project
       // taken, so the recency order this queue was given survives into the LRU
       // cache rather than being reset to completion order.
-      lastUsed: Date.now() - job.taken * 1000,
+      lastUsed: job.epoch - job.taken * 1000,
     });
     if (result.status === "deferred") {
       // The window is at its warm-view ceiling, or memory pressure has pulled

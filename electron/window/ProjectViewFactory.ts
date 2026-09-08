@@ -81,6 +81,15 @@ export function createRegisteredView(
   registerProjectView(projectId, view.webContents);
   setupViewHandlers(host, view, entry);
   registerWebContents(view.webContents, host.win);
+  // Ownership index, not activation: `appViewWebContentsIds` is a Set per
+  // window, so adding a background view neither displaces the foreground entry
+  // nor makes this view visible. Skipping it is silent and long-lived — first
+  // activation returns `isNew: false`, and the switch handler's own
+  // registration is gated on `isNew`, so a restored view would never be
+  // indexed. `NotificationService.pruneDeadOwners` then discards its
+  // notification state because the owning window cannot be resolved, and
+  // terminal focus IPC drops its signals, for the rest of that view's life.
+  host.windowRegistry?.registerAppViewWebContents(host.win.id, view.webContents.id);
   return entry;
 }
 

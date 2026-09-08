@@ -224,9 +224,7 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       // id that can cold-start a view for a workspace that no longer exists
       // (#12320).
       const workspaceIds = [
-        ...new Set(
-          records.flatMap((r) => [r.projectId, ...(r.backgroundProjectIds ?? [])])
-        ),
+        ...new Set(records.flatMap((r) => [r.projectId, ...(r.backgroundProjectIds ?? [])])),
       ].filter((id): id is string => id !== null);
       if (workspaceIds.length === 0) return { hadManifest: true, records };
 

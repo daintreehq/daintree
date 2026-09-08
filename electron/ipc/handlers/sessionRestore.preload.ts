@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const SESSION_RESTORE_METHOD_CHANNELS = {
   getConfig: "session-restore:get-config",
   updateConfig: "session-restore:update-config",
+  notifyViewHydrated: "session-restore:view-hydrated",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof SESSION_RESTORE_METHOD_CHANNELS;
@@ -15,9 +16,7 @@ export type SessionRestorePreloadBindings = {
 
 type Invoker = (channel: string, ...args: unknown[]) => Promise<unknown>;
 
-export function buildSessionRestorePreloadBindings(
-  invoke: Invoker
-): SessionRestorePreloadBindings {
+export function buildSessionRestorePreloadBindings(invoke: Invoker): SessionRestorePreloadBindings {
   const out: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
   for (const method of Object.keys(SESSION_RESTORE_METHOD_CHANNELS) as Array<keyof Methods>) {
     const channel = SESSION_RESTORE_METHOD_CHANNELS[method];

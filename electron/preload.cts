@@ -1684,8 +1684,6 @@ function buildElectronApi(): ElectronAPI {
 
       notifyWarmViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_WARM_PAINTED),
 
-      notifyViewHydrated: () => _unwrappingInvoke(CHANNELS.APP_VIEW_HYDRATED),
-
       onMenuAction: (callback: (payload: { actionId: string; args?: unknown }) => void) =>
         _typedOn(CHANNELS.MENU_ACTION, callback),
 

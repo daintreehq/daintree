@@ -90,19 +90,50 @@ const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
  */
 export function stripLaunchTargets(argv: readonly string[]): string[] {
   const out: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  // Set by a two-token `--cli-path` whose operand was displaced by an injected
+  // switch (#11410). Chromium orders positionals after switches, so the path is
+  // further along — the same forward search `extractCliPath` performs.
+  let seekingDisplacedOperand = false;
+
+  for (const arg of argv) {
     if (arg === CLI_PATH_FLAG) {
-      // Skip the operand too. Leaving it behind would turn a directory path
-      // into a bare positional argument, which is how a `.dntr` plugin archive
-      // is recognised — a folder named `x.dntr` would then be routed to the
-      // plugin installer on the very launch meant to restore a session.
-      i++;
+      seekingDisplacedOperand = true;
       continue;
     }
+    // Single-token form is self-contained: its value never displaces.
     if (arg.startsWith(CLI_PATH_PREFIX)) continue;
     if (arg.startsWith("file://")) continue;
+    // Bare `.dntr` archives (a double-clicked plugin on Windows/Linux) survive
+    // in argv even though the in-process queue that carried them does not, and
+    // `windowServices` re-extracts them from argv on the next launch. Left in,
+    // every app-initiated relaunch would re-open the plugin install prompt.
+    if (isDntrToken(arg)) continue;
+
+    if (seekingDisplacedOperand) {
+      // A switch is not the operand — Chromium injected it into that slot, and
+      // `extractCliPath` skips past it rather than treating it as the path.
+      // Consuming it here would silently drop switches like `--disable-gpu`
+      // from the relaunch that exists to apply them.
+      if (isSwitchToken(arg)) {
+        out.push(arg);
+        continue;
+      }
+      // The first positional past the flag: the operand, adjacent or displaced.
+      seekingDisplacedOperand = false;
+      continue;
+    }
+
     out.push(arg);
   }
   return out;
+}
+
+/** `extractCliPath`'s own switch test — `--` prefixed, not `-`. */
+function isSwitchToken(arg: string): boolean {
+  return arg.startsWith("--");
+}
+
+/** `extractDntrPaths`' own archive test: a non-switch token ending in `.dntr`. */
+function isDntrToken(arg: string): boolean {
+  return !isSwitchToken(arg) && arg.toLowerCase().endsWith(".dntr");
 }

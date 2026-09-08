@@ -1035,20 +1035,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   );
 
   handlers.push(
-    typedHandleWithContext(CHANNELS.APP_VIEW_HYDRATED, async (ctx) => {
-      // Identity comes from the sender alone — a caller-supplied project id
-      // would let any view settle another view's restore. Same per-window
-      // resolution as APP_VIEW_PAINTED below.
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
-      const pvm =
-        (senderWindow &&
-          deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
-        deps?.projectViewManager;
-      pvm?.signalViewHydrated?.(ctx.webContentsId);
-    })
-  );
-
-  handlers.push(
     typedHandleWithContext(CHANNELS.APP_VIEW_PAINTED, async (ctx) => {
       // Route to the ProjectViewManager that owns the sending view so its
       // pending paint gate can release. Mirrors the multi-window resolution

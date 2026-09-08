@@ -139,9 +139,9 @@ describe("stripLaunchTargets", () => {
   });
 
   it("removes every target when several are present", () => {
-    expect(stripLaunchTargets(["--cli-path", "/a", "file:///b", "--cli-path=/c", "--keep"])).toEqual(
-      ["--keep"]
-    );
+    expect(
+      stripLaunchTargets(["--cli-path", "/a", "file:///b", "--cli-path=/c", "--keep"])
+    ).toEqual(["--keep"]);
   });
 
   it("is a no-op on an empty argv", () => {
@@ -155,9 +155,9 @@ describe("stripLaunchTargets", () => {
   ])("turns %s from targeted into cold", (_label, argv) => {
     expect(resolveLaunchIntent(argvSignals(argv))).toBe("targeted");
     expect(resolveLaunchIntent(argvSignals(stripLaunchTargets(argv)))).toBe("cold");
-    expect(shouldRestoreWindowFleet(resolveLaunchIntent(argvSignals(stripLaunchTargets(argv))))).toBe(
-      true
-    );
+    expect(
+      shouldRestoreWindowFleet(resolveLaunchIntent(argvSignals(stripLaunchTargets(argv))))
+    ).toBe(true);
   });
 
   it("leaves an already-cold launch cold", () => {
@@ -168,7 +168,51 @@ describe("stripLaunchTargets", () => {
     // Safe mode restores one window on purpose; a relaunch marker must never
     // override that.
     expect(
-      resolveLaunchIntent({ ...argvSignals(stripLaunchTargets(["--cli-path", "/a"])), isSafeMode: true })
+      resolveLaunchIntent({
+        ...argvSignals(stripLaunchTargets(["--cli-path", "/a"])),
+        isSafeMode: true,
+      })
     ).toBe("recovery");
+  });
+});
+
+/**
+ * `stripLaunchTargets` mirrors `extractCliPath`'s argument grammar, including
+ * the displaced-operand case Chromium's command-line reconstruction creates
+ * (#11410). These are the inputs where a naive "skip the next token" strip
+ * gets it wrong.
+ */
+describe("stripLaunchTargets argument grammar", () => {
+  it("keeps an injected switch sitting where the --cli-path operand should be", () => {
+    // extractCliPath skips past the switch and searches forward for the path,
+    // so consuming the switch here would drop the very flag a GPU relaunch
+    // exists to apply.
+    expect(stripLaunchTargets(["--cli-path", "--disable-gpu", "/repos/app"])).toEqual([
+      "--disable-gpu",
+    ]);
+  });
+
+  it("still removes the displaced operand itself", () => {
+    expect(
+      stripLaunchTargets(["--cli-path", "--allow-file-access-from-files", "/repos/app", "--e2e"])
+    ).toEqual(["--allow-file-access-from-files", "--e2e"]);
+  });
+
+  it("removes a bare .dntr archive, case-insensitively", () => {
+    // Its in-process queue does not survive the relaunch, but argv does — and
+    // windowServices re-extracts from argv, re-opening the install prompt.
+    expect(stripLaunchTargets(["/Downloads/plugin.DNTR", "--disable-gpu"])).toEqual([
+      "--disable-gpu",
+    ]);
+  });
+
+  it("keeps a positional that is not a launch target when no --cli-path precedes it", () => {
+    // `electron .` in development: argv[1] is a bare positional the relaunch
+    // still needs.
+    expect(stripLaunchTargets([".", "--disable-gpu"])).toEqual([".", "--disable-gpu"]);
+  });
+
+  it("takes only the first positional after the flag", () => {
+    expect(stripLaunchTargets(["--cli-path", "/repos/app", "trailing"])).toEqual(["trailing"]);
   });
 });

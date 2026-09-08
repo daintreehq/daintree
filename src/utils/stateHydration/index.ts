@@ -822,7 +822,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // timeout. Never gated on an animation frame, unlike first-interactive —
     // a background-restored view is never composited and would never send it.
     try {
-      void window.electron?.app?.notifyViewHydrated?.().catch(() => {
+      void window.electron?.sessionRestore?.notifyViewHydrated?.().catch(() => {
         // Main may already have timed out or torn the view down.
       });
     } catch {

@@ -103,14 +103,12 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
       // an unpredictable order, and a plain show() would hand focus to
       // whichever renderer parsed its skeleton last.
       const results = await Promise.allSettled(
-        deps.records
-          .slice(1)
-          .map((record) =>
-            deps.createWindow(record.projectId ?? undefined, {
-              revealMode: "showInactive",
-              backgroundProjectIds: record.backgroundProjectIds,
-            })
-          )
+        deps.records.slice(1).map((record) =>
+          deps.createWindow(record.projectId ?? undefined, {
+            revealMode: "showInactive",
+            backgroundProjectIds: record.backgroundProjectIds,
+          })
+        )
       );
       for (const result of results) {
         if (result.status === "rejected") {

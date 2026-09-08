@@ -1579,6 +1579,10 @@ export interface GeneratedIpcInvokeMap {
     args: [config: Partial<import("./sessionRestore.js").SessionRestoreConfig>];
     result: import("./sessionRestore.js").SessionRestoreConfig;
   };
+  "session-restore:view-hydrated": {
+    args: [];
+    result: void;
+  };
   "shortcut-hints:get-counts": {
     args: [];
     result: Record<string, number>;
