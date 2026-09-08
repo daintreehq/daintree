@@ -477,7 +477,7 @@ export const TerminalStatusEntrySchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Present once the process has exited, so its absence means still running. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
+      "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
     ),
   spawnedAt: z
     .number()
@@ -502,13 +502,27 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent only when the terminal itself could not be resolved."
+      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`."
     ),
   error: z
     .string()
     .optional()
     .describe(
       "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
+    ),
+});
+
+export const TerminalStatusResultSchema = z.object({
+  terminals: z.array(TerminalStatusEntrySchema),
+  source: z
+    .enum(["renderer", "pty"])
+    .describe(
+      "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
+    ),
+  unavailableFields: z
+    .array(z.enum(["armed", "lastCheckResult", "exitCode"]))
+    .describe(
+      "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),
 });
 

@@ -142,6 +142,10 @@ export interface HttpLifecycleDeps {
     rawArgs: unknown,
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
+  handleTerminalGetStatusViewless: (
+    rawArgs: unknown,
+    workspaceId: string
+  ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -1820,6 +1824,7 @@ export class HttpLifecycle {
       handleSkillsSearch: this.deps.handleSkillsSearch,
       handleSkillsLoad: this.deps.handleSkillsLoad,
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
+      handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
         // `summarizeMcpArgs` — running the scrubber after truncation would

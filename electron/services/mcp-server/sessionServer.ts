@@ -105,6 +105,7 @@ import {
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
+import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { extractOwnedResourcesFromDispatch, type OwnedResourceKind } from "./resourceOwnership.js";
 
 /**
@@ -120,6 +121,43 @@ const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
+const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
+
+/**
+ * The tools whose execution never touches a renderer, and which are therefore
+ * answerable for a workspace-bound session whose workspace has no live view
+ * (#12316).
+ *
+ * These skip the bound confirm ceiling below, and only these. The ceiling
+ * exists to stop a dispatch raising a dialog nobody is watching; it answers
+ * that question by resolving the bound view's manifest, which is exactly the
+ * thing an unreachable workspace cannot provide — so a tool that was never
+ * going to reach a renderer failed on evidence it did not need. Each of these
+ * has a short-circuit branch below whose own comment records that it is never
+ * `danger: "confirm"`, and each of those branches returns unconditionally, so
+ * no member can reach renderer dispatch with the ceiling unenforced. The
+ * args-conditional elevations the ceiling also covers (`recipeId`,
+ * `terminal.new`'s `command`/`cwd`) elevate a *dispatch*; a main-process
+ * handler dispatches nothing, so a stray field of that name starts nothing.
+ *
+ * Kept beside the id constants the branches themselves match on, rather than
+ * derived from tier metadata or MCP annotations: annotations are untrusted UX
+ * hints, not an access-control boundary, and a second curated allowlist is the
+ * drift this file has been bitten by before. `sessionServer.test.ts` walks this
+ * set and proves every member both answers viewlessly and never reaches
+ * `dispatchAction`, so a member that stops being main-process-only fails there.
+ *
+ * `terminal.getStatus` is deliberately absent: it is a renderer action with a
+ * reduced main-process fallback, handled separately below.
+ */
+export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
+  TERMINAL_WAIT_UNTIL_IDLE_TOOL,
+  TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL,
+  SKILLS_SEARCH_TOOL,
+  SKILLS_LOAD_TOOL,
+  MCP_SURFACE_TOOL_ID,
+  PROJECT_RUN_CHECK_TOOL,
+]);
 /**
  * The session-scoped cleanup tools (#11909), and the action each one delegates
  * to once ownership checks out.
@@ -390,6 +428,16 @@ export interface SessionServerDeps {
     rawArgs: unknown,
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
+  /**
+   * Read `terminal.getStatus` off the pty-host for one workspace, with no
+   * renderer (#12316). Used only as a fallback when the bound workspace has no
+   * live view: the renderer answer is richer, and this one reports which fields
+   * it could not observe. Throws {@link McpError} on invalid args.
+   */
+  handleTerminalGetStatusViewless: (
+    rawArgs: unknown,
+    workspaceId: string
+  ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -566,6 +614,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleSkillsSearch,
     handleSkillsLoad,
     handleProjectRunCheck,
+    handleTerminalGetStatusViewless,
     appendAuditRecord,
     getCachedManifest,
     notifyTierMismatch,
@@ -1016,6 +1065,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       });
     }
 
+    // The workspace to answer `terminal.getStatus` for from the pty-host, set
+    // when the bound workspace has no live view (#12316). Read off the binding
+    // failure the ceiling below already resolved — the exact workspace routing
+    // itself tried to reach — so a caller argument can never redirect the read.
+    let viewlessStatusWorkspaceId: string | undefined;
+
     // Confirm-gated tools are unreachable for a workspace-bound external
     // session, so refuse them here — after tier/grant admission, but before a
     // native grant use is charged, before dedup can cache an answer, and long
@@ -1027,48 +1082,91 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // native grant widens dispatch past the tier floor, and must not widen past
     // this one — the dialog those grants would bypass is the same dialog nobody
     // is watching.
-    if (sessionSurface.workspaceBound && tier === "external") {
+    //
+    // Skipped entirely for {@link VIEWLESS_MAIN_PROCESS_TOOLS}: the ceiling is a
+    // question about renderer dispatch, and those tools never reach one, so
+    // resolving the bound view's manifest to answer it made a workspace's view
+    // residency a precondition for calls that never needed a view (#12316).
+    if (
+      sessionSurface.workspaceBound &&
+      tier === "external" &&
+      !VIEWLESS_MAIN_PROCESS_TOOLS.has(actionId)
+    ) {
       let boundManifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
       try {
         boundManifest = getCachedManifest() ?? (await requestManifest());
       } catch (err) {
-        // Fail closed. Proceeding on an unresolved manifest would erase the
-        // only evidence that this action needs confirmation, turning a refusal
-        // into an unattended dispatch. Audited as a throw, matching how the
-        // post-dispatch binding failure below records the same class of error.
-        try {
-          appendAuditRecord({
-            toolId: actionId,
-            sessionId,
-            tier,
-            args,
-            durationMs: Date.now() - startedAt,
-            startedAt,
-            outcome: { kind: "throw", error: err },
-            capturedTurnId,
-          });
-        } catch (auditErr) {
-          console.error("[MCP] Failed to append audit record:", auditErr);
-        }
-        if (err instanceof McpRouteBindingError) {
-          // Deliberately NOT answered from the host base surface, unlike
-          // `tools/list` (#12082). Discovery describes what exists; this gate
-          // decides whether a specific call runs unattended, and the host
-          // catalog is not evidence about the bound view. Fail closed, and say
-          // so retriably when the route can come back.
+        // One exception to failing closed, and it is not a confirm decision:
+        // `terminal.getStatus` has a read-only main-process fallback that reads
+        // the pty-host directly (#12316). Taken only when the workspace simply
+        // has no view — an `ambiguous` binding is a conflict the user must
+        // resolve, and a destroyed pin is not a route that comes back — and only
+        // when the call named its terminals, since the fleet path filters on
+        // `location`, which has no pty-host meaning. The fallback is `danger:
+        // "safe"`, dispatches nothing, and so raises no dialog: the ceiling has
+        // nothing to decide about it.
+        if (
+          actionId === TERMINAL_GET_STATUS_TOOL &&
+          err instanceof WorkspaceBindingError &&
+          err.reason === "not-found" &&
+          viewlessStatusArgsAreAnswerable(args)
+        ) {
+          viewlessStatusWorkspaceId = err.workspaceId;
+          boundManifest = [];
+        } else {
+          // Fail closed. Proceeding on an unresolved manifest would erase the
+          // only evidence that this action needs confirmation, turning a refusal
+          // into an unattended dispatch. Audited as a throw, matching how the
+          // post-dispatch binding failure below records the same class of error.
+          try {
+            appendAuditRecord({
+              toolId: actionId,
+              sessionId,
+              tier,
+              args,
+              durationMs: Date.now() - startedAt,
+              startedAt,
+              outcome: { kind: "throw", error: err },
+              capturedTurnId,
+            });
+          } catch (auditErr) {
+            console.error("[MCP] Failed to append audit record:", auditErr);
+          }
+          if (err instanceof McpRouteBindingError) {
+            // Deliberately NOT answered from the host base surface, unlike
+            // `tools/list` (#12082). Discovery describes what exists; this gate
+            // decides whether a specific call runs unattended, and the host
+            // catalog is not evidence about the bound view. Fail closed, and say
+            // so retriably when the route can come back.
+            //
+            // The one thing added is a way out: a `terminal.getStatus` that named
+            // no terminals is refused here, but the same call *with* explicit
+            // `terminalIds` is answerable from the pty-host without a view
+            // (#12316). Say so, rather than leaving a poller to retry the shape
+            // that cannot work.
+            // Scoped to `not-found`, the only reason the fallback takes.
+            // Telling a caller whose workspace is open in two views to retry
+            // with ids would be advice that cannot work.
+            const viewlessHint =
+              actionId === TERMINAL_GET_STATUS_TOOL &&
+              err instanceof WorkspaceBindingError &&
+              err.reason === "not-found"
+                ? ` Status for specific terminals can still be read while the workspace is closed — call '${actionId}' again with an explicit 'terminalIds' array.`
+                : "";
+            return buildToolError({
+              code: SESSION_BINDING_GONE,
+              message: `${err.message}${viewlessHint}`,
+              retriable: err.retriable,
+            });
+          }
           return buildToolError({
-            code: SESSION_BINDING_GONE,
-            message: err.message,
-            retriable: err.retriable,
+            code: EXECUTION_ERROR_CODE,
+            message: formatErrorMessage(
+              err,
+              `Could not resolve the action surface for workspace-bound tool '${actionId}'`
+            ),
           });
         }
-        return buildToolError({
-          code: EXECUTION_ERROR_CODE,
-          message: formatErrorMessage(
-            err,
-            `Could not resolve the action surface for workspace-bound tool '${actionId}'`
-          ),
-        });
       }
 
       const withheldIds = new Set(
@@ -1111,25 +1209,33 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // exists to avoid. Read through the same extraction points the elevation
       // uses, so the refusal and the elevation can never disagree about which
       // dispatches are gated.
-      const boundConfirmRefusal = withheldIds.has(actionId)
-        ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
-          `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
-          `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
-          `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
-          `workspace binding.`
-        : dispatchCarriesRecipeId(args)
-          ? `Action '${actionId}' was called with a 'recipeId', so it would start that recipe's ` +
-            `terminals and requires confirmation. This MCP session is bound to workspace ` +
-            `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
-            `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
-            `recipe from Daintree, or connect without a workspace binding.`
-          : terminalLaunchArg !== undefined
-            ? `Action '${actionId}' was called with a '${terminalLaunchArg}', so it would start a shell and ` +
-              `requires confirmation. This MCP session is bound to workspace ` +
-              `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
-              `to approve the dialog. The action was not run — call it without 'command' or 'cwd', open ` +
-              `the terminal from Daintree, or connect without a workspace binding.`
-            : undefined;
+      const boundConfirmRefusal =
+        viewlessStatusWorkspaceId !== undefined
+          ? // The fallback runs in main and dispatches nothing, so none of the
+            // three reasons below can apply to it: there is no renderer call to
+            // elevate and no dialog to raise. Skipped explicitly rather than left
+            // to fall through the empty stand-in manifest, which would still let
+            // an args-conditional elevation refuse a read (#12316).
+            undefined
+          : withheldIds.has(actionId)
+            ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
+              `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
+              `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
+              `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
+              `workspace binding.`
+            : dispatchCarriesRecipeId(args)
+              ? `Action '${actionId}' was called with a 'recipeId', so it would start that recipe's ` +
+                `terminals and requires confirmation. This MCP session is bound to workspace ` +
+                `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+                `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
+                `recipe from Daintree, or connect without a workspace binding.`
+              : terminalLaunchArg !== undefined
+                ? `Action '${actionId}' was called with a '${terminalLaunchArg}', so it would start a shell and ` +
+                  `requires confirmation. This MCP session is bound to workspace ` +
+                  `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+                  `to approve the dialog. The action was not run — call it without 'command' or 'cwd', open ` +
+                  `the terminal from Daintree, or connect without a workspace binding.`
+                : undefined;
 
       if (boundConfirmRefusal !== undefined) {
         const message = boundConfirmRefusal;
@@ -1488,6 +1594,34 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "waitUntilIdleBatch failed"),
+            });
+          }
+        }
+
+        // Short-circuit: terminal.getStatus, read off the pty-host, when the
+        // bound workspace has no live view (#12316). Unlike its siblings here
+        // this is a *fallback*, not the tool's home: the renderer answer knows
+        // panel identity, arming and the parsed check result, and is used
+        // whenever a view exists. The flag is set by the bound ceiling above,
+        // from the binding failure it already resolved, so this branch never
+        // decides for itself that a view is missing.
+        //
+        // Read-only and never `danger: "confirm"` — the strip shows a plain
+        // in-flight row. Audit and strip-settle unify via the shared `finally`.
+        if (viewlessStatusWorkspaceId !== undefined) {
+          emitToolCallStarted(false);
+          try {
+            const result = await handleTerminalGetStatusViewless(args, viewlessStatusWorkspaceId);
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, `${actionId} failed`),
             });
           }
         }
@@ -2080,40 +2214,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   // (#11799). One capture per request: the listing helpers await dispatches
   // mid-enumeration, and re-reading across those awaits would let one response
   // mix two authorization lifetimes.
-  /**
-   * Confirm a workspace-bound session can still reach its workspace, for a read
-   * that would otherwise never consult it (#12082).
-   *
-   * Most resources are backed by a dispatch, so the binding is checked by the
-   * routing itself. `agentState` is not: it answers from the process-global
-   * `AgentAvailabilityStore`, and its tier gate (`terminal.list`) says nothing
-   * about *which* workspace the agent belongs to. Before this issue a bound
-   * session could not exist without a live view, so the viewless case was
-   * unreachable; now it is, and a bound session with an unreachable workspace
-   * must not read host-global state as if it were its own.
-   *
-   * Deliberately a route check, not an ownership check. Whether a given agent id
-   * belongs to the bound workspace is a separate, pre-existing gap in #11789 —
-   * a bound session with a *live* view can still read another workspace's agent
-   * state, and closing that needs an agent→workspace map this layer does not
-   * have. This closes only the half that is new.
-   *
-   * Probing through `requestManifest` rather than a bespoke resolver keeps the
-   * answer identical to the one dispatch would get: it re-resolves the workspace
-   * the same way and reads a warm per-view cache on success.
-   */
-  const assertBoundRouteReachable = async (): Promise<void> => {
-    if (!sessionSurface.workspaceBound) return;
-    try {
-      await requestManifest();
-    } catch (err) {
-      const routed = routeBindingMcpError(err);
-      if (routed) throw routed;
-      // Anything else is a manifest failure, not a routing one. The read does
-      // not need a manifest, so it is not this probe's business to fail it.
-    }
-  };
-
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const tier = sessionStore.getTier(sessionId);
     if (tier === null) throw sessionGoneError();
@@ -2142,11 +2242,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
-    if (parsed.kind === "agentState") await assertBoundRouteReachable();
-    // `binding` deliberately skips the probe above, and needs no exemption
-    // branch to do it: it dispatches nothing, so there is no route for a probe
-    // to be protecting. That is the whole point — it is the one read a session
-    // whose workspace is gone can still make (#12313).
+    // `agentState` deliberately has no view-residency probe (#12316). It answers
+    // from the process-global `AgentAvailabilityStore` with no renderer
+    // involved, so requiring the bound workspace to hold a live view made an
+    // orchestrator's reach a function of the user's navigation — the whole
+    // complaint. The probe #12082 added closed only half of a gap it could not
+    // close: which workspace an agent belongs to is not checked here either
+    // way, because that needs an agent→workspace map this layer does not have,
+    // and a bound session with a live view could always read across it. Closing
+    // it properly is #11789's own scoping work, and it has to apply to both.
+    //
+    // `binding` never needed one: it dispatches nothing, so there is no route
+    // for a probe to be protecting. That is the whole point — it is the one
+    // read a session whose workspace is gone can still make (#12313).
     try {
       return {
         contents: [
@@ -2179,10 +2287,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
-    // Same reason as the read above: an `agentState` subscription installs a
-    // listener on a process-global event and would push another workspace's
-    // updates at a session that cannot reach its own.
-    if (parsed.kind === "agentState") await assertBoundRouteReachable();
     subscribeResource(sessionId, server, uri, parsed, sessionStore, workspaceBinding?.workspaceId);
     return {};
   });
