@@ -1147,6 +1147,13 @@ export const CHANNELS = {
   // both stores, so an MCP client can look a workspace id up instead of
   // deriving one (#12307).
   WORKSPACE_LIST: "workspace:list",
+
+  // The user's "keep this workspace resident" grant (#12313). Renderer-only by
+  // design: the action manifest is the MCP tool surface, so routing this
+  // through an action would let a bound client grant itself the residency
+  // #11790 refused to grant it automatically.
+  WORKSPACE_RESIDENCY_GET: "workspace-residency:get",
+  WORKSPACE_RESIDENCY_SET: "workspace-residency:set",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
