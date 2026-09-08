@@ -55,7 +55,7 @@ type StatusEntry = {
   error?: string;
 };
 
-type StatusResult = { terminals: StatusEntry[] };
+type StatusResult = { terminals: StatusEntry[]; source: string; unavailableFields: string[] };
 
 function setupActions(): ActionRegistry {
   const actions: ActionRegistry = new Map();
@@ -87,6 +87,24 @@ beforeEach(() => {
 });
 
 describe("terminal.getStatus", () => {
+  it("names its source and reports nothing as unobservable (#12316)", async () => {
+    // The same envelope the main-process fallback answers in. A live view saw
+    // everything, so `unavailableFields` is empty — which is what tells a
+    // client that a missing `armed` here means "not armed", not "unknown".
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
+      },
+    });
+
+    const result = await callGetStatus(setupActions());
+
+    expect(result.source).toBe("renderer");
+    expect(result.unavailableFields).toEqual([]);
+    expect(result.terminals[0]?.armed).toBe(false);
+  });
+
   it("returns a `terminals` object wrapper, never a raw array", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1"],

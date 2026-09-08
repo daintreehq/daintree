@@ -1590,7 +1590,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               armed: {
                 description:
-                  "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent only when the terminal itself could not be resolved.",
+                  "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`.",
                 type: "boolean",
               },
               error: {
@@ -1603,8 +1603,23 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             additionalProperties: false,
           },
         },
+        source: {
+          type: "string",
+          enum: ["renderer", "pty"],
+          description:
+            "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window.",
+        },
+        unavailableFields: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["armed", "lastCheckResult"],
+          },
+          description:
+            "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",
+        },
       },
-      required: ["terminals"],
+      required: ["terminals", "source", "unavailableFields"],
       additionalProperties: false,
     },
     requiresArgs: false,

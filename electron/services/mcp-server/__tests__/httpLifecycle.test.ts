@@ -167,6 +167,9 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     handleSkillsSearch: vi.fn(() => ({ skills: [] })),
     handleSkillsLoad: vi.fn(),
     handleProjectRunCheck: vi.fn(),
+    handleTerminalGetStatusViewless: vi
+      .fn()
+      .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
     getCachedManifest: vi.fn(() => null),
     clearCachedManifest: vi.fn(),
     cleanupListeners: [],

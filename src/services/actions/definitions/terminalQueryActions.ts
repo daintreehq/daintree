@@ -1,6 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { TerminalSummarySchema, TerminalStatusEntrySchema } from "./schemas";
+import { TerminalSummarySchema, TerminalStatusResultSchema } from "./schemas";
 import { tailCapturedOutput } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
@@ -8,8 +8,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import type { AgentState, WaitingReason } from "@shared/types/agent";
-import type { TerminalCheckResult } from "@shared/types/checkResult";
+import type { TerminalStatusEntry } from "@shared/types/terminalStatus";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -261,7 +260,7 @@ export function registerTerminalQueryActions(
           ),
       })
       .optional(),
-    resultSchema: z.object({ terminals: z.array(TerminalStatusEntrySchema) }),
+    resultSchema: TerminalStatusResultSchema,
     mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { terminalIds, worktreeId, location, includeOutput } = (args ?? {}) as {
@@ -275,20 +274,6 @@ export function registerTerminalQueryActions(
       const panelsById = state.panelsById;
       // Fresh point-in-time snapshot of the fleet arming set for this call.
       const armedIds = useFleetArmingStore.getState().armedIds;
-
-      type StatusEntry = {
-        terminalId: string;
-        agentId: string | null;
-        agentState: AgentState | null;
-        waitingReason?: WaitingReason;
-        lastTransitionAt?: number;
-        exitCode?: number | null;
-        spawnedAt?: number;
-        lastCheckResult?: TerminalCheckResult;
-        recentOutput?: string | null;
-        armed?: boolean;
-        error?: string;
-      };
 
       const resolved: Array<{ id: string; terminal: PanelInstance | undefined }> = [];
 
@@ -348,7 +333,7 @@ export function registerTerminalQueryActions(
         }
       }
 
-      const entries: StatusEntry[] = resolved.map(({ id, terminal }) => {
+      const entries: TerminalStatusEntry[] = resolved.map(({ id, terminal }) => {
         if (!terminal) {
           return {
             terminalId: id,
@@ -358,7 +343,7 @@ export function registerTerminalQueryActions(
           };
         }
 
-        const entry: StatusEntry = {
+        const entry: TerminalStatusEntry = {
           terminalId: terminal.id,
           agentId: isPtyPanel(terminal)
             ? (terminal.detectedAgentId ?? terminal.launchAgentId ?? null)
@@ -412,7 +397,11 @@ export function registerTerminalQueryActions(
         return entry;
       });
 
-      return { terminals: entries };
+      // `source` and `unavailableFields` are the same envelope the main-process
+      // fallback answers in (#12316), so a client reads one shape whether or not
+      // its workspace had a live view. A view saw everything, so nothing is
+      // unavailable here.
+      return { terminals: entries, source: "renderer" as const, unavailableFields: [] };
     },
   }));
 
