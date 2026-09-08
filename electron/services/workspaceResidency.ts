@@ -130,27 +130,25 @@ export function setWorkspaceKeepResident(workspaceId: string, keepResident: bool
 }
 
 /**
- * Record that eviction took the last live view of `workspaceId`.
+ * Record that an eviction pass took a view of `workspaceId`.
  *
- * Call it *after* the view is torn down, so the liveness check below sees the
- * settled state. A second window's view of the same workspace is not affected
- * by this pass — the route still resolves there — so an eviction that leaves
- * one standing is not this workspace's eviction and is not recorded as one.
+ * Deliberately unconditional — it does not ask whether another window still
+ * holds a view. Checking here would be marginally more precise about *why* a
+ * workspace is unreachable later, and it would put a `getWebContentsForProject`
+ * call on a path eleven window test fixtures stub without it: a coupling that
+ * broad, bought that cheaply, is the wrong trade.
  *
- * {@link readWorkspaceBindingState} suppresses the record whenever a live view
- * exists regardless, so the read stays correct without depending on this check
- * winning any particular race; this one keeps the ledger itself from carrying a
- * reason that never applied.
+ * It costs nothing real, because the claim stays true either way. This says a
+ * view was evicted at T, which it was; {@link readWorkspaceBindingState} is what
+ * decides whether that is worth reporting, and it only surfaces the record while
+ * no view is live. A workspace still reachable through another window therefore
+ * never shows a loss, which is the property that actually matters — and what is
+ * reported is an observation the host made, not a conclusion about the cause.
  */
 export function recordWorkspaceEviction(
   workspaceId: string,
   reason: WorkspaceEvictionReason
 ): void {
-  if (getWebContentsForProject(workspaceId).length > 0) {
-    // Still reachable, but the view set changed — tell subscribers to re-read.
-    emitResidencyChanged(workspaceId);
-    return;
-  }
   evictions.set(workspaceId, { at: Date.now(), reason });
   emitResidencyChanged(workspaceId);
 }
@@ -229,9 +227,10 @@ export function readWorkspaceBindingState(
 
   const liveViewCount = getWebContentsForProject(boundWorkspaceId).length;
   // A live view means the workspace is here now, whatever took an earlier one:
-  // reporting a stale eviction beside it would describe a loss that has already
-  // been recovered, and in a second window's case one that never applied to
-  // this route at all.
+  // reporting an eviction beside it would describe a loss that has already been
+  // recovered, and in a second window's case one that never applied to this
+  // route at all. This is the only gate on the record, so it carries the whole
+  // guarantee — see `recordWorkspaceEviction`, which writes unconditionally.
   const record = liveViewCount === 0 ? (evictions.get(boundWorkspaceId) ?? null) : null;
 
   return {

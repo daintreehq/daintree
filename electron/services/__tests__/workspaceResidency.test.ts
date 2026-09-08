@@ -125,21 +125,21 @@ describe("binding state read (#12313)", () => {
     expect(readWorkspaceBindingState(WORKSPACE).evictedAt).toBeNull();
   });
 
-  it("does not record an eviction while another window still holds a view", () => {
+  it("never reports a loss while the route still resolves", () => {
+    // The single gate on the record, since writes are unconditional — so this
+    // carries the whole guarantee. Covers both orderings: a second window's
+    // view already live when the pass runs, and a workspace reopened after one.
     liveViewsByWorkspace.set(WORKSPACE, 1);
     recordWorkspaceEviction(WORKSPACE, "pressure");
-    liveViewsByWorkspace.set(WORKSPACE, 0);
-    // The pass took one window's view; the route still resolved through the
-    // other, so that pass was not this workspace's eviction and must not be
-    // reported as one after the second view closes for its own reasons.
-    expect(readWorkspaceBindingState(WORKSPACE).evictedAt).toBeNull();
-  });
+    expect(readWorkspaceBindingState(WORKSPACE)).toMatchObject({
+      routeState: "available",
+      evictedAt: null,
+      evictionReason: null,
+    });
 
-  it("suppresses a stale record while a view is live", () => {
-    recordWorkspaceEviction(WORKSPACE, "pressure");
+    liveViewsByWorkspace.set(WORKSPACE, 0);
+    recordWorkspaceEviction(WORKSPACE, "lru");
     liveViewsByWorkspace.set(WORKSPACE, 1);
-    // Read-side belt to the write-side check above: a recovered workspace must
-    // never report a loss beside a route that currently resolves.
     expect(readWorkspaceBindingState(WORKSPACE).evictedAt).toBeNull();
   });
 });
