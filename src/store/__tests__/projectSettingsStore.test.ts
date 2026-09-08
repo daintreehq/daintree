@@ -137,14 +137,19 @@ describe("projectSettingsStore", () => {
       useProjectSettingsStore.setState({
         settings: { ...SETTINGS_WITH_COMMANDS, devServerCommand: "npm run dev" },
         projectId: "project-a",
+        allDetectedRunners: DETECTED_RUNNERS,
+        detectedRunners: [DETECTED_RUNNERS[1]!],
       });
 
       patchCachedProjectSettings("project-a", { preferredEditor: { id: "zed" } });
 
-      const settings = useProjectSettingsStore.getState().settings;
-      expect(settings?.preferredEditor).toEqual({ id: "zed" });
-      expect(settings?.devServerCommand).toBe("npm run dev");
-      expect(settings?.runCommands).toHaveLength(2);
+      const state = useProjectSettingsStore.getState();
+      expect(state.settings?.preferredEditor).toEqual({ id: "zed" });
+      expect(state.settings?.devServerCommand).toBe("npm run dev");
+      expect(state.settings?.runCommands).toHaveLength(2);
+      // setSettings recomputes these from allDetectedRunners; a preference-only
+      // patch must not drop a runner that is still undetected-and-unsaved.
+      expect(state.detectedRunners).toEqual([DETECTED_RUNNERS[1]]);
     });
 
     it("ignores a patch for a project the store no longer holds", () => {

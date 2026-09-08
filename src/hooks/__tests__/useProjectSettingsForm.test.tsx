@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectSettings } from "@/types";
 
 const {
@@ -124,6 +124,12 @@ describe("useProjectSettingsForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetMocks();
+  });
+
+  // Every timer restore below is on the success path, so a failed assertion
+  // would leave fake timers installed and hang the async tests after it.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("stays uninitialized when isOpen is false", () => {
@@ -326,6 +332,43 @@ describe("useProjectSettingsForm", () => {
     });
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
     expect(mockSaveSettings.mock.calls[0]![0]).toMatchObject({
+      devServerCommand: "npm run serve",
+    });
+    vi.useRealTimers();
+  });
+
+  it("a later form save carries the preference the cache holds, not the one it opened with", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = { ...baseSettings, preferredEditor: { id: "vscode" } };
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(result.current.projectIsInitialized).toBe(true);
+
+    // Another tab saved a new editor and wrote through to the cache. The form
+    // spreads the cache on every save, so it must pick up the new value —
+    // this is what patchCachedProjectSettings exists to make true (#12326).
+    mockSettings.value = { ...baseSettings, preferredEditor: { id: "zed" } };
+    rerender({ isOpen: true, tick: 3 });
+
+    vi.clearAllMocks();
+    act(() => {
+      result.current.setDevServerCommand("npm run serve");
+    });
+    await act(async () => {
+      await result.current.flush();
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    expect(mockSaveSettings.mock.calls[0]![0]).toMatchObject({
+      preferredEditor: { id: "zed" },
       devServerCommand: "npm run serve",
     });
     vi.useRealTimers();

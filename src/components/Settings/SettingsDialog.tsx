@@ -756,7 +756,7 @@ function SettingsDialogInner({
                 <SettingsLoadErrorBanner
                   title={`Couldn't save settings for ${projectLabel}`}
                   message={projectForm.projectAutoSaveError}
-                  onRetry={() => void projectForm.flush()}
+                  onRetry={() => void projectForm.saveNow()}
                 />
               )}
               {showProjectLoading && (

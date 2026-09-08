@@ -3,7 +3,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImageViewerTab } from "../ImageViewerTab";
 import { useProjectStore } from "@/store/projectStore";
-import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import {
+  cleanupProjectSettingsStore,
+  useProjectSettingsStore,
+} from "@/store/projectSettingsStore";
 import { projectClient } from "@/clients";
 import type { Project, ProjectSettings } from "@shared/types/project";
 
@@ -52,10 +55,22 @@ function installElectron(getSettings: () => Promise<unknown>) {
 beforeEach(() => {
   vi.clearAllMocks();
   setProject(null);
-  useProjectSettingsStore.setState({ settings: null, projectId: null });
-  vi.mocked(projectClient.getSettings).mockResolvedValue({ runCommands: [] } as ProjectSettings);
+  cleanupProjectSettingsStore();
+  // Carries the pre-save value, so merging this fetched copy over the cache
+  // instead of patching only the preference would be caught below.
+  vi.mocked(projectClient.getSettings).mockResolvedValue({
+    runCommands: [],
+    devServerCommand: "npm run dev",
+  } as ProjectSettings);
   vi.mocked(projectClient.saveSettings).mockResolvedValue(undefined);
 });
+
+/** Settings seeded into the cache, with a sentinel a bad write would disturb. */
+const SEEDED_SETTINGS: ProjectSettings = {
+  runCommands: [],
+  devServerCommand: "npm run dev",
+  preferredEditor: { id: "vscode" },
+};
 
 /** Render for "proj-1" with settings loaded and the Save button enabled. */
 async function renderLoadedTab() {
@@ -192,10 +207,7 @@ describe("ImageViewerTab", () => {
   // keeps the pre-save value and the next settings-form write reverts it (#12326).
   describe("cached settings write-through", () => {
     it("merges the saved preference into the cache, preserving unrelated fields", async () => {
-      useProjectSettingsStore.setState({
-        settings: { runCommands: [], devServerCommand: "npm run dev" },
-        projectId: "proj-1",
-      });
+      useProjectSettingsStore.setState({ settings: SEEDED_SETTINGS, projectId: "proj-1" });
       const saveButton = await renderLoadedTab();
 
       fireEvent.click(saveButton);
@@ -207,14 +219,14 @@ describe("ImageViewerTab", () => {
         });
       });
       expect(useProjectSettingsStore.getState().settings?.devServerCommand).toBe("npm run dev");
+      expect(useProjectSettingsStore.getState().settings?.preferredEditor).toEqual({
+        id: "vscode",
+      });
       expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
     });
 
     it("merges into the settings the cache holds after the save, not the pre-await copy", async () => {
-      useProjectSettingsStore.setState({
-        settings: { runCommands: [], devServerCommand: "npm run dev" },
-        projectId: "proj-1",
-      });
+      useProjectSettingsStore.setState({ settings: SEEDED_SETTINGS, projectId: "proj-1" });
       // A concurrent writer lands while the save IPC is in flight.
       vi.mocked(projectClient.saveSettings).mockImplementation(async () => {
         useProjectSettingsStore.setState({
@@ -232,24 +244,21 @@ describe("ImageViewerTab", () => {
     });
 
     it("leaves the cache untouched when the save rejects", async () => {
-      useProjectSettingsStore.setState({
-        settings: { runCommands: [] },
-        projectId: "proj-1",
-      });
+      useProjectSettingsStore.setState({ settings: SEEDED_SETTINGS, projectId: "proj-1" });
       vi.mocked(projectClient.saveSettings).mockRejectedValue(new Error("save blew up"));
       const saveButton = await renderLoadedTab();
 
       fireEvent.click(saveButton);
 
       await screen.findByText(/save blew up|Failed to save image viewer preference/i);
-      expect(useProjectSettingsStore.getState().settings?.preferredImageViewer).toBeUndefined();
+      // Asserting the whole object, not just the absent preference — wiping the
+      // cache outright would satisfy a `?.preferredImageViewer` check.
+      expect(useProjectSettingsStore.getState().settings).toEqual(SEEDED_SETTINGS);
+      expect(useProjectSettingsStore.getState().projectId).toBe("proj-1");
     });
 
     it("leaves the cache untouched when it holds a different project", async () => {
-      useProjectSettingsStore.setState({
-        settings: { runCommands: [] },
-        projectId: "proj-2",
-      });
+      useProjectSettingsStore.setState({ settings: SEEDED_SETTINGS, projectId: "proj-2" });
       const saveButton = await renderLoadedTab();
 
       fireEvent.click(saveButton);
@@ -257,7 +266,8 @@ describe("ImageViewerTab", () => {
       await waitFor(() => {
         expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
       });
-      expect(useProjectSettingsStore.getState().settings?.preferredImageViewer).toBeUndefined();
+      expect(useProjectSettingsStore.getState().settings).toEqual(SEEDED_SETTINGS);
+      expect(useProjectSettingsStore.getState().projectId).toBe("proj-2");
     });
   });
 });
