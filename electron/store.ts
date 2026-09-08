@@ -577,6 +577,26 @@ export interface StoreSchema {
     defaultHiddenPluginIds: string[];
     projectOverrides: Record<string, Record<string, boolean>>;
   };
+
+  /**
+   * Workspaces the user asked to keep resident in the project-view cache
+   * (#12313), keyed by workspace id — a project's 64-hex id or a scratch
+   * workspace's UUID, the same vocabulary `ProjectViewManager.views` and an MCP
+   * session binding use.
+   *
+   * A grant, not a floor: it orders the workspace last in the eviction
+   * candidate queue, so a grant is surrendered only once every ungranted
+   * candidate is gone. That ordering is the whole mechanism — residency never
+   * carries the cache over the user's configured cap, because a candidate is
+   * always available to take, and a forced critical reclaim (`effectiveMax`
+   * collapsed to 1) takes the grants along with everything else. The client
+   * cannot set this — only the user, through project settings.
+   *
+   * Additive key with no numbered migration, matching `projectPluginTrust`
+   * above: every read goes through `?? {}`, and only an exact `true` counts, so
+   * a stale entry for a deleted workspace grants nothing.
+   */
+  workspaceKeepResident?: Record<string, true>;
 }
 
 const storeOptions = {
@@ -775,6 +795,7 @@ const storeOptions = {
     },
     pluginCapabilityConsent: {},
     projectPluginTrust: {},
+    workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

@@ -841,4 +841,12 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["workspace:list"]["args"]
     ): Promise<IpcInvokeMap["workspace:list"]["result"]>;
   };
+  workspaceResidency: {
+    get(
+      ...args: IpcInvokeMap["workspace-residency:get"]["args"]
+    ): Promise<IpcInvokeMap["workspace-residency:get"]["result"]>;
+    set(
+      ...args: IpcInvokeMap["workspace-residency:set"]["args"]
+    ): Promise<IpcInvokeMap["workspace-residency:set"]["result"]>;
+  };
 }

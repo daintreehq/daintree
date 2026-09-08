@@ -39,6 +39,7 @@ import {
   MCP_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS_MAX_BYTES,
   TIER_ALLOWLISTS,
+  WORKSPACE_BINDING_RESOURCE_URI,
 } from "../shared.js";
 import type { DispatchedWorkspaceRef } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
@@ -5704,37 +5705,178 @@ describe("workspace-bound external sessions (#11789)", () => {
       );
     });
 
-    it.each([
-      ["resources/list", {}],
+    it("reports an unreachable workspace on a resource read rather than answering as if it were empty", async () => {
+      // `tools/list` gets a host surface because the tool *set* is knowable
+      // without a view; a resource read is not — it reads what is actually open
+      // in that workspace. Answering emptily would be an authoritative "you
+      // have nothing", the same lie the terminal handshake told.
+      //
       // `scrollback` is backed by `terminal.getOutput`, which the external tier
       // permits — a `pulse` URI would be refused as TIER_NOT_PERMITTED before
       // dispatch and never reach the binding at all.
-      ["resources/read", { uri: "daintree://terminal/t-1/scrollback" }],
-    ])(
-      "reports an unreachable workspace on %s rather than answering as if it were empty",
-      async (method, params) => {
-        // `tools/list` gets a host surface because the tool *set* is knowable
-        // without a view; a resource listing is not — it enumerates what is
-        // actually open in that workspace. Answering `{ resources: [] }` there
-        // would be an authoritative "you have nothing", which is the same lie
-        // the terminal handshake told, in a quieter place.
-        const deps = boundDeps({
-          dispatchAction: vi
-            .fn()
-            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-          requestManifest: vi
-            .fn()
-            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-          getCachedManifest: vi.fn(() => null),
-        });
-        const server = createSessionServer(SESSION, deps);
-        await server.connect(makeMockTransport());
+      const deps = boundDeps({
+        dispatchAction: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
 
-        await expect(callHandler(server, method, params)).rejects.toMatchObject({
-          data: { code: SESSION_BINDING_GONE, retriable: true, errorCategory: "business" },
-        });
-      }
-    );
+      await expect(
+        callHandler(server, "resources/read", { uri: "daintree://terminal/t-1/scrollback" })
+      ).rejects.toMatchObject({
+        data: { code: SESSION_BINDING_GONE, retriable: true, errorCategory: "business" },
+      });
+    });
+
+    it("answers resources/list with the binding resource instead of refusing outright (#12313)", async () => {
+      // The refusal above used to cover `resources/list` too, on the reasoning
+      // that an empty listing is an authoritative "you have nothing". That
+      // reasoning still holds — what changed is that the listing is no longer
+      // empty. It leads with the binding resource, so dropping the categories
+      // that needed a renderer is not a claim about the workspace's contents:
+      // the client is handed the thing that says the route is gone.
+      //
+      // It has to be `resources/list` specifically that recovers, because a
+      // bound session with no view cannot call anything else — refusing here
+      // left it knowing it was evicted with nothing to ask.
+      const deps = boundDeps({
+        dispatchAction: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const listed = (await callHandler(server, "resources/list", {})) as {
+        resources: Array<{ uri: string }>;
+      };
+      const uris = listed.resources.map((r) => r.uri);
+
+      // Asserted whole rather than by absence: a listing that degraded the
+      // dispatch-backed categories but fabricated an entry in their place would
+      // satisfy any "does not contain" check while telling the same lie.
+      expect(uris).toEqual([WORKSPACE_BINDING_RESOURCE_URI]);
+    });
+
+    it("serves the binding resource without dispatching or probing the route (#12313)", async () => {
+      // The exemption the issue asked for, obtained by construction rather than
+      // by a special case: this read touches no renderer, so there is no route
+      // for `assertBoundRouteReachable` to be protecting. If it ever grew a
+      // dispatch it would start failing exactly when it is needed most.
+      const dispatchAction = vi
+        .fn()
+        .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found"));
+      const deps = boundDeps({
+        dispatchAction,
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const read = (await callHandler(server, "resources/read", {
+        uri: WORKSPACE_BINDING_RESOURCE_URI,
+      })) as { contents: Array<{ text: string; mimeType: string }> };
+
+      expect(dispatchAction).not.toHaveBeenCalled();
+      // `assertBoundRouteReachable` probes through `requestManifest`, so an
+      // untouched manifest is what proves the exemption is structural rather
+      // than a branch that could be reordered back into the path.
+      expect(deps.requestManifest).not.toHaveBeenCalled();
+      const state = JSON.parse(read.contents[0].text);
+      expect(state.workspaceId).toBe(WORKSPACE);
+      expect(state.routeState).toBe("not-found");
+      expect(state.liveViewCount).toBe(0);
+      expect(state.keepResident).toBe(false);
+    });
+
+    it("answers `unbound` for a session with no binding rather than borrowing a workspace", async () => {
+      // The failure this guards is argument mis-wiring: a reader handed the
+      // focused workspace, or a stale one from another session, would look
+      // right in every bound test and be exactly the cross-workspace answer the
+      // binding exists to refuse (#7003).
+      const server = createSessionServer("unbound-session", unboundDeps());
+      await server.connect(makeMockTransport());
+
+      const read = (await callHandler(server, "resources/read", {
+        uri: WORKSPACE_BINDING_RESOURCE_URI,
+      })) as { contents: Array<{ text: string }> };
+
+      const state = JSON.parse(read.contents[0].text);
+      expect(state.workspaceId).toBeNull();
+      expect(state.routeState).toBe("unbound");
+    });
+
+    it("installs and tears down a real subscription to the binding resource", async () => {
+      // `pulse` and `agentState` were the only subscribable kinds; a client that
+      // must poll to notice its workspace returning is the case the issue calls
+      // out, so the push half has to exist even though it is best effort.
+      //
+      // Asserted through the session's subscription bucket rather than the `{}`
+      // acknowledgement: returning `{}` without installing anything would
+      // satisfy the acknowledgement while the client waited forever. The
+      // unsubscribe is also load-bearing here — the listener lives on a
+      // process-global registry, so a test that only subscribes leaks one into
+      // every case that runs after it.
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await callHandler(server, "resources/subscribe", { uri: WORKSPACE_BINDING_RESOURCE_URI });
+      expect(
+        deps.sessionStore.resourceSubscriptions.get(SESSION)?.has(WORKSPACE_BINDING_RESOURCE_URI)
+      ).toBe(true);
+
+      await callHandler(server, "resources/unsubscribe", { uri: WORKSPACE_BINDING_RESOURCE_URI });
+      // `?? false` because an emptied bucket is dropped from the map entirely,
+      // so "no bucket" and "bucket without this uri" are the same answer here.
+      expect(
+        deps.sessionStore.resourceSubscriptions.get(SESSION)?.has(WORKSPACE_BINDING_RESOURCE_URI) ??
+          false
+      ).toBe(false);
+    });
+
+    it("refuses a binding URI naming another workspace", async () => {
+      // `current` is the only id this resource takes. Rejecting at the parse
+      // step means no URI shape can reach the reader asking about a workspace
+      // the session is not bound to.
+      const server = createSessionServer(SESSION, boundDeps());
+      await server.connect(makeMockTransport());
+
+      await expect(
+        callHandler(server, "resources/read", { uri: `daintree://workspace/${WORKSPACE}/binding` })
+      ).rejects.toThrow(/Unknown resource URI/);
+    });
+
+    it("still refuses resources/list for a dead pin, which has no later state to recover into", async () => {
+      // A `SessionBindingError` is a destroyed WebContents the session can never
+      // re-resolve — unlike a workspace, which comes back when the user reopens
+      // it. Degrading the listing there would promise a recovery that cannot
+      // happen, so narrowing the fallback to `WorkspaceBindingError` is
+      // load-bearing rather than incidental.
+      const deps = boundDeps({
+        dispatchAction: vi.fn().mockRejectedValue(new SessionBindingError(1234)),
+        requestManifest: vi.fn().mockRejectedValue(new SessionBindingError(1234)),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(callHandler(server, "resources/list", {})).rejects.toMatchObject({
+        data: { code: SESSION_BINDING_GONE },
+      });
+    });
 
     it.each([["resources/read"], ["resources/subscribe"]])(
       "refuses %s for host-global agent state while the workspace is unreachable",

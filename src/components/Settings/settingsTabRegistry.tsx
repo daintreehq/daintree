@@ -1789,6 +1789,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         keywords: ["dev", "server", "preview", "start", "command"],
       },
       {
+        id: "project-agent-integrations",
+        section: "Agent integrations",
+        title: "Keep Workspace Resident",
+        description: "Hold this project's view in the cache so a bound MCP session stays reachable",
+        keywords: ["resident", "mcp", "cache", "evict", "keep", "warm", "tier"],
+      },
+      {
         id: "project-in-repo-settings",
         section: "In-Repo Settings",
         title: "In-Repo Settings",

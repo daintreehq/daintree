@@ -80,6 +80,7 @@ import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapab
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
+import { buildWorkspaceResidencyPreloadBindings } from "./ipc/handlers/workspaceResidency.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
@@ -2632,6 +2633,8 @@ function buildElectronApi(): ElectronAPI {
 
     // Daintree CLI install API
     cli: buildCliPreloadBindings(_unwrappingInvoke),
+
+    workspaceResidency: buildWorkspaceResidencyPreloadBindings(_unwrappingInvoke),
 
     // Commands API
     commands: buildCommandsPreloadBindings(_unwrappingInvoke),

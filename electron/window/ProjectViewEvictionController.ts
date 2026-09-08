@@ -13,6 +13,10 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
+import {
+  isWorkspaceKeepResident,
+  recordWorkspaceEviction,
+} from "../services/workspaceResidency.js";
 
 /** A view eligible for eviction; the flags beyond the entry are carried into the eviction log line. */
 type EvictionCandidate = {
@@ -21,6 +25,7 @@ type EvictionCandidate = {
   activeAgent: boolean;
   liveAssistantBackend: boolean;
   boundMcpSession: boolean;
+  keepResident: boolean;
 };
 
 /**
@@ -105,6 +110,14 @@ export function evictDeadView(
     });
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
+    // After the teardown, because the write is unconditional and the liveness
+    // gate lives on the read side: `readWorkspaceBindingState` surfaces the
+    // record only while no view is live, so recording first would notify
+    // subscribers into a read that still sees this view and swallows the loss
+    // (#12313). A bound MCP session learns from this that its route went away
+    // and roughly when, which is the difference between a workspace it can wait
+    // for and an id that was never right.
+    recordWorkspaceEviction(projectId, trigger);
   });
 }
 
@@ -324,9 +337,14 @@ export function evictStaleViews(
   // nothing dies with the renderer the way an assistant's process tree does,
   // and enough concurrent bound sessions would otherwise defeat the pressure
   // policy. So it yields under real pressure, just last.
+  //
+  // A workspace the *user* granted residency (#12313) is the one tier a client
+  // cannot give itself, so it outranks the bound-session ordering above. Still
+  // not a floor, and deliberately not an exclusion — see the ordering below.
   const safeToEvict: EvictionCandidate[] = [];
   const activeAgentFallback: EvictionCandidate[] = [];
   const boundMcpSessionFallback: EvictionCandidate[] = [];
+  const residentGranted: EvictionCandidate[] = [];
   const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
     const activeAgent = hasActiveAgent(host, projectId);
@@ -335,9 +353,16 @@ export function evictStaleViews(
     // it must not reach the exclusion set above, or one broken callback would
     // pin every cached view straight through critical pressure.
     const boundMcpSession = mcp.liveBinding || mcp.unknown;
-    const base = { projectId, entry, activeAgent, boundMcpSession };
+    // Read per pass rather than cached: the grant is a live user setting, and
+    // this is also the liveness half (#11162) — the preference record is keyed
+    // by workspace id and nothing prunes it when a project is deleted, so a
+    // stale entry only ever meets this loop for a view that actually exists.
+    const keepResident = isWorkspaceKeepResident(projectId);
+    const base = { projectId, entry, activeAgent, boundMcpSession, keepResident };
     if (hasLiveAssistantBackend(host, projectId, entry)) {
       assistantProtected.push({ ...base, liveAssistantBackend: true });
+    } else if (keepResident) {
+      residentGranted.push({ ...base, liveAssistantBackend: false });
     } else if (boundMcpSession) {
       boundMcpSessionFallback.push({ ...base, liveAssistantBackend: false });
     } else if (activeAgent) {
@@ -347,11 +372,45 @@ export function evictStaleViews(
     }
   }
 
-  const candidates = [...safeToEvict, ...activeAgentFallback, ...boundMcpSessionFallback];
+  // Granted workspaces go last, and stay in `candidates` rather than becoming a
+  // fourth exclusion.
+  //
+  // Being last is the whole mechanism, and it is enough: a pass evicts only
+  // until the cache is back at `effectiveMax`, so a grant is taken only once
+  // every ungranted candidate is gone — which is exactly "keep this one while
+  // there is anything else to give up". Rotating through other projects can no
+  // longer evict the workspace holding an orchestrator's agents, because those
+  // other projects are always the cheaper answer.
+  //
+  // Reserving slots instead was the obvious design and is strictly worse. Any
+  // reservation big enough to be safe (`effectiveMax` minus the active view,
+  // the bridges, the leases and the assistant floor) is by construction never
+  // reached — the loop always converges before it needs a reserved view — so
+  // the arithmetic produces this same ordering with more code. Sized any larger
+  // it stops being safe: with a cap of 2, an active view, a live assistant's
+  // floor and one grant, a reservation leaves the pass nothing it may evict and
+  // pins three views indefinitely, where the plain tier settles at two.
+  //
+  // Both halves of the issue's ask fall out of staying in `candidates`, with no
+  // branch for either. Residency can never carry the cache over the configured
+  // cap, because a candidate is always available to take. And it yields at
+  // critical pressure for the same reason — a forced reclaim converges on the
+  // active view alone, and a grant is not exempt from that, it is merely the
+  // last thing surrendered.
+  //
+  // What the user gets over `boundMcpSessionFallback` is precedence, which is
+  // the right shape: that tier is ordering a client earns just by connecting,
+  // and this one is ordering the user granted deliberately.
+  const candidates = [
+    ...safeToEvict,
+    ...activeAgentFallback,
+    ...boundMcpSessionFallback,
+    ...residentGranted,
+  ];
 
   let evictedCount = 0;
   while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
-    const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession } =
+    const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession, keepResident } =
       candidates.shift()!;
     const ageMs = Date.now() - entry.lastUsed;
     const memoryKb = memoryFor(entry);
@@ -367,12 +426,20 @@ export function evictStaleViews(
     // the pass that took its view, rather than looking like the binding broke
     // on its own.
     if (boundMcpSession) ctx.boundMcpSession = true;
+    // The user granted this workspace residency and it is being evicted anyway
+    // — the cap could not hold every grant, or pressure took the slots. Logged
+    // so the override is attributable rather than looking like the grant was
+    // ignored (#11162).
+    if (keepResident) ctx.keepResident = true;
     if (memoryKb > 0) ctx.memoryKb = memoryKb;
     if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
     if (availableMb != null) ctx.memoryAvailableMb = availableMb;
     logInfo("projectview.eviction", ctx);
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
+    // After the teardown, because the read side is what gates the record on
+    // liveness — see `readWorkspaceBindingState` (#12313).
+    recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
   }
 

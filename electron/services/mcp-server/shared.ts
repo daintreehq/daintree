@@ -735,7 +735,7 @@ export function minimumPermittingTier(toolId: string): "workbench" | "action" | 
   return null;
 }
 
-export type ResourceKind = "pulse" | "scrollback" | "agentState" | "issues";
+export type ResourceKind = "pulse" | "scrollback" | "agentState" | "issues" | "binding";
 
 export interface ParsedResourceUri {
   kind: ResourceKind;
@@ -747,7 +747,23 @@ export const RESOURCE_BACKING_ACTIONS: Readonly<Record<ResourceKind, string>> = 
   scrollback: "terminal.getOutput",
   agentState: "terminal.list",
   issues: "forge.listIssues",
+  // `binding` reads no renderer state at all, so its gate is about who should
+  // be able to ask "is my workspace reachable" — the same audience that can
+  // enumerate workspaces. Riding an already-permitted tool id is also what
+  // keeps this off the external tool budget, which is spent (#12313).
+  binding: "workspace.list",
 };
+
+/**
+ * The one URI for {@link ResourceKind} `binding` — a session's own binding, not
+ * an addressable workspace.
+ *
+ * `current` follows `daintree://project/current/issues`: a caller-relative
+ * pseudo-id, because a bound session has exactly one binding and naming another
+ * workspace here would invite exactly the cross-workspace read the binding
+ * exists to prevent.
+ */
+export const WORKSPACE_BINDING_RESOURCE_URI = "daintree://workspace/current/binding";
 
 export const RESOURCE_TEXT_MAX_BYTES = 50 * 1024;
 
@@ -1035,7 +1051,7 @@ export interface McpHttpSession {
 }
 
 const RESOURCE_URI_PATTERN =
-  /^daintree:\/\/(worktree|terminal|agent|project)\/([^/]+)\/(pulse|scrollback|state|issues)$/;
+  /^daintree:\/\/(worktree|terminal|agent|project|workspace)\/([^/]+)\/(pulse|scrollback|state|issues|binding)$/;
 
 export function parseResourceUri(uri: string): ParsedResourceUri | null {
   const match = RESOURCE_URI_PATTERN.exec(uri);
@@ -1052,6 +1068,13 @@ export function parseResourceUri(uri: string): ParsedResourceUri | null {
   if (host === "terminal" && verb === "scrollback") return { kind: "scrollback", id };
   if (host === "agent" && verb === "state") return { kind: "agentState", id };
   if (host === "project" && id === "current" && verb === "issues") return { kind: "issues", id };
+  // `current` only — this resource is about the caller's own binding, so an
+  // arbitrary workspace id must not parse. Rejecting it here rather than in the
+  // read handler means there is no shape of URI that could reach the reader
+  // asking about somebody else's workspace.
+  if (host === "workspace" && id === "current" && verb === "binding") {
+    return { kind: "binding", id };
+  }
   return null;
 }
 
