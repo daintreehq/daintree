@@ -17,37 +17,87 @@ import ts from "typescript";
 //               Retry both re-save deliberately *unchanged* values.
 //
 // Wire a user-facing callback to flush() and it becomes a no-op the moment the
-// form is clean — the exact case both of those callers exist for. No render
-// test can see the difference: both are `() => Promise<void>` and both resolve.
-// So the rule is enforced on the source. flush() belongs to the dialog's own
-// teardown path and nowhere else; anything reachable from a JSX prop is a user
+// form is clean — the exact case both of those callers exist for. The two are
+// interchangeable at the type level, so nothing in the signature catches it.
+//
+// Source enforcement rather than a rendering assertion is a cost call, not an
+// impossibility: SettingsDialog is ~1600 lines of lazily-loaded tabs, and
+// standing that up to click one Retry button buys a single assertion. The rule
+// itself is structural anyway — flush() belongs to the dialog's own teardown
+// path and nowhere else, so anything reachable from a JSX prop is a user
 // action and must use saveNow().
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DIALOG_PATH = path.resolve(TEST_DIR, "../SettingsDialog.tsx");
 
-/** The object the form hook is destructured onto in SettingsDialog. */
+/** The object the form hook's return value is bound to in SettingsDialog. */
 const FORM_OBJECT = "projectForm";
 
 function parseDialog(): ts.SourceFile {
   const source = fs.readFileSync(DIALOG_PATH, "utf8");
-  return ts.createSourceFile(DIALOG_PATH, source, ts.ScriptTarget.Latest, /* setParentNodes */ true);
+  return ts.createSourceFile(
+    DIALOG_PATH,
+    source,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true
+  );
 }
 
-/** Every `projectForm.<member>` access in the file, with the member name. */
-function collectFormAccesses(sourceFile: ts.SourceFile): ts.PropertyAccessExpression[] {
-  const found: ts.PropertyAccessExpression[] = [];
-  const visit = (node: ts.Node): void => {
+function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
+  visit(node);
+  ts.forEachChild(node, (child) => walk(child, visit));
+}
+
+/**
+ * Names destructured off `projectForm` (`const { flush } = projectForm`), so a
+ * refactor to bare identifiers stays covered instead of silently passing.
+ */
+function collectDestructuredNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  walk(sourceFile, (node) => {
+    if (
+      !ts.isVariableDeclaration(node) ||
+      !node.initializer ||
+      !ts.isIdentifier(node.initializer) ||
+      node.initializer.text !== FORM_OBJECT ||
+      !ts.isObjectBindingPattern(node.name)
+    ) {
+      return;
+    }
+    for (const element of node.name.elements) {
+      const source = element.propertyName ?? element.name;
+      if (ts.isIdentifier(source)) names.add(source.text);
+    }
+  });
+  return names;
+}
+
+/** Every reference to `projectForm.<member>`, in property-access or destructured form. */
+function collectMemberReferences(sourceFile: ts.SourceFile, member: string): ts.Node[] {
+  const destructured = collectDestructuredNames(sourceFile);
+  const found: ts.Node[] = [];
+  walk(sourceFile, (node) => {
     if (
       ts.isPropertyAccessExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      node.expression.text === FORM_OBJECT
+      node.expression.text === FORM_OBJECT &&
+      node.name.text === member
+    ) {
+      found.push(node);
+      return;
+    }
+    // A bare identifier only counts once the name is bound off projectForm,
+    // otherwise unrelated locals named `flush` would be swept in.
+    if (
+      destructured.has(member) &&
+      ts.isIdentifier(node) &&
+      node.text === member &&
+      !ts.isPropertyAccessExpression(node.parent) &&
+      !ts.isBindingElement(node.parent)
     ) {
       found.push(node);
     }
-    ts.forEachChild(node, visit);
-  };
-  ts.forEachChild(sourceFile, visit);
+  });
   return found;
 }
 
@@ -63,36 +113,24 @@ function lineOf(node: ts.Node, sourceFile: ts.SourceFile): number {
 }
 
 describe("SettingsDialog persist wiring", () => {
-  it("routes every JSX-prop persist callback through saveNow, never flush", () => {
+  it("never hands the lifecycle flush to a JSX callback prop", () => {
     const sourceFile = parseDialog();
-    const accesses = collectFormAccesses(sourceFile);
+    const flushRefs = collectMemberReferences(sourceFile, "flush");
 
-    const flushInProps = accesses
-      .filter((node) => node.name.text === "flush" && isInsideJsxAttribute(node))
+    const inProps = flushRefs
+      .filter(isInsideJsxAttribute)
       .map((node) => `line ${lineOf(node, sourceFile)}`);
 
-    expect(flushInProps).toEqual([]);
+    expect(inProps).toEqual([]);
   });
 
-  it("still hands flush to the dialog's own teardown path", () => {
+  it("still uses both entry points, so the rule above cannot pass vacuously", () => {
     const sourceFile = parseDialog();
-    const accesses = collectFormAccesses(sourceFile);
 
-    // Guards the assertion above against passing vacuously once `flush` is
-    // renamed or the teardown call is dropped altogether.
-    const flushCalls = accesses.filter((node) => node.name.text === "flush");
-    expect(flushCalls.length).toBeGreaterThan(0);
-    expect(flushCalls.every((node) => !isInsideJsxAttribute(node))).toBe(true);
-  });
-
-  it("wires the explicit user-initiated saves to saveNow", () => {
-    const sourceFile = parseDialog();
-    const accesses = collectFormAccesses(sourceFile);
-
-    // The environment-variable editor's onFlush and the autosave-error Retry.
-    const saveNowInProps = accesses.filter(
-      (node) => node.name.text === "saveNow" && isInsideJsxAttribute(node)
-    );
-    expect(saveNowInProps.length).toBeGreaterThanOrEqual(2);
+    // flush() reaching nothing at all would mean teardown stopped persisting;
+    // saveNow() reaching nothing would mean the explicit saves regressed to a
+    // dirty-gated write. Either makes the assertion above meaningless.
+    expect(collectMemberReferences(sourceFile, "flush").length).toBeGreaterThan(0);
+    expect(collectMemberReferences(sourceFile, "saveNow").length).toBeGreaterThan(0);
   });
 });

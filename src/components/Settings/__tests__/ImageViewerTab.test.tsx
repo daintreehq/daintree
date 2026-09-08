@@ -3,10 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImageViewerTab } from "../ImageViewerTab";
 import { useProjectStore } from "@/store/projectStore";
-import {
-  cleanupProjectSettingsStore,
-  useProjectSettingsStore,
-} from "@/store/projectSettingsStore";
+import { cleanupProjectSettingsStore, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { projectClient } from "@/clients";
 import type { Project, ProjectSettings } from "@shared/types/project";
 
@@ -72,10 +69,18 @@ const SEEDED_SETTINGS: ProjectSettings = {
   preferredEditor: { id: "vscode" },
 };
 
+const TEST_PROJECT: Project = {
+  id: "proj-1",
+  path: "/repo",
+  name: "Repo",
+  emoji: "🌲",
+  lastOpened: 0,
+};
+
 /** Render for "proj-1" with settings loaded and the Save button enabled. */
 async function renderLoadedTab() {
   installElectron(async () => ({}));
-  setProject({ id: "proj-1", path: "/repo", name: "Repo" } as Project);
+  setProject(TEST_PROJECT);
   render(<ImageViewerTab />);
   const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;
   await waitFor(() => {
