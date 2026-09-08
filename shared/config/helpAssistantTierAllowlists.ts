@@ -160,6 +160,12 @@ export const ACTION_TIER_ADDONS = [
   // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
   // already reach"). Listing it here keeps the direction of the cut honest.
   "terminal.closeOwned",
+  // Carried here for the same subset invariant (#12315): the external tier must
+  // never reach past the in-app assistant. Close to redundant for this caller —
+  // it is pinned to the view the user is already looking at — but the invariant
+  // is asserted rather than assumed, and the direction of the cut has to stay
+  // honest. It tracks `pilot.openRun`, which it delegates to.
+  "terminal.revealOwned",
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killBatch",

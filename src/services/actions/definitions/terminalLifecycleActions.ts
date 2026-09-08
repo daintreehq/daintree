@@ -277,6 +277,54 @@ export function registerTerminalLifecycleActions(
     },
   }));
 
+  // Registered here for manifest metadata only, for the same reason as
+  // `terminal.closeOwned` above: the authorization is the ownership ledger,
+  // which is main-process session state the renderer cannot see. Main checks
+  // ownership, then delegates to `pilot.openRun` — the shipped operation that
+  // switches the workspace and carries a one-shot focus intent the incoming
+  // view applies once it has hydrated — so this tool reveals a panel exactly
+  // the way clicking its row in the agent overview does (#12315).
+  //
+  // Deliberately NOT `panel.focus` on the external tier, which is the shape
+  // that looks equivalent and is not. `rendererBridge` resolves a bound
+  // workspace without attaching, thawing, activating, focusing or switching
+  // anything, so `panel.focus` aimed at a workspace nobody is watching selects
+  // a panel inside a cached view, moves DOM focus where it cannot be seen, and
+  // returns success.
+  actions.set("terminal.revealOwned", () => ({
+    id: "terminal.revealOwned",
+    title: "Reveal Owned Terminal",
+    description:
+      "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+    category: "terminal",
+    kind: "command",
+    // Reversible navigation: nothing is destroyed and the user can switch back.
+    // The band is also load-bearing for reachability — `isWithheldFromBoundSession`
+    // withholds `confirm` entries from a workspace-bound external session, which
+    // is precisely the caller this tool exists for.
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["focus", "attach", "show", "owned"],
+    // Hidden for the same reason as `terminal.closeOwned`: only the MCP
+    // main-process path can reach it, so a user picking it from the palette
+    // would get the `run()` throw below. `pilot.openRun` is what the agent
+    // overview dispatches.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The panel to reveal, as an `id` this session received when it created the panel."
+        ),
+    }),
+    run: async () => {
+      throw new Error(
+        "terminal.revealOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("terminal.trash", () => ({
     id: "terminal.trash",
     title: "Trash Terminal",

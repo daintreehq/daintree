@@ -118,6 +118,38 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // the same name at a wider tier would have given this caller a different
   // contract behind an identical id.
   "terminal.closeOwned",
+  // The last direction in that loop with no route (#12315). A client can launch
+  // an agent, inject into it, read it and dispose of it, and still has no way to
+  // say "here it is" — so `gc attach`, whose entire purpose is putting the
+  // operator in front of a session, returns exit 2 and tells the user the
+  // session exists instead of taking them to it.
+  //
+  // Two shapes were rejected before this one, and both are worth stating,
+  // because both look like reuse and neither is. A `focus` argument on an
+  // existing tool would be the first exception to `useMcpBridge`'s unconditional
+  // `focusPolicy: "preserve"` — written so a client cannot claim a focus policy
+  // any more than it can claim to be the assistant. `panel.focus` here would
+  // fail hardest in exactly the case it was wanted for: `rendererBridge`
+  // resolves a bound workspace without attaching, thawing, activating, focusing
+  // or switching anything, so aiming it at a workspace nobody is watching
+  // selects a panel inside a cached view, moves DOM focus where it cannot be
+  // seen, and returns success.
+  //
+  // What ships instead is the operation that already existed: main verifies the
+  // panel against this session's ownership ledger, then delegates to
+  // `pilot.openRun`, which switches the workspace and carries a one-shot focus
+  // intent the incoming view applies once hydrated — and raises the owning
+  // window afterwards, since a switch alone does nothing when Daintree is
+  // behind another application.
+  //
+  // This is the one entry that deliberately disturbs what the user is looking
+  // at, which is a decision about the contract rather than a spare slot: the
+  // binding path exists precisely so a session driving project A cannot move
+  // someone working in B. Ownership is what keeps that honest — a client can
+  // only be taken to a panel it created, which is no escalation over having
+  // created it — and the ledger is server-authoritative, written from trusted
+  // dispatch results, so the id cannot be claimed into it.
+  "terminal.revealOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
 

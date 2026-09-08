@@ -315,7 +315,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `pilot.openProject` | View this project's agents | safe | — |
-| `pilot.openRun` | Open run | safe | `runId`, `workspaceId` |
+| `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
 | `project.add` | Add Project | safe | `path?` |
 | `project.cloneRepo` | Clone Repository | safe | — |
@@ -454,6 +454,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.restart` | Restart Terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restartService` | Restart Terminal Service | safe | — |
 | `terminal.resumeSessions` | Resume Session… | safe | — |
+| `terminal.revealOwned` | Reveal Owned Terminal | safe | `terminalId` |
 | `terminal.sendToAgent` | Send to Agent | safe | `terminalId?` |
 | `terminal.stashInput` | Stash Input | safe | — |
 | `terminal.toggleDock` | Toggle Dock | safe | `terminalId?` |

@@ -8,6 +8,7 @@ import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 import { usePilotStore } from "@/store/pilotStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { hasWorktreeAxis } from "@/components/Pilot/pilotRows";
@@ -82,7 +83,14 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   defaultWorktreeMode: z.string().optional(),
 };
 
-const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string() });
+// `workspaceId` is optional because the MCP route cannot supply it. A reveal
+// delegated by `terminal.revealOwned` is rebuilt from the id alone and lands in
+// the workspace-bound view, which IS the workspace the owned panel lives in —
+// so the executing view's own identity is the right default there, and the only
+// one main could pass without re-deriving what the routing already decided.
+// The click payload keeps sending it explicitly: a row in the overview names a
+// run in some *other* workspace far more often than not.
+const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string().optional() });
 
 /**
  * The one thing a row in the agent overview promises, not kept.
@@ -296,23 +304,50 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // Parsed rather than asserted: this is the one action whose args arrive
       // from a click payload, and a parse both narrows the type and rejects a
       // malformed dispatch instead of trusting it.
-      const { runId, workspaceId } = openRunArgs.parse(args);
+      const { runId, workspaceId: requestedWorkspaceId } = openRunArgs.parse(args);
 
       // The workspace THIS view owns, not the one the app is globally pointed
-      // at. `currentProject` is replicated to every view including cached ones,
-      // and it is null outright in a scratch view — reading it here sent a run
-      // that was already on screen through a cross-workspace switch, and sent
-      // every scratch run to `switchProject`, which rejects a scratch id.
+      // at. `currentProject` is per-view — main answers `project:get-current`
+      // from the sender's own binding — and it is null outright in a scratch
+      // view, so reading it here sent a run that was already on screen through
+      // a cross-workspace switch, and sent every scratch run to
+      // `switchProject`, which rejects a scratch id.
       const currentId = getViewWorkspaceId();
 
-      // Already here: focus directly. Going through a switch would tear down
-      // and rebuild a view that is already the active one.
+      const workspaceId = requestedWorkspaceId ?? currentId;
+      if (workspaceId === null) {
+        // Only reachable from a caller that omitted the workspace in a view
+        // with no workspace identity at all. Nothing can be routed from that,
+        // and guessing a destination is the failure mode this whole action
+        // exists to avoid.
+        failToOpenRun(
+          new Error("no workspace identity"),
+          "Daintree couldn't tell which workspace this run belongs to."
+        );
+      }
+
+      // Already here AND on screen: focus directly. Going through a switch
+      // would tear down and rebuild a view that is already the active one.
+      //
+      // `isProjectViewCached()` is the second half of that question, and it is
+      // load-bearing rather than defensive. `getViewWorkspaceId()` is the
+      // workspace this view was CREATED for — immutable identity, seeded at
+      // view creation — which says nothing about whether the view is the one
+      // attached to the window right now. For a click those two always agree,
+      // because the dialog only ever runs in the view the user is looking at.
+      // They come apart the moment an MCP session dispatches into its bound
+      // workspace: `dispatchActionForWorkspace` routes straight into a cached,
+      // detached, thawed background view, where the id comparison alone is
+      // trivially true and this branch would select the panel inside a view
+      // nobody can see and report success (#12315). Main's cache lifecycle is
+      // the only signal that can tell the two apart — `document.visibilityState`
+      // reports "visible" forever for a detached child view.
       //
       // Focus BEFORE closing, and only close on success. An agent can exit
       // between the list rendering and the click, and `panel.focus` rejects on
       // a panel that no longer exists — closing first would leave the user back
       // where they started with the overview gone and nothing explaining why.
-      if (workspaceId === currentId) {
+      if (workspaceId === currentId && !isProjectViewCached()) {
         const result = await actionService.dispatch("panel.focus", { panelId: runId });
         if (result.ok) {
           // Closing a palette normally returns the keyboard to whatever opened
@@ -335,10 +370,17 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         );
       }
 
-      // Elsewhere: the switch is the only way across, and this context dies
-      // with it — so the target rides along as a one-shot intent that the
-      // incoming view applies once its state has hydrated. Closing first is
-      // right here: the view holding this dialog is about to be replaced.
+      // Elsewhere — or here but cached: the switch is the only way to put a
+      // view on screen, and this context may die with it, so the target rides
+      // along as a one-shot intent that the incoming view applies once its
+      // state has hydrated. Closing first is right here: the view holding this
+      // dialog is about to be replaced.
+      //
+      // A cached view switching to its OWN workspace is not a contradiction —
+      // it is the reveal. Main's cache-hit branch re-attaches this very view,
+      // focuses it and delivers the intent to it
+      // (`ProjectViewSwitchController`), so the same call that crosses
+      // workspaces also brings a backgrounded one forward.
       usePilotStore.getState().close();
       const focusIntent = { intent: "focus-panel", panelId: runId } as const;
 

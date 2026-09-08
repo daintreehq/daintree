@@ -120,6 +120,15 @@ export interface HttpLifecycleDeps {
     workspaceId: string
   ) => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
+   * Bring the window hosting a workspace to the front (#12315). The only
+   * deliberately user-visible route on the bridge, reached solely by
+   * `terminal.revealOwned` after ownership has been verified. Optional for the
+   * same reason as the routing helpers above; a fixture that omits it simply
+   * leaves the reveal at "workspace switched", which is the weaker half of the
+   * same outcome rather than a failure.
+   */
+  revealWorkspaceWindow?: (workspaceId: string) => boolean;
+  /**
    * Validate a handshake workspace selector, or throw when it names no live
    * view or more than one (#11789).
    */
@@ -1819,6 +1828,7 @@ export class HttpLifecycle {
       ...(workspaceBinding ? { workspaceBinding } : {}),
       requestManifest,
       dispatchAction,
+      revealWorkspaceWindow: this.deps.revealWorkspaceWindow,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       handleSkillsSearch: this.deps.handleSkillsSearch,

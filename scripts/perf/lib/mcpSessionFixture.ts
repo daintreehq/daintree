@@ -809,6 +809,7 @@ export function forbiddenCallSample(
  */
 export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
+  "terminal.revealOwned",
   "worktree.deleteOwned",
   "help.displayImage",
 ]);

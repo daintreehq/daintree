@@ -392,6 +392,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.rename",
   "terminal.close",
   "terminal.closeOwned",
+  "terminal.revealOwned",
   "terminal.trash",
   "terminal.kill",
   "terminal.killBatch",

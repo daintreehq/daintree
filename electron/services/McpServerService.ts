@@ -235,6 +235,7 @@ export class McpServerService {
           confirmed,
           sessionOrigin
         ),
+      revealWorkspaceWindow: (workspaceId) => this.bridge.revealWorkspaceWindow(workspaceId),
       resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),

@@ -159,25 +159,47 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   PROJECT_RUN_CHECK_TOOL,
 ]);
 /**
- * The session-scoped cleanup tools (#11909), and the action each one delegates
+ * The session-scoped `*Owned` tools (#11909), and the action each one delegates
  * to once ownership checks out.
  *
  * They run here rather than as ordinary renderer actions because the thing they
  * authorize against — which session created which resource — is main-process
  * state keyed by the MCP transport session id. The renderer never sees that id
- * and must not: handing it over would make "am I allowed to close this?" a
+ * and must not: handing it over would make "am I allowed to act on this?" a
  * question the caller's own dispatch could answer about itself.
  *
- * Delegation, not reimplementation. The check happens here; the close and the
- * delete are the shipped actions, dispatched under their own ids so
- * `terminal.close`'s trash/recovery behaviour and `worktree.delete`'s D2
- * confirmation with its real file-count preview
- * (`resolveMcpConfirmPreviewTarget` in `useMcpBridge`, which matches on the
- * literal action id) apply unchanged.
+ * Delegation, not reimplementation. The check happens here; the close, the
+ * delete and the reveal are the shipped actions, dispatched under their own ids
+ * so `terminal.close`'s trash/recovery behaviour, `worktree.delete`'s D2
+ * confirmation with its real file-count preview (`resolveMcpConfirmPreviewTarget`
+ * in `useMcpBridge`, which matches on the literal action id) and
+ * `pilot.openRun`'s switch-then-focus-intent sequence all apply unchanged.
+ *
+ * `releasesOwnership` splits the two things an owned tool can be. Cleanup ends
+ * the resource, so the record goes with it; a reveal only navigates to one that
+ * is still running, and dropping the record there would cost the session the
+ * authority to reveal it a second time — or to clean it up at all.
  */
-const OWNED_CLEANUP_TOOLS: Record<
+const OWNED_RESOURCE_TOOLS: Record<
   string,
-  { resourceKind: OwnedResourceKind; delegateTo: string; idArg: string }
+  {
+    resourceKind: OwnedResourceKind;
+    delegateTo: string;
+    idArg: string;
+    /**
+     * The delegate's own name for the id, where it differs from the public one.
+     * Arguments are rebuilt rather than forwarded, so without this the id
+     * simply would not reach an action that spells it differently.
+     */
+    delegateIdArg?: string;
+    releasesOwnership: boolean;
+    /**
+     * Whether a success should also bring the owning window forward. Only a
+     * reveal wants this, and only a reveal may have it: it is the single place
+     * on the external surface that deliberately moves the user.
+     */
+    raisesOwningWindow?: boolean;
+  }
 > = {
   // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
   // and guards comparisons against it with a lint rule, and an ownership
@@ -186,11 +208,26 @@ const OWNED_CLEANUP_TOOLS: Record<
     resourceKind: "terminal",
     delegateTo: "terminal.close",
     idArg: "terminalId",
+    releasesOwnership: true,
   },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
     delegateTo: "worktree.delete",
     idArg: "worktreeId",
+    releasesOwnership: true,
+  },
+  // The panel is still the session's after it has been revealed, so this is the
+  // one entry that keeps its record. `pilot.openRun` spells the id `runId` and
+  // takes an optional `workspaceId` it defaults to the executing view's own
+  // workspace — which is the bound view the owned panel lives in, so the
+  // rebuilt call carries the id alone (#12315).
+  "terminal.revealOwned": {
+    resourceKind: "terminal",
+    delegateTo: "pilot.openRun",
+    idArg: "terminalId",
+    delegateIdArg: "runId",
+    releasesOwnership: false,
+    raisesOwningWindow: true,
   },
 };
 
@@ -392,6 +429,17 @@ export interface SessionServerDeps {
     args: unknown,
     confirmed?: boolean
   ) => Promise<DispatchEnvelope>;
+  /**
+   * Bring the window hosting a workspace to the front (#12315), reporting
+   * whether it raised anything.
+   *
+   * Reached only from `terminal.revealOwned`, after the ownership gate has
+   * cleared and the delegated `pilot.openRun` has already switched the
+   * workspace. Optional: a fixture without it leaves a reveal at "the right
+   * view is now showing", which is the weaker half of the same outcome rather
+   * than a failed call — so nothing here treats its absence as an error.
+   */
+  revealWorkspaceWindow?: (workspaceId: string) => boolean;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -881,9 +929,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
-    // other tool and for a refused cleanup, so neither of those paths can
+    // other tool and for a refused call, so neither of those paths can
     // accidentally rewrite an action id or drop an ownership record (#11909).
-    const ownedCleanup = OWNED_CLEANUP_TOOLS[actionId];
+    const ownedResource = OWNED_RESOURCE_TOOLS[actionId];
     let ownedResourceId: string | undefined;
 
     /**
@@ -898,19 +946,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * being gone. `terminal.close` reports an empty `closedIds` when it found
      * nothing to close, and dropping the record on that would let one no-op
      * call revoke the session's authority over a panel that is still running.
+     * A non-releasing owned tool — a reveal — returns before any of that:
+     * navigating to a panel is not a claim that it stopped existing (#12315).
      */
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void => {
-      if (ownedCleanup !== undefined) {
+      if (ownedResource !== undefined) {
+        if (!ownedResource.releasesOwnership) return;
         if (ownedResourceId === undefined || !envelope.result.ok) return;
         if (
-          ownedCleanup.resourceKind === "terminal" &&
+          ownedResource.resourceKind === "terminal" &&
           !closedIdsInclude(envelope.result.result, ownedResourceId)
         ) {
           return;
         }
         sessionStore.resourceOwnership.release(
           sessionId,
-          ownedCleanup.resourceKind,
+          ownedResource.resourceKind,
           ownedResourceId
         );
         return;
@@ -1457,11 +1508,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // before any confirmation is raised, and — the acceptance criterion
         // that matters — before anything reaches a renderer, so a refused call
         // cannot have mutated a panel or a worktree.
-        if (ownedCleanup !== undefined) {
-          const resourceId = readOwnedResourceId(args, ownedCleanup.idArg);
+        if (ownedResource !== undefined) {
+          const resourceId = readOwnedResourceId(args, ownedResource.idArg);
           if (resourceId === undefined) {
             const message =
-              `Action '${actionId}' requires a non-empty '${ownedCleanup.idArg}' naming a resource ` +
+              `Action '${actionId}' requires a non-empty '${ownedResource.idArg}' naming a resource ` +
               `this session created.`;
             outcome = {
               kind: "result",
@@ -1471,7 +1522,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           const record = sessionStore.resourceOwnership.get(
             sessionId,
-            ownedCleanup.resourceKind,
+            ownedResource.resourceKind,
             resourceId
           );
           // One message for "never existed", "another session's", and "the
@@ -1490,8 +1541,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             record.workspaceId !== boundWorkspaceId;
           if (record === undefined || workspaceMismatch) {
             const message =
-              `No ${ownedCleanup.resourceKind} with id '${resourceId}' was created by this session, so ` +
-              `'${actionId}' will not act on it. This tool only cleans up resources this ` +
+              `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
+              `'${actionId}' will not act on it. This tool only acts on resources this ` +
               `connection created; ids from listings may belong to the user, another client, or a plugin.`;
             outcome = {
               kind: "result",
@@ -1933,19 +1984,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
 
         try {
-          // An `*Owned` cleanup that cleared the gate above delegates to the
-          // real action under its own id, with arguments rebuilt from scratch
-          // rather than forwarded (#11909). Rebuilding is the enforcement: the
-          // renderer validates against `worktree.delete`'s schema, which still
-          // accepts `force`, `deleteBranch` and `closeTerminals`, so anything
-          // the caller sent beyond the id would otherwise pass straight
-          // through the narrower tool that deliberately omits them.
+          // An `*Owned` tool that cleared the gate above delegates to the real
+          // action under its own id, with arguments rebuilt from scratch rather
+          // than forwarded (#11909). Rebuilding is the enforcement: the renderer
+          // validates against `worktree.delete`'s schema, which still accepts
+          // `force`, `deleteBranch` and `closeTerminals`, so anything the caller
+          // sent beyond the id would otherwise pass straight through the
+          // narrower tool that deliberately omits them. It is also what lets a
+          // delegate spell the id differently — `pilot.openRun` takes `runId`
+          // where the public tool takes `terminalId` (#12315).
           const envelope = listPaging
             ? await collectListPages()
-            : ownedCleanup !== undefined && ownedResourceId !== undefined
+            : ownedResource !== undefined && ownedResourceId !== undefined
               ? await dispatchAction(
-                  ownedCleanup.delegateTo,
-                  { [ownedCleanup.idArg]: ownedResourceId },
+                  ownedResource.delegateTo,
+                  { [ownedResource.delegateIdArg ?? ownedResource.idArg]: ownedResourceId },
                   dispatchConfirmed
                 )
               : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
@@ -1984,6 +2037,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           recordDispatchOwnership(envelope);
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           dispatchedWorkspace = envelope.dispatchedWorkspace;
+          // The second half of a reveal (#12315). `pilot.openRun` has by now
+          // put the right view in front of the window; this puts the window in
+          // front of the user, which switching alone cannot do when Daintree is
+          // minimised or behind another application — the case the calling
+          // client is usually in.
+          //
+          // Keyed on the workspace the dispatch actually landed on, never the
+          // caller's argument, for the same reason the ledger is: the routing
+          // already decided where this went. A failure to raise leaves the
+          // result untouched — the view did change, and reporting an error for
+          // a window that closed in between would be the wrong half to believe.
+          if (ownedResource?.raisesOwningWindow === true && envelope.result.ok) {
+            const revealWorkspaceId = envelope.dispatchedWorkspace?.workspaceId;
+            if (revealWorkspaceId !== undefined) {
+              deps.revealWorkspaceWindow?.(revealWorkspaceId);
+            }
+          }
         } catch (err) {
           outcome = { kind: "throw", error: err };
           if (err instanceof McpRouteBindingError) {

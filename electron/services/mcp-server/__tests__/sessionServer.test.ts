@@ -6599,6 +6599,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     return [
       makeManifestEntry("terminal.new"),
       { ...makeManifestEntry("terminal.closeOwned"), kind: "command", danger: "safe" as const },
+      { ...makeManifestEntry("terminal.revealOwned"), kind: "command", danger: "safe" as const },
       {
         ...makeManifestEntry("worktree.deleteOwned"),
         kind: "command",
@@ -6976,6 +6977,195 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(refused.isError).toBe(true);
       expect(errorText(refused)).toContain(SESSION_GONE);
       expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("terminal.revealOwned (#12315)", () => {
+    it("delegates to pilot.openRun under the delegate's own name for the id", async () => {
+      // `pilot.openRun` is the shipped operation — switch the workspace, then
+      // carry a one-shot focus intent the incoming view applies once hydrated —
+      // and it spells the id `runId` where the public tool spells it
+      // `terminalId`. Arguments are rebuilt, not forwarded, so without that
+      // rename the id would simply not arrive.
+      const { store, server, dispatchAction } = harness("s-reveal", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "pilot.openRun",
+        { runId: "terminal-1" },
+        expect.anything()
+      );
+    });
+
+    it("keeps the session's authority over a panel it revealed", async () => {
+      // The one owned tool that does not release. Navigating to a panel is not
+      // a claim that it stopped existing, and dropping the record would cost
+      // the session the ability to reveal it twice — or to clean it up at all.
+      const { store, server } = harness("s-reveal-keep", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal-keep", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(store.resourceOwnership.owns("s-reveal-keep", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("reveals the same panel twice, because the user may have moved away since", async () => {
+      const { store, server, dispatchAction } = harness("s-reveal-twice", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal-twice", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const args = { name: "terminal.revealOwned", arguments: { terminalId: "terminal-1" } };
+      const first = await callTool(server, args);
+      const second = await callTool(server, args);
+
+      expect(first.isError).toBeUndefined();
+      expect(second.isError).toBeUndefined();
+      expect(
+        dispatchAction.mock.calls.filter(([actionId]) => actionId === "pilot.openRun")
+      ).toHaveLength(2);
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      // The boundary the whole tool rests on: a client may be taken to what it
+      // made, which is no escalation over having made it, and to nothing else.
+      // `terminal.list` hands out the user's own shells and other clients'
+      // agents, so an id from a listing confers nothing.
+      const { store, server, dispatchAction } = harness("s-reveal-foreign", {});
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(store.resourceOwnership.owns("other-session", "terminal", "terminal-theirs")).toBe(
+        true
+      );
+    });
+
+    it("strips anything the caller sent beyond the id", async () => {
+      // Rebuilding is the enforcement. `pilot.openRun` also accepts a
+      // `workspaceId`, which it defaults to the executing view's own workspace
+      // — so a caller-supplied one would be a destination this session was
+      // never routed to.
+      const { store, server, dispatchAction } = harness("s-reveal-forge", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal-forge", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1", workspaceId: "ws-somewhere-else" },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "pilot.openRun",
+        { runId: "terminal-1" },
+        expect.anything()
+      );
+    });
+
+    it("raises the window of the workspace the dispatch actually landed on", async () => {
+      // Switching the workspace changes which view the window shows and does
+      // nothing at all when Daintree is minimised or behind another app — which
+      // is the usual state of the client this exists for.
+      const revealWorkspaceWindow = vi.fn(() => true);
+      const { store, server } = harness(
+        "s-reveal-window",
+        {
+          "pilot.openRun": {
+            result: { ok: true, result: null },
+            dispatchedWorkspace: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+          },
+        },
+        { revealWorkspaceWindow }
+      );
+      store.resourceOwnership.record("s-reveal-window", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      // Keyed on where the routing put the dispatch, never on an argument.
+      expect(revealWorkspaceWindow).toHaveBeenCalledWith("ws-a");
+    });
+
+    it("raises no window for a refused reveal", async () => {
+      const revealWorkspaceWindow = vi.fn(() => true);
+      const { server } = harness("s-reveal-refused", {}, { revealWorkspaceWindow });
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-not-mine" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(revealWorkspaceWindow).not.toHaveBeenCalled();
+    });
+
+    it("raises no window when the reveal itself failed", async () => {
+      // A run can exit between the client reading it and asking to be taken to
+      // it. Pulling the user across for nothing is worse than not moving them.
+      const revealWorkspaceWindow = vi.fn(() => true);
+      const { store, server } = harness(
+        "s-reveal-failed",
+        {
+          "pilot.openRun": {
+            result: { ok: false, error: { code: "EXECUTION_ERROR", message: "run is gone" } },
+            dispatchedWorkspace: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+          },
+        },
+        { revealWorkspaceWindow }
+      );
+      store.resourceOwnership.record("s-reveal-failed", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(revealWorkspaceWindow).not.toHaveBeenCalled();
+      // Still the session's panel: a failed reveal is not a disposal.
+      expect(store.resourceOwnership.owns("s-reveal-failed", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("succeeds without a window route wired at all", async () => {
+      // The raise is the weaker half of the outcome: the right view is showing
+      // either way, so a fixture (or a window that closed in between) must not
+      // turn a completed reveal into an error.
+      const { store, server } = harness(
+        "s-reveal-no-route",
+        { "pilot.openRun": { result: { ok: true, result: null } } },
+        { revealWorkspaceWindow: undefined }
+      );
+      store.resourceOwnership.record("s-reveal-no-route", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
     });
   });
 

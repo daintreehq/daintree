@@ -1825,6 +1825,33 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
+      "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+    enabled: true,
+    id: "terminal.revealOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "The panel to reveal, as an `id` this session received when it created the panel.",
+        },
+      },
+      required: ["terminalId"],
+    },
+    keywords: ["focus", "attach", "show", "owned"],
+    kind: "command",
+    name: "terminal.revealOwned",
+    requiresArgs: true,
+    title: "Reveal Owned Terminal",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
       "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing off a partial message. This returns once the submission is queued, not once it has been delivered or run, so inspect the terminal afterwards to see what happened. It runs with the terminal's own privileges.",
     enabled: true,
     id: "terminal.sendCommand",
