@@ -335,10 +335,25 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   //
   // Raised here rather than on that branch because #12317, #12318 and #12319 are
   // all open against this same surface and would otherwise each re-raise it on
-  // rebase. The cost is that develop sits 268 B under its own ceiling until
-  // #12189 lands, and a spend that drifts into that window before then will not
-  // be caught.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 46_600;
+  // rebase.
+  // 46_600 → 47_500, extending that same pre-spend to the two of those three
+  // that actually cost bytes. Both were raising this constant on their own
+  // branches and colliding with each other on every rebase:
+  //   - #12318's `terminal.getStatus`, 342 B. An orchestrator holding a bound
+  //     workspace whose view has been evicted had no way to read that terminal
+  //     at all; the status is what makes an evicted binding reachable instead
+  //     of merely reported.
+  //   - #12319's `terminal.revealOwned`, 479 B. An owning session could act on
+  //     its panel but not bring the user to it, so a client that needed a human
+  //     to look had nothing to call.
+  // #12317 spends nothing here — its additions are main-process resources, and
+  // this budget measures the renderer action registry.
+  // The cost of pre-spending is real: measured external usage on develop is
+  // 46_332 B, so develop sits 1_168 B under its own ceiling until all three
+  // land, and a spend that drifts into that window will not be caught. Once
+  // #12189 (243 B), #12318 and #12319 are in, usage is 47_396 B and the ratchet
+  // is back to biting with 104 B of slack.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 47_500;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
