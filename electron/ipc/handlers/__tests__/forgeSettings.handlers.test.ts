@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ForgeProviderEntry, ResolvedForgeProvider } from "../../../../shared/types/forge.js";
+import type {
+  ForgeProviderEntry,
+  ForgeTokenHealthState,
+  HealthEventsCapability,
+  ResolvedForgeProvider,
+} from "../../../../shared/types/forge.js";
 import type { ResolveForgeProviderInputs } from "../../../services/forgeProviderResolver.js";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -749,15 +754,26 @@ describe("registerForgeSettingsHandlers", () => {
   /**
    * Minimal `healthEvents` capability. `refreshTokenHealth` is the only member
    * the handlers touch; the other two are present so the fixture matches the
-   * shape a real provider registers.
+   * shape a real provider registers. Typed against the capability on purpose —
+   * `getForgeProviderImpl` is mocked as `unknown`, so this annotation is the
+   * only thing holding the fixture to the real contract.
    */
-  function makeHealthEvents(refreshTokenHealth: ReturnType<typeof vi.fn>) {
+  function makeHealthEvents(
+    refreshTokenHealth: HealthEventsCapability["refreshTokenHealth"]
+  ): HealthEventsCapability {
     return {
-      getTokenHealth: vi.fn(() => ({ status: "unhealthy", tokenVersion: 1, checkedAt: 1 })),
+      getTokenHealth: vi.fn<() => ForgeTokenHealthState>(() => ({
+        status: "unhealthy",
+        tokenVersion: 1,
+        checkedAt: 1,
+      })),
       onTokenHealthChanged: vi.fn(() => () => {}),
       refreshTokenHealth,
     };
   }
+
+  /** Let a rejected fire-and-forget probe settle so containment is observable. */
+  const flushProbe = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   it("setCredential forces a token-health re-probe after delivering the credential (#12325)", async () => {
     registerGiteaProvider();
@@ -847,6 +863,10 @@ describe("registerForgeSettingsHandlers", () => {
     await expect(setCredential(null, "acme.gitea", { token: "secret-token" })).resolves.toEqual({
       valid: true,
     });
+    // Without this the rejecting mock is never invoked and the test proves
+    // nothing — it would pass against a build that dropped the refresh call.
+    expect(refreshTokenHealth).toHaveBeenCalledWith({ force: true });
+    await flushProbe();
     expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", {
       kind: "bearer",
       value: "secret-token",
@@ -869,10 +889,33 @@ describe("registerForgeSettingsHandlers", () => {
     await expect(setCredential(null, "acme.gitea", { token: "secret-token" })).resolves.toEqual({
       valid: true,
     });
+    expect(refreshTokenHealth).toHaveBeenCalledWith({ force: true });
     expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", {
       kind: "bearer",
       value: "secret-token",
     });
+  });
+
+  it("setCredential does not re-probe when setCredentials itself throws", async () => {
+    registerGiteaProvider();
+    const refreshTokenHealth = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+      // A synchronous throw from the impl is a plugin bug that must surface
+      // (#9983), so it propagates — and nothing after it may run.
+      setCredentials: vi.fn(() => {
+        throw new Error("impl exploded");
+      }),
+      healthEvents: makeHealthEvents(refreshTokenHealth),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await expect(setCredential(null, "acme.gitea", { token: "secret-token" })).rejects.toThrow(
+      "impl exploded"
+    );
+    expect(refreshTokenHealth).not.toHaveBeenCalled();
+    expect(workspaceClientMock.updateForgeCredentials).not.toHaveBeenCalled();
   });
 
   it("setCredential succeeds for a provider that omits the healthEvents capability", async () => {
@@ -949,14 +992,17 @@ describe("registerForgeSettingsHandlers", () => {
 
   it("clearCredential survives a provider whose refreshTokenHealth rejects", async () => {
     storeMock._data["forgeCredentials"] = { "acme.gitea": JSON.stringify({ token: "a" }) };
+    const refreshTokenHealth = vi.fn().mockRejectedValue(new Error("probe exploded"));
     registryMock.getForgeProviderImpl.mockReturnValue({
       setCredentials: vi.fn(),
-      healthEvents: makeHealthEvents(vi.fn().mockRejectedValue(new Error("probe exploded"))),
+      healthEvents: makeHealthEvents(refreshTokenHealth),
     });
     registerForgeSettingsHandlers();
     const clearCredential = findHandler("forge:clear-credential");
 
     await expect(clearCredential(null, "acme.gitea")).resolves.toBeUndefined();
+    expect(refreshTokenHealth).toHaveBeenCalledWith({ force: true });
+    await flushProbe();
     expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", null);
   });
 });

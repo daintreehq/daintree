@@ -232,6 +232,21 @@ describe("GitHubTokenHealthService", () => {
   describe("credential change during an in-flight probe (#12325)", () => {
     const TOKEN_A = "ghp_stale00000000000000000000000000000000000";
     const TOKEN_B = "ghp_fresh00000000000000000000000000000000000";
+    const TOKEN_C = "ghp_newest0000000000000000000000000000000000";
+
+    /**
+     * Drive the service to a settled verdict for `token`, then clear the call
+     * records. Every case here starts from a real verdict — a service still at
+     * `unknown` hides the banner already, so it cannot show that the fix
+     * cleared one.
+     */
+    async function seed(token: string, probeStatus: number) {
+      GitHubAuth.setToken(token);
+      fetchMock.mockResolvedValue(buildResponse(probeStatus));
+      await gitHubTokenHealthService.refresh({ force: true });
+      fetchMock.mockClear();
+      listener.mockClear();
+    }
 
     /** A fetch stub whose every call stays pending until settled by index. */
     function deferredFetch() {
@@ -246,7 +261,9 @@ describe("GitHubTokenHealthService", () => {
     }
 
     it("re-probes with the new credential instead of folding into the stale probe", async () => {
-      GitHubAuth.setToken(TOKEN_A);
+      // The stuck state from the issue: the expired token's verdict is in.
+      await seed(TOKEN_A, 401);
+      expect(gitHubTokenHealthService.getState().status).toBe("unhealthy");
       const settlers = deferredFetch();
 
       const stale = gitHubTokenHealthService.refresh({ force: true });
@@ -264,7 +281,10 @@ describe("GitHubTokenHealthService", () => {
       // re-probe and left the "token expired" banner up.
       settlers[0].resolve(buildResponse(401));
       await stale;
-      expect(gitHubTokenHealthService.getState().status).toBe("unknown");
+      // Still unhealthy: the stale 401 was discarded and nothing has confirmed
+      // the new token yet. Saving a credential must not clear the banner on
+      // its own — only a probe of the new token may.
+      expect(gitHubTokenHealthService.getState().status).toBe("unhealthy");
 
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
       expect(fetchMock).toHaveBeenLastCalledWith(
@@ -282,7 +302,8 @@ describe("GitHubTokenHealthService", () => {
     });
 
     it("leaves the new credential unhealthy when its own probe returns 401", async () => {
-      GitHubAuth.setToken(TOKEN_A);
+      await seed(TOKEN_A, 200);
+      expect(gitHubTokenHealthService.getState().status).toBe("healthy");
       const settlers = deferredFetch();
 
       const stale = gitHubTokenHealthService.refresh({ force: true });
@@ -343,13 +364,15 @@ describe("GitHubTokenHealthService", () => {
       expect(gitHubTokenHealthService.getState().status).toBe("healthy");
     });
 
-    it("converges to unknown without another probe when the credential is cleared", async () => {
-      GitHubAuth.setToken(TOKEN_A);
+    it("drops a stale unhealthy verdict to unknown when the credential is cleared", async () => {
+      await seed(TOKEN_A, 401);
+      expect(gitHubTokenHealthService.getState().status).toBe("unhealthy");
       const settlers = deferredFetch();
 
       const stale = gitHubTokenHealthService.refresh({ force: true });
       // Clearing during an in-flight probe: the follow-up finds no token and
-      // settles on `unknown` rather than leaving the last verdict standing.
+      // settles on `unknown` rather than leaving the expired verdict — and the
+      // banner — standing.
       GitHubAuth.clearToken();
       const reprobe = gitHubTokenHealthService.refresh({ force: true });
 
@@ -358,7 +381,40 @@ describe("GitHubTokenHealthService", () => {
       await reprobe;
 
       expect(gitHubTokenHealthService.getState().status).toBe("unknown");
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: "unknown" }));
+      // No token means no request — the verdict is dropped, not re-probed.
       expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("probes the newest credential when two replacements land during one probe", async () => {
+      await seed(TOKEN_A, 401);
+      const settlers = deferredFetch();
+
+      const stale = gitHubTokenHealthService.refresh({ force: true });
+      GitHubAuth.setToken(TOKEN_B);
+      const afterB = gitHubTokenHealthService.refresh({ force: true });
+      GitHubAuth.setToken(TOKEN_C);
+      const afterC = gitHubTokenHealthService.refresh({ force: true });
+
+      settlers[0].resolve(buildResponse(401));
+      await stale;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      // The queued probe re-reads the current credential rather than capturing
+      // the one its caller saw, so it can never authenticate with a token that
+      // was already superseded while it waited.
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "https://api.github.com/rate_limit",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: `Bearer ${TOKEN_C}` }),
+        })
+      );
+
+      settlers[1].resolve(buildResponse(200));
+      await Promise.all([afterB, afterC]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(gitHubTokenHealthService.getState().status).toBe("healthy");
     });
 
     it("drops the queued re-probe when the plugin stops before it runs", async () => {
@@ -374,8 +430,14 @@ describe("GitHubTokenHealthService", () => {
       gitHubTokenHealthService.stop();
       settlers[0].resolve(buildResponse(401));
       await stale;
-      await reprobe;
+      // Give the queued continuation its turn before asserting. A follow-up
+      // that skipped the gate would issue a fetch nothing ever settles, so
+      // `await reprobe` alone would hang to the suite timeout rather than
+      // failing on the count.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
 
+      await reprobe;
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });

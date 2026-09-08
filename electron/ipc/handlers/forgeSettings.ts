@@ -17,6 +17,8 @@ import {
   pickPrimaryValue,
 } from "../../services/forge/forgeCredentialUtils.js";
 import type { AuthValidation, ForgeProviderImpl } from "../../../shared/types/forge.js";
+import { logWarn } from "../../utils/logger.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -113,12 +115,24 @@ async function syncWorkspaceCredential(
  * must not fail the credential mutation. Unlike that caller this also attaches
  * a rejection handler: the call is async, and an unhandled rejection in main
  * is worse than the synchronous throw a bare `try` would catch.
+ *
+ * Contained but not silent. A provider failing here leaves the stale banner
+ * standing while the save reports success — the exact symptom of #12325 — so
+ * the failure is logged rather than swallowed. Providers log their own
+ * expected transport failures at debug; reaching here means the call itself
+ * broke, which is a plugin bug worth seeing.
  */
-function refreshProviderTokenHealth(impl: ForgeProviderImpl): void {
+function refreshProviderTokenHealth(impl: ForgeProviderImpl, providerId: string): void {
+  const onFailed = (error: unknown) => {
+    logWarn("[forgeSettings] token-health re-probe failed after credential change", {
+      providerId,
+      error: formatErrorMessage(error, "Token-health re-probe failed"),
+    });
+  };
   try {
-    void Promise.resolve(impl.healthEvents?.refreshTokenHealth?.({ force: true })).catch(() => {});
-  } catch {
-    // A provider throwing synchronously must not break the save/clear.
+    void Promise.resolve(impl.healthEvents?.refreshTokenHealth?.({ force: true })).catch(onFailed);
+  } catch (error) {
+    onFailed(error);
   }
 }
 
@@ -248,7 +262,7 @@ export function registerForgeSettingsHandlers(): () => void {
         // plugin bug that should surface, so it is intentionally uncaught,
         // mirroring `validateToken` above.
         impl.setCredentials?.({ kind: "bearer", value: primaryValue });
-        refreshProviderTokenHealth(impl);
+        refreshProviderTokenHealth(impl, providerId);
 
         await syncWorkspaceCredential(providerId, primaryValue);
 
@@ -287,7 +301,7 @@ export function registerForgeSettingsHandlers(): () => void {
         // Re-probe even when nothing was stored under this id: the impl can
         // still hold in-memory auth — and a stale unhealthy verdict — from a
         // save the store no longer reflects.
-        refreshProviderTokenHealth(impl);
+        refreshProviderTokenHealth(impl, providerId);
       }
 
       await syncWorkspaceCredential(providerId, null);
