@@ -1047,7 +1047,7 @@ function ProjectFormTabContent({
           onEnvironmentVariablesChange={projectForm.setEnvironmentVariables}
           settings={projectForm.projectSettings}
           isOpen={isOpen}
-          onFlush={projectForm.flush}
+          onFlush={projectForm.saveNow}
           projectLabel={projectLabel}
           globalEnvironmentVariables={globalEnvVars}
         />

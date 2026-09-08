@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImageViewerTab } from "../ImageViewerTab";
 import { useProjectStore } from "@/store/projectStore";
-import type { Project } from "@shared/types/project";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { projectClient } from "@/clients";
+import type { Project, ProjectSettings } from "@shared/types/project";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -50,7 +52,22 @@ function installElectron(getSettings: () => Promise<unknown>) {
 beforeEach(() => {
   vi.clearAllMocks();
   setProject(null);
+  useProjectSettingsStore.setState({ settings: null, projectId: null });
+  vi.mocked(projectClient.getSettings).mockResolvedValue({ runCommands: [] } as ProjectSettings);
+  vi.mocked(projectClient.saveSettings).mockResolvedValue(undefined);
 });
+
+/** Render for "proj-1" with settings loaded and the Save button enabled. */
+async function renderLoadedTab() {
+  installElectron(async () => ({}));
+  setProject({ id: "proj-1", path: "/repo", name: "Repo" } as Project);
+  render(<ImageViewerTab />);
+  const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;
+  await waitFor(() => {
+    expect(osRadio.disabled).toBe(false);
+  });
+  return screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
+}
 
 describe("ImageViewerTab", () => {
   it("renders section chrome and disabled controls while settings are loading", async () => {
@@ -169,5 +186,78 @@ describe("ImageViewerTab", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A save here never reaches useProjectSettingsStore on its own, so the cache
+  // keeps the pre-save value and the next settings-form write reverts it (#12326).
+  describe("cached settings write-through", () => {
+    it("merges the saved preference into the cache, preserving unrelated fields", async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [], devServerCommand: "npm run dev" },
+        projectId: "proj-1",
+      });
+      const saveButton = await renderLoadedTab();
+
+      fireEvent.click(saveButton);
+
+      await waitFor(() => {
+        expect(useProjectSettingsStore.getState().settings?.preferredImageViewer).toEqual({
+          mode: "os",
+          customCommand: undefined,
+        });
+      });
+      expect(useProjectSettingsStore.getState().settings?.devServerCommand).toBe("npm run dev");
+      expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("merges into the settings the cache holds after the save, not the pre-await copy", async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [], devServerCommand: "npm run dev" },
+        projectId: "proj-1",
+      });
+      // A concurrent writer lands while the save IPC is in flight.
+      vi.mocked(projectClient.saveSettings).mockImplementation(async () => {
+        useProjectSettingsStore.setState({
+          settings: { runCommands: [], devServerCommand: "npm run other" },
+        });
+      });
+      const saveButton = await renderLoadedTab();
+
+      fireEvent.click(saveButton);
+
+      await waitFor(() => {
+        expect(useProjectSettingsStore.getState().settings?.preferredImageViewer).toBeTruthy();
+      });
+      expect(useProjectSettingsStore.getState().settings?.devServerCommand).toBe("npm run other");
+    });
+
+    it("leaves the cache untouched when the save rejects", async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [] },
+        projectId: "proj-1",
+      });
+      vi.mocked(projectClient.saveSettings).mockRejectedValue(new Error("save blew up"));
+      const saveButton = await renderLoadedTab();
+
+      fireEvent.click(saveButton);
+
+      await screen.findByText(/save blew up|Failed to save image viewer preference/i);
+      expect(useProjectSettingsStore.getState().settings?.preferredImageViewer).toBeUndefined();
+    });
+
+    it("leaves the cache untouched when it holds a different project", async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [] },
+        projectId: "proj-2",
+      });
+      const saveButton = await renderLoadedTab();
+
+      fireEvent.click(saveButton);
+
+      await waitFor(() => {
+        expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
+      });
+      expect(useProjectSettingsStore.getState().settings?.preferredImageViewer).toBeUndefined();
+    });
   });
 });

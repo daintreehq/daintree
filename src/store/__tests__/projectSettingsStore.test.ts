@@ -13,7 +13,11 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-import { cleanupProjectSettingsStore, useProjectSettingsStore } from "../projectSettingsStore";
+import {
+  cleanupProjectSettingsStore,
+  patchCachedProjectSettings,
+  useProjectSettingsStore,
+} from "../projectSettingsStore";
 
 function createDeferred<T>() {
   let resolve: (value: T) => void;
@@ -126,5 +130,40 @@ describe("projectSettingsStore", () => {
     expect(state.detectedRunners).toEqual([
       { id: "det-2", name: "Build", command: "npm run build" },
     ]);
+  });
+
+  describe("patchCachedProjectSettings", () => {
+    it("merges the patch into the cached settings, preserving unrelated fields", () => {
+      useProjectSettingsStore.setState({
+        settings: { ...SETTINGS_WITH_COMMANDS, devServerCommand: "npm run dev" },
+        projectId: "project-a",
+      });
+
+      patchCachedProjectSettings("project-a", { preferredEditor: { id: "zed" } });
+
+      const settings = useProjectSettingsStore.getState().settings;
+      expect(settings?.preferredEditor).toEqual({ id: "zed" });
+      expect(settings?.devServerCommand).toBe("npm run dev");
+      expect(settings?.runCommands).toHaveLength(2);
+    });
+
+    it("ignores a patch for a project the store no longer holds", () => {
+      useProjectSettingsStore.setState({
+        settings: SETTINGS_WITH_COMMANDS,
+        projectId: "project-a",
+      });
+
+      patchCachedProjectSettings("project-b", { preferredEditor: { id: "zed" } });
+
+      expect(useProjectSettingsStore.getState().settings?.preferredEditor).toBeUndefined();
+    });
+
+    it("ignores a patch when no settings are cached", () => {
+      useProjectSettingsStore.setState({ settings: null, projectId: "project-a" });
+
+      patchCachedProjectSettings("project-a", { preferredEditor: { id: "zed" } });
+
+      expect(useProjectSettingsStore.getState().settings).toBeNull();
+    });
   });
 });

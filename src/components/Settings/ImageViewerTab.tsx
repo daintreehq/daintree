@@ -11,7 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Image } from "lucide-react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { useProjectStore } from "@/store";
+import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -106,14 +106,16 @@ export function ImageViewerTab() {
       // Routed through projectClient so the per-projectId getSettings cache
       // is invalidated on save. Bypassing it left other readers reading
       // stale data for up to the cache TTL.
+      const preferredImageViewer = {
+        mode,
+        customCommand: mode === "custom" ? customCommand.trim() : undefined,
+      };
       const settings = await projectClient.getSettings(activeProjectId);
-      await projectClient.saveSettings(activeProjectId, {
-        ...settings,
-        preferredImageViewer: {
-          mode,
-          customCommand: mode === "custom" ? customCommand.trim() : undefined,
-        },
-      });
+      await projectClient.saveSettings(activeProjectId, { ...settings, preferredImageViewer });
+      // Merge into whatever the cache holds now, not into the object fetched
+      // before the await — a concurrent write may have landed in between. A
+      // stale cache here is what reverts this save on dialog close (#12326).
+      patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
       if (!isMountedRef.current) return;
       setSaved(true);
     } catch (err) {
