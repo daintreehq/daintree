@@ -18,7 +18,6 @@ import {
 } from "../../services/forge/forgeCredentialUtils.js";
 import type { AuthValidation, ForgeProviderImpl } from "../../../shared/types/forge.js";
 import { logWarn } from "../../utils/logger.js";
-import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -124,10 +123,21 @@ async function syncWorkspaceCredential(
  */
 function refreshProviderTokenHealth(impl: ForgeProviderImpl, providerId: string): void {
   const onFailed = (error: unknown) => {
-    logWarn("[forgeSettings] token-health re-probe failed after credential change", {
-      providerId,
-      error: formatErrorMessage(error, "Token-health re-probe failed"),
-    });
+    // Deliberately no provider error text: a plugin is free to interpolate the
+    // credential it was just handed into its own message, and this buffer is
+    // readable (`logs:getAll`). The scrubber only knows the token shapes it can
+    // pattern-match. Provider id plus the error's constructor names the culprit
+    // without carrying anything the user typed. Wrapped because a hostile error
+    // can throw from `name` too, and reporting a failure must not become one —
+    // that would reject the save and skip the workspace sync.
+    try {
+      logWarn("[forgeSettings] token-health re-probe failed after credential change", {
+        providerId,
+        errorKind: error instanceof Error ? error.name : typeof error,
+      });
+    } catch {
+      // The probe failure is already contained; there is nothing left to do.
+    }
   };
   try {
     void Promise.resolve(impl.healthEvents?.refreshTokenHealth?.({ force: true })).catch(onFailed);
