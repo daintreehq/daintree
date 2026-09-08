@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ForgeTokenHealthState,
   ForgeTokenHealthStatus,
@@ -35,6 +36,16 @@ let tokenVersion = 0;
 let validatedUser: ValidatedUserInfo | null = null;
 let validatedUserVersion = -1;
 let instanceUrlReader: InstanceUrlReader | null = null;
+let cachedInstanceUrl: string | null = null;
+/**
+ * Normalized base URL the in-memory token is bound to — the configured
+ * instance at the moment the host handed the credential over. A token issued
+ * by instance A is never a valid credential for instance B, so changing
+ * `instanceUrl` without re-saving must withhold it rather than replay it at
+ * the new origin. The whole base, not just the hostname: the same host on a
+ * different port or deployment path is a different installation.
+ */
+let tokenInstanceUrl: string | null = null;
 
 let healthState: ForgeTokenHealthState = { status: "unknown", tokenVersion: 0, checkedAt: 0 };
 const healthListeners = new Set<(state: ForgeTokenHealthState) => void>();
@@ -42,6 +53,88 @@ let lastHealthProbeAt = 0;
 
 export function setInstanceUrlReader(reader: InstanceUrlReader | null): void {
   instanceUrlReader = reader;
+}
+
+/**
+ * Durable record of which instance the stored credential was saved for.
+ *
+ * The host's credential store holds a bare token with no instance, so on a
+ * replay (every activation, and every plugin re-enable) the provider has no
+ * way to tell "the token the user saved for this instance" from "a token they
+ * saved for a different one before repointing `instanceUrl`". Deriving
+ * provenance from the current setting is exactly how instance A's token ends
+ * up at instance B.
+ *
+ * The token itself is NEVER written here — plugin storage is plaintext JSON.
+ * Only a digest, which is enough to tell a replay of the same credential from
+ * a genuinely new one.
+ */
+export interface CredentialProvenance {
+  instanceUrl: string;
+  tokenDigest: string;
+}
+
+type ProvenanceReader = () => CredentialProvenance | null;
+type ProvenanceWriter = (record: CredentialProvenance | null) => void;
+
+let provenanceReader: ProvenanceReader | null = null;
+let provenanceWriter: ProvenanceWriter | null = null;
+
+/**
+ * Instances that candidate tokens were proven against, keyed by token digest.
+ * The host's save path is `validateToken(token)` then `setCredentials(token)`,
+ * so this carries the validation's own resolved destination across to the save
+ * instead of letting it re-derive one from settings that may have changed in
+ * between.
+ *
+ * A map rather than one slot: a background probe of the OLD token, or a second
+ * candidate validation, would otherwise evict the record for the token being
+ * saved — and the save would then find no provenance and bind to null, leaving
+ * the user with a credential the UI calls saved and every request omits.
+ *
+ * Entries expire by AGE, never by count. A capacity limit has the same defect
+ * as the single slot it replaced, just further away: enough other validations
+ * while one is still in introspection and the live entry is the one dropped.
+ * A save follows its validation within milliseconds, so the window only has to
+ * outlive that; the host rate-limits the write path, which bounds the map.
+ */
+const provenValidations = new Map<string, { instanceUrl: string; at: number }>();
+const PROVEN_VALIDATION_TTL_MS = 5 * 60 * 1000;
+
+function recordProvenValidation(tokenDigest: string, instanceUrl: string): void {
+  const now = Date.now();
+  for (const [digest, entry] of provenValidations) {
+    if (now - entry.at > PROVEN_VALIDATION_TTL_MS) provenValidations.delete(digest);
+  }
+  provenValidations.set(tokenDigest, { instanceUrl, at: now });
+}
+
+function provenInstanceFor(tokenDigest: string): string | undefined {
+  const entry = provenValidations.get(tokenDigest);
+  if (!entry) return undefined;
+  if (Date.now() - entry.at > PROVEN_VALIDATION_TTL_MS) {
+    provenValidations.delete(tokenDigest);
+    return undefined;
+  }
+  return entry.instanceUrl;
+}
+
+/**
+ * Wire the durable provenance accessors. `activate()` loads the record before
+ * the provider is registered, so the synchronous reader is populated by the
+ * time the host replays the credential into `setCredentials`.
+ */
+export function setProvenanceAccessors(
+  reader: ProvenanceReader | null,
+  writer: ProvenanceWriter | null
+): void {
+  provenanceReader = reader;
+  provenanceWriter = writer;
+}
+
+/** Non-reversible digest of a token — never the token itself. */
+export function digestToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 function normalizeInstanceUrl(raw: string): string {
@@ -59,9 +152,23 @@ function normalizeInstanceUrl(raw: string): string {
 async function readConfiguredInstanceUrl(): Promise<string | undefined> {
   const raw = await instanceUrlReader?.();
   if (typeof raw === "string" && raw.trim().length > 0) {
-    return normalizeInstanceUrl(raw);
+    const normalized = normalizeInstanceUrl(raw);
+    cachedInstanceUrl = normalized;
+    return normalized;
   }
+  cachedInstanceUrl = DEFAULT_INSTANCE_URL;
   return undefined;
+}
+
+/**
+ * Last successfully-read instance base URL, for the synchronous URL builders
+ * (`buildIssueUrl` and friends are sync in the contract, so they cannot await
+ * the setting). Null until the first successful read — callers fall back to
+ * plain `https://<host>`, which is correct for gitlab.com and for any
+ * hostname-matched public instance.
+ */
+export function getCachedInstanceUrl(): string | null {
+  return cachedInstanceUrl;
 }
 
 /**
@@ -95,15 +202,76 @@ export async function getInstanceHost(): Promise<string> {
  * rather than fall back to a default origin the token was never scoped to.
  */
 export async function getInstanceHostStrict(): Promise<string> {
+  return new URL(await getInstanceUrlStrict()).hostname.toLowerCase();
+}
+
+/**
+ * Configured instance base URL for credential-bearing requests. Unlike
+ * {@link getInstanceUrl} this THROWS when the settings read failed, so a
+ * broken read can never redirect a self-hosted token to gitlab.com.
+ */
+export async function getInstanceUrlStrict(): Promise<string> {
   const configured = await readConfiguredInstanceUrl();
-  if (configured === undefined) {
-    return "gitlab.com";
+  return configured ?? DEFAULT_INSTANCE_URL;
+}
+
+/**
+ * Where a token belongs — the instance it was PROVEN against, never the one
+ * that happens to be configured when it arrives.
+ *
+ * Two sources, in order:
+ *
+ * 1. A just-completed validation of this exact token. The host validates
+ *    through this provider immediately before persisting (`validateToken` then
+ *    `setCredentials`), so a matching record is proof the user explicitly
+ *    supplied this token for that instance — including a deliberate re-save of
+ *    the same token against a new one. It resolved the instance itself, so a
+ *    settings change racing the validation can't retarget it.
+ * 2. The durable record from a previous save, which is what a replay is.
+ *
+ * Neither means the provenance is unknown, and the binding is null. That is
+ * deliberately fail-closed: an absent record is NOT evidence of a new save —
+ * it is equally a replay whose record was lost — and adopting the current
+ * setting there is exactly how a repointed instance claims a token it was
+ * never issued.
+ */
+function resolveBinding(token: string): string | null {
+  const digest = digestToken(token);
+  const proven = provenInstanceFor(digest);
+  if (proven !== undefined) {
+    provenanceWriter?.({ instanceUrl: proven, tokenDigest: digest });
+    return proven;
   }
-  return new URL(configured).hostname.toLowerCase();
+  const recorded = provenanceReader?.() ?? null;
+  if (recorded && recorded.tokenDigest === digest) return recorded.instanceUrl;
+  return null;
 }
 
 export function getToken(): string | null {
   return memoryToken;
+}
+
+/**
+ * Normalized base URL the in-memory token was bound to, or null when the
+ * binding could not be established (the settings read failed, in which case
+ * every credential-attachment path already fails closed).
+ */
+export function getTokenInstanceUrl(): string | null {
+  return tokenInstanceUrl;
+}
+
+/**
+ * Whether the in-memory token may be used against `instanceUrl` — the base the
+ * caller resolved and is about to send to, not a second read of the setting.
+ *
+ * Fails closed on an unknown binding. That only happens when the settings read
+ * failed outright, and in that state every attachment path already withholds
+ * the token; adopting "whatever is configured now" would let a repointed
+ * setting silently claim a credential it was never issued.
+ */
+export function tokenMatchesInstance(instanceUrl: string): boolean {
+  if (tokenInstanceUrl === null) return false;
+  return tokenInstanceUrl === instanceUrl;
 }
 
 export function getTokenVersion(): number {
@@ -117,10 +285,19 @@ export function getTokenVersion(): number {
  * the probe cooldown so the next health refresh isn't blocked by the previous
  * token's schedule.
  */
-export function setMemoryToken(token: string | null): void {
+export function setMemoryToken(token: string | null, instanceUrl?: string | null): void {
   const next = token && token.trim().length > 0 ? token.trim() : null;
-  if (next === memoryToken) return;
+  // Unconditional: a clear that arrives while the in-memory token is already
+  // null (the plugin was disabled when the user cleared it) must still drop
+  // the durable record, or a later replay would resurrect its provenance.
+  if (next === null) {
+    provenanceWriter?.(null);
+    provenValidations.clear();
+  }
+  const nextUrl = next === null ? null : (instanceUrl ?? resolveBinding(next));
+  if (next === memoryToken && nextUrl === tokenInstanceUrl) return;
   memoryToken = next;
+  tokenInstanceUrl = nextUrl;
   tokenVersion += 1;
   validatedUser = null;
   validatedUserVersion = -1;
@@ -128,10 +305,37 @@ export function setMemoryToken(token: string | null): void {
   setHealth("unknown");
 }
 
-export function setValidatedUserInfo(info: ValidatedUserInfo, versionAtStart: number): void {
+export function setValidatedUserInfo(
+  info: ValidatedUserInfo,
+  versionAtStart: number,
+  identityGenerationAtStart?: number
+): void {
   if (versionAtStart !== tokenVersion) return;
+  if (identityGenerationAtStart !== undefined && identityGenerationAtStart !== identityGeneration) {
+    return;
+  }
   validatedUser = info;
   validatedUserVersion = versionAtStart;
+}
+
+/** Drop the cached identity — it describes an account on a different instance. */
+export function clearValidatedUserInfo(): void {
+  identityGeneration += 1;
+  validatedUser = null;
+  validatedUserVersion = -1;
+}
+
+/**
+ * Bumped whenever the cached identity is dropped. `tokenVersion` doesn't move
+ * when only the INSTANCE changed, so without this a `/user` lookup already in
+ * flight against the old instance would resolve afterwards and repopulate the
+ * identity of an account on a server we're no longer talking to.
+ */
+let identityGeneration = 0;
+
+/** Snapshot before an identity lookup; hand back to {@link setValidatedUserInfo}. */
+export function currentIdentityGeneration(): number {
+  return identityGeneration;
 }
 
 export function getValidatedUserInfo(): ValidatedUserInfo | null {
@@ -199,7 +403,7 @@ export async function refreshTokenHealth(options?: { force?: boolean }): Promise
   lastHealthProbeAt = now;
   const versionAtStart = tokenVersion;
   try {
-    const result = await validateGitLabToken(token);
+    const result = await validateStoredGitLabToken(token);
     if (versionAtStart !== tokenVersion) return;
     if (result.valid) {
       markTokenHealthy(versionAtStart);
@@ -213,7 +417,11 @@ export async function refreshTokenHealth(options?: { force?: boolean }): Promise
 
 /** Test-isolation helper: reset every module-level auth state. */
 export function resetAuthStateForTests(): void {
+  identityGeneration += 1;
   memoryToken = null;
+  tokenInstanceUrl = null;
+  cachedInstanceUrl = null;
+  provenValidations.clear();
   tokenVersion += 1;
   validatedUser = null;
   validatedUserVersion = -1;
@@ -243,8 +451,64 @@ export interface GitLabTokenValidationResult {
  * stays unknown rather than "never expires" when introspection is
  * unavailable).
  */
-export async function validateGitLabToken(token: string): Promise<GitLabTokenValidationResult> {
-  const instanceUrl = await getInstanceUrl();
+/**
+ * Validate the STORED token — the health probe, `validateCredentials`, and the
+ * cached-identity refresh. Unlike {@link validateGitLabToken}, which validates
+ * a token the user just typed for the instance on screen, this must not send a
+ * credential to an instance it wasn't issued for: after an `instanceUrl`
+ * change the stored token still belongs to the old one.
+ */
+export async function validateStoredGitLabToken(
+  token: string
+): Promise<GitLabTokenValidationResult> {
+  const unavailable = (error: string): GitLabTokenValidationResult => ({
+    valid: false,
+    authoritative: false,
+    credentialRejected: false,
+    error,
+  });
+  let instanceUrl: string;
+  try {
+    instanceUrl = await getInstanceUrlStrict();
+  } catch {
+    return unavailable("Couldn't read the GitLab instance setting — reopen this tab and try again");
+  }
+  // The binding describes the CURRENT stored token, so a caller holding one
+  // captured before a rotation must not borrow its verdict.
+  if (token !== memoryToken || !tokenMatchesInstance(instanceUrl)) {
+    return unavailable(
+      "The stored token belongs to a different GitLab instance — enter one for this instance"
+    );
+  }
+  // Hand the resolved destination through, so the check above and the request
+  // below cannot disagree about where the token is going.
+  return validateGitLabToken(token, instanceUrl, false);
+}
+
+export async function validateGitLabToken(
+  token: string,
+  resolvedInstanceUrl?: string,
+  // Stored-token probes pass false: they re-check a credential whose
+  // provenance is already established.
+  recordProvenance = true
+): Promise<GitLabTokenValidationResult> {
+  let instanceUrl: string;
+  if (resolvedInstanceUrl !== undefined) {
+    instanceUrl = resolvedInstanceUrl;
+  } else {
+    try {
+      // Strict: a failed settings read must not send a self-hosted token to
+      // gitlab.com just because that is the display-time default.
+      instanceUrl = await getInstanceUrlStrict();
+    } catch {
+      return {
+        valid: false,
+        authoritative: false,
+        credentialRejected: false,
+        error: "Couldn't read the GitLab instance setting — reopen this tab and try again",
+      };
+    }
+  }
   const instanceHost = (() => {
     try {
       return new URL(instanceUrl).hostname;
@@ -325,6 +589,15 @@ export async function validateGitLabToken(token: string): Promise<GitLabTokenVal
     };
   }
 
+  // Only when the caller is validating a CANDIDATE token: that is the save
+  // path, and the destination it reached is what the save must bind to. A
+  // stored-token probe is re-checking an already-bound credential and proves
+  // nothing new — letting it write here would let a slow probe of the OLD
+  // token stand in for the new one's provenance.
+  if (recordProvenance) {
+    recordProvenValidation(digestToken(token), instanceUrl);
+  }
+
   const result: GitLabTokenValidationResult = {
     valid: true,
     authoritative: true,
@@ -346,7 +619,20 @@ export async function validateGitLabToken(token: string): Promise<GitLabTokenVal
         expires_at?: unknown;
       };
       if (Array.isArray(data.scopes)) {
-        result.scopes = data.scopes.filter((s): s is string => typeof s === "string");
+        const scopes = data.scopes.filter((s): s is string => typeof s === "string");
+        result.scopes = scopes;
+        // Introspection is the only place scopes are knowable, so it is also
+        // the only place an under-scoped token can be caught. `/user` answers
+        // for a bare `read_user` token, which cannot read a single project —
+        // accepting it would connect the provider and then 403 on every read.
+        if (!scopes.includes("api") && !scopes.includes("read_api")) {
+          return {
+            valid: false,
+            authoritative: true,
+            credentialRejected: false,
+            error: `Token lacks API access — it has ${scopes.join(", ") || "no scopes"}, and needs api or read_api`,
+          };
+        }
       }
       if (typeof data.expires_at === "string") {
         const t = Date.parse(data.expires_at);

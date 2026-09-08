@@ -19,7 +19,7 @@ import type {
   GitLabRelease,
   GitLabUser,
 } from "../shared/types.js";
-import { repoWebUrl } from "./gitlabRemote.js";
+import { instanceOriginFor, repoWebUrl } from "./gitlabRemote.js";
 
 const TOOLTIP_EXCERPT_MAX = 280;
 
@@ -42,7 +42,10 @@ export function isoToMsOrNull(value: unknown): number | null {
 export function absolutizeAvatarUrl(avatarUrl: unknown, host: string): string | undefined {
   if (typeof avatarUrl !== "string" || avatarUrl.length === 0) return undefined;
   if (/^https?:\/\//i.test(avatarUrl)) return avatarUrl;
-  return avatarUrl.startsWith("/") ? `https://${host}${avatarUrl}` : undefined;
+  // GitLab serves relative avatar paths from the instance root, so a
+  // self-hosted install on a custom scheme or port needs its own origin —
+  // plain `https://<host>` would 404 or hit the wrong service.
+  return avatarUrl.startsWith("/") ? `${instanceOriginFor(host)}${avatarUrl}` : undefined;
 }
 
 export function gitlabUserToForgeUser(
@@ -92,26 +95,38 @@ export function normalizeGitLabMRState(rawState: string): NormalizedPRState {
 
 /**
  * Draft detection across GitLab versions: the boolean `draft` field is
- * current, `work_in_progress` predates it, and very old self-managed
- * instances only carry the title convention (`Draft:`/`[Draft]`/`WIP:`).
+ * current and `work_in_progress` predates it. Both are derived server-side
+ * from the title, so a present boolean — including an explicit `false` — is
+ * authoritative and the title is only consulted when neither is present.
  */
 export function isDraftMergeRequest(
   mr: Pick<GitLabMergeRequest, "draft" | "work_in_progress" | "title">
 ): boolean {
-  if (mr.draft === true || mr.work_in_progress === true) return true;
+  // An explicit `false` must win over the title. GitLab dropped `WIP:` in
+  // 14.8, so an MR titled "WIP: …" is an ordinary open MR — reading the title
+  // first would call it a draft and make "convert to draft" a silent no-op.
+  if (typeof mr.draft === "boolean") return mr.draft;
+  if (typeof mr.work_in_progress === "boolean") return mr.work_in_progress;
   return isDraftTitle(mr.title ?? "");
 }
 
+/**
+ * The prefixes GitLab itself recognizes, from `Gitlab::Regex.merge_request_draft`:
+ * `Draft:`, `[Draft]`, `(Draft)` and `Draft -`, case-insensitive. `WIP:` was
+ * removed in GitLab 14.8 and is deliberately absent — treating it as a draft
+ * would disagree with the server about every MR that still uses it.
+ */
+const DRAFT_TITLE_PREFIX = /^\s*(?:\[draft\]|\(draft\)|draft\s*[:-])\s*/i;
+
 export function isDraftTitle(title: string): boolean {
-  return /^\s*(?:\[draft\]|\(draft\)|draft:|\[wip\]|\(wip\)|wip:)/i.test(title);
+  return DRAFT_TITLE_PREFIX.test(title);
 }
 
-/** Strip every GitLab-recognized draft/WIP prefix from an MR title. */
+/** Strip every GitLab-recognized draft prefix from an MR title. */
 export function stripDraftPrefix(title: string): string {
   let result = title;
-  const prefix = /^\s*(?:\[draft\]|\(draft\)|draft:|\[wip\]|\(wip\)|wip:)\s*/i;
-  while (prefix.test(result)) {
-    result = result.replace(prefix, "");
+  while (DRAFT_TITLE_PREFIX.test(result)) {
+    result = result.replace(DRAFT_TITLE_PREFIX, "");
   }
   return result.trim();
 }
@@ -155,10 +170,14 @@ export function pipelineStatusToCIState(status: unknown): CIStatusState | undefi
 function mergeableFromMR(mr: GitLabMergeRequest): boolean | null {
   if (typeof mr.detailed_merge_status === "string") {
     if (mr.detailed_merge_status === "mergeable") return true;
+    // The four states GitLab documents as "still being computed". Reporting
+    // any of them as not-mergeable would show a merge button disabled for a
+    // reason that hasn't been established yet.
     if (
       mr.detailed_merge_status === "checking" ||
       mr.detailed_merge_status === "unchecked" ||
-      mr.detailed_merge_status === "preparing"
+      mr.detailed_merge_status === "preparing" ||
+      mr.detailed_merge_status === "approvals_syncing"
     ) {
       return null;
     }
@@ -364,7 +383,7 @@ export function graphqlMergeRequestToForgePR(
     body: typeof node.description === "string" ? node.description : "",
     state: merged ? "merged" : normalizeGitLabMRState(rawState),
     rawState,
-    isDraft: node.draft === true || isDraftTitle(title),
+    isDraft: typeof node.draft === "boolean" ? node.draft : isDraftTitle(title),
     merged,
     url: typeof node.webUrl === "string" ? node.webUrl : "",
     ...(authorUser ? { author: authorUser } : {}),

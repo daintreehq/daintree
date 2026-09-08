@@ -1,4 +1,27 @@
 import type { RepoRef } from "../../../../shared/types/forge.js";
+import { getCachedInstanceUrl } from "./GitLabAuth.js";
+
+/**
+ * The configured instance base as `{ host, prefix }`, or null when no setting
+ * has been read yet. `prefix` is the deployment path a relative install sits
+ * under (`https://code.example:8443/gitlab` → `/gitlab`), normalized without a
+ * trailing slash. Read from the synchronous cache because the contract's
+ * `parseRemote` and URL builders can't await the setting.
+ */
+function configuredInstance(): { origin: string; host: string; prefix: string } | null {
+  const configured = getCachedInstanceUrl();
+  if (configured === null) return null;
+  try {
+    const url = new URL(configured);
+    return {
+      origin: url.origin,
+      host: url.hostname.toLowerCase(),
+      prefix: url.pathname.replace(/\/+$/, ""),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Parsed identity of a GitLab repository. GitLab nests projects in subgroups
@@ -77,9 +100,42 @@ export function parseGitLabRemoteUrl(url: string): ParsedGitLabRemote | null {
     return null;
   }
   if (!parsed.hostname) return null;
-  const segments = cleanPath(parsed.pathname);
+  // A relative install serves clone URLs under its deployment path
+  // (`https://code.example:8443/gitlab/team/app.git`). That prefix is part of
+  // the URL, not of the project namespace — leaving it in would ask the API
+  // for project `gitlab/team/app` under a base that already includes
+  // `/gitlab`, and 404 on a project that exists.
+  const segments = cleanPath(
+    stripInstancePrefix(parsed.protocol, parsed.hostname, parsed.pathname)
+  );
   if (!segments) return null;
   return fromSegments(parsed.hostname, segments);
+}
+
+/**
+ * Only HTTP(S) clone URLs carry the deployment prefix — it is a web-server
+ * mount point. SSH remotes address the git service directly, so their path IS
+ * the namespace: stripping there would turn a genuine `gitlab/team/app`
+ * project into `team/app`.
+ */
+function stripInstancePrefix(protocol: string, host: string, pathname: string): string {
+  if (protocol !== "http:" && protocol !== "https:") return pathname;
+  const instance = configuredInstance();
+  if (!instance || instance.prefix.length === 0) return pathname;
+  if (host.toLowerCase() !== instance.host) return pathname;
+  const prefix = instance.prefix;
+  if (pathname === prefix) return "";
+  return pathname.startsWith(`${prefix}/`) ? pathname.slice(prefix.length) : pathname;
+}
+
+/**
+ * Origin (scheme, host, port) the instance is served on, for absolutizing the
+ * relative paths GitLab returns. Falls back to plain https for any host that
+ * isn't the configured instance.
+ */
+export function instanceOriginFor(host: string): string {
+  const instance = configuredInstance();
+  return instance && instance.host === host.toLowerCase() ? instance.origin : `https://${host}`;
 }
 
 /** Full namespace path (`group/subgroup/project`) for a parsed repo. */
@@ -95,7 +151,18 @@ export function encodeProjectId(repo: Pick<RepoRef, "owner" | "repo">): string {
   return encodeURIComponent(repoFullPath(repo));
 }
 
-/** Web URL of the project's home page. */
+/**
+ * Web URL of the project's home page. Built from the configured instance base
+ * when the repo lives on it, so a self-hosted install on a custom port or
+ * under a deployment path keeps both — `https://<host>/…` would drop them and
+ * hand the user a dead link. Any other GitLab host (hostname-matched public
+ * instances) gets plain https, which is what those serve.
+ */
 export function repoWebUrl(repo: Pick<RepoRef, "host" | "owner" | "repo">): string {
-  return `https://${repo.host}/${repo.owner}/${repo.repo}`;
+  const instance = configuredInstance();
+  const base =
+    instance && instance.host === repo.host.toLowerCase()
+      ? `${instance.origin}${instance.prefix}`
+      : `https://${repo.host}`;
+  return `${base}/${repo.owner}/${repo.repo}`;
 }

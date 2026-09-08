@@ -15,6 +15,7 @@ import {
   getInstanceHost,
   getToken,
   getTokenHealth,
+  currentIdentityGeneration,
   getTokenVersion,
   getValidatedUserInfo,
   onTokenHealthChanged,
@@ -22,6 +23,7 @@ import {
   setMemoryToken,
   setValidatedUserInfo,
   validateGitLabToken,
+  validateStoredGitLabToken,
 } from "./GitLabAuth.js";
 import { getRateLimitSnapshot } from "./GitLabClient.js";
 import { parseGitLabRemoteUrl, repoWebUrl } from "./gitlabRemote.js";
@@ -91,8 +93,10 @@ const identityCapability: IdentityCapability = {
         rawData: { source: "GitLabAuth.cached" },
       };
     }
+
     const versionAtStart = getTokenVersion();
-    const result = await validateGitLabToken(token);
+    const identityAtStart = currentIdentityGeneration();
+    const result = await validateStoredGitLabToken(token);
     if (!result.valid || !result.username) return null;
     setValidatedUserInfo(
       {
@@ -100,7 +104,8 @@ const identityCapability: IdentityCapability = {
         ...(result.avatarUrl ? { avatarUrl: result.avatarUrl } : {}),
         ...(result.scopes ? { scopes: result.scopes } : {}),
       },
-      versionAtStart
+      versionAtStart,
+      identityAtStart
     );
     return {
       login: result.username,
@@ -195,6 +200,9 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
     // Non-bearer credentials are silently ignored — GitLab tokens are bearer.
     // A credential change invalidates everything fetched under the old one
     // (private tooltips, stats, instance-scoped avatars).
+    // `setMemoryToken` binds the credential to the instance configured right
+    // now, so a later `instanceUrl` change withholds it instead of replaying
+    // it at the new origin.
     if (getTokenVersion() !== before) {
       clearGitLabCaches();
     }
@@ -206,7 +214,8 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
       return { valid: false, error: "No GitLab token configured" };
     }
     const versionAtStart = getTokenVersion();
-    const result = await validateGitLabToken(token);
+    const identityAtStart = currentIdentityGeneration();
+    const result = await validateStoredGitLabToken(token);
     if (result.valid && result.username) {
       setValidatedUserInfo(
         {
@@ -214,7 +223,8 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
           ...(result.avatarUrl ? { avatarUrl: result.avatarUrl } : {}),
           ...(result.scopes ? { scopes: result.scopes } : {}),
         },
-        versionAtStart
+        versionAtStart,
+        identityAtStart
       );
     }
     return toAuthValidation(result);

@@ -11,6 +11,7 @@ import {
   pipelineStatusToCIState,
   stripDraftPrefix,
 } from "../mappers.js";
+import { getInstanceUrl, resetAuthStateForTests, setInstanceUrlReader } from "../GitLabAuth.js";
 import type { GitLabMergeRequest } from "../../shared/types.js";
 
 const HOST = "gitlab.com";
@@ -54,21 +55,59 @@ describe("draft detection", () => {
     expect(isDraftMergeRequest({ work_in_progress: true, title: "Anything" })).toBe(true);
   });
 
-  it("falls back to title conventions on old instances", () => {
+  // The booleans are derived server-side from the title, so a present `false`
+  // is the server disagreeing with what the title looks like — and it wins.
+  it("lets an explicit false override a draft-looking title", () => {
+    expect(isDraftMergeRequest({ draft: false, title: "Draft: thing" })).toBe(false);
+    expect(isDraftMergeRequest({ work_in_progress: false, title: "[Draft] thing" })).toBe(false);
+  });
+
+  it("falls back to title conventions only when neither boolean is present", () => {
     expect(isDraftMergeRequest({ title: "Draft: thing" })).toBe(true);
     expect(isDraftMergeRequest({ title: "[Draft] thing" })).toBe(true);
-    expect(isDraftMergeRequest({ title: "WIP: thing" })).toBe(true);
-    expect(isDraftMergeRequest({ title: "[WIP] thing" })).toBe(true);
-    expect(isDraftMergeRequest({ title: "(WIP) thing" })).toBe(true);
+    expect(isDraftMergeRequest({ title: "(Draft) thing" })).toBe(true);
+    expect(isDraftMergeRequest({ title: "Draft - thing" })).toBe(true);
+    expect(isDraftMergeRequest({ title: "draft: lowercase" })).toBe(true);
     expect(isDraftMergeRequest({ title: "Drafting a doc" })).toBe(false);
   });
 
+  // GitLab removed WIP: in 14.8, so a WIP-titled MR is an ordinary open one.
+  // Calling it a draft would make "convert to draft" a silent no-op.
+  it("does not treat the removed WIP prefix as a draft", () => {
+    expect(isDraftMergeRequest({ title: "WIP: thing" })).toBe(false);
+    expect(isDraftMergeRequest({ title: "[WIP] thing" })).toBe(false);
+    expect(stripDraftPrefix("WIP: thing")).toBe("WIP: thing");
+  });
+
   it("strips stacked draft prefixes", () => {
-    expect(stripDraftPrefix("Draft: WIP: thing")).toBe("thing");
+    expect(stripDraftPrefix("Draft: [Draft] thing")).toBe("thing");
     expect(stripDraftPrefix("[Draft] thing")).toBe("thing");
-    expect(stripDraftPrefix("[WIP] thing")).toBe("thing");
-    expect(stripDraftPrefix("(WIP) thing")).toBe("thing");
+    expect(stripDraftPrefix("(Draft) thing")).toBe("thing");
+    expect(stripDraftPrefix("Draft - thing")).toBe("thing");
     expect(stripDraftPrefix("thing")).toBe("thing");
+  });
+});
+
+describe("mergeableFromMR via mergeRequestToForgePR", () => {
+  const mr = (detailed_merge_status: string): GitLabMergeRequest => ({
+    iid: 1,
+    state: "opened",
+    detailed_merge_status,
+  });
+
+  it("reports the computing states as not-yet-known, not as blocked", () => {
+    // A merge button disabled for a reason GitLab hasn't established yet is
+    // worse than one that says "checking".
+    for (const status of ["checking", "unchecked", "preparing", "approvals_syncing"]) {
+      expect(mergeRequestToForgePR(mr(status), HOST).mergeable).toBeNull();
+    }
+  });
+
+  it("separates mergeable from the blocked states", () => {
+    expect(mergeRequestToForgePR(mr("mergeable"), HOST).mergeable).toBe(true);
+    for (const status of ["conflict", "ci_must_pass", "draft_status", "not_approved"]) {
+      expect(mergeRequestToForgePR(mr(status), HOST).mergeable).toBe(false);
+    }
   });
 });
 
@@ -174,11 +213,26 @@ describe("absolutizeAvatarUrl", () => {
     expect(absolutizeAvatarUrl("https://cdn.example/a.png", HOST)).toBe(
       "https://cdn.example/a.png"
     );
+    // Not the configured instance, so plain https on the default port.
     expect(absolutizeAvatarUrl("/uploads/a.png", "gitlab.example.com")).toBe(
       "https://gitlab.example.com/uploads/a.png"
     );
     expect(absolutizeAvatarUrl(undefined, HOST)).toBeUndefined();
     expect(absolutizeAvatarUrl("", HOST)).toBeUndefined();
+  });
+
+  it("resolves against the configured origin for a self-hosted instance", async () => {
+    setInstanceUrlReader(() => Promise.resolve("http://code.example:8443/gitlab"));
+    await getInstanceUrl();
+    try {
+      // The scheme and port come from the instance, not a hardcoded https.
+      expect(absolutizeAvatarUrl("/uploads/a.png", "code.example")).toBe(
+        "http://code.example:8443/uploads/a.png"
+      );
+    } finally {
+      setInstanceUrlReader(null);
+      resetAuthStateForTests();
+    }
   });
 });
 
@@ -249,5 +303,21 @@ describe("graphqlMergeRequestToForgePR", () => {
   it("returns null for nodes without a usable iid", () => {
     expect(graphqlMergeRequestToForgePR({ iid: "not-a-number" }, HOST)).toBeNull();
     expect(graphqlMergeRequestToForgePR({}, HOST)).toBeNull();
+  });
+
+  // Same precedence as the REST mapper: the server's boolean is derived from
+  // the title, so a present `false` is authoritative and the title loses.
+  it("lets an explicit draft:false override a draft-looking title", () => {
+    const node = { iid: "3", title: "Draft: thing", draft: false };
+    expect(graphqlMergeRequestToForgePR(node, HOST)?.isDraft).toBe(false);
+  });
+
+  it("falls back to the title when the node carries no draft field", () => {
+    expect(graphqlMergeRequestToForgePR({ iid: "3", title: "Draft: thing" }, HOST)?.isDraft).toBe(
+      true
+    );
+    expect(graphqlMergeRequestToForgePR({ iid: "3", title: "WIP: thing" }, HOST)?.isDraft).toBe(
+      false
+    );
   });
 });

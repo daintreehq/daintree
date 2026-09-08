@@ -5,15 +5,19 @@ const { authMock, readOpsMock, updateForgeCredentialsMock } = vi.hoisted(() => (
   authMock: {
     getToken: vi.fn<() => string | null>(),
     getTokenVersion: vi.fn(() => 0),
-    validateGitLabToken: vi.fn(),
+    validateStoredGitLabToken: vi.fn(),
     setValidatedUserInfo: vi.fn(),
+    clearValidatedUserInfo: vi.fn(),
+    currentIdentityGeneration: vi.fn(() => 0),
+    setProvenanceAccessors: vi.fn(),
     setInstanceUrlReader: vi.fn(),
     setMemoryToken: vi.fn(),
     markTokenHealthy: vi.fn(),
     markTokenUnhealthy: vi.fn(),
-    // Present only because index.ts re-exports them from GitLabAuth.js — a
-    // mocked module must still provide every re-exported binding.
-    getInstanceUrl: vi.fn(),
+    // activate() awaits this to prime the synchronous instance cache the URL
+    // builders read; getInstanceHost is here only because index.ts re-exports
+    // it, and a mocked module must still provide every re-exported binding.
+    getInstanceUrl: vi.fn(() => Promise.resolve("https://gitlab.com")),
     getInstanceHost: vi.fn(),
     GITLAB_API_TIMEOUT_MS: 15_000,
     GITLAB_AUTH_TIMEOUT_MS: 10_000,
@@ -39,7 +43,15 @@ import { activate } from "../index.js";
 function makeHost(): PluginHostApi {
   return {
     registerForgeProvider: vi.fn(() => Promise.resolve(vi.fn())),
-    settings: { get: vi.fn(() => Promise.resolve(undefined)) },
+    settings: {
+      get: vi.fn(() => Promise.resolve(undefined)),
+      onDidChange: vi.fn(() => Promise.resolve(vi.fn())),
+    },
+    storage: {
+      get: vi.fn(() => Promise.resolve(undefined)),
+      set: vi.fn(() => Promise.resolve()),
+      delete: vi.fn(() => Promise.resolve()),
+    },
   } as unknown as PluginHostApi;
 }
 
@@ -67,17 +79,17 @@ describe("gitlab plugin activate", () => {
 
   it("returns synchronously even while a stored-token validate hangs", async () => {
     authMock.getToken.mockReturnValue("glpat-123");
-    authMock.validateGitLabToken.mockReturnValue(new Promise<never>(() => {}));
+    authMock.validateStoredGitLabToken.mockReturnValue(new Promise<never>(() => {}));
 
     const dispose = await activate(makeHost());
 
     expect(typeof dispose).toBe("function");
-    expect(authMock.validateGitLabToken).toHaveBeenCalledWith("glpat-123");
+    expect(authMock.validateStoredGitLabToken).toHaveBeenCalledWith("glpat-123");
   });
 
   it("contains a rejected validate so it can't surface as an unhandled rejection", async () => {
     authMock.getToken.mockReturnValue("glpat-123");
-    authMock.validateGitLabToken.mockRejectedValue(new Error("network down"));
+    authMock.validateStoredGitLabToken.mockRejectedValue(new Error("network down"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown): void => {
@@ -98,10 +110,13 @@ describe("gitlab plugin activate", () => {
     }
   });
 
-  it("caches user info under the token version captured before validation", async () => {
+  it("caches user info under the token version and identity generation captured before validation", async () => {
     authMock.getToken.mockReturnValue("glpat-123");
     authMock.getTokenVersion.mockReturnValue(7);
-    authMock.validateGitLabToken.mockResolvedValue({
+    // An instance change bumps this, so a validation that started before it
+    // can't repopulate the identity of an account on the previous server.
+    authMock.currentIdentityGeneration.mockReturnValue(3);
+    authMock.validateStoredGitLabToken.mockResolvedValue({
       valid: true,
       authoritative: true,
       username: "dev",
@@ -113,13 +128,14 @@ describe("gitlab plugin activate", () => {
 
     expect(authMock.setValidatedUserInfo).toHaveBeenCalledWith(
       { username: "dev", scopes: ["api"] },
-      7
+      7,
+      3
     );
   });
 
   it("pushes stored credentials to workspace hosts on activation", async () => {
     authMock.getToken.mockReturnValue("glpat-123");
-    authMock.validateGitLabToken.mockResolvedValue({ valid: false, authoritative: false });
+    authMock.validateStoredGitLabToken.mockResolvedValue({ valid: false, authoritative: false });
 
     await activate(makeHost());
     await new Promise((resolve) => setImmediate(resolve));
@@ -134,7 +150,7 @@ describe("gitlab plugin activate", () => {
     await activate(makeHost());
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(authMock.validateGitLabToken).not.toHaveBeenCalled();
+    expect(authMock.validateStoredGitLabToken).not.toHaveBeenCalled();
     expect(updateForgeCredentialsMock).not.toHaveBeenCalled();
   });
 

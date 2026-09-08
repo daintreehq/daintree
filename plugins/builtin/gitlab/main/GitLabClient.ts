@@ -1,12 +1,12 @@
 import type { RateLimitInfo } from "../../../../shared/types/forge.js";
 import {
   GITLAB_API_TIMEOUT_MS,
-  getInstanceHostStrict,
-  getInstanceUrl,
+  getInstanceUrlStrict,
   getToken,
   getTokenVersion,
   markTokenHealthy,
   markTokenUnhealthy,
+  tokenMatchesInstance,
 } from "./GitLabAuth.js";
 
 /** GitLab REST/GraphQL error with the HTTP status preserved for callers. */
@@ -60,6 +60,18 @@ export interface RateLimitSnapshot {
  */
 const rateLimitByHost = new Map<string, RateLimitSnapshot>();
 
+/**
+ * One coherent decision about a request: where it goes, what credential it
+ * carries, and the token version that credential was read at. All three come
+ * from a single settings read so they cannot disagree with each other.
+ */
+export interface RequestAuth {
+  /** API base, including the configured scheme, port, and deployment path. */
+  base: string;
+  token: string | null;
+  version: number;
+}
+
 export function getRateLimitSnapshot(host: string): RateLimitSnapshot | null {
   return rateLimitByHost.get(host.toLowerCase()) ?? null;
 }
@@ -69,7 +81,26 @@ export function resetLastRateLimitInfo(): void {
   rateLimitByHost.clear();
 }
 
-function captureRateLimit(host: string, headers: Headers): void {
+/**
+ * Drop observed quotas. Called on invalidation because a quota belongs to an
+ * account on an instance: after a credential or instance change, the previous
+ * account's exhausted quota would keep the host's polling gate shut.
+ */
+export function resetRateLimitSnapshots(): void {
+  rateLimitGeneration += 1;
+  rateLimitByHost.clear();
+}
+
+/**
+ * Bumped by {@link resetRateLimitSnapshots}. A request in flight when the
+ * credential or instance changed carries the PREVIOUS account's quota
+ * headers; recording them would leave the host's polling gate shut on a quota
+ * the new account never spent.
+ */
+let rateLimitGeneration = 0;
+
+function captureRateLimit(host: string, headers: Headers, epoch: number): void {
+  if (epoch !== rateLimitGeneration) return;
   const limit = Number.parseInt(headers.get("ratelimit-limit") ?? "", 10);
   const remaining = Number.parseInt(headers.get("ratelimit-remaining") ?? "", 10);
   const reset = Number.parseInt(headers.get("ratelimit-reset") ?? "", 10);
@@ -92,34 +123,35 @@ function captureRateLimit(host: string, headers: Headers): void {
  * no token, not "assume gitlab.com". The token is read AFTER the async
  * settings read so a credential cleared or rotated mid-await is honored.
  */
-export async function tokenAllowedForHost(host: string): Promise<string | null> {
+export async function resolveRequestAuth(host: string): Promise<RequestAuth> {
+  const version = getTokenVersion();
+  let instanceUrl: string | null;
+  try {
+    instanceUrl = await getInstanceUrlStrict();
+  } catch {
+    // The configured instance is unknowable, so neither the destination nor
+    // the authorization decision can be made. Public hosts still work.
+    return { base: `https://${host}`, token: null, version };
+  }
   let instanceHost: string;
   try {
-    instanceHost = await getInstanceHostStrict();
+    instanceHost = new URL(instanceUrl).hostname.toLowerCase();
   } catch {
-    return null;
+    return { base: `https://${host}`, token: null, version };
   }
-  if (host.toLowerCase() !== instanceHost) return null;
-  return getToken();
-}
-
-/**
- * Base URL for API calls against `host`. When `host` is the configured
- * instance, the full configured base URL is used so self-hosted installs on
- * a custom scheme, port, or path prefix (`https://code.example:8443/gitlab`)
- * reach the right endpoint. Any other GitLab host (public instances matched
- * by hostname) gets plain `https://` on the default port.
- */
-async function apiBaseForHost(host: string): Promise<string> {
-  const instanceUrl = await getInstanceUrl();
-  try {
-    if (new URL(instanceUrl).hostname.toLowerCase() === host.toLowerCase()) {
-      return instanceUrl;
-    }
-  } catch {
-    // Unparsable configured URL — fall through to the plain-https default.
+  // Not the configured instance: a public GitLab host reached over plain
+  // https, unauthenticated.
+  if (host.toLowerCase() !== instanceHost) {
+    return { base: `https://${host}`, token: null, version };
   }
-  return `https://${host}`;
+  // Destination and authorization come from THE SAME read. Resolving them
+  // separately lets the second read fail and send the token to a fallback
+  // origin — dropping the configured port and deployment path — after the
+  // first read already approved it for the real one.
+  const token = tokenMatchesInstance(instanceUrl) ? getToken() : null;
+  // Token and version are read with no await between them, so a rotation
+  // can't stamp the new version onto the old token's outcome.
+  return { base: instanceUrl, token, version: getTokenVersion() };
 }
 
 function buildQueryString(query: Record<string, QueryValue> | undefined): string {
@@ -157,9 +189,8 @@ async function parseErrorMessage(response: Response): Promise<string> {
  * (guarded by the token version captured at send time).
  */
 export async function gitlabRest<T>(options: GitLabRestOptions): Promise<GitLabRestResult<T>> {
-  const token = await tokenAllowedForHost(options.host);
-  const base = await apiBaseForHost(options.host);
-  const versionAtRequest = getTokenVersion();
+  const rateLimitEpoch = rateLimitGeneration;
+  const { base, token, version: versionAtRequest } = await resolveRequestAuth(options.host);
   const url = `${base}/api/v4${options.path}${buildQueryString(options.query)}`;
 
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -178,7 +209,7 @@ export async function gitlabRest<T>(options: GitLabRestOptions): Promise<GitLabR
     throw new GitLabApiError(0, `Couldn't reach ${options.host}: ${(err as Error).message}`);
   }
 
-  captureRateLimit(options.host, response.headers);
+  captureRateLimit(options.host, response.headers, rateLimitEpoch);
 
   if (response.status === 401 && token) markTokenUnhealthy(versionAtRequest);
 
@@ -186,12 +217,29 @@ export async function gitlabRest<T>(options: GitLabRestOptions): Promise<GitLabR
     throw new GitLabApiError(response.status, await parseErrorMessage(response));
   }
 
-  if (token) markTokenHealthy(versionAtRequest);
-
   if (response.status === 204) {
+    if (token) markTokenHealthy(versionAtRequest);
     return { data: undefined as T, headers: response.headers };
   }
-  const data = (await response.json()) as T;
+
+  // An SSO gateway or captive portal answers 200 with an HTML login page. That
+  // is not a GitLab response, so it must neither certify the token as healthy
+  // nor surface as a bare SyntaxError from the JSON parse.
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("json")) {
+    throw new GitLabApiError(
+      response.status,
+      `${options.host} didn't answer with JSON — a sign-in gateway may be intercepting the API`
+    );
+  }
+  let data: T;
+  try {
+    data = (await response.json()) as T;
+  } catch {
+    throw new GitLabApiError(response.status, `${options.host} returned an unreadable response`);
+  }
+
+  if (token) markTokenHealthy(versionAtRequest);
   return { data, headers: response.headers };
 }
 
@@ -205,8 +253,14 @@ export async function gitlabRestPage<T>(options: GitLabRestOptions): Promise<Git
   const { data, headers } = await gitlabRest<T[]>(options);
   const nextPage = headers.get("x-next-page") ?? "";
   const total = Number.parseInt(headers.get("x-total") ?? "", 10);
+  // A 200 carrying an object (an error envelope, a gateway page that happened
+  // to be JSON) is not an empty page. Reporting it as one tells the user the
+  // project has no issues.
+  if (!Array.isArray(data)) {
+    throw new GitLabApiError(200, `${options.host} returned an unexpected list payload`);
+  }
   return {
-    items: Array.isArray(data) ? data : [],
+    items: data,
     nextCursor: nextPage.length > 0 ? nextPage : null,
     hasMore: nextPage.length > 0,
     ...(Number.isFinite(total) ? { totalCount: total } : {}),
@@ -223,9 +277,8 @@ export async function gitlabGraphQL<T>(
   query: string,
   variables: Record<string, unknown>
 ): Promise<T> {
-  const token = await tokenAllowedForHost(host);
-  const base = await apiBaseForHost(host);
-  const versionAtRequest = getTokenVersion();
+  const rateLimitEpoch = rateLimitGeneration;
+  const { base, token, version: versionAtRequest } = await resolveRequestAuth(host);
   const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -244,7 +297,7 @@ export async function gitlabGraphQL<T>(
     throw new GitLabApiError(0, `Couldn't reach ${host}: ${(err as Error).message}`);
   }
 
-  captureRateLimit(host, response.headers);
+  captureRateLimit(host, response.headers, rateLimitEpoch);
 
   if (response.status === 401 && token) markTokenUnhealthy(versionAtRequest);
   if (!response.ok) {

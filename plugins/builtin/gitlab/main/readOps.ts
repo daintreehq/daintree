@@ -25,10 +25,12 @@ import {
   gitlabRest,
   gitlabRestPage,
   getRateLimitSnapshot,
+  resetRateLimitSnapshots,
 } from "./GitLabClient.js";
 import { getInstanceHost } from "./GitLabAuth.js";
 import { encodeProjectId, repoFullPath } from "./gitlabRemote.js";
 import {
+  absolutizeAvatarUrl,
   gitlabIssueToForgeIssue,
   gitlabReleaseToForgeRelease,
   graphqlMergeRequestToForgePR,
@@ -59,11 +61,31 @@ const prTooltipCache = new Map<string, CacheEntry<PRTooltipData | null>>();
 const avatarCache = new Map<string, CacheEntry<string | null>>();
 const repoStatsCache = new Map<string, CacheEntry<RepoStatsSnapshot>>();
 
+/**
+ * Bumped by every invalidation. A read that started before the bump writes its
+ * result under the old generation and is dropped — clearing the maps alone
+ * would let an in-flight request repopulate them a moment later with data
+ * fetched under the previous credential or instance.
+ */
+let cacheGeneration = 0;
+
 export function clearGitLabCaches(): void {
+  cacheGeneration += 1;
   issueTooltipCache.clear();
   prTooltipCache.clear();
   avatarCache.clear();
   repoStatsCache.clear();
+  resetRateLimitSnapshots();
+}
+
+/** Snapshot the generation before an await; pass it to {@link cacheSet}. */
+function cacheEpoch(): number {
+  return cacheGeneration;
+}
+
+function cacheSet<T>(map: Map<string, CacheEntry<T>>, key: string, value: T, epoch: number): void {
+  if (epoch !== cacheGeneration) return;
+  map.set(key, { value, at: Date.now() });
 }
 
 function cacheGet<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number): T | undefined {
@@ -74,6 +96,15 @@ function cacheGet<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number
     return undefined;
   }
   return entry.value;
+}
+
+/**
+ * Entries GitLab can't identify. Without an `iid` a row maps to "#0" with an
+ * empty URL — it opens nothing and no action can target it — so it is dropped
+ * rather than rendered as if it were real.
+ */
+function withUsableNumber<T extends { iid?: number }>(items: T[]): T[] {
+  return items.filter((item) => typeof item.iid === "number");
 }
 
 function tooltipKey(repo: RepoRef, number: number): string {
@@ -89,7 +120,11 @@ function listQuery(opts: ListOptions, state: string | undefined) {
     sort: opts.direction ?? "desc",
     ...(opts.search ? { search: opts.search } : {}),
     ...(opts.labels && opts.labels.length > 0 ? { labels: opts.labels.join(",") } : {}),
-    ...(opts.assignee ? { assignee_username: opts.assignee } : {}),
+    // `assignee_username[]` is the documented array type on BOTH the issues
+    // and merge_requests endpoints. Grape silently drops an undeclared
+    // parameter, so a wrong shape here would return an UNFILTERED list rather
+    // than an error — send the form the docs declare.
+    ...(opts.assignee ? { assignee_username: [opts.assignee] } : {}),
   };
 }
 
@@ -100,7 +135,9 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     query: listQuery(opts, mapIssueListState(opts.state)),
   });
   return {
-    items: page.items.map((issue) => gitlabIssueToForgeIssue(issue, repo.host)),
+    // An entry with no `iid` maps to issue #0 with an empty URL — unopenable
+    // and unactionable, so it is dropped rather than rendered as a real row.
+    items: withUsableNumber(page.items).map((issue) => gitlabIssueToForgeIssue(issue, repo.host)),
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
     ...(page.totalCount !== undefined ? { totalCount: page.totalCount } : {}),
@@ -114,7 +151,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
     query: listQuery(opts, mapMRListState(opts.state)),
   });
   return {
-    items: page.items.map((mr) => mergeRequestToForgePR(mr, repo.host)),
+    items: withUsableNumber(page.items).map((mr) => mergeRequestToForgePR(mr, repo.host)),
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
     ...(page.totalCount !== undefined ? { totalCount: page.totalCount } : {}),
@@ -168,7 +205,7 @@ export async function findPRByBranchImpl(repo: RepoRef, branchName: string): Pro
     },
   });
   const first = page.items[0];
-  return first ? mergeRequestToForgePR(first, repo.host) : null;
+  return first && typeof first.iid === "number" ? mergeRequestToForgePR(first, repo.host) : null;
 }
 
 const BRANCH_BATCH_QUERY = `
@@ -357,10 +394,11 @@ export async function getIssueTooltipImpl(
   const key = tooltipKey(repo, issueNumber);
   const cached = cacheGet(issueTooltipCache, key, TOOLTIP_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
+  const epoch = cacheEpoch();
   try {
     const issue = await getIssueImpl(repo, issueNumber);
     const tooltip = issue ? issueToTooltipData(issue) : null;
-    issueTooltipCache.set(key, { value: tooltip, at: Date.now() });
+    cacheSet(issueTooltipCache, key, tooltip, epoch);
     return tooltip;
   } catch {
     return null;
@@ -374,10 +412,11 @@ export async function getPRTooltipImpl(
   const key = tooltipKey(repo, prNumber);
   const cached = cacheGet(prTooltipCache, key, TOOLTIP_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
+  const epoch = cacheEpoch();
   try {
     const pr = await getPRImpl(repo, prNumber);
     const tooltip = pr ? prToTooltipData(pr, repo.host) : null;
-    prTooltipCache.set(key, { value: tooltip, at: Date.now() });
+    cacheSet(prTooltipCache, key, tooltip, epoch);
     return tooltip;
   } catch {
     return null;
@@ -400,18 +439,22 @@ export async function resolveAuthorAvatarImpl(
   const key = `${instanceHost.toLowerCase()}:${normalizedEmail}`;
   const cached = cacheGet(avatarCache, key, AVATAR_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
+  const epoch = cacheEpoch();
   try {
     const { data } = await gitlabRest<{ avatar_url?: unknown }>({
       host: instanceHost,
       path: "/avatar",
       query: { email: normalizedEmail, size: 64 },
     });
-    const url =
-      typeof data.avatar_url === "string" && data.avatar_url.length > 0 ? data.avatar_url : null;
-    avatarCache.set(key, { value: url, at: Date.now() });
+    // GitLab documents this as an absolute URL — the instance's own uploads
+    // path, or an external avatar service for an unknown email — which
+    // absolutizeAvatarUrl passes through untouched. It runs through the same
+    // helper anyway so a relative value can't reach the renderer as one.
+    const url = absolutizeAvatarUrl(data.avatar_url, instanceHost) ?? null;
+    cacheSet(avatarCache, key, url, epoch);
     return url;
   } catch {
-    avatarCache.set(key, { value: null, at: Date.now() });
+    cacheSet(avatarCache, key, null, epoch);
     return null;
   }
 }
@@ -440,6 +483,7 @@ export async function getRepoStatsImpl(
   opts?: { bypassCache?: boolean }
 ): Promise<RepoStatsSnapshot> {
   const key = `${repo.host}/${repoFullPath(repo)}`;
+  const epoch = cacheEpoch();
   if (!opts?.bypassCache) {
     const cached = cacheGet(repoStatsCache, key, REPO_STATS_CACHE_TTL_MS);
     if (cached !== undefined) return { ...cached, source: "memory-cache" };
@@ -479,18 +523,20 @@ export async function getRepoStatsImpl(
         prCountRefreshedAt: now,
       },
       issues: toStatsPage(
-        issuesPage.items.map((issue) => gitlabIssueToForgeIssue(issue, repo.host)),
+        withUsableNumber(issuesPage.items).map((issue) =>
+          gitlabIssueToForgeIssue(issue, repo.host)
+        ),
         issuesPage.hasMore,
         issuesPage.totalCount
       ),
       prs: toStatsPage(
-        mrsPage.items.map((mr) => mergeRequestToForgePR(mr, repo.host)),
+        withUsableNumber(mrsPage.items).map((mr) => mergeRequestToForgePR(mr, repo.host)),
         mrsPage.hasMore,
         mrsPage.totalCount
       ),
       source: "network",
     };
-    repoStatsCache.set(key, { value: snapshot, at: now });
+    cacheSet(repoStatsCache, key, snapshot, epoch);
     return snapshot;
   } catch (err) {
     const stale = repoStatsCache.get(key)?.value;

@@ -53,6 +53,9 @@ export interface GitLabMergeRequest {
   updated_at?: string;
   closed_at?: string | null;
   merged_at?: string | null;
+  /** Present on the merge endpoint's response; which one is set depends on squash. */
+  merge_commit_sha?: string | null;
+  squash_commit_sha?: string | null;
 }
 
 export interface GitLabPipeline {

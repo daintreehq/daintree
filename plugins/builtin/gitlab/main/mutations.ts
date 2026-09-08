@@ -4,11 +4,14 @@ import type {
   EditIssueInput,
   EditPRInput,
   ForgeLabel,
+  ForgeUser,
   Issue,
   IssueCloseReason,
   IssueComment,
   MergePRInput,
+  MergePRResult,
   PR,
+  PRDraftStateResult,
   RepoRef,
 } from "../../../../shared/types/forge.js";
 import type { GitLabIssue, GitLabMergeRequest, GitLabNote, GitLabUser } from "../shared/types.js";
@@ -18,11 +21,13 @@ import {
   gitlabIssueToForgeIssue,
   gitlabLabelsToForgeLabels,
   gitlabNoteToIssueComment,
+  gitlabUserToForgeUser,
   isDraftMergeRequest,
   isDraftTitle,
   mergeRequestToForgePR,
   stripDraftPrefix,
 } from "./mappers.js";
+import { clearGitLabCaches } from "./readOps.js";
 
 function projectPath(repo: RepoRef): string {
   return `/projects/${encodeProjectId(repo)}`;
@@ -62,6 +67,14 @@ async function resolveUserId(repo: RepoRef, username: string): Promise<number> {
   return match.id;
 }
 
+/** The issue's resulting assignee list — what actually landed, not what was asked for. */
+function gitlabAssigneesToForgeUsers(issue: GitLabIssue, host: string): ForgeUser[] {
+  if (!Array.isArray(issue.assignees)) return [];
+  return issue.assignees
+    .map((u) => gitlabUserToForgeUser(u, host))
+    .filter((u): u is ForgeUser => u !== undefined);
+}
+
 function currentAssigneeIds(issue: GitLabIssue): number[] {
   if (!Array.isArray(issue.assignees)) return [];
   return issue.assignees.map((a) => a.id).filter((id): id is number => typeof id === "number");
@@ -78,6 +91,7 @@ export async function createIssueImpl(repo: RepoRef, input: CreateIssueInput): P
       ...(input.labels && input.labels.length > 0 ? { labels: input.labels.join(",") } : {}),
     },
   });
+  clearGitLabCaches();
   return gitlabIssueToForgeIssue(data, repo.host);
 }
 
@@ -85,14 +99,16 @@ export async function assignIssueImpl(
   repo: RepoRef,
   issueNumber: number,
   username: string
-): Promise<void> {
+): Promise<ForgeUser[]> {
   const [userId, issue] = await Promise.all([
     resolveUserId(repo, username),
     fetchIssueRaw(repo, issueNumber),
   ]);
   const ids = currentAssigneeIds(issue);
-  if (ids.includes(userId)) return;
-  await gitlabRest({
+  // Already assigned — the state the caller asked for is the state on the
+  // server, so report the current list rather than writing it back.
+  if (ids.includes(userId)) return gitlabAssigneesToForgeUsers(issue, repo.host);
+  const { data } = await gitlabRest<GitLabIssue>({
     host: repo.host,
     method: "PUT",
     path: `${projectPath(repo)}/issues/${issueNumber}`,
@@ -103,27 +119,35 @@ export async function assignIssueImpl(
     // semantics stay additive.
     body: { assignee_ids: [userId, ...ids] },
   });
+  clearGitLabCaches();
+  // The updated issue's own list, not the requested id: on GitLab Free the
+  // extra ids are dropped, so only the response says what actually landed.
+  return gitlabAssigneesToForgeUsers(data, repo.host);
 }
 
 export async function unassignIssueImpl(
   repo: RepoRef,
   issueNumber: number,
   username: string
-): Promise<void> {
+): Promise<ForgeUser[]> {
   const issue = await fetchIssueRaw(repo, issueNumber);
   const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
   const remaining = assignees
     .filter((a) => (a.username ?? "").toLowerCase() !== username.toLowerCase())
     .map((a) => a.id)
     .filter((id): id is number => typeof id === "number");
-  if (remaining.length === assignees.length) return;
-  await gitlabRest({
+  // Not assigned in the first place — nothing to write, and the current list
+  // is already the resulting list.
+  if (remaining.length === assignees.length) return gitlabAssigneesToForgeUsers(issue, repo.host);
+  const { data } = await gitlabRest<GitLabIssue>({
     host: repo.host,
     method: "PUT",
     path: `${projectPath(repo)}/issues/${issueNumber}`,
     // `[0]` is GitLab's documented "unassign everyone" sentinel.
     body: { assignee_ids: remaining.length > 0 ? remaining : [0] },
   });
+  clearGitLabCaches();
+  return gitlabAssigneesToForgeUsers(data, repo.host);
 }
 
 export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise<PR> {
@@ -142,6 +166,7 @@ export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise
       ...(input.body !== undefined ? { description: input.body } : {}),
     },
   });
+  clearGitLabCaches();
   return mergeRequestToForgePR(data, repo.host);
 }
 
@@ -149,28 +174,30 @@ async function setMRStateEvent(
   repo: RepoRef,
   prNumber: number,
   stateEvent: "close" | "reopen"
-): Promise<void> {
-  await gitlabRest({
+): Promise<PR> {
+  const { data } = await gitlabRest<GitLabMergeRequest>({
     host: repo.host,
     method: "PUT",
     path: `${projectPath(repo)}/merge_requests/${prNumber}`,
     body: { state_event: stateEvent },
   });
+  clearGitLabCaches();
+  return mergeRequestToForgePR(data, repo.host);
 }
 
-export async function closePRImpl(repo: RepoRef, prNumber: number): Promise<void> {
-  await setMRStateEvent(repo, prNumber, "close");
+export async function closePRImpl(repo: RepoRef, prNumber: number): Promise<PR> {
+  return setMRStateEvent(repo, prNumber, "close");
 }
 
-export async function reopenPRImpl(repo: RepoRef, prNumber: number): Promise<void> {
-  await setMRStateEvent(repo, prNumber, "reopen");
+export async function reopenPRImpl(repo: RepoRef, prNumber: number): Promise<PR> {
+  return setMRStateEvent(repo, prNumber, "reopen");
 }
 
 export async function mergePRImpl(
   repo: RepoRef,
   prNumber: number,
   input?: MergePRInput
-): Promise<void> {
+): Promise<MergePRResult> {
   if (input?.mergeMethod === "rebase") {
     // GitLab's merge method is project-level configuration, not a per-merge
     // parameter; only squash can be chosen per merge.
@@ -182,7 +209,7 @@ export async function mergePRImpl(
       ? [input.commitTitle, input.commitMessage].filter(Boolean).join("\n\n")
       : undefined;
   try {
-    await gitlabRest({
+    const { data } = await gitlabRest<GitLabMergeRequest>({
       host: repo.host,
       method: "PUT",
       path: `${projectPath(repo)}/merge_requests/${prNumber}/merge`,
@@ -200,6 +227,38 @@ export async function mergePRImpl(
           : {}),
       },
     });
+    clearGitLabCaches();
+    // GitLab answers the merge endpoint with the updated merge request, not a
+    // dedicated ack. Squash and merge-commit land in different fields, so both
+    // are read; a 2xx means the merge happened, which is why `state` only gets
+    // to deny it when it explicitly says otherwise.
+    // Merge commit first: GitLab can squash the source commits AND still
+    // create a merge commit, returning both. `MergePRResult.sha` names the
+    // commit the change landed as on the target branch, so the squash sha is
+    // only right when there is no merge commit (fast-forward/semi-linear).
+    const sha =
+      (typeof data.merge_commit_sha === "string" && data.merge_commit_sha) ||
+      (typeof data.squash_commit_sha === "string" && data.squash_commit_sha) ||
+      null;
+    // A 200 whose body isn't a merge request at all (an error envelope, a
+    // gateway page) says nothing about the merge. Claiming either outcome
+    // from it would be a guess, so it's an error.
+    if (typeof data.state !== "string") {
+      throw new Error("GitLab returned an unrecognizable response to the merge");
+    }
+    // Only an explicit "merged" counts: a queued merge acks with the MR still
+    // open, and reporting a merge that didn't happen is the worse mistake.
+    const merged = data.state === "merged";
+    return {
+      prNumber,
+      sha,
+      merged,
+      // A queued merge (merge-when-pipeline-succeeds) acks 2xx with the MR
+      // still open. Saying "merged" there would contradict the flag beside it.
+      message: merged
+        ? `Merge request !${prNumber} merged`
+        : `Merge request !${prNumber} is queued to merge`,
+    };
   } catch (err) {
     // GitLab answers 405/406 for unmergeable states with a terse body;
     // translate them so the confirm-dialog error is actionable.
@@ -213,40 +272,60 @@ export async function mergePRImpl(
   }
 }
 
-export async function convertPRToDraftImpl(repo: RepoRef, prNumber: number): Promise<void> {
+/**
+ * Draft state IS the title prefix in GitLab — there is no writable flag — so a
+ * toggle is a title rewrite. The resulting state is read back off the updated
+ * merge request rather than assumed from the request, so a project rule that
+ * rewrites the title can't leave the UI claiming a state the server rejected.
+ */
+async function setMRDraftState(
+  repo: RepoRef,
+  prNumber: number,
+  draft: boolean
+): Promise<PRDraftStateResult> {
   const mr = await fetchMRRaw(repo, prNumber);
-  if (isDraftMergeRequest(mr)) return;
-  await gitlabRest({
+  if (isDraftMergeRequest(mr) === draft) return { prNumber, isDraft: draft };
+  const title = draft ? `Draft: ${mr.title ?? ""}` : stripDraftPrefix(mr.title ?? "");
+  const { data } = await gitlabRest<GitLabMergeRequest>({
     host: repo.host,
     method: "PUT",
     path: `${projectPath(repo)}/merge_requests/${prNumber}`,
-    // Draft state IS the title prefix in GitLab — there's no writable flag.
-    body: { title: `Draft: ${mr.title ?? ""}` },
+    body: { title },
   });
+  clearGitLabCaches();
+  return { prNumber, isDraft: isDraftMergeRequest(data) };
 }
 
-export async function markPRReadyForReviewImpl(repo: RepoRef, prNumber: number): Promise<void> {
-  const mr = await fetchMRRaw(repo, prNumber);
-  if (!isDraftMergeRequest(mr)) return;
-  await gitlabRest({
-    host: repo.host,
-    method: "PUT",
-    path: `${projectPath(repo)}/merge_requests/${prNumber}`,
-    body: { title: stripDraftPrefix(mr.title ?? "") },
-  });
+export async function convertPRToDraftImpl(
+  repo: RepoRef,
+  prNumber: number
+): Promise<PRDraftStateResult> {
+  return setMRDraftState(repo, prNumber, true);
+}
+
+export async function markPRReadyForReviewImpl(
+  repo: RepoRef,
+  prNumber: number
+): Promise<PRDraftStateResult> {
+  return setMRDraftState(repo, prNumber, false);
 }
 
 export async function commentOnPRImpl(
   repo: RepoRef,
   prNumber: number,
   body: string
-): Promise<void> {
-  await gitlabRest({
+): Promise<IssueComment> {
+  const { data } = await gitlabRest<GitLabNote>({
     host: repo.host,
     method: "POST",
     path: `${projectPath(repo)}/merge_requests/${prNumber}/notes`,
     body: { body },
   });
+  // A note changes the MR's comment count and timeline, so the cached
+  // tooltips that carry it are stale.
+  clearGitLabCaches();
+  const prUrl = `${repoWebUrl(repo)}/-/merge_requests/${prNumber}`;
+  return gitlabNoteToIssueComment(data, prUrl, repo.host);
 }
 
 export async function editPRImpl(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR> {
@@ -269,6 +348,7 @@ export async function editPRImpl(repo: RepoRef, prNumber: number, input: EditPRI
       ...(input.body !== undefined ? { description: input.body } : {}),
     },
   });
+  clearGitLabCaches();
   return mergeRequestToForgePR(data, repo.host);
 }
 
@@ -284,6 +364,7 @@ export async function closeIssueImpl(
     path: `${projectPath(repo)}/issues/${issueNumber}`,
     body: { state_event: "close" },
   });
+  clearGitLabCaches();
   return gitlabIssueToForgeIssue(data, repo.host);
 }
 
@@ -294,6 +375,7 @@ export async function reopenIssueImpl(repo: RepoRef, issueNumber: number): Promi
     path: `${projectPath(repo)}/issues/${issueNumber}`,
     body: { state_event: "reopen" },
   });
+  clearGitLabCaches();
   return gitlabIssueToForgeIssue(data, repo.host);
 }
 
@@ -311,6 +393,7 @@ export async function editIssueImpl(
       ...(input.body !== undefined ? { description: input.body } : {}),
     },
   });
+  clearGitLabCaches();
   return gitlabIssueToForgeIssue(data, repo.host);
 }
 
@@ -325,6 +408,7 @@ export async function addIssueCommentImpl(
     path: `${projectPath(repo)}/issues/${issueNumber}/notes`,
     body: { body },
   });
+  clearGitLabCaches();
   const issueUrl = `${repoWebUrl(repo)}/-/issues/${issueNumber}`;
   return gitlabNoteToIssueComment(data, issueUrl, repo.host);
 }
@@ -340,6 +424,7 @@ export async function addIssueLabelImpl(
     path: `${projectPath(repo)}/issues/${issueNumber}`,
     body: { add_labels: label },
   });
+  clearGitLabCaches();
   return gitlabLabelsToForgeLabels(data.labels);
 }
 
@@ -359,5 +444,6 @@ export async function removeIssueLabelImpl(
     path: `${projectPath(repo)}/issues/${issueNumber}`,
     body: { remove_labels: label },
   });
+  clearGitLabCaches();
   return gitlabLabelsToForgeLabels(data.labels);
 }
