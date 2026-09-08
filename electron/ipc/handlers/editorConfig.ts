@@ -1,6 +1,7 @@
 import { projectStore } from "../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../types.js";
 import type { EditorSetConfigPayload } from "../../../shared/types/editor.js";
+import { isKnownEditorId } from "../../../shared/types/editor.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { EDITOR_CONFIG_METHOD_CHANNELS } from "./editorConfig.preload.js";
 
@@ -38,19 +39,7 @@ export const editorConfigNamespace = defineIpcNamespace({
           throw new Error("Invalid editor config");
         }
         const editorObj = editor as Record<string, unknown>;
-        const validIds = [
-          "vscode",
-          "vscode-insiders",
-          "cursor",
-          "windsurf",
-          "antigravity-ide",
-          "zed",
-          "neovim",
-          "webstorm",
-          "sublime",
-          "custom",
-        ];
-        if (typeof editorObj.id !== "string" || !validIds.includes(editorObj.id)) {
+        if (!isKnownEditorId(editorObj.id)) {
           throw new Error(`Invalid editor id: ${String(editorObj.id)}`);
         }
         if (editorObj.customCommand !== undefined) {

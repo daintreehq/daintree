@@ -57,6 +57,9 @@ describe("EditorService adversarial", () => {
     delete process.env.VISUAL;
     delete process.env.EDITOR;
     setPlatform("linux");
+    // clearAllMocks() clears calls but keeps implementations, so a previous test's
+    // "installed" filesystem would otherwise persist into this one.
+    mockExistingFiles([]);
     shellMock.openPath.mockResolvedValue("");
     mockExecaChildren(execaMock.execa, ["spawned"]);
   });
@@ -93,11 +96,44 @@ describe("EditorService adversarial", () => {
     expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
   });
 
-  it("launches Antigravity IDE from its bundle, passing the spaced launcher path unquoted", async () => {
-    const launcher = "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide";
+  const ANTIGRAVITY_LAUNCHER =
+    "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide";
+
+  it.each([
+    {
+      what: "line and column",
+      line: 12 as number | undefined,
+      col: 5 as number | undefined,
+      expected: ["--goto", "/repo with spaces/src/app.ts:12:5"],
+    },
+    {
+      what: "a line only",
+      line: 12 as number | undefined,
+      col: undefined,
+      expected: ["--goto", "/repo with spaces/src/app.ts:12"],
+    },
+    {
+      what: "no location",
+      line: undefined,
+      col: undefined,
+      expected: ["--goto", "/repo with spaces/src/app.ts"],
+    },
+  ])("builds Antigravity IDE argv for $what", async ({ line, col, expected }) => {
     setPlatform("darwin");
     process.env.PATH = "";
-    mockExistingFiles([launcher]);
+    mockExistingFiles([ANTIGRAVITY_LAUNCHER]);
+
+    const { openFile } = await loadModule();
+    await openFile("/repo with spaces/src/app.ts", line, col, { id: "antigravity-ide" });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0][1]).toEqual(expected);
+  });
+
+  it("launches Antigravity IDE from its bundle, passing the spaced launcher path unquoted", async () => {
+    setPlatform("darwin");
+    process.env.PATH = "";
+    mockExistingFiles([ANTIGRAVITY_LAUNCHER]);
     const child = { unref: vi.fn(), catch: vi.fn() };
     execaMock.execa.mockReturnValue(child);
 
@@ -105,26 +141,40 @@ describe("EditorService adversarial", () => {
     await openFile("/repo with spaces/src/app.ts", 12, 5, { id: "antigravity-ide" });
 
     expect(execaMock.execa).toHaveBeenCalledTimes(1);
-    const [binary, args, options] = execaMock.execa.mock.calls[0];
-    expect(binary).toBe(launcher);
-    expect(args).toEqual(["--goto", "/repo with spaces/src/app.ts:12:5"]);
+    const [binary, , options] = execaMock.execa.mock.calls[0];
+    expect(binary).toBe(ANTIGRAVITY_LAUNCHER);
     expect(options).toMatchObject({ detached: true, stdio: "ignore", cleanup: false });
     expect(child.unref).toHaveBeenCalledTimes(1);
     expect(child.catch).toHaveBeenCalledWith(expect.any(Function));
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
-  it("omits the column from the Antigravity IDE --goto target when only a line is given", async () => {
-    const launcher = "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide";
+  it("honours a configured Antigravity IDE over an earlier-listed installed editor", async () => {
+    // Both installed: only the configured-editor branch can pick Antigravity, since
+    // VS Code wins the discovery-order fallback.
     setPlatform("darwin");
-    process.env.PATH = "";
-    mockExistingFiles([launcher]);
+    process.env.PATH = "/usr/local/bin";
+    mockExistingFiles([ANTIGRAVITY_LAUNCHER, "/usr/local/bin/code"]);
 
     const { openFile } = await loadModule();
-    await openFile("/repo/src/app.ts", 12, undefined, { id: "antigravity-ide" });
+    await openFile("/repo/src/app.ts", 3, undefined, { id: "antigravity-ide" });
 
     expect(execaMock.execa).toHaveBeenCalledTimes(1);
-    expect(execaMock.execa.mock.calls[0][1]).toEqual(["--goto", "/repo/src/app.ts:12"]);
+    expect(execaMock.execa.mock.calls[0][0]).toBe(ANTIGRAVITY_LAUNCHER);
+  });
+
+  it("does not preempt an already-supported editor when nothing is configured", async () => {
+    // Antigravity is appended last in KNOWN_EDITORS precisely so adding it cannot
+    // change which editor an existing user's unconfigured opens land in.
+    setPlatform("darwin");
+    process.env.PATH = "/usr/local/bin";
+    mockExistingFiles([ANTIGRAVITY_LAUNCHER, "/usr/local/bin/zed"]);
+
+    const { openFile } = await loadModule();
+    await openFile("/repo/src/app.ts");
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0][0]).toBe("/usr/local/bin/zed");
   });
 
   it("custom template tokenizes before substitution — file path with spaces stays one arg", async () => {

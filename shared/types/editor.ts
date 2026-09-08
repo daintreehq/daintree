@@ -1,14 +1,26 @@
-export type KnownEditorId =
-  | "vscode"
-  | "vscode-insiders"
-  | "cursor"
-  | "windsurf"
-  | "antigravity-ide"
-  | "zed"
-  | "neovim"
-  | "webstorm"
-  | "sublime"
-  | "custom";
+/**
+ * Every selectable editor id, in picker display order. The single source of truth:
+ * the union, the `setConfig` allowlist, and the picker's ordering all derive from
+ * it, so a new editor cannot compile into one list and be missing from another.
+ */
+export const KNOWN_EDITOR_IDS = [
+  "vscode",
+  "vscode-insiders",
+  "cursor",
+  "windsurf",
+  "antigravity-ide",
+  "zed",
+  "neovim",
+  "webstorm",
+  "sublime",
+  "custom",
+] as const;
+
+export type KnownEditorId = (typeof KNOWN_EDITOR_IDS)[number];
+
+export function isKnownEditorId(value: unknown): value is KnownEditorId {
+  return typeof value === "string" && (KNOWN_EDITOR_IDS as readonly string[]).includes(value);
+}
 
 /** Persisted preference for the user's chosen editor */
 export interface EditorConfig {

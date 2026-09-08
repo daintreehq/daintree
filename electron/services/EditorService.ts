@@ -66,18 +66,6 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     },
   },
   {
-    id: "antigravity-ide",
-    name: "Antigravity IDE",
-    binaries: ["antigravity-ide"],
-    extraDirs: () =>
-      macAppBundleDirs([{ name: "Antigravity IDE", subPath: "Contents/Resources/app/bin" }]),
-    buildArgs(filePath, line, col) {
-      const target =
-        line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
-      return ["--goto", target];
-    },
-  },
-  {
     id: "zed",
     name: "Zed",
     binaries: ["zed"],
@@ -145,6 +133,20 @@ const KNOWN_EDITORS: EditorDefinition[] = [
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
       return [target];
+    },
+  },
+  // Appended last on purpose: KNOWN_EDITORS order is also the auto-pick priority in
+  // openFile's fallback, so a new editor must not demote one users already have.
+  {
+    id: "antigravity-ide",
+    name: "Antigravity IDE",
+    binaries: ["antigravity-ide"],
+    extraDirs: () =>
+      macAppBundleDirs([{ name: "Antigravity IDE", subPath: "Contents/Resources/app/bin" }]),
+    buildArgs(filePath, line, col) {
+      const target =
+        line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
+      return ["--goto", target];
     },
   },
 ];
