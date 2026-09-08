@@ -33,24 +33,22 @@ export interface ChildDouble {
 }
 
 export function makeChildDouble(behaviour: ChildBehaviour): ChildDouble {
-  const listeners = new Map<string, Set<() => void>>();
   // A plain registry rather than an EventEmitter: emitting 'error' with no
   // listener would throw synchronously, which is the very failure shape these
-  // doubles exist to rule out.
-  const once = new WeakSet<() => void>();
-  const register = (event: string, listener: () => void, removeAfterCall: boolean) => {
-    const registered = listeners.get(event) ?? new Set<() => void>();
-    registered.add(listener);
-    listeners.set(event, registered);
-    if (removeAfterCall) once.add(listener);
+  // doubles exist to rule out. Lifetime is tracked per registration, not per
+  // function, so one callback can be both a `once` and an `on` listener.
+  const listeners = new Map<string, { listener: () => void; once: boolean }[]>();
+  const register = (event: string, listener: () => void, once: boolean) => {
+    listeners.set(event, [...(listeners.get(event) ?? []), { listener, once }]);
   };
   const emit = (event: string) => {
     const registered = listeners.get(event);
     if (!registered) return;
-    for (const listener of [...registered]) {
-      if (once.has(listener)) registered.delete(listener);
-      listener();
-    }
+    listeners.set(
+      event,
+      registered.filter((entry) => !entry.once)
+    );
+    for (const entry of registered) entry.listener();
   };
 
   let resolvePromise!: () => void;
@@ -76,7 +74,7 @@ export function makeChildDouble(behaviour: ChildBehaviour): ChildDouble {
       register(event, listener, false);
       return child;
     }),
-    listenerCount: (event: string) => listeners.get(event)?.size ?? 0,
+    listenerCount: (event: string) => listeners.get(event)?.length ?? 0,
     emitSpawn: () => emit("spawn"),
     rejectLaunch: (error = new Error("spawn ENOENT")) => rejectPromise(error),
   };
