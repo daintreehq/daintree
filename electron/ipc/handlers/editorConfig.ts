@@ -66,7 +66,7 @@ export const editorConfigNamespace = defineIpcNamespace({
         }
 
         const editorConfig = {
-          id: editorObj.id as import("../../../shared/types/editor.js").KnownEditorId,
+          id: editorObj.id,
           customCommand:
             isCustom && typeof editorObj.customCommand === "string"
               ? editorObj.customCommand
