@@ -319,7 +319,26 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // it does not instruct a rewrite, and this is the text that standard protects.
   // The headroom went to #12312's `workspace.list`; each PR fits alone and only
   // the landing order does not.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 46_400;
+  // 46_400 → 46_600 ahead of the spend, for #12189's two additions to the
+  // external tier:
+  //   - `agent.listAvailable`'s `defaultAgentId` and `resolvedDefaultAgentId`,
+  //     207 B. The user's explicit pick and what a launch would actually spawn
+  //     are different answers whenever the pick is unset or its CLI is not
+  //     launchable, and a caller that reads one as the other names an agent the
+  //     host then refuses. The two descriptions are what make the pair legible;
+  //     without them "resolved" is a word a client has to guess at.
+  //   - `agent.launch`'s `worktreeId`, 36 B. The action now fails closed when a
+  //     headless caller omits it, so the old "Defaults to the active worktree"
+  //     describes a behaviour only a person driving the UI still gets.
+  // #12189 is within budget alone; #12312's `workspace.list` consumed the prior
+  // headroom and only the landing order exceeds the ceiling.
+  //
+  // Raised here rather than on that branch because #12317, #12318 and #12319 are
+  // all open against this same surface and would otherwise each re-raise it on
+  // rebase. The cost is that develop sits 268 B under its own ceiling until
+  // #12189 lands, and a spend that drifts into that window before then will not
+  // be caught.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 46_600;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
