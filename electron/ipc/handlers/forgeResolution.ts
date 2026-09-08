@@ -225,6 +225,41 @@ export async function resolveForgeRemoteNameForCwd(cwd: string): Promise<string 
 }
 
 /**
+ * Accept a provider's refspec only if it maps one source ref onto exactly the
+ * branch the caller asked for. The provider owns the source hierarchy; the
+ * destination is the host's, and this is where that stops being a convention.
+ *
+ * The value goes into `git fetch` argv, and git updates whatever destination it
+ * is handed. Everything rejected here is something git would otherwise accept
+ * and do:
+ *
+ *  - `...:refs/heads/main` fast-forwards an unrelated local branch. A leading
+ *    `+` is not required for that, and outside `refs/heads/*` and `refs/tags/*`
+ *    git takes even non-fast-forward updates without one.
+ *  - `:feature/x` is not a delete on fetch the way it is on push — it fetches
+ *    the remote's HEAD, so the worktree would be built on the default branch
+ *    instead of the PR, silently and successfully.
+ *  - `refs/merge-requests/42/head:` fetches the objects and creates no branch,
+ *    which the host would still report as a successful fetch.
+ *  - A leading `-` is parsed as an option rather than a refspec, which drops the
+ *    mapping and lets the repo's configured fetch refspecs apply instead.
+ *  - A `*` maps a whole hierarchy, writing refs nobody asked for.
+ *
+ * Whitespace is rejected rather than trimmed: a ref name cannot contain any, so
+ * its presence means the provider built the string wrong, and trimming would
+ * hide that. It also keeps JS whitespace semantics from quietly reshaping a ref
+ * name git would have read differently.
+ */
+function isRefspecForBranch(refspec: string, headRefName: string): boolean {
+  if (/^[+^-]/.test(refspec) || /\s/.test(refspec) || refspec.includes("*")) return false;
+  const parts = refspec.split(":");
+  if (parts.length !== 2) return false;
+  const [src, dst] = parts;
+  if (!src || !dst) return false;
+  return dst === headRefName || dst === `refs/heads/${headRefName}`;
+}
+
+/**
  * The provider-shaped refspec that fetches a PR's head into `headRefName`, for
  * the checkout fallback that runs when the head branch isn't already local
  * (#12324). Resolved here, next to the remote name, so the workspace host never
@@ -269,13 +304,10 @@ export async function resolvePRHeadRefspecForCwd(
     return undefined;
   }
   if (refspec === null) return null;
-  // The value goes straight into `git fetch` argv, so a provider bug must not
-  // become a surprising local-ref write. A `+` prefix would silently turn a
-  // fetch that has never force-updated into one that clobbers the destination.
-  if (typeof refspec !== "string") return undefined;
-  const trimmed = refspec.trim();
-  if (!trimmed || trimmed.startsWith("+") || !trimmed.includes(":")) return undefined;
-  return trimmed;
+  // A provider bug must not become a surprising local-ref write, so anything
+  // that doesn't land on exactly the requested branch degrades to the default.
+  if (typeof refspec !== "string" || !isRefspecForBranch(refspec, headRefName)) return undefined;
+  return refspec;
 }
 
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {

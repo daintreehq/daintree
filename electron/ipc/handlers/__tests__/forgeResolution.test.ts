@@ -757,10 +757,26 @@ describe("resolvePRHeadRefspecForCwd", () => {
     await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
   });
 
+  it("accepts a fully-qualified destination for the same branch", async () => {
+    withProvider({
+      buildPRHeadRefspec: vi.fn(() => "refs/merge-requests/42/head:refs/heads/feature/x"),
+    });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBe(
+      "refs/merge-requests/42/head:refs/heads/feature/x"
+    );
+  });
+
   it.each([
     ["an empty string", ""],
     ["whitespace only", "   "],
-    ["a refspec with no destination", "refs/merge-requests/42/head"],
+    ["no destination at all", "refs/merge-requests/42/head"],
+    ["an empty destination", "refs/merge-requests/42/head:"],
+    ["an empty source", ":feature/x"],
+    ["more than one mapping separator", "refs/merge-requests/42/head:feature/x:extra"],
+    ["a wildcard mapping", "refs/merge-requests/*:refs/heads/*"],
+    ["surrounding whitespace", " refs/merge-requests/42/head:feature/x "],
+    ["a smuggled second argument", "refs/merge-requests/42/head:feature/x --depth=1"],
     ["a non-string", 42 as unknown as string],
   ])("rejects %s and falls back", async (_label, value) => {
     withProvider({ buildPRHeadRefspec: vi.fn(() => value) });
@@ -768,11 +784,25 @@ describe("resolvePRHeadRefspecForCwd", () => {
     await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
   });
 
-  it("rejects a force refspec so a provider cannot clobber the local branch", async () => {
-    // This fetch has never force-updated; a `+` prefix would change that silently.
-    withProvider({
-      buildPRHeadRefspec: vi.fn(() => "+refs/merge-requests/42/head:feature/x"),
-    });
+  it.each([
+    ["a force refspec", "+refs/merge-requests/42/head:feature/x"],
+    ["a negative refspec", "^refs/merge-requests/42/head:feature/x"],
+    ["something git would read as an option", "--filter=blob:none"],
+  ])("rejects %s so git cannot reinterpret the argument", async (_label, value) => {
+    withProvider({ buildPRHeadRefspec: vi.fn(() => value) });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["an unrelated local branch", "refs/merge-requests/42/head:refs/heads/main"],
+    ["the bare name of another branch", "refs/merge-requests/42/head:main"],
+    ["a ref outside refs/heads", "refs/merge-requests/42/head:refs/daintree/pwned"],
+    ["a near-miss on the requested name", "refs/merge-requests/42/head:feature/x2"],
+  ])("refuses to write to %s", async (_label, value) => {
+    // git needs no `+` to fast-forward another branch, and outside
+    // refs/heads/* it will take a non-fast-forward update too.
+    withProvider({ buildPRHeadRefspec: vi.fn(() => value) });
 
     await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
   });

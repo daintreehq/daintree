@@ -136,7 +136,11 @@ describe("handleWorktreeFetchPRBranch", () => {
     // fail with an unrelated "couldn't find remote ref".
     resolvePRHeadRefspecForCwdMock.mockResolvedValue(null);
 
+    // The PR number and branch are the actionable parts — this message is all
+    // the caller gets, since no fetch will run to produce a git error.
     await expect(invoke()).rejects.toThrow(/doesn't publish a fetchable ref/);
+    await expect(invoke()).rejects.toThrow(/pull request #42/);
+    await expect(invoke()).rejects.toThrow(/"feature\/my-branch"/);
     expect(fetchPRBranch).not.toHaveBeenCalled();
   });
 

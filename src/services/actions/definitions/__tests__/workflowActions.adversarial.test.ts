@@ -415,9 +415,16 @@ describe("worktree.createWithRecipe", () => {
     worktreeClientMock.fetchPRBranch.mockRejectedValue(original);
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
-    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toMatchObject({
-      cause: original,
-    });
+    // Identity, not shape: `toMatchObject` compares nested Errors structurally,
+    // so a freshly built Error carrying the same message would satisfy it while
+    // having lost the original stack.
+    const thrown = await def.run({ source: pullRequest(42) }, {} as never).then(
+      () => {
+        throw new Error("expected the PR path to reject");
+      },
+      (error: unknown) => error as Error
+    );
+    expect(thrown.cause).toBe(original);
   });
 
   it("PR path survives a rejection that is not an Error", async () => {

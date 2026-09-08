@@ -1061,10 +1061,16 @@ interface ForgeProviderImpl {
      * fetch that cannot succeed. Throwing is not a way to signal this: the host
      * treats a throw as "capability unknown" and falls back to the default.
      *
-     * The returned refspec must not force-update (no leading `+`); the host
-     * rejects one that does and falls back. Note the PR-head ref is not
-     * guaranteed to be permanent — GitLab prunes merged/closed MR refs after
-     * roughly two weeks, so an old PR can stop being fetchable.
+     * You choose the source ref; the destination is the host's. It must be
+     * exactly `headRefName` or `refs/heads/${headRefName}` — the host rejects a
+     * refspec that would write anywhere else and falls back to the default,
+     * because git would otherwise happily update an unrelated local branch. For
+     * the same reason it rejects a leading `+`, `-` or `^`, a `*` wildcard,
+     * whitespace, more than one `:`, and an empty half on either side.
+     *
+     * Note the PR-head ref is not guaranteed to be permanent — GitLab prunes
+     * merged/closed MR refs after roughly two weeks, so an old PR can stop being
+     * fetchable.
      */
     buildPRHeadRefspec?(prNumber: number, headRefName: string): string | null;
     /**
