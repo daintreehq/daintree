@@ -336,9 +336,8 @@ export function evictStaleViews(
   // policy. So it yields under real pressure, just last.
   //
   // A workspace the *user* granted residency (#12313) is the one tier a client
-  // cannot give itself, so it outranks the bound-session ordering above and
-  // sits directly under the assistant floor. It is still not a floor: the
-  // number protected is bounded by the cap the user configured, below.
+  // cannot give itself, so it outranks the bound-session ordering above. Still
+  // not a floor, and deliberately not an exclusion — see the ordering below.
   const safeToEvict: EvictionCandidate[] = [];
   const activeAgentFallback: EvictionCandidate[] = [];
   const boundMcpSessionFallback: EvictionCandidate[] = [];
@@ -370,40 +369,40 @@ export function evictStaleViews(
     }
   }
 
-  // How many granted workspaces this pass will actually hold.
+  // Granted workspaces go last, and stay in `candidates` rather than becoming a
+  // fourth exclusion.
   //
-  // The whole bound is `effectiveMax - 1`: the active view is excluded from
-  // `evictable` and occupies one slot, so protected residents plus the active
-  // view can never exceed the cap. That is the "inside the configured cap"
-  // half of the issue's ask, as an invariant rather than a policy — residency
-  // alone can never carry the cache over `effectiveMax`, and the loop below
-  // always has enough candidates left to converge.
+  // Being last is the whole mechanism, and it is enough: a pass evicts only
+  // until the cache is back at `effectiveMax`, so a grant is taken only once
+  // every ungranted candidate is gone — which is exactly "keep this one while
+  // there is anything else to give up". Rotating through other projects can no
+  // longer evict the workspace holding an orchestrator's agents, because those
+  // other projects are always the cheaper answer.
   //
-  // It is also the whole of the "yields at critical pressure" half, with no
-  // branch anywhere: `effectiveMax` is already 1 on a forced reclaim and
-  // already `targetMax` under gradual pressure, so the slots go to zero exactly
-  // when the pressure ladder says they should and every granted view drops back
-  // into the ordinary queue. A soft band that still allows 3 views still honours
-  // 2 grants, which is the behaviour the issue thread converged on.
+  // Reserving slots instead was the obvious design and is strictly worse. Any
+  // reservation big enough to be safe (`effectiveMax` minus the active view,
+  // the bridges, the leases and the assistant floor) is by construction never
+  // reached — the loop always converges before it needs a reserved view — so
+  // the arithmetic produces this same ordering with more code. Sized any larger
+  // it stops being safe: with a cap of 2, an active view, a live assistant's
+  // floor and one grant, a reservation leaves the pass nothing it may evict and
+  // pins three views indefinitely, where the plain tier settles at two.
   //
-  // `evictable` is LRU-ascending, so the most recently used grants are its tail
-  // — when the user has granted more workspaces than fit, the ones they have
-  // actually been working in are the ones held.
-  const residentSlots = Math.max(0, effectiveMax - 1);
-  const residentProtected = residentSlots === 0 ? [] : residentGranted.slice(-residentSlots);
-  const residentOverflow = residentGranted.slice(
-    0,
-    residentGranted.length - residentProtected.length
-  );
-
-  // Overflow grants go last: one the cap could not hold is still a view the
-  // user asked for, so it outranks every ungranted candidate — including a
-  // bound-but-quiet session's, which is ordering the client got for free.
+  // Both halves of the issue's ask fall out of staying in `candidates`, with no
+  // branch for either. Residency can never carry the cache over the configured
+  // cap, because a candidate is always available to take. And it yields at
+  // critical pressure for the same reason — a forced reclaim converges on the
+  // active view alone, and a grant is not exempt from that, it is merely the
+  // last thing surrendered.
+  //
+  // What the user gets over `boundMcpSessionFallback` is precedence, which is
+  // the right shape: that tier is ordering a client earns just by connecting,
+  // and this one is ordering the user granted deliberately.
   const candidates = [
     ...safeToEvict,
     ...activeAgentFallback,
     ...boundMcpSessionFallback,
-    ...residentOverflow,
+    ...residentGranted,
   ];
 
   let evictedCount = 0;
@@ -459,7 +458,7 @@ export function evictStaleViews(
   if (
     host.views.size > effectiveMax &&
     candidates.length === 0 &&
-    (assistantProtected.length > 0 || mcpLeasedProjectIds.size > 0 || residentProtected.length > 0)
+    (assistantProtected.length > 0 || mcpLeasedProjectIds.size > 0)
   ) {
     // `overflow` counts views over target; the two counts beside it say what is
     // holding them, so a reader can tell a pinned assistant (persistent, this
@@ -488,12 +487,6 @@ export function evictStaleViews(
       // mid-dispatch as transient when its floor outlives the call. Kept apart,
       // each count means exactly one thing.
       mcpLeasedCount: mcpLeasedProjectIds.size,
-      // Residency alone cannot cause the overflow — it is bounded by
-      // `effectiveMax - 1`, so held grants plus the active view always fit the
-      // cap. It can still be part of an over-cap cache alongside an assistant
-      // floor or a dispatch lease, and a reader tracing the extra renderers
-      // needs to see which held views were the user's own choice (#12313).
-      residentProtectedCount: residentProtected.length,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
     });
   }

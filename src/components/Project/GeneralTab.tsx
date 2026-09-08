@@ -133,6 +133,10 @@ export function GeneralTab({
 }: GeneralTabProps) {
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
   const [keepResident, setKeepResident] = useState(false);
+  // Read by the residency save handler to tell "still this project" from "the
+  // dialog moved on"; a captured `projectId` would only ever equal itself.
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
   const [keepResidentBusy, setKeepResidentBusy] = useState(true);
   const [keepResidentError, setKeepResidentError] = useState<string | null>(null);
   const [iconError, setIconError] = useState<string | null>(null);
@@ -339,7 +343,12 @@ export function GeneralTab({
   // place that reads it — so a fresh read when the tab opens is both simpler and
   // more current than anything cached would be.
   useEffect(() => {
-    if (!isOpen || !projectId) return;
+    if (!isOpen || !projectId) {
+      // The toggle starts disabled and only the load re-enables it, so a tab
+      // that never loads must not leave it stuck that way.
+      setKeepResidentBusy(false);
+      return;
+    }
     let cancelled = false;
     setKeepResidentBusy(true);
     setKeepResidentError(null);
@@ -365,15 +374,23 @@ export function GeneralTab({
 
   const handleKeepResidentToggle = async () => {
     const next = !keepResident;
+    // The write is for the project as it stands now. The dialog can be pointed
+    // at another project while it is in flight, and the load effect's own guard
+    // does not cover this direction — without the capture, a slow save for one
+    // project lands its result on whichever project the tab is showing when it
+    // settles, reporting the wrong grant or the wrong error.
+    const savingProjectId = projectId;
     setKeepResidentBusy(true);
     setKeepResidentError(null);
     try {
-      await workspaceResidencyClient.set(projectId, next);
-      setKeepResident(next);
+      await workspaceResidencyClient.set(savingProjectId, next);
+      if (savingProjectId === projectIdRef.current) setKeepResident(next);
     } catch (err) {
-      setKeepResidentError(formatErrorMessage(err, "Failed to save the residency setting"));
+      if (savingProjectId === projectIdRef.current) {
+        setKeepResidentError(formatErrorMessage(err, "Failed to save the residency setting"));
+      }
     } finally {
-      setKeepResidentBusy(false);
+      if (savingProjectId === projectIdRef.current) setKeepResidentBusy(false);
     }
   };
 
@@ -675,8 +692,8 @@ export function GeneralTab({
             disabled={keepResidentBusy}
           />
           <p className="text-xs text-text-secondary">
-            Spends one of your cached-view slots rather than adding to them, so it competes with
-            other projects you keep open. Low memory can still unload it.
+            Other projects are closed first to stay within your cached-view limit, rather than
+            raising it. Low memory can still unload this one.
           </p>
           {keepResidentError && (
             <div

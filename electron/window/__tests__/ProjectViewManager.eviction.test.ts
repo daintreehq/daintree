@@ -92,11 +92,15 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterCachedViewWebContents: vi.fn(),
 }));
 
-vi.mock("../../services/workspaceResidency.js", () => ({
-  isWorkspaceKeepResident: (workspaceId: string) => residentWorkspaces.has(workspaceId),
+const residencyLedger = vi.hoisted(() => ({
   recordWorkspaceEviction: vi.fn(),
   clearWorkspaceEviction: vi.fn(),
   notifyWorkspaceViewsChanged: vi.fn(),
+}));
+
+vi.mock("../../services/workspaceResidency.js", () => ({
+  isWorkspaceKeepResident: (workspaceId: string) => residentWorkspaces.has(workspaceId),
+  ...residencyLedger,
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
@@ -3773,6 +3777,13 @@ describe("ProjectViewManager — user-granted workspace residency (#12313)", () 
     await flushImmediates();
   }
 
+  /** Bind a running assistant to the project's current view — the view the session pinned. */
+  function bindLiveAssistant(mgr: ProjectViewManager, projectId: string, terminalId: string) {
+    const wc = mgr.getAllViews().find((v) => v.projectId === projectId)!.view.webContents;
+    assistantBackends.set(projectId, { terminalId, webContentsId: wc.id });
+    liveTerminals.add(terminalId);
+  }
+
   beforeEach(() => {
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
@@ -3866,6 +3877,30 @@ describe("ProjectViewManager — user-granted workspace residency (#12313)", () 
     expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
   });
 
+  it("tells the ledger which workspace it took, and why", async () => {
+    // Without this the ledger mocks are unchecked and every production call
+    // site could be deleted with the suite still green — while a bound session
+    // would silently lose the one signal that distinguishes "evicted" from
+    // "this id was never right".
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+
+    mgr.setCachedViewLimit(2);
+
+    expect(residencyLedger.recordWorkspaceEviction).toHaveBeenCalledWith("proj-a", "limit-change");
+  });
+
+  it("clears the ledger for a workspace that opens again", async () => {
+    // The reopen half (lesson #10821): a ledger only ever written would let a
+    // subscribe-then-read client settle on a loss the workspace has recovered
+    // from.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+
+    expect(residencyLedger.clearWorkspaceEviction).toHaveBeenCalledWith("proj-b");
+    expect(residencyLedger.clearWorkspaceEviction).toHaveBeenCalledWith("proj-c");
+  });
+
   it("records the grant on the eviction it was overridden by", async () => {
     // Eviction reported rather than silent. Without this the log reads as if
     // the grant were simply ignored, instead of outranked by the cap.
@@ -3896,6 +3931,28 @@ describe("ProjectViewManager — user-granted workspace residency (#12313)", () 
         .map((v) => v.projectId)
         .sort()
     ).toEqual(["proj-a", "proj-c"]);
+  });
+
+  it("does not widen an overflow another protection already caused", async () => {
+    // The cap bound only means anything in composition. A live assistant's
+    // floor is unconditional and already holds the cache over its cap; if
+    // residency budgeted against the raw cap it would hold a third view on top,
+    // where without the grant the pass settles at two. Held slots are counted,
+    // so the assistant still overflows as it is entitled to and the grant does
+    // not add to it.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    bindLiveAssistant(mgr, "proj-b", "term-assistant");
+    residentWorkspaces.add("proj-a");
+
+    mgr.setCachedViewLimit(2);
+
+    expect(
+      mgr
+        .getAllViews()
+        .map((v) => v.projectId)
+        .sort()
+    ).toEqual(["proj-b", "proj-c"]);
   });
 
   it("protects nothing for a grant with no live view", async () => {

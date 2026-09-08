@@ -36,6 +36,17 @@ vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
   SettingsSwitchCard: () => null,
 }));
 
+// The residency toggle reads its grant over IPC on mount (#12313), and this
+// fixture renders the real component with no `window.electron` — the client
+// reaches through it directly, like every other client in the renderer, so the
+// stub belongs here rather than as a defensive branch in production code.
+vi.mock("@/clients/workspaceResidencyClient", () => ({
+  workspaceResidencyClient: {
+    get: vi.fn(() => Promise.resolve(false)),
+    set: vi.fn(() => Promise.resolve()),
+  },
+}));
+
 vi.mock("@/components/Settings/SettingsChoicebox", () => ({
   SettingsChoicebox: () => null,
 }));

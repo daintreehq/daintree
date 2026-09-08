@@ -5761,10 +5761,10 @@ describe("workspace-bound external sessions (#11789)", () => {
       };
       const uris = listed.resources.map((r) => r.uri);
 
-      expect(uris[0]).toBe(WORKSPACE_BINDING_RESOURCE_URI);
-      // The dispatch-backed categories are omitted, not invented.
-      expect(uris.some((u) => u.includes("/scrollback"))).toBe(false);
-      expect(uris.some((u) => u.includes("/pulse"))).toBe(false);
+      // Asserted whole rather than by absence: a listing that degraded the
+      // dispatch-backed categories but fabricated an entry in their place would
+      // satisfy any "does not contain" check while telling the same lie.
+      expect(uris).toEqual([WORKSPACE_BINDING_RESOURCE_URI]);
     });
 
     it("serves the binding resource without dispatching or probing the route (#12313)", async () => {
@@ -5790,21 +5790,61 @@ describe("workspace-bound external sessions (#11789)", () => {
       })) as { contents: Array<{ text: string; mimeType: string }> };
 
       expect(dispatchAction).not.toHaveBeenCalled();
+      // `assertBoundRouteReachable` probes through `requestManifest`, so an
+      // untouched manifest is what proves the exemption is structural rather
+      // than a branch that could be reordered back into the path.
+      expect(deps.requestManifest).not.toHaveBeenCalled();
       const state = JSON.parse(read.contents[0].text);
       expect(state.workspaceId).toBe(WORKSPACE);
       expect(state.routeState).toBe("not-found");
+      expect(state.liveViewCount).toBe(0);
+      expect(state.keepResident).toBe(false);
     });
 
-    it("accepts a subscription to the binding resource", async () => {
+    it("answers `unbound` for a session with no binding rather than borrowing a workspace", async () => {
+      // The failure this guards is argument mis-wiring: a reader handed the
+      // focused workspace, or a stale one from another session, would look
+      // right in every bound test and be exactly the cross-workspace answer the
+      // binding exists to refuse (#7003).
+      const server = createSessionServer("unbound-session", unboundDeps());
+      await server.connect(makeMockTransport());
+
+      const read = (await callHandler(server, "resources/read", {
+        uri: WORKSPACE_BINDING_RESOURCE_URI,
+      })) as { contents: Array<{ text: string }> };
+
+      const state = JSON.parse(read.contents[0].text);
+      expect(state.workspaceId).toBeNull();
+      expect(state.routeState).toBe("unbound");
+    });
+
+    it("installs and tears down a real subscription to the binding resource", async () => {
       // `pulse` and `agentState` were the only subscribable kinds; a client that
       // must poll to notice its workspace returning is the case the issue calls
       // out, so the push half has to exist even though it is best effort.
-      const server = createSessionServer(SESSION, boundDeps());
+      //
+      // Asserted through the session's subscription bucket rather than the `{}`
+      // acknowledgement: returning `{}` without installing anything would
+      // satisfy the acknowledgement while the client waited forever. The
+      // unsubscribe is also load-bearing here — the listener lives on a
+      // process-global registry, so a test that only subscribes leaks one into
+      // every case that runs after it.
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
       await server.connect(makeMockTransport());
 
-      await expect(
-        callHandler(server, "resources/subscribe", { uri: WORKSPACE_BINDING_RESOURCE_URI })
-      ).resolves.toEqual({});
+      await callHandler(server, "resources/subscribe", { uri: WORKSPACE_BINDING_RESOURCE_URI });
+      expect(
+        deps.sessionStore.resourceSubscriptions.get(SESSION)?.has(WORKSPACE_BINDING_RESOURCE_URI)
+      ).toBe(true);
+
+      await callHandler(server, "resources/unsubscribe", { uri: WORKSPACE_BINDING_RESOURCE_URI });
+      // `?? false` because an emptied bucket is dropped from the map entirely,
+      // so "no bucket" and "bucket without this uri" are the same answer here.
+      expect(
+        deps.sessionStore.resourceSubscriptions.get(SESSION)?.has(WORKSPACE_BINDING_RESOURCE_URI) ??
+          false
+      ).toBe(false);
     });
 
     it("refuses a binding URI naming another workspace", async () => {
