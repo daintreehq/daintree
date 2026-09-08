@@ -150,7 +150,7 @@ const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
  * `terminal.getStatus` is deliberately absent: it is a renderer action with a
  * reduced main-process fallback, handled separately below.
  */
-const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
+export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
   TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL,
   SKILLS_SEARCH_TOOL,
@@ -1144,8 +1144,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // `terminalIds` is answerable from the pty-host without a view
             // (#12316). Say so, rather than leaving a poller to retry the shape
             // that cannot work.
+            // Scoped to `not-found`, the only reason the fallback takes.
+            // Telling a caller whose workspace is open in two views to retry
+            // with ids would be advice that cannot work.
             const viewlessHint =
-              actionId === TERMINAL_GET_STATUS_TOOL && err instanceof WorkspaceBindingError
+              actionId === TERMINAL_GET_STATUS_TOOL &&
+              err instanceof WorkspaceBindingError &&
+              err.reason === "not-found"
                 ? ` Status for specific terminals can still be read while the workspace is closed — call '${actionId}' again with an explicit 'terminalIds' array.`
                 : "";
             return buildToolError({

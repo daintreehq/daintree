@@ -32,20 +32,18 @@ function deps(
   records: Record_[],
   opts: {
     serialized?: Record<string, { data: string } | null>;
-    agentIdFor?: Record<string, string>;
-    exitCodes?: Record<string, number | null>;
+    /** Ids the pty-host reports for the bound workspace. Defaults to every record. */
+    inventory?: string[];
   } = {}
 ) {
   const byId = new Map(records.map((r) => [r["id"] as string, r]));
   return {
     ptyClient: {
+      getTerminalsForProjectAsync: vi.fn(
+        async () => opts.inventory ?? records.map((r) => r["id"] as string)
+      ),
       getTerminalAsync: vi.fn(async (id: string) => byId.get(id) ?? null),
       getSerializedStateAsync: vi.fn(async (id: string) => opts.serialized?.[id] ?? null),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any,
-    availability: {
-      getAgentIdForTerminal: (id: string) => opts.agentIdFor?.[id],
-      getExitCode: (agentId: string) => opts.exitCodes?.[agentId],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
   };
@@ -97,7 +95,7 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(result.source).toBe("pty");
     // Reported as unobservable rather than defaulted: `armed: false` would be
     // an interpretation main has no evidence for.
-    expect(result.unavailableFields).toEqual(["armed", "lastCheckResult"]);
+    expect(result.unavailableFields).toEqual(["armed", "lastCheckResult", "exitCode"]);
     expect(result.terminals[0]).toMatchObject({
       terminalId: "t-1",
       agentId: "claude",
@@ -107,6 +105,7 @@ describe("buildViewlessTerminalStatus results", () => {
     });
     expect(result.terminals[0]).not.toHaveProperty("armed");
     expect(result.terminals[0]).not.toHaveProperty("lastCheckResult");
+    expect(result.terminals[0]).not.toHaveProperty("exitCode");
   });
 
   it("prefers the detected agent over the launch agent, matching the renderer", async () => {
@@ -141,7 +140,7 @@ describe("buildViewlessTerminalStatus results", () => {
       terminalId: "missing",
       agentId: null,
       agentState: null,
-      error: "Terminal not found",
+      error: "Terminal not found or status unavailable",
     });
   });
 
@@ -161,8 +160,37 @@ describe("buildViewlessTerminalStatus results", () => {
       terminalId: "x",
       agentId: null,
       agentState: null,
-      error: "Terminal not found",
+      error: "Terminal not found or status unavailable",
     });
+  });
+
+  it("never routes a terminal RPC for an id outside the workspace inventory", async () => {
+    // The rows would read the same either way. The latency need not: the pty
+    // fabric shards by owning project, so a `get-terminal` for a foreign id
+    // lands on its owner's shard and an unknown one lands on the default.
+    // Scoping to the inventory first means a foreign id is never routed.
+    const d = deps([record({ id: "mine" }), record({ id: "theirs", projectId: "ws-other" })], {
+      inventory: ["mine"],
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["mine", "theirs"],
+    });
+
+    expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledTimes(1);
+    expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledWith("mine");
+    expect(result.terminals[1]?.error).toBe("Terminal not found or status unavailable");
+  });
+
+  it("answers every row unavailable when the inventory read fails", async () => {
+    // `PtyClient` folds a failed inventory to `[]`, and nothing was observed —
+    // so every row says so rather than claiming the terminals are gone.
+    const d = deps([record({ id: "a" })], { inventory: [] });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["a"] });
+
+    expect(d.ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+    expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
   });
 
   it("carries waitingReason only while the agent is actually waiting", async () => {
@@ -181,61 +209,25 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(working.terminals[0]?.waitingReason).toBeUndefined();
   });
 
-  it("omits exitCode while the agent is still running", async () => {
-    // Absence means "still running" in the published schema, so a running
-    // terminal must not carry a code — including a null one.
+  it("never reports an exitCode, even for an agent that has finished", async () => {
+    // Main does cache exit metadata, but `AgentAvailabilityStore` keys it by
+    // agent *type* ("claude"), not by spawn — several terminals share one id
+    // and only the most recent is mapped back. Joining through it would report
+    // whichever same-type terminal exited last, which for a fleet of identical
+    // agents is wrong far more often than right. `agentState` still says the
+    // run finished, and how.
     const result = await buildViewlessTerminalStatus(
-      deps([record({ agentState: "working" })], {
-        agentIdFor: { "t-1": "agent-1" },
-        exitCodes: { "agent-1": 0 },
-      }),
-      WORKSPACE,
-      { terminalIds: ["t-1"] }
-    );
-
-    expect(result.terminals[0]).not.toHaveProperty("exitCode");
-  });
-
-  it.each([
-    ["a clean finish", 0],
-    ["a failure", 1],
-    ["a signal kill with no numeric code", null],
-  ])("reports %s once the agent has exited", async (_label, code) => {
-    const result = await buildViewlessTerminalStatus(
-      deps([record({ agentState: "exited" })], {
-        agentIdFor: { "t-1": "agent-1" },
-        exitCodes: { "agent-1": code },
-      }),
-      WORKSPACE,
-      { terminalIds: ["t-1"] }
-    );
-
-    expect(result.terminals[0]?.exitCode).toBe(code);
-  });
-
-  it("joins exit metadata through the terminal's own ledger entry", async () => {
-    // Two terminals of the same agent kind: the code must follow the per-spawn
-    // ledger id, never the agent kind on the record.
-    const result = await buildViewlessTerminalStatus(
-      deps([record({ id: "a", agentState: "exited" }), record({ id: "b", agentState: "exited" })], {
-        agentIdFor: { a: "agent-a", b: "agent-b" },
-        exitCodes: { "agent-a": 0, "agent-b": 137 },
-      }),
+      deps([
+        record({ id: "a", agentState: "exited" }),
+        record({ id: "b", agentState: "completed" }),
+      ]),
       WORKSPACE,
       { terminalIds: ["a", "b"] }
     );
 
-    expect(result.terminals.map((t) => t.exitCode)).toEqual([0, 137]);
-  });
-
-  it("leaves exitCode absent when the ledger never saw the terminal", async () => {
-    const result = await buildViewlessTerminalStatus(
-      deps([record({ agentState: "exited" })]),
-      WORKSPACE,
-      { terminalIds: ["t-1"] }
-    );
-
-    expect(result.terminals[0]).not.toHaveProperty("exitCode");
+    expect(result.terminals.map((t) => t.agentState)).toEqual(["exited", "completed"]);
+    for (const entry of result.terminals) expect(entry).not.toHaveProperty("exitCode");
+    expect(result.unavailableFields).toContain("exitCode");
   });
 
   it("reads no scrollback unless output was asked for", async () => {

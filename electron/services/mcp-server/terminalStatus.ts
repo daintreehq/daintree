@@ -6,8 +6,6 @@ import type {
   TerminalStatusResult,
   TerminalStatusUnavailableField,
 } from "../../../shared/types/terminalStatus.js";
-import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
-import type { AgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -32,14 +30,26 @@ import type { PtyClient } from "../PtyClient.js";
  * What a pty-sourced answer structurally cannot observe.
  *
  * `armed` is fleet-broadcast routing held in `useFleetArmingStore`, and
- * `lastCheckResult` is parsed out of agent stdout by `CheckResultDetector` and
- * only ever reaches the renderer's panel record — main keeps no copy of either.
- * Reported as unavailable rather than defaulted: `armed: false` would be an
- * interpretation main has no evidence for.
+ * `lastCheckResult` is parsed out of agent stdout by `CheckResultDetector` —
+ * both only ever reach the renderer's panel record, and main keeps no copy.
+ *
+ * `exitCode` is the one that looks reachable and is not. Main does cache exit
+ * metadata, but `AgentAvailabilityStore` keys it by agent id, and an agent id
+ * names the agent *type* ("claude"), not the spawn — so several terminals share
+ * one, and `agentToTerminal` keeps only the most recent. Joining through it
+ * would report whichever same-type terminal exited last, which for a fleet of
+ * identical agents is a wrong answer far more often than a right one. The
+ * renderer path has the code on the panel itself and reports it there.
+ *
+ * All three are reported as unavailable rather than defaulted or guessed:
+ * `armed: false` and a borrowed exit code are both interpretations main has no
+ * evidence for. `agentState` still distinguishes `completed` from `exited`, so
+ * "the run finished, and how" survives without the numeric code.
  */
 export const VIEWLESS_STATUS_UNAVAILABLE_FIELDS: readonly TerminalStatusUnavailableField[] = [
   "armed",
   "lastCheckResult",
+  "exitCode",
 ];
 
 /** Mirrors the action's own `terminalIds` bound, which does not run here. */
@@ -52,17 +62,11 @@ type TerminalRecord = NonNullable<Awaited<ReturnType<PtyClient["getTerminalAsync
 
 export type ViewlessStatusPtyClient = Pick<
   PtyClient,
-  "getTerminalAsync" | "getSerializedStateAsync"
->;
-
-export type ViewlessStatusAvailabilityStore = Pick<
-  AgentAvailabilityStore,
-  "getAgentIdForTerminal" | "getExitCode"
+  "getTerminalsForProjectAsync" | "getTerminalAsync" | "getSerializedStateAsync"
 >;
 
 export interface ViewlessTerminalStatusDeps {
   ptyClient: ViewlessStatusPtyClient;
-  availability: ViewlessStatusAvailabilityStore;
 }
 
 interface ParsedArgs {
@@ -156,14 +160,14 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
 }
 
 /**
- * Whether this record belongs to the bound workspace and is a terminal an MCP
- * caller may see at all.
+ * Whether this record is a terminal an MCP caller may see at all.
  *
  * The non-PTY and assistant exclusions mirror `buildTerminalInventory` and the
  * renderer's own ephemeral-panel filter: tooling-internal panels — the dev
- * preview among them — must never report state to an MCP caller. A record from another workspace is treated the
- * same as one that does not exist — a bound session must not be able to confirm
- * a terminal id it has no route to.
+ * preview among them — must never report state to an MCP caller. The workspace
+ * comparison is belt-and-braces behind the inventory scoping in
+ * {@link buildViewlessTerminalStatus}, which is what actually keeps a foreign
+ * id from being looked up.
  */
 function isVisibleToBoundSession(record: TerminalRecord, workspaceId: string): boolean {
   if (record.projectId !== workspaceId) return false;
@@ -174,19 +178,13 @@ function isVisibleToBoundSession(record: TerminalRecord, workspaceId: string): b
   return true;
 }
 
-function buildEntry(
-  record: TerminalRecord,
-  availability: ViewlessStatusAvailabilityStore
-): TerminalStatusEntry {
+function buildEntry(record: TerminalRecord): TerminalStatusEntry {
   const agentState = record.agentState ?? null;
 
   const entry: TerminalStatusEntry = {
     terminalId: record.id,
-    // The agent *kind*, in the renderer's own precedence — the runtime-detected
-    // agent outranks the one the terminal was launched as. Deliberately not the
-    // availability ledger's agent id, which is a per-spawn instance handle used
-    // below for the exit-code join and would put a different namespace on the
-    // wire under the same field name.
+    // The agent kind, in the renderer's own precedence — the runtime-detected
+    // agent outranks the one the terminal was launched as.
     agentId: record.detectedAgentId ?? record.launchAgentId ?? null,
     agentState,
     lastTransitionAt: record.lastStateChange,
@@ -197,23 +195,19 @@ function buildEntry(
     entry.waitingReason = record.waitingReason;
   }
 
-  // Exit metadata only once the agent has finished, matching the `agentState`
-  // resource: absence means still running, and a `null` code means a signal
-  // kill with no numeric status. Gate on the terminal state rather than on the
-  // value, which is legitimately `null` and legitimately `0`.
-  if (agentState === "completed" || agentState === "exited") {
-    const ledgerAgentId = availability.getAgentIdForTerminal(record.id);
-    if (ledgerAgentId !== undefined) {
-      const exitCode = availability.getExitCode(ledgerAgentId);
-      if (exitCode !== undefined) entry.exitCode = exitCode;
-    }
-  }
-
   return entry;
 }
 
 /**
  * Read status for explicitly named terminals in one workspace, off the pty-host.
+ *
+ * Every requested id is checked against the bound workspace's own inventory
+ * *before* any terminal-keyed RPC is issued. Filtering the records afterwards
+ * would answer the same way, but it would first route a `get-terminal` for a
+ * foreign id — and the pty fabric shards by owning project, so a foreign id
+ * lands on its owner's shard while an unknown one lands on the default. The two
+ * rows read identically; their latency need not, and a stalled foreign shard
+ * would be the tell. Scoping first means a foreign id is never routed at all.
  *
  * Request order and duplicates are preserved — a caller zipping the answer
  * against its own id list must get one row per id it asked for. Backend reads
@@ -227,9 +221,15 @@ export async function buildViewlessTerminalStatus(
   const { terminalIds, lines, stripAnsi, includeOutput } = parseArgs(rawArgs);
   const uniqueIds = [...new Set(terminalIds)];
 
+  // One inventory read for the workspace, then only the ids it actually owns.
+  // A failed inventory folds to `[]` in `PtyClient`, which answers every row
+  // "not found or unavailable" — honest, since nothing could be observed.
+  const owned = new Set(await deps.ptyClient.getTerminalsForProjectAsync(workspaceId));
+  const lookupIds = uniqueIds.filter((id) => owned.has(id));
+
   const records = new Map<string, TerminalRecord>();
-  const fetched = await Promise.all(uniqueIds.map((id) => deps.ptyClient.getTerminalAsync(id)));
-  uniqueIds.forEach((id, index) => {
+  const fetched = await Promise.all(lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id)));
+  lookupIds.forEach((id, index) => {
     const record = fetched[index];
     // `getTerminalAsync` folds an RPC failure into `null`, so this means "not
     // found or unreadable" — never evidence that the terminal has exited.
@@ -238,7 +238,7 @@ export async function buildViewlessTerminalStatus(
 
   const outputs = new Map<string, string | null>();
   if (includeOutput) {
-    const readable = uniqueIds.filter((id) => records.has(id));
+    const readable = lookupIds.filter((id) => records.has(id));
     const snapshots = await Promise.all(
       readable.map((id) => deps.ptyClient.getSerializedStateAsync(id))
     );
@@ -257,9 +257,19 @@ export async function buildViewlessTerminalStatus(
   const terminals = terminalIds.map((id): TerminalStatusEntry => {
     const record = records.get(id);
     if (!record) {
-      return { terminalId: id, agentId: null, agentState: null, error: "Terminal not found" };
+      // Deliberately one message for three cases: no such terminal, one in
+      // another workspace, and one the backend could not be read for. The first
+      // two must not be distinguishable — a bound session confirming a foreign
+      // id is the leak this scoping exists to prevent — and the third is real,
+      // so the wording must not promise the terminal is gone.
+      return {
+        terminalId: id,
+        agentId: null,
+        agentState: null,
+        error: "Terminal not found or status unavailable",
+      };
     }
-    const entry = buildEntry(record, deps.availability);
+    const entry = buildEntry(record);
     if (includeOutput) entry.recentOutput = outputs.get(id) ?? null;
     return entry;
   });
@@ -288,9 +298,5 @@ export async function handleTerminalGetStatusViewless(
       "The terminal backend is not available, so terminal status cannot be read without a live view."
     );
   }
-  return buildViewlessTerminalStatus(
-    { ptyClient, availability: getAgentAvailabilityStore() },
-    workspaceId,
-    rawArgs
-  );
+  return buildViewlessTerminalStatus({ ptyClient }, workspaceId, rawArgs);
 }

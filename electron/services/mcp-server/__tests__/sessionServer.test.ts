@@ -13,7 +13,12 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createSessionServer, validateDisplayImageUrl } from "../sessionServer.js";
+import {
+  createSessionServer,
+  validateDisplayImageUrl,
+  VIEWLESS_MAIN_PROCESS_TOOLS,
+} from "../sessionServer.js";
+import { MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
@@ -5517,49 +5522,86 @@ describe("workspace-bound external sessions (#11789)", () => {
         });
       }
 
-      // Walked rather than spelled out per-tool, so a tool that stops being
-      // main-process-only fails here instead of silently keeping a bypass it no
-      // longer earns.
-      const MAIN_PROCESS_CALLS: Array<[string, Record<string, unknown>]> = [
-        ["terminal.waitUntilIdle", { terminalId: "t-1" }],
-        ["terminal.waitUntilIdleBatch", { terminalIds: ["t-1"] }],
-        ["skills.search", { query: "x" }],
-        ["skills.load", { id: "s-1" }],
-        ["mcp.surface", {}],
-        ["project.runCheck", { check: "test" }],
-      ];
+      // Arguments and the dep each tool's execution lands in, keyed by the
+      // production set below rather than restated beside it.
+      const MAIN_PROCESS_CALLS: Record<
+        string,
+        { args: Record<string, unknown>; handler?: keyof SessionServerDeps }
+      > = {
+        "terminal.waitUntilIdle": {
+          args: { terminalId: "t-1" },
+          handler: "handleWaitUntilIdle",
+        },
+        "terminal.waitUntilIdleBatch": {
+          args: { terminalIds: ["t-1"] },
+          handler: "handleWaitUntilIdleBatch",
+        },
+        "skills.search": { args: { query: "x" }, handler: "handleSkillsSearch" },
+        "skills.load": { args: { id: "s-1" }, handler: "handleSkillsLoad" },
+        // Built here from the manifest rather than through an injected handler.
+        "mcp.surface": { args: {} },
+        "project.runCheck": {
+          args: { projectId: "p-1", runnerId: "test" },
+          handler: "handleProjectRunCheck",
+        },
+      };
 
-      it.each(MAIN_PROCESS_CALLS)("answers %s without a live view", async (name, args) => {
+      it("covers every tool the production bypass set names", () => {
+        // The guard below is only a drift guard if the cases come from the set
+        // itself. Restating the ids would let a tool be added to the bypass —
+        // the direction that matters — with no test case at all.
+        expect(new Set(Object.keys(MAIN_PROCESS_CALLS))).toEqual(
+          new Set(VIEWLESS_MAIN_PROCESS_TOOLS)
+        );
+      });
+
+      // The bypass widens reachability, never authority — the tier gate runs
+      // first and is untouched. `project.runCheck` is in the set and off the
+      // external tier, so it proves that directly: it is refused here for the
+      // reason it always was, not because a view is missing.
+      const externalTierTools = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
+      const eachMainProcessTool = it.each(
+        [...VIEWLESS_MAIN_PROCESS_TOOLS].map((name) => [name] as const)
+      );
+
+      eachMainProcessTool("does not need a live view to settle %s", async (name) => {
+        const { args, handler } = MAIN_PROCESS_CALLS[name]!;
         const deps = viewlessDeps();
         const server = createSessionServer(SESSION, deps);
         await server.connect(makeMockTransport());
 
         const result = await callTool(server, { name, arguments: args });
 
+        if (externalTierTools.has(name)) {
+          // Success, not merely "not a binding error" — an unrelated refusal
+          // would satisfy the weaker assertion while proving the opposite.
+          expect(result.isError).toBeFalsy();
+          if (handler) expect(deps[handler]).toHaveBeenCalled();
+        } else {
+          expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+          if (handler) expect(deps[handler]).not.toHaveBeenCalled();
+        }
+        // Either way, the answer is never "your workspace has no view", and
+        // nothing was routed at a renderer.
         expect(JSON.stringify(result.content)).not.toContain(SESSION_BINDING_GONE);
-        // The whole point: none of these needed the view whose absence used to
-        // refuse them.
         expect(deps.dispatchAction).not.toHaveBeenCalled();
       });
 
-      it.each(MAIN_PROCESS_CALLS)(
-        "does not resolve the bound manifest to admit %s",
-        async (name, args) => {
-          // The ceiling asked the manifest a question about renderer dispatch.
-          // A tool that never reaches a renderer should not pay for the answer.
-          const deps = viewlessDeps();
-          const server = createSessionServer(SESSION, deps);
-          await server.connect(makeMockTransport());
+      eachMainProcessTool("does not resolve the bound manifest to admit %s", async (name) => {
+        // The ceiling asked the manifest a question about renderer dispatch.
+        // A tool that never reaches a renderer should not pay for the answer.
+        const deps = viewlessDeps();
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
 
-          await callTool(server, { name, arguments: args });
+        await callTool(server, { name, arguments: MAIN_PROCESS_CALLS[name]!.args });
 
-          if (name !== "mcp.surface") {
-            // `mcp.surface` resolves a manifest for its own report, and falls
-            // back to the host base surface when the workspace is unreachable.
-            expect(deps.requestManifest).not.toHaveBeenCalled();
-          }
+        if (name !== MCP_SURFACE_TOOL_ID) {
+          // `mcp.surface` resolves a manifest for its own report, and falls
+          // back to the host base surface when the workspace is unreachable.
+          expect(deps.requestManifest).not.toHaveBeenCalled();
         }
-      );
+      });
 
       it("still refuses a renderer action with no live view", async () => {
         const deps = viewlessDeps();
@@ -5583,6 +5625,25 @@ describe("workspace-bound external sessions (#11789)", () => {
         const result = await callTool(server, { name: "recipe.run", arguments: {} });
 
         expect(result.isError).toBe(true);
+        // Refused by the ceiling's fail-closed arm: with no reachable manifest
+        // there is no evidence about `danger`, and proceeding would turn a
+        // refusal into an unattended dispatch. `SESSION_BINDING_GONE` rather
+        // than `CONFIRMATION_REQUIRED` is therefore the honest code — the
+        // bypass did not give this action a way past either.
+        expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("still refuses a confirm-gated action whose manifest IS reachable", async () => {
+        // The complementary half: when the ceiling can read the manifest, the
+        // refusal is the confirm one, and the bypass does not reach it.
+        const deps = boundDeps();
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+        expect(toolErrorPayload(result).code).toBe("CONFIRMATION_REQUIRED");
         expect(deps.dispatchAction).not.toHaveBeenCalled();
       });
 
@@ -5590,7 +5651,7 @@ describe("workspace-bound external sessions (#11789)", () => {
         const handleTerminalGetStatusViewless = vi.fn().mockResolvedValue({
           terminals: [{ terminalId: "t-1", agentId: "claude", agentState: "working" }],
           source: "pty",
-          unavailableFields: ["armed", "lastCheckResult"],
+          unavailableFields: ["armed", "lastCheckResult", "exitCode"],
         });
         const deps = viewlessDeps({ handleTerminalGetStatusViewless });
         const server = createSessionServer(SESSION, deps);
@@ -5673,6 +5734,9 @@ describe("workspace-bound external sessions (#11789)", () => {
         });
 
         expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
+        // And it does not hand out the id advice, which cannot resolve a
+        // duplicate view.
+        expect(JSON.stringify(result.content)).not.toContain("terminalIds");
         expect(handleTerminalGetStatusViewless).not.toHaveBeenCalled();
       });
 
@@ -5875,8 +5939,14 @@ describe("workspace-bound external sessions (#11789)", () => {
       const listed = new Set((await listBaseTools(server)).map((t) => t.name));
 
       expect(result.isError).toBeFalsy();
-      const reported = JSON.stringify(result.content);
-      for (const name of listed) expect(reported).toContain(name);
+      // Set equality, not containment: a report that named every listed tool
+      // *plus* a withheld one would satisfy the weaker check while describing
+      // exactly the surface the ceiling exists to keep off this session.
+      const reported = new Set(
+        (result.structuredContent as { tools: Array<{ id: string }> }).tools.map((t) => t.id)
+      );
+      expect(reported).toEqual(listed);
+      expect(listed.size).toBeGreaterThan(0);
     });
 
     it("never serves a cached manifest after a binding failure", async () => {

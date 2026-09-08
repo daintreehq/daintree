@@ -17,7 +17,7 @@ export type TerminalStatusSource = "renderer" | "pty";
  * observed-and-absent. Without this a `pty` answer's missing `armed` reads as
  * "not armed", which is an interpretation main has no evidence for.
  */
-export type TerminalStatusUnavailableField = "armed" | "lastCheckResult";
+export type TerminalStatusUnavailableField = "armed" | "lastCheckResult" | "exitCode";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {

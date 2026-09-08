@@ -520,7 +520,7 @@ export const TerminalStatusResultSchema = z.object({
       "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
     ),
   unavailableFields: z
-    .array(z.enum(["armed", "lastCheckResult"]))
+    .array(z.enum(["armed", "lastCheckResult", "exitCode"]))
     .describe(
       "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),
