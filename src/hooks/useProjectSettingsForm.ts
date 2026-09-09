@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -179,7 +179,11 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     daintreeMcpTier,
     forgeProviderOverride,
   ]);
-  useEffect(() => {
+  // Layout effect, not passive: callers such as EnvironmentVariablesEditor push
+  // new values and invoke flush() in the same tick, and flush() reads this ref
+  // to decide whether anything changed. A passive effect lands after that read,
+  // so the edit would look clean and be dropped.
+  useLayoutEffect(() => {
     currentProjectSnapshotRef.current = currentProjectSnapshot;
   }, [currentProjectSnapshot]);
 
@@ -441,8 +445,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   };
 
   // projectPersist is recreated each render; sync it to the ref so the
-  // debounced wrapper always calls the latest closure.
-  useEffect(() => {
+  // debounced wrapper always calls the latest closure. Layout phase for the
+  // same reason as currentProjectSnapshotRef above.
+  useLayoutEffect(() => {
     projectPersistRef.current = projectPersist;
   });
 
@@ -455,14 +460,31 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     debouncedProjectSaveRef.current?.();
   }, [currentProjectSnapshot, projectIsInitialized]);
 
-  const flush = async () => {
-    // First try flushing any pending debounced save
+  // Explicit user-initiated save. Persists unconditionally, so a re-save of
+  // unchanged values still reaches main — the environment-variable migration
+  // button relies on that to relocate insecure values.
+  const saveNow = async () => {
     await debouncedProjectSaveRef.current?.flush();
-    // If no debounced save was pending (state changed but useEffect hasn't
-    // scheduled it yet), force a direct save to avoid data loss on close
     if (projectIsInitialized && projectPersistRef.current) {
       await projectPersistRef.current();
     }
+  };
+
+  // Lifecycle save, run on dialog close and on WebContentsView detach. Unlike
+  // saveNow it must not write when the form is clean: projectPersist spreads
+  // the cached settings snapshot, so a no-op write would revert fields saved
+  // out-of-band by other tabs since that snapshot was taken (#12326).
+  const flush = async () => {
+    // First drain any pending debounced save — that also settles an in-flight
+    // one, so the snapshot comparison below sees its result.
+    await debouncedProjectSaveRef.current?.flush();
+    if (!projectIsInitialized || !projectPersistRef.current) return;
+    const lastSaved = lastSavedSnapshotRef.current;
+    const current = currentProjectSnapshotRef.current;
+    // Missing either snapshot means we cannot prove the form is clean; persist
+    // rather than risk losing an edit on close.
+    if (lastSaved && current && areSnapshotsEqual(lastSaved, current)) return;
+    await projectPersistRef.current();
   };
 
   return {
@@ -534,6 +556,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     worktreeMap,
     worktrees,
     flush,
+    saveNow,
   };
 }
 

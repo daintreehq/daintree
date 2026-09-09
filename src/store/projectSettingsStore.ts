@@ -192,6 +192,21 @@ export const useProjectSettingsStore = create<ProjectSettingsState & ProjectSett
   createProjectSettingsStore
 );
 
+/**
+ * Merge fields persisted outside the settings form into the cached settings.
+ * Without this the cache keeps the pre-write values, and the next form save —
+ * which spreads that cache — reverts them (#12326). No-op unless the store
+ * still holds the project the write targeted.
+ */
+export function patchCachedProjectSettings(
+  projectId: string,
+  patch: Partial<ProjectSettings>
+): void {
+  const state = useProjectSettingsStore.getState();
+  if (state.projectId !== projectId || !state.settings) return;
+  state.setSettings({ ...state.settings, ...patch });
+}
+
 /** Cleanup function for project switch */
 export function cleanupProjectSettingsStore(): void {
   useProjectSettingsStore.getState().reset();

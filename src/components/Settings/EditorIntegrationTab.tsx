@@ -6,7 +6,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
 import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
-import { useProjectStore } from "@/store";
+import { useProjectStore, patchCachedProjectSettings } from "@/store";
+import { invalidateProjectSettingsCache } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 
@@ -103,6 +104,11 @@ export function EditorIntegrationTab() {
         customTemplate: selectedId === "custom" ? customTemplate.trim() || undefined : undefined,
       };
       await editorClient.setConfig({ editor, projectId: activeProjectId });
+      // Main writes preferredEditor straight into the project settings file, so
+      // every renderer-side copy is now stale. Both must be refreshed before
+      // anything else reads or re-saves the whole settings object (#12326).
+      invalidateProjectSettingsCache(activeProjectId);
+      patchCachedProjectSettings(activeProjectId, { preferredEditor: editor });
       if (!isMountedRef.current) return;
       setPreferredEditor(editor);
     } catch (err) {
