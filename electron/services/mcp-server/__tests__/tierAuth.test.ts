@@ -607,7 +607,15 @@ describe("external tool surface budget (#11585)", () => {
   // the unconditional `focusPolicy: "preserve"`, and `panel.focus` here would
   // select a panel inside a cached view and report success. Ownership is what
   // keeps the cost bounded: it reveals only a panel this session created.
-  const EXTERNAL_BUDGET_MAX = 30;
+  //
+  // 30 → 31 for #12338's `terminal.interruptOwned`. The surface could start an
+  // agent and end it and had nothing in between: submitted text queues behind
+  // the very turn it was meant to stop, so the only working lever was the close,
+  // which discards the conversation. A slot buys the one operation that was
+  // missing rather than a signal API — no signal argument, no key sequence, just
+  // the id — and it stays bounded the same way its two siblings do, by acting
+  // only on a panel this session created.
+  const EXTERNAL_BUDGET_MAX = 31;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
@@ -701,6 +709,28 @@ describe("external tool surface budget (#11585)", () => {
     }
     // The in-app assistant, which has a human watching, keeps them.
     expect(isTierPermitted("action", "terminal.close")).toBe(true);
+  });
+
+  // Same split as the closes above, one rung down (#12338): the session-scoped
+  // interrupt is on the surface and the two unscoped ones are not. The fleet
+  // interrupt reaches every armed pane, and the raw single-terminal one reaches
+  // any id a listing hands out — including the user's own agent, mid-turn. What
+  // makes the owned form affordable is that it acts on a panel this session
+  // created and nothing else, which is no escalation over having created it.
+  it("admits only the session-scoped interrupt externally (#12338)", () => {
+    for (const id of ["terminal.interruptOwned", "terminal.interrupt", "fleet.interrupt"]) {
+      // Pin to ground truth: a renamed id must fail loudly, not vacuously pass.
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    }
+    expect(isTierPermitted("external", "terminal.interruptOwned")).toBe(true);
+    expect(shouldExposeTool(makeEntry({ id: "terminal.interruptOwned" }), "external")).toBe(true);
+    // Carried in-app too, or the subset invariant below fails.
+    expect(isTierPermitted("action", "terminal.interruptOwned")).toBe(true);
+
+    expect(isTierPermitted("external", "terminal.interrupt")).toBe(false);
+    expect(shouldExposeTool(makeEntry({ id: "terminal.interrupt" }), "external")).toBe(false);
+    expect(isTierPermitted("external", "fleet.interrupt")).toBe(false);
+    expect(shouldExposeTool(makeEntry({ id: "fleet.interrupt" }), "external")).toBe(false);
   });
 
   // A cut PR that quietly widens is the failure #10710 documents, so assert the

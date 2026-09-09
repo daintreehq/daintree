@@ -318,10 +318,11 @@ export const mcpSessionScenarios: PerfScenario[] = [
       // make a server that lists nothing call nothing and score a clean sheet
       // — the exact shape this harness exists to refuse.
       //
-      // Three tools are held out: the two `*Owned` cleanups check the ownership
-      // ledger and `help.displayImage` requires a help binding, so refusing is
-      // the right answer for all three and none belongs in a battery whose
-      // oracle is "every call is admitted". PERF-283 grades them both ways.
+      // The self-gated tools are held out: every `*Owned` tool checks the
+      // ownership ledger and `help.displayImage` requires a help binding, so
+      // refusing is the right answer for all of them and none belongs in a
+      // battery whose oracle is "every call is admitted". PERF-283 grades them
+      // both ways.
       const battery = [...expectedExposedIds(manifest, "system", false)]
         .filter((id) => !SELF_GATED_TOOLS.has(id))
         .sort();

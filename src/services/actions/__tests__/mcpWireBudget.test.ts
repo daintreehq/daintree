@@ -353,7 +353,19 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // land, and a spend that drifts into that window will not be caught. Once
   // #12189 (243 B), #12318 and #12319 are in, usage is 47_516 B and the ratchet
   // is back to biting with 84 B of slack.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 47_600;
+  // 47_600 → 48_865 for #12338's `terminal.interruptOwned`. Most of the spend is
+  // its output schema, and that is the tool rather than its prose: it is the one
+  // tool here whose contract is mostly what it does NOT confirm.
+  // `batchDoubleEscape` is a one-way `ipcRenderer.send`, so every outcome it can
+  // report is something it asked for — `requested` or `requested-unverified`,
+  // the latter meaning the target's CLI names no interrupt key at all — and
+  // `agentStateAtDispatch` is the heuristic that gated the call rather than
+  // evidence a turn was running. A caller that reads a bare success here retries
+  // against an agent it never stopped, so each of those needs advertising.
+  // 48_865 → 49_150 for the `hasPty` field #12342 added to `terminal.getStatus`
+  // on develop; the tool is externally advertised, so this branch inherits the
+  // 285 B on rebase rather than spending them.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 49_150;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -397,7 +409,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `pr` and `reason` as independent optionals the advertised schema accepted
   // `{status:"found"}` with no PR and `{status:"not_found"}` carrying one —
   // contradictions a strict client would have validated as fine.
-  const MAX_COHORT_PAYLOAD_BYTES = 204_400;
+  // 204_400 → 204_685 for the same 285 B: `terminal.getStatus` sits on both
+  // tiers, so the cohort total moved by the identical amount.
+  const MAX_COHORT_PAYLOAD_BYTES = 204_685;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -418,6 +418,8 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.sendToAgent",
   "terminal.inject",
   "terminal.bulkCommand",
+  "terminal.interrupt",
+  "terminal.interruptOwned",
   "terminal.stashInput",
   "terminal.popStash",
 
@@ -561,4 +563,6 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "fleet.reject",
   "fleet.interrupt",
   "fleet.retryFailures",
+  "terminal.interrupt",
+  "terminal.interruptOwned",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

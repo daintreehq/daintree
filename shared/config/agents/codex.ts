@@ -89,6 +89,10 @@ export const config: AgentConfig = {
     supportsBracketedPaste: true,
     softNewlineSequence: "\n",
     ignoredInputSequences: ["\n", "\x1b\r"],
+    // Advertises "esc to interrupt" while working. Distinct from the Ctrl-C
+    // escalation in `resume.shutdownSignal`: that one quits the CLI, this one
+    // cancels the turn and leaves the session up.
+    interrupt: "double-escape",
   },
   detection: {
     primaryPatterns: [

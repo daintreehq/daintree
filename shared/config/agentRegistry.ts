@@ -241,6 +241,27 @@ export interface AgentPackages {
 }
 
 /**
+ * Which keystroke a CLI binds to "cancel the turn you are running" (#12338).
+ *
+ * Declared per agent because it is not guessable: the double-Escape Daintree
+ * sends is Claude's and Codex's convention, not a terminal-wide one, and Goose
+ * advertises `(Ctrl+C to interrupt)` in the very footer we scrape for its
+ * working state. Nothing else in this file records it, so an interrupt aimed at
+ * an agent had no way to know whether it was addressing the right key.
+ *
+ * Evidence is the CLI's own advertised hint — the same standard the detection
+ * patterns below are held to. `"double-escape"` means the agent prints an
+ * Escape-to-interrupt affordance while working; `"ctrl-c"` means it prints a
+ * different key, which is positive evidence that Escape is NOT its cancel.
+ *
+ * Omit it when the CLI advertises nothing. Absence means unverified, never
+ * unsupported: callers that act on it must be able to tell those apart, because
+ * treating "we have not looked" as "it does not work" would shrink the roster
+ * to whoever happened to get measured.
+ */
+export type AgentInterruptStrategy = "double-escape" | "ctrl-c";
+
+/**
  * A shutdown signal that escalates one key press at a time, gated on the
  * agent's own output rather than on a fixed press count (#11851).
  *
@@ -638,6 +659,12 @@ export interface AgentConfig {
     softNewlineSequence?: string;
     /** Input sequences the activity monitor should ignore (default: ["\x1b\r"]) */
     ignoredInputSequences?: string[];
+    /**
+     * Which key this CLI binds to cancelling the turn it is running, as the CLI
+     * itself advertises it. See {@link AgentInterruptStrategy} — omitted means
+     * unverified, not unsupported.
+     */
+    interrupt?: AgentInterruptStrategy;
     /** Delay in ms before sending Enter key after body write (default: 200) */
     submitEnterDelayMs?: number;
     /**

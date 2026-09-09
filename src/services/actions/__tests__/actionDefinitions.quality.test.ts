@@ -328,7 +328,16 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // `terminal.list` are not targets. Cutting either one buys 40 B and costs a
   // caller that uses the tool to announce itself, or reads every ownership
   // refusal as a bug.
-  const MAX_EXTERNAL_TOTAL_BYTES = 10_800;
+  // 10_800 → 11_082 for #12338's `terminal.interruptOwned`. Only 59 B were free,
+  // so a 341 B description could not have landed at any wording. What it has to
+  // carry is three things no sibling here says: that this stops a turn without
+  // disposing of the panel (the tool exists because the only other stop was the
+  // close), that it sends keystrokes rather than the prompt text a mid-turn
+  // agent would not read, and that an idle agent or one binding a different
+  // cancel key is refused rather than reported stopped. Cutting the last clause
+  // buys 90 B and costs the caller the one thing the maintainer asked for: an
+  // unsupported target named instead of a success returned at it.
+  const MAX_EXTERNAL_TOTAL_BYTES = 11_082;
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
@@ -372,7 +381,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // tier for that same subset invariant — the external surface may not reach
   // past the assistant's. Its 264 B is the whole of the increase, so this stays
   // the measured total rather than an allowance.
-  const MAX_COHORT_TOTAL_BYTES = 53_176;
+  // 53_176 → 53_517 for #12338's `terminal.interruptOwned`, carried on the action
+  // tier for that same subset invariant. Its 341 B is the whole of the increase,
+  // so this stays the measured total rather than an allowance — the raw
+  // `terminal.interrupt` it delegates to is on no tier and costs nothing here.
+  const MAX_COHORT_TOTAL_BYTES = 53_517;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

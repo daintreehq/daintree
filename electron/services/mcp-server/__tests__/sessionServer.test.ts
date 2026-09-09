@@ -6601,6 +6601,11 @@ describe("session-scoped resource ownership (#11909)", () => {
       { ...makeManifestEntry("terminal.closeOwned"), kind: "command", danger: "safe" as const },
       { ...makeManifestEntry("terminal.revealOwned"), kind: "command", danger: "safe" as const },
       {
+        ...makeManifestEntry("terminal.interruptOwned"),
+        kind: "command",
+        danger: "safe" as const,
+      },
+      {
         ...makeManifestEntry("worktree.deleteOwned"),
         kind: "command",
         danger: "confirm" as const,
@@ -6980,6 +6985,174 @@ describe("session-scoped resource ownership (#11909)", () => {
     });
   });
 
+  describe("terminal.interruptOwned (#12338)", () => {
+    const INTERRUPT_RESULT = {
+      terminalId: "terminal-1",
+      agentId: "claude",
+      agentStateAtDispatch: "working",
+      status: "requested",
+    };
+
+    function interruptHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.interrupt": { result: { ok: true, result: INTERRUPT_RESULT } },
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    it("delegates to the renderer interrupt with only the id", async () => {
+      const { server, dispatchAction } = interruptHarness("s-interrupt");
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.interrupt",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+      expect(payloadOf<{ status: string }>(result).status).toBe("requested");
+    });
+
+    // Rebuilding the arguments is what keeps this one operation rather than the
+    // general signal API it was deliberately not made into: a caller cannot
+    // smuggle a key sequence, a signal number or a second target through it.
+    it("strips anything the caller sent beyond the id", async () => {
+      const { server, dispatchAction } = interruptHarness("s-interrupt-strip");
+
+      await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          signal: "SIGKILL",
+          keySequence: "\u0003",
+          confirmed: true,
+        },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.interrupt",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      const { store, server, dispatchAction } = interruptHarness("s-interrupt-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    // The half that separates this from the cleanup tools: a stop is not an
+    // end, so the session keeps the authority to stop the panel again — and to
+    // close it afterwards, which is the point of having a non-destructive stop.
+    it("keeps ownership, so the panel can be interrupted again and then closed", async () => {
+      const { store, server, dispatchAction } = interruptHarness("s-interrupt-twice");
+      const args = { name: "terminal.interruptOwned", arguments: { terminalId: "terminal-1" } };
+
+      const first = await callTool(server, args);
+      const second = await callTool(server, args);
+
+      expect(first.isError).toBeUndefined();
+      expect(second.isError).toBeUndefined();
+      // Counted, not inferred from two successes: a dedup entry would serve the
+      // second call from cache and leave the agent running with both calls green.
+      expect(
+        dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === "terminal.interrupt")
+      ).toHaveLength(2);
+
+      // The point of retaining the record: the stop did not spend the session's
+      // authority, so the close it was a step toward still works.
+      const closed = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(closed.isError).toBeUndefined();
+      expect(store.resourceOwnership.owns("s-interrupt-twice", "terminal", "terminal-1")).toBe(
+        false
+      );
+    });
+
+    // Guards `releasesOwnership: false` itself. Without it the entry would fall
+    // through to the release path, and the structural `closedIds` check is a
+    // separate guard that would mask the flag being wrong.
+    it("retains ownership even if the delegate claims the panel closed", async () => {
+      const { store, server } = harness("s-interrupt-claims-closed", {
+        "terminal.interrupt": {
+          result: { ok: true, result: { ...INTERRUPT_RESULT, closedIds: ["terminal-1"] } },
+        },
+      });
+      store.resourceOwnership.record("s-interrupt-claims-closed", [
+        { kind: "terminal", id: "terminal-1" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(
+        store.resourceOwnership.owns("s-interrupt-claims-closed", "terminal", "terminal-1")
+      ).toBe(true);
+    });
+
+    // A refusal is the delegate declining to write keystrokes, not the panel
+    // going away — so the session keeps it and can close it instead.
+    it("keeps ownership when the delegate refuses the target", async () => {
+      const { store, server } = harness("s-interrupt-refused", {
+        "terminal.interrupt": {
+          result: {
+            ok: false,
+            error: { code: "EXECUTION_ERROR", message: "advertises Ctrl+C as its interrupt" },
+          },
+        },
+      });
+      store.resourceOwnership.record("s-interrupt-refused", [
+        { kind: "terminal", id: "terminal-1" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("Ctrl+C");
+      expect(store.resourceOwnership.owns("s-interrupt-refused", "terminal", "terminal-1")).toBe(
+        true
+      );
+    });
+
+    it("rejects a missing id before anything reaches the renderer", async () => {
+      const { server, dispatchAction } = interruptHarness("s-interrupt-noid");
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: {},
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("VALIDATION_ERROR");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
   describe("terminal.revealOwned (#12315)", () => {
     /**
      * A reveal harness with the bridge's reveal route wired. One dep, because

@@ -166,6 +166,13 @@ export const ACTION_TIER_ADDONS = [
   // is asserted rather than assumed, and the direction of the cut has to stay
   // honest. It tracks `pilot.openRun`, which it delegates to.
   "terminal.revealOwned",
+  // Carried here for that same subset invariant (#12338). The assistant has the
+  // interactive fleet interrupt sitting beside it and a human watching, so this
+  // adds nothing it could not already do — but the external tier may not reach
+  // past what the assistant can, and that is asserted rather than assumed
+  // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
+  // already reach"). Listing it keeps the direction of the cut honest.
+  "terminal.interruptOwned",
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killBatch",
