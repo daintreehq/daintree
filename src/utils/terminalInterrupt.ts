@@ -1,6 +1,7 @@
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getAgentConfig, type AgentInterruptStrategy } from "@shared/config/agentRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import type { WaitingReason } from "@shared/types/agent";
 import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 
 /**
@@ -34,6 +35,17 @@ export interface TerminalInterruptRefusal {
 }
 
 export type TerminalInterruptAssessment = TerminalInterruptTarget | TerminalInterruptRefusal;
+
+/**
+ * The `waiting` reasons that mean a turn is still in flight, and so still has
+ * something to cancel. Everything else — an empty prompt, or no reason recorded
+ * at all — is treated as idle.
+ */
+const INTERRUPTIBLE_WAITING_REASONS = new Set<WaitingReason | undefined>([
+  "question",
+  "approval",
+  "error",
+]);
 
 function refuse(reason: string): TerminalInterruptRefusal {
   return { eligible: false, reason };
@@ -83,6 +95,16 @@ export function assessTerminalInterrupt(
         `to come back up.`
     );
   }
+  // A restart that failed after tearing down the old process clears
+  // `isRestarting` and records the error, but leaves the synthetic `working`
+  // state and the old process fields behind — so the panel reads as a busy
+  // agent with nothing actually running under it.
+  if (panel.restartError !== undefined) {
+    return refuse(
+      `Terminal "${terminalId}" has a failed restart on it, so there is no agent process to ` +
+        `interrupt. Restart it again, or close the panel.`
+    );
+  }
   if (panel.isInputLocked === true) {
     return refuse(
       `Terminal "${terminalId}" has input locked, so keystrokes sent to it would be discarded. ` +
@@ -122,16 +144,25 @@ export function assessTerminalInterrupt(
         `and can lag; read the terminal's output to see where it actually is.`
     );
   }
-  // `waiting` is two different situations wearing one name. A question or an
-  // approval selector is a turn still in flight and interruptible; `"prompt"`
-  // is documented as an empty input prompt, safe to auto-drive — which is to
-  // say idle. Letting that through would defeat the guard above at exactly the
-  // moment it matters, since a second Escape at an idle Claude prompt opens the
-  // session rewind menu rather than doing nothing.
-  if (agentState === "waiting" && panel.waitingReason === "prompt") {
+  // `waiting` is several situations wearing one name, and only some are a turn
+  // in flight. A question, an approval selector or a blocking error all still
+  // have something to cancel; `"prompt"` is documented as an empty input prompt
+  // — safe to auto-drive, which is to say idle. An absent reason is idle too
+  // often to treat as a turn: the completion timer emits an unclassified idle,
+  // and the state machine routes that `completed -> waiting` with no reason set,
+  // so a finished agent arrives here looking interruptible.
+  //
+  // Hence a positive test rather than a denylist. Sending is the side-effecting
+  // direction — a second Escape at an idle Claude prompt opens the session
+  // rewind menu rather than doing nothing — so an unclassified wait is refused,
+  // and a new `WaitingReason` added later is refused until someone decides it
+  // means a turn is running.
+  if (agentState === "waiting" && !INTERRUPTIBLE_WAITING_REASONS.has(panel.waitingReason)) {
     return refuse(
-      `The agent in terminal "${terminalId}" is sitting at an empty prompt, not running a turn, so ` +
-        `no interrupt was sent. Submit the next instruction instead of stopping it.`
+      `The agent in terminal "${terminalId}" is waiting rather than running a turn` +
+        `${panel.waitingReason === undefined ? "" : ` (${panel.waitingReason})`}, so no interrupt ` +
+        `was sent. Submit the next instruction instead of stopping it, or read the terminal's ` +
+        `output to see what it is waiting on.`
     );
   }
 

@@ -41,17 +41,37 @@ describe("assessTerminalInterrupt (#12338)", () => {
     }
   );
 
-  // `waiting` is two situations wearing one name, and `"prompt"` is the idle
-  // one — documented as an empty input prompt, safe to auto-drive. Letting it
-  // through would defeat the idle guard at the exact moment it matters: a
-  // second Escape at an idle Claude prompt opens the session rewind menu.
+  // `"prompt"` is the idle one — documented as an empty input prompt, safe to
+  // auto-drive. Letting it through would defeat the idle guard at the exact
+  // moment it matters: a second Escape at an idle Claude prompt opens the
+  // session rewind menu.
   it("refuses a waiting agent sitting at an empty prompt", () => {
     const result = assessTerminalInterrupt(
       makeAgentPanel({ agentState: "waiting", waitingReason: "prompt" }),
       "t1"
     );
     expect(result.eligible).toBe(false);
-    if (!result.eligible) expect(result.reason).toContain("empty prompt");
+    if (!result.eligible) expect(result.reason).toContain("waiting rather than running a turn");
+  });
+
+  // An absent reason is the common idle shape, not a rare one: the completion
+  // timer emits an unclassified idle and the state machine routes it
+  // `completed -> waiting`, so a finished agent lands here looking busy.
+  it("refuses a waiting agent with no recorded reason", () => {
+    const result = assessTerminalInterrupt(
+      makeAgentPanel({ agentState: "waiting", waitingReason: undefined }),
+      "t1"
+    );
+    expect(result.eligible).toBe(false);
+  });
+
+  it("refuses a panel whose last restart failed", () => {
+    const result = assessTerminalInterrupt(
+      makeAgentPanel({ agentState: "working", restartError: { kind: "spawn-failed" } }),
+      "t1"
+    );
+    expect(result.eligible).toBe(false);
+    if (!result.eligible) expect(result.reason).toContain("failed restart");
   });
 
   // Restart locks the managed terminal without touching the persisted flag and

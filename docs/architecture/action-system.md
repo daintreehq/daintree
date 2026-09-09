@@ -139,7 +139,7 @@ interface ActionError {
 | Code | Means |
 | --- | --- |
 | `NOT_FOUND` | no such action id |
-| `VALIDATION_ERROR` | args failed `argsSchema` |
+| `VALIDATION_ERROR` | args failed `argsSchema`, or `run()` threw `UnactionableTargetError` — the args parsed but named a target the action refuses to act on. Both are permanent for identical args, which is what keeps this code out of `RETRIABLE_ERROR_CODES`. |
 | `RESULT_VALIDATION_ERROR` | `run()` succeeded but its return value failed `resultSchema` — a bug in the action, not the caller; the side effects stand |
 | `DISABLED` | `isEnabled(ctx)` returned false; `message` carries `disabledReason` |
 | `RESTRICTED` | `danger: "restricted"`, or `denyPluginDispatch` with a plugin source |

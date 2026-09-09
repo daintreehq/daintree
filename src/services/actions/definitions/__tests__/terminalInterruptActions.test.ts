@@ -268,6 +268,10 @@ describe("terminal.interruptOwned (#12338)", () => {
       const result = await service().dispatch("terminal.interrupt", { terminalId: "a" });
 
       expect(result.ok, JSON.stringify(result)).toBe(true);
+      // Asserted in every case, not just the happy one: a write gated on
+      // `agentState === "working"` would otherwise return success at a waiting
+      // agent without sending it anything.
+      expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["a"]);
       if (result.ok) {
         expect(result.result).toEqual({
           terminalId: "a",
