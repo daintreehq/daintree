@@ -447,3 +447,128 @@ describe("handleWaitUntilIdleBatch", () => {
     ).rejects.toThrow(/mode/);
   });
 });
+
+// #12339 — "the agent finished" and "the terminal is gone" both surface as
+// busyState: "idle". `trackingState` is the discriminator; these cover the
+// issue's exact repro (launch, close, wait with timeoutMs: 0).
+describe("trackingState discriminates a closed terminal from an idle agent", () => {
+  const snapshot = (terminalId: string) =>
+    handleWaitUntilIdle({ terminalId, timeoutMs: 0 }, new AbortController().signal);
+
+  it("reports a live agent sitting at rest as 'live'", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    emitIdle(terminalId, agentId, "idle");
+
+    const result = await snapshot(terminalId);
+
+    expect(result.busyState).toBe("idle");
+    expect(result.idleReason).toBe("idle");
+    expect(result.trackingState).toBe("tracked");
+  });
+
+  it("reports a closed terminal as 'closed' with an unknown idleReason", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    // A kill maps straight to `idle` in the FSM, then agent:killed lands.
+    emitIdle(terminalId, agentId, "idle");
+    events.emit("agent:killed", { agentId, terminalId, timestamp: Date.now() });
+
+    const result = await snapshot(terminalId);
+
+    // Still idle and still non-failing — the fail-open contract is unchanged.
+    expect(result.busyState).toBe("idle");
+    expect(result.timedOut).toBe(false);
+    // ...but no longer indistinguishable from the case above.
+    expect(result.idleReason).toBe("unknown");
+    expect(result.trackingState).toBe("closed");
+  });
+
+  it("reports an id it has never seen as 'unknown', not 'closed'", async () => {
+    const result = await snapshot("never-existed-terminal");
+
+    expect(result.busyState).toBe("idle");
+    expect(result.idleReason).toBe("unknown");
+    // A reconciler reaps on "closed" but may retry on "unknown" (a poll can
+    // race the spawn), so these must not collapse.
+    expect(result.trackingState).toBe("unknown");
+  });
+
+  it("reports 'live' while the agent is still working (timeout path)", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 30,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.trackingState).toBe("tracked");
+  });
+
+  it("reports 'live' for an agent that exited normally, panel still tracked", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state: "completed",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: Date.now(),
+      exitCode: 0,
+    });
+
+    const result = await snapshot(terminalId);
+
+    // The process ended but the terminal was never killed — a completed run is
+    // already unambiguous via idleReason + exitCode.
+    expect(result.idleReason).toBe("completed");
+    expect(result.exitCode).toBe(0);
+    expect(result.trackingState).toBe("tracked");
+  });
+
+  it("a respawn under the same terminal id reports 'live' again", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    events.emit("agent:killed", { agentId, terminalId, timestamp: Date.now() });
+    expect((await snapshot(terminalId)).trackingState).toBe("closed");
+
+    seedWorkingAgent(terminalId, agentId);
+
+    expect((await snapshot(terminalId)).trackingState).toBe("tracked");
+  });
+
+  it("batch rows carry trackingState and closed rows stay settled", async () => {
+    const live = nextIds();
+    const closed = nextIds();
+    seedWorkingAgent(live.terminalId, live.agentId);
+    emitIdle(live.terminalId, live.agentId, "idle");
+    seedWorkingAgent(closed.terminalId, closed.agentId);
+    emitIdle(closed.terminalId, closed.agentId, "idle");
+    events.emit("agent:killed", {
+      agentId: closed.agentId,
+      terminalId: closed.terminalId,
+      timestamp: Date.now(),
+    });
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [live.terminalId, closed.terminalId, "batch-never-existed"], mode: "all" },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    const byId = new Map(res.results.map((e) => [e.terminalId, e]));
+    expect(byId.get(live.terminalId)!.trackingState).toBe("tracked");
+    expect(byId.get(closed.terminalId)!.trackingState).toBe("closed");
+    expect(byId.get("batch-never-existed")!.trackingState).toBe("unknown");
+
+    // `settled` deliberately stays true for gone terminals so mode "all" cannot
+    // hang on them — trackingState is what says the work did not finish.
+    expect(byId.get(closed.terminalId)!.settled).toBe(true);
+    expect(byId.get("batch-never-existed")!.settled).toBe(true);
+    expect(res.timedOut).toBe(false);
+    expect(res.settledTerminalIds).toHaveLength(3);
+  });
+});

@@ -1944,7 +1944,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working; an exit code appears only once the process ends, so confirm success there before acting irreversibly.",
+      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState` before trusting it.",
     enabled: true,
     id: "terminal.waitUntilIdle",
     inputSchema: {
@@ -1955,7 +1955,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked resolves as idle rather than failing.",
+            "Identifies the terminal to act on, using a panel id from the terminal-listing capability. A closed or unknown id resolves as idle rather than failing.",
         },
         timeoutMs: {
           description:
@@ -1974,6 +1974,62 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       destructiveHint: false,
     },
     name: "terminal.waitUntilIdle",
+    outputSchema: {
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+        },
+        agentId: {
+          type: "string",
+        },
+        busyState: {
+          type: "string",
+          enum: ["working", "idle"],
+        },
+        idleReason: {
+          type: "string",
+          enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+          description:
+            "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+        },
+        trackingState: {
+          type: "string",
+          enum: ["tracked", "closed", "unknown"],
+          description:
+            "Tells an agent that finished from a session that is gone, which both report idle: 'tracked' = a session is still held, 'closed' = its agent was killed, 'unknown' = no record, which also covers a plain shell or a poll that raced the spawn.",
+        },
+        waitingReason: {
+          type: "string",
+          enum: ["prompt", "question", "approval", "error"],
+          description:
+            "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
+        },
+        previousBusyState: {
+          type: "string",
+          enum: ["working", "idle"],
+        },
+        lastTransitionAt: {
+          type: "number",
+        },
+        exitCode: {
+          type: ["number", "null"],
+          description:
+            "Process exit code, present only when idleReason is 'completed' or 'exited'. null = signal-terminated with no numeric code.",
+        },
+        exitSignal: {
+          type: "number",
+          description:
+            "OS signal number that terminated the process, when applicable (completed/exited only).",
+        },
+        timedOut: {
+          type: "boolean",
+          description:
+            "True when the wait elapsed with the agent still working. Call again to keep waiting — it is not a failure.",
+        },
+      },
+      required: ["terminalId", "busyState", "trackingState", "timedOut"],
+    },
     requiresArgs: true,
     title: "Wait until terminal idle",
   },
@@ -1982,7 +2038,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold the call open for a minute interactively, far longer headless. Timing out means not met yet; untracked terminals count as finished.",
+      "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdleBatch",
     inputSchema: {
@@ -1998,7 +2054,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             minLength: 1,
           },
           description:
-            "Identifies the terminals to watch (1-256), using panel ids from the terminal-listing capability. Ids no longer tracked count as already finished rather than failing the batch.",
+            "Identifies the terminals to watch (1-256), using panel ids from the terminal-listing capability. Closed or unknown ids count as already settled rather than failing the batch; each row's `trackingState` says which.",
         },
         mode: {
           description:
@@ -2023,6 +2079,76 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       destructiveHint: false,
     },
     name: "terminal.waitUntilIdleBatch",
+    outputSchema: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["first", "all"],
+        },
+        results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              agentId: {
+                type: "string",
+              },
+              busyState: {
+                type: "string",
+                enum: ["working", "idle"],
+              },
+              idleReason: {
+                type: "string",
+                enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+              },
+              trackingState: {
+                type: "string",
+                enum: ["tracked", "closed", "unknown"],
+                description:
+                  "Tells an agent that finished from a session that is gone, which both report idle: 'tracked' = a session is still held, 'closed' = its agent was killed, 'unknown' = no record, which also covers a plain shell or a poll that raced the spawn.",
+              },
+              waitingReason: {
+                type: "string",
+                enum: ["prompt", "question", "approval", "error"],
+              },
+              previousBusyState: {
+                type: "string",
+                enum: ["working", "idle"],
+              },
+              lastTransitionAt: {
+                type: "number",
+              },
+              exitCode: {
+                type: ["number", "null"],
+              },
+              exitSignal: {
+                type: "number",
+              },
+              settled: {
+                type: "boolean",
+                description:
+                  "True once this row satisfied the wait. Gone terminals settle so the batch cannot hang; that is not a claim work completed, so read trackingState.",
+              },
+            },
+            required: ["terminalId", "busyState", "trackingState", "settled"],
+          },
+        },
+        settledTerminalIds: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        timedOut: {
+          type: "boolean",
+        },
+      },
+      required: ["mode", "results", "settledTerminalIds", "timedOut"],
+    },
     requiresArgs: true,
     title: "Wait until terminals idle (batch)",
   },

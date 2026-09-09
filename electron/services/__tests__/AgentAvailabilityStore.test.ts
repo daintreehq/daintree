@@ -590,6 +590,134 @@ describe("AgentAvailabilityStore", () => {
     });
   });
 
+  // #12339 — a killed terminal used to keep its mapping forever, so
+  // waitUntilIdle read the kill's `idle` state and could not tell a closed
+  // panel from an agent at rest.
+  describe("terminal-scoped release on agent:killed", () => {
+    const spawn = (agentId: string, terminalId: string) => {
+      events.emit("agent:spawned", { agentId, terminalId, timestamp: Date.now() });
+    };
+
+    it("drops the terminal mapping when its agent is killed", () => {
+      spawn("claude", "term-1");
+      expect(store.getAgentIdForTerminal("term-1")).toBe("claude");
+
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getAgentIdForTerminal("term-1")).toBeUndefined();
+      expect(store.isTerminalClosed("term-1")).toBe(true);
+    });
+
+    it("reports an id it has never seen as not closed", () => {
+      expect(store.isTerminalClosed("never-existed")).toBe(false);
+    });
+
+    // The reason this is not `unregisterAgent`: agent ids name the agent type,
+    // so two panels running "claude" share one id.
+    it("killing one terminal leaves a live sibling of the same agent type mapped", () => {
+      spawn("claude", "term-old");
+      spawn("claude", "term-new");
+      events.emit("agent:state-changed", {
+        agentId: "claude",
+        terminalId: "term-new",
+        state: "working",
+        previousState: "idle",
+        timestamp: Date.now(),
+        trigger: "output",
+        confidence: 1,
+      });
+
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-old",
+        timestamp: Date.now(),
+      });
+
+      // The old terminal is released, the newer one keeps both directions of
+      // the mapping and the shared agent-level state is untouched.
+      expect(store.getAgentIdForTerminal("term-old")).toBeUndefined();
+      expect(store.getAgentIdForTerminal("term-new")).toBe("claude");
+      expect(store.getTerminalIdForAgent("claude")).toBe("term-new");
+      expect(store.getState("claude")).toBe("working");
+    });
+
+    it("clears the reverse mapping when the killed terminal still owns it", () => {
+      spawn("claude", "term-1");
+
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getTerminalIdForAgent("claude")).toBeUndefined();
+    });
+
+    it("ignores an agent:killed with no terminalId", () => {
+      spawn("claude", "term-1");
+
+      events.emit("agent:killed", { agentId: "claude", timestamp: Date.now() });
+
+      expect(store.getAgentIdForTerminal("term-1")).toBe("claude");
+    });
+
+    it("a respawn under the same terminal id clears the closed mark", () => {
+      spawn("claude", "term-1");
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+      expect(store.isTerminalClosed("term-1")).toBe(true);
+
+      spawn("claude", "term-1");
+
+      expect(store.isTerminalClosed("term-1")).toBe(false);
+      expect(store.getAgentIdForTerminal("term-1")).toBe("claude");
+    });
+
+    it("marks a terminal closed even when no mapping was ever recorded", () => {
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "unmapped",
+        timestamp: Date.now(),
+      });
+
+      expect(store.isTerminalClosed("unmapped")).toBe(true);
+    });
+
+    it("bounds the closed set, ageing out the oldest entries first", () => {
+      // 256 is the cap; 300 closes must not grow the set without bound, and the
+      // most recent id must survive.
+      for (let i = 0; i < 300; i += 1) {
+        events.emit("agent:killed", {
+          agentId: "claude",
+          terminalId: `term-${i}`,
+          timestamp: Date.now(),
+        });
+      }
+
+      expect(store.isTerminalClosed("term-299")).toBe(true);
+      // Evicting only ever downgrades "closed" to "unknown", never to live.
+      expect(store.isTerminalClosed("term-0")).toBe(false);
+    });
+
+    it("clear() forgets closed terminals", () => {
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+      store.clear();
+
+      expect(store.isTerminalClosed("term-1")).toBe(false);
+    });
+  });
+
   describe("dispose", () => {
     it("stops listening to events after dispose", () => {
       store.registerAgent("agent-1", "idle");

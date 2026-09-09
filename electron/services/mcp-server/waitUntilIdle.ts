@@ -7,12 +7,25 @@ import {
   type WaitUntilIdleBatchResult,
   type WaitUntilIdleBatchEntry,
   type WaitUntilIdleBatchMode,
+  type WaitUntilIdleTrackingState,
   DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
   MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import { mapAgentStateToBusyState, mapAgentStateToIdleReason } from "./shared.js";
 import type { AgentAvailabilityStore } from "../AgentAvailabilityStore.js";
+
+/**
+ * Classify a terminal we hold no agent mapping for. The store drops the mapping
+ * when it sees the agent killed, so "we watched this one end" and "we have no
+ * record of this id" are different facts here rather than one `unknown` (#12339).
+ */
+function resolveUntrackedTrackingState(
+  store: AgentAvailabilityStore,
+  terminalId: string
+): WaitUntilIdleTrackingState {
+  return store.isTerminalClosed(terminalId) ? "closed" : "unknown";
+}
 
 export interface WaitUntilIdleOptions {
   /**
@@ -81,6 +94,7 @@ export async function handleWaitUntilIdle(
       terminalId,
       busyState: "idle",
       idleReason: "unknown",
+      trackingState: resolveUntrackedTrackingState(store, terminalId),
       timedOut: false,
     };
   }
@@ -140,6 +154,14 @@ export async function handleWaitUntilIdle(
   const agentSnapshotMatchesTerminal = () => store.getTerminalIdForAgent(agentId) === terminalId;
   const previousState = agentSnapshotMatchesTerminal() ? store.getState(agentId) : "working";
 
+  // Read at return time, not seeded above: a kill landing mid-wait settles the
+  // wait via its `idle` state change and only then releases the mapping, so a
+  // value captured before the await would report the terminal as live.
+  const currentTrackingState = (): WaitUntilIdleTrackingState =>
+    store.getAgentIdForTerminal(terminalId) !== undefined
+      ? "tracked"
+      : resolveUntrackedTrackingState(store, terminalId);
+
   try {
     const settlement = await new Promise<Settlement>((resolve) => {
       const settle = (value: Settlement) => {
@@ -193,6 +215,7 @@ export async function handleWaitUntilIdle(
         terminalId,
         agentId,
         busyState: "working",
+        trackingState: currentTrackingState(),
         previousBusyState: mapAgentStateToBusyState(previousState),
         lastTransitionAt: agentSnapshotMatchesTerminal()
           ? store.getLastStateChange(agentId)
@@ -208,6 +231,7 @@ export async function handleWaitUntilIdle(
         agentId,
         busyState: mapAgentStateToBusyState(settlement.state),
         idleReason,
+        trackingState: currentTrackingState(),
         ...(idleReason === "waiting_for_user" && settlement.waitingReason
           ? { waitingReason: settlement.waitingReason }
           : {}),
@@ -224,6 +248,7 @@ export async function handleWaitUntilIdle(
       agentId,
       busyState: mapAgentStateToBusyState(settlement.state),
       idleReason,
+      trackingState: currentTrackingState(),
       ...(idleReason === "waiting_for_user" && settlement.waitingReason
         ? { waitingReason: settlement.waitingReason }
         : {}),
@@ -295,6 +320,7 @@ function settleTrackFromState(
 }
 
 function buildBatchResult(
+  store: AgentAvailabilityStore,
   tracks: Map<string, BatchTrack>,
   orderedIds: string[],
   mode: WaitUntilIdleBatchMode,
@@ -305,6 +331,12 @@ function buildBatchResult(
     const entry: WaitUntilIdleBatchEntry = {
       terminalId: t.terminalId,
       busyState: t.busyState,
+      // Resolved here rather than seeded per track so a terminal killed while
+      // the batch was waiting reports `closed`, not the state it had on entry.
+      trackingState:
+        store.getAgentIdForTerminal(t.terminalId) !== undefined
+          ? "tracked"
+          : resolveUntrackedTrackingState(store, t.terminalId),
       settled: t.settled,
     };
     if (t.agentId !== undefined) entry.agentId = t.agentId;
@@ -539,7 +571,7 @@ export async function handleWaitUntilIdleBatch(
     if (outcome === "abort") {
       throw new McpError(ErrorCode.RequestTimeout, "Request was cancelled.");
     }
-    return buildBatchResult(tracks, orderedIds, mode, outcome === "timeout");
+    return buildBatchResult(store, tracks, orderedIds, mode, outcome === "timeout");
   } finally {
     cleanup();
   }

@@ -17,11 +17,62 @@ export const DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS = 60 * 1000;
 export const INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS = 60 * 1000;
 export const MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
+/**
+ * Shared by the single and batched results so the two can never drift — they
+ * carried verbatim copies of this union before, which typechecked fine while
+ * silently desyncing.
+ */
+export type WaitUntilIdleIdleReason =
+  "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+
+/** Literal values of {@link WaitUntilIdleIdleReason}, for the raw JSON schemas. */
+export const WAIT_UNTIL_IDLE_IDLE_REASONS: readonly WaitUntilIdleIdleReason[] = [
+  "idle",
+  "waiting_for_user",
+  "completed",
+  "exited",
+  "unknown",
+];
+
+/**
+ * Whether a session is still tracked for this terminal, so a reconciler can
+ * tell an agent that finished from one whose terminal is gone — both of which
+ * report `busyState: "idle"` (#12339).
+ *
+ * Deliberately three values, not a boolean. `"closed"` is decisive (reap the
+ * session); `"unknown"` is not (an id can be unknown because a poll raced the
+ * spawn, or because another window replaced the store singleton), and
+ * collapsing them would push a caller into guessing.
+ *
+ * Named for tracking, not liveness, because that is all this observes:
+ * `"tracked"` means an agent-session mapping is still held. It is not a claim
+ * that a panel is on screen, and a plain shell that never launched an agent is
+ * `"unknown"` while being perfectly alive.
+ */
+export type WaitUntilIdleTrackingState = "tracked" | "closed" | "unknown";
+
+/** Literal values of {@link WaitUntilIdleTrackingState}, for the raw JSON schemas. */
+export const WAIT_UNTIL_IDLE_TRACKING_STATES: readonly WaitUntilIdleTrackingState[] = [
+  "tracked",
+  "closed",
+  "unknown",
+];
+
+// Carried on both wait tools, so every byte here is spent twice on the
+// advertised surface — keep it to the three arms and what separates them.
+const TRACKING_STATE_DESCRIPTION =
+  "Tells an agent that finished from a session that is gone, which both report idle: 'tracked' = a session is still held, 'closed' = its agent was killed, 'unknown' = no record, which also covers a plain shell or a poll that raced the spawn.";
+
 export type WaitUntilIdleResult = {
   terminalId: string;
   agentId?: string;
   busyState: "working" | "idle";
-  idleReason?: "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+  idleReason?: WaitUntilIdleIdleReason;
+  /**
+   * Distinguishes "the agent finished" from "this terminal is gone", which
+   * both surface as `busyState: "idle"`. Always present.
+   */
+  trackingState: WaitUntilIdleTrackingState;
   /**
    * Only present when `idleReason === "waiting_for_user"`. Distinguishes a safe
    * auto-drive moment (`"prompt"` — empty input prompt) from an agent actively
@@ -51,7 +102,7 @@ export const WAIT_UNTIL_IDLE_INPUT_SCHEMA: Record<string, unknown> = {
     terminalId: {
       type: "string",
       description:
-        "Identifies the terminal to watch, using a panel id from the terminal-listing capability. An id no longer tracked resolves immediately as idle with an unknown reason rather than failing.",
+        "Identifies the terminal to watch, using a panel id from the terminal-listing capability. A closed or unknown id resolves immediately as idle rather than failing — read `trackingState` to tell that apart from an agent that is genuinely at rest.",
     },
     timeoutMs: {
       type: "integer",
@@ -72,9 +123,14 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     busyState: { type: "string", enum: ["working", "idle"] },
     idleReason: {
       type: "string",
-      enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+      enum: [...WAIT_UNTIL_IDLE_IDLE_REASONS],
       description:
         "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+    },
+    trackingState: {
+      type: "string",
+      enum: [...WAIT_UNTIL_IDLE_TRACKING_STATES],
+      description: TRACKING_STATE_DESCRIPTION,
     },
     waitingReason: {
       type: "string",
@@ -100,11 +156,12 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
         "True when the wait elapsed with the agent still working. Call again to keep waiting — it is not a failure.",
     },
   },
-  required: ["terminalId", "busyState", "timedOut"],
+  required: ["terminalId", "busyState", "trackingState", "timedOut"],
 };
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
-  "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working; an exit code appears only once the process ends, so confirm success there before acting irreversibly.";
+  // Kept under the 400-byte tool-description budget (mcpWireBudget.test.ts).
+  "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState` before trusting it.";
 
 // === Batched wait (fan-out orchestration) ===
 
@@ -124,13 +181,27 @@ export type WaitUntilIdleBatchEntry = {
   terminalId: string;
   agentId?: string;
   busyState: "working" | "idle";
-  idleReason?: "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+  idleReason?: WaitUntilIdleIdleReason;
+  /**
+   * Same discriminator as the single-terminal result. Load-bearing here: a
+   * closed row still reports `settled: true`, so this is the only thing that
+   * separates it from an agent that genuinely finished.
+   */
+  trackingState: WaitUntilIdleTrackingState;
   waitingReason?: WaitingReason;
   previousBusyState?: "working" | "idle";
   lastTransitionAt?: number;
   exitCode?: number | null;
   exitSignal?: number;
-  /** True once this terminal left `working` (or was never working / untracked). */
+  /**
+   * True once this terminal left `working` (or was never working / untracked).
+   *
+   * Stays `true` for closed and unknown rows on purpose: it latches "this row
+   * satisfied the wait", so `mode: "all"` cannot hang on a terminal that is
+   * gone. It is not a claim that any work completed — read `trackingState` for
+   * that — nor that nothing further can happen to the terminal, since a row
+   * that settled while the batch was still running may close before it returns.
+   */
   settled: boolean;
 };
 
@@ -158,16 +229,25 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
           busyState: { type: "string", enum: ["working", "idle"] },
           idleReason: {
             type: "string",
-            enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+            enum: [...WAIT_UNTIL_IDLE_IDLE_REASONS],
+          },
+          trackingState: {
+            type: "string",
+            enum: [...WAIT_UNTIL_IDLE_TRACKING_STATES],
+            description: TRACKING_STATE_DESCRIPTION,
           },
           waitingReason: { type: "string", enum: ["prompt", "question", "approval", "error"] },
           previousBusyState: { type: "string", enum: ["working", "idle"] },
           lastTransitionAt: { type: "number" },
           exitCode: { type: ["number", "null"] },
           exitSignal: { type: "number" },
-          settled: { type: "boolean" },
+          settled: {
+            type: "boolean",
+            description:
+              "True once this row satisfied the wait. Gone terminals settle so the batch cannot hang; that is not a claim work completed, so read trackingState.",
+          },
         },
-        required: ["terminalId", "busyState", "settled"],
+        required: ["terminalId", "busyState", "trackingState", "settled"],
       },
     },
     settledTerminalIds: { type: "array", items: { type: "string" } },
@@ -177,4 +257,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
-  "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold the call open for a minute interactively, far longer headless. Timing out means not met yet; untracked terminals count as finished.";
+  "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.";
