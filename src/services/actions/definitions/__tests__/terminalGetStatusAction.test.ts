@@ -17,6 +17,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindHasPty: (kind: string) => kind === "terminal" || kind === "agent",
 }));
 
+import type { TerminalStatusResult } from "@shared/types/terminalStatus";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
 
 /**
@@ -35,27 +36,10 @@ function snapshotMap(
   );
 }
 
-type StatusEntry = {
-  terminalId: string;
-  agentId: string | null;
-  agentState: string | null;
-  waitingReason?: string;
-  lastTransitionAt?: number;
-  exitCode?: number | null;
-  spawnedAt?: number;
-  lastCheckResult?: {
-    command: string | null;
-    passed: boolean;
-    ranAt: number;
-    failureSummary: string | null;
-    truncated: boolean;
-  };
-  recentOutput?: string | null;
-  armed?: boolean;
-  error?: string;
-};
-
-type StatusResult = { terminals: StatusEntry[]; source: string; unavailableFields: string[] };
+// The shared wire types rather than a third hand-maintained mirror: a field
+// added to `TerminalStatusEntry` and forgotten in the builder now fails here
+// instead of being invisible to a copy that drifted.
+type StatusResult = TerminalStatusResult;
 
 function setupActions(): ActionRegistry {
   const actions: ActionRegistry = new Map();
@@ -87,10 +71,12 @@ beforeEach(() => {
 });
 
 describe("terminal.getStatus", () => {
-  it("names its source and reports nothing as unobservable (#12316)", async () => {
+  it("names its source and declares only hasPty unobservable (#12316, #12336)", async () => {
     // The same envelope the main-process fallback answers in. A live view saw
-    // everything, so `unavailableFields` is empty — which is what tells a
-    // client that a missing `armed` here means "not armed", not "unknown".
+    // the panel-shaped fields, so their absence is evidence — a missing `armed`
+    // here means "not armed", not "unknown". `hasPty` is the exception: the
+    // pty-host computes it and the renderer's panel copy is never written, so
+    // this surface says it could not look rather than reporting silence.
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1"],
       panelsById: {
@@ -101,8 +87,42 @@ describe("terminal.getStatus", () => {
     const result = await callGetStatus(setupActions());
 
     expect(result.source).toBe("renderer");
-    expect(result.unavailableFields).toEqual([]);
+    expect(result.unavailableFields).toEqual(["hasPty"]);
     expect(result.terminals[0]?.armed).toBe(false);
+  });
+
+  it("emits no hasPty key rather than a value it cannot observe (#12336)", async () => {
+    // Nothing in the renderer writes `PtyPanelData.hasPty` — not `addPanel`,
+    // not `statePatcher` on restore or reconnect, not the `onExit` listener —
+    // and `fleetEligibility.ts` records that it lags. Forwarding the stale
+    // property, or deriving one from `runtimeStatus`, would publish an
+    // interpretation as a process fact. Read off the serialized payload,
+    // because an explicit `hasPty: undefined` would vanish on the wire while
+    // still satisfying an in-memory property check.
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["live", "stale", "plain"],
+      panelsById: {
+        live: { id: "live", kind: "terminal", location: "grid", agentState: "working" },
+        // A panel carrying the vestigial property must not be believed either.
+        stale: {
+          id: "stale",
+          kind: "terminal",
+          location: "grid",
+          agentState: "exited",
+          hasPty: true,
+          runtimeStatus: "exited",
+        },
+        plain: { id: "plain", kind: "file", location: "grid" },
+      },
+    });
+
+    const wire = JSON.parse(JSON.stringify(await callGetStatus(setupActions()))) as StatusResult;
+
+    expect(wire.terminals).toHaveLength(3);
+    for (const entry of wire.terminals) {
+      expect(entry).not.toHaveProperty("hasPty");
+    }
+    expect(wire.unavailableFields).toEqual(["hasPty"]);
   });
 
   it("returns a `terminals` object wrapper, never a raw array", async () => {

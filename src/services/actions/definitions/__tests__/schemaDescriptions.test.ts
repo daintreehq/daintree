@@ -285,6 +285,17 @@ describe("result descriptions explain what a value cannot say for itself", () =>
     expect(exitCode).toMatch(/running|absen/i);
   });
 
+  it("keeps hasPty a lifecycle fact rather than a liveness probe", () => {
+    // #12336 was filed asking for "is this process alive?" and deliberately
+    // did not get it: a wedged process and an agent that exited to its
+    // keep-open shell both read `true`. If that caveat falls out of the text,
+    // the field starts reading as the health check it explicitly is not — so
+    // the disclaimer is the assertion, not the happy-path meaning.
+    const hasPty = statusProperties().hasPty?.description ?? "";
+    expect(hasPty).toMatch(/not a health probe|not a (?:liveness|health) (?:probe|check)/i);
+    expect(hasPty).toMatch(/keep-open|wedged/i);
+  });
+
   it("explains a per-entry error rather than letting it read as a whole-call failure", () => {
     expect(statusProperties().error?.description ?? "").not.toBe("");
   });

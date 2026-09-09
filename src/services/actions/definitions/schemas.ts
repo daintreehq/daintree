@@ -504,6 +504,12 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`."
     ),
+  hasPty: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether this terminal still holds a live PTY. False once the process ended on a pane kept for review, separating that from "the pane is gone", which reports `error`. A lifecycle fact, not a health probe: a keep-open shell or a wedged agent still reads true.'
+    ),
   error: z
     .string()
     .optional()
@@ -520,7 +526,7 @@ export const TerminalStatusResultSchema = z.object({
       "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
     ),
   unavailableFields: z
-    .array(z.enum(["armed", "lastCheckResult", "exitCode"]))
+    .array(z.enum(["armed", "lastCheckResult", "exitCode", "hasPty"]))
     .describe(
       "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),

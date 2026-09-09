@@ -78,6 +78,36 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(props.armed).toBeDefined();
   });
 
+  it("terminal.getStatus advertises hasPty as an optional plain boolean (#12336)", () => {
+    const schema = outputSchema(registerAll(), "terminal.getStatus")!;
+    const items = (schema.properties as { terminals: { items?: Record<string, unknown> } })
+      .terminals.items;
+    const props = (items?.properties as Record<string, { type?: unknown }>) ?? {};
+
+    // Advertised, or an introspecting client never learns the read exists.
+    expect(props.hasPty).toBeDefined();
+    // A plain boolean, not an anyOf/null union: the renderer answer omits the
+    // key entirely rather than sending `null`, and a third representation
+    // would give a poller a state neither builder ever produces.
+    expect(props.hasPty?.type).toBe("boolean");
+    // Optional, because the surface that cannot observe it sends no key. A
+    // required field would make every renderer-sourced answer fail a strict
+    // client's structuredContent validation.
+    const required = (items?.required as string[] | undefined) ?? [];
+    expect(required).not.toContain("hasPty");
+  });
+
+  it("terminal.getStatus admits hasPty in its unavailableFields enum (#12336)", () => {
+    // The renderer path answers `unavailableFields: ["hasPty"]`. Entry schema
+    // and envelope have to land together — widening only the entry ships a
+    // manifest whose own envelope rejects the answer the action returns.
+    const schema = outputSchema(registerAll(), "terminal.getStatus")!;
+    const unavailable = (
+      schema.properties as { unavailableFields: { items?: { enum?: string[] } } }
+    ).unavailableFields.items;
+    expect(unavailable?.enum).toContain("hasPty");
+  });
+
   it("terminal.getOutput exposes content/lineCount/truncated properties", () => {
     const props =
       (outputSchema(registerAll(), "terminal.getOutput")!.properties as Record<string, unknown>) ??

@@ -16,8 +16,12 @@ export type TerminalStatusSource = "renderer" | "pty";
  * Entry fields the answering surface could not observe at all, as opposed to
  * observed-and-absent. Without this a `pty` answer's missing `armed` reads as
  * "not armed", which is an interpretation main has no evidence for.
+ *
+ * It cuts both ways. `hasPty` is the one field the reduced `pty` answer reports
+ * and the richer `renderer` answer cannot, so a surface listing nothing is not
+ * the same as a surface that saw everything.
  */
-export type TerminalStatusUnavailableField = "armed" | "lastCheckResult" | "exitCode";
+export type TerminalStatusUnavailableField = "armed" | "lastCheckResult" | "exitCode" | "hasPty";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
@@ -31,6 +35,7 @@ export interface TerminalStatusEntry {
   lastCheckResult?: TerminalCheckResult;
   recentOutput?: string | null;
   armed?: boolean;
+  hasPty?: boolean;
   error?: string;
 }
 
