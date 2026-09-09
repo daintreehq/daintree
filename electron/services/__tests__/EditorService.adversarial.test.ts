@@ -350,3 +350,241 @@ describe("EditorService adversarial", () => {
     expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
   });
 });
+
+// The worktree "Open in Editor" action hands EditorService a folder (#12329).
+// Everything here is about what changes for a directory target — and, just as
+// deliberately, what does not.
+describe("EditorService directory targets", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "/usr/local/bin";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    setPlatform("linux");
+    fsMock.statSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    fsMock.accessSync.mockImplementation(() => {
+      throw new Error("EACCES");
+    });
+    shellMock.openPath.mockResolvedValue("");
+    mockExecaChildren(execaMock.execa, ["spawned"]);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    process.env.PATH = originalPATH;
+    if (originalVISUAL !== undefined) process.env.VISUAL = originalVISUAL;
+    else delete process.env.VISUAL;
+    if (originalEDITOR !== undefined) process.env.EDITOR = originalEDITOR;
+    else delete process.env.EDITOR;
+  });
+
+  const WORKTREE = "/abs/worktrees/feature-x";
+
+  function argsOfFirstLaunch(): string[] {
+    expect(execaMock.execa).toHaveBeenCalled();
+    return execaMock.execa.mock.calls[0][1] as string[];
+  }
+
+  // `--goto` names a file to navigate into; the whole point of the fix.
+  const GOTO_EDITORS = [
+    ["vscode", "code"],
+    ["vscode-insiders", "code-insiders"],
+    ["cursor", "cursor"],
+    ["windsurf", "windsurf"],
+    ["antigravity-ide", "antigravity-ide"],
+  ] as const;
+
+  for (const [id, binary] of GOTO_EDITORS) {
+    it(`${id} opens a directory as a bare path, without --goto`, async () => {
+      mockExistingFiles([`/usr/local/bin/${binary}`]);
+      const { openFile } = await loadModule();
+
+      await openFile(WORKTREE, undefined, undefined, { id }, true);
+
+      expect(execaMock.execa).toHaveBeenCalledWith(
+        `/usr/local/bin/${binary}`,
+        [WORKTREE],
+        expect.objectContaining({ detached: true })
+      );
+    });
+
+    it(`${id} still uses --goto for a file target`, async () => {
+      mockExistingFiles([`/usr/local/bin/${binary}`]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", 12, 5, { id }, false);
+
+      expect(argsOfFirstLaunch()).toEqual(["--goto", "/abs/file.ts:12:5"]);
+    });
+  }
+
+  // A caller that passes coordinates alongside a folder must not be able to
+  // turn it back into a file target — the folder wins.
+  it("drops coordinates supplied with a directory target", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, 12, 5, { id: "vscode" }, true);
+
+    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+  });
+
+  it("passes a bare directory path to the editors that already take one", async () => {
+    for (const [id, binary] of [
+      ["zed", "zed"],
+      ["sublime", "subl"],
+      ["webstorm", "webstorm"],
+      ["neovim", "nvim"],
+    ] as const) {
+      vi.clearAllMocks();
+      mockExecaChildren(execaMock.execa, ["spawned"]);
+      mockExistingFiles([`/usr/local/bin/${binary}`]);
+      const { openFile } = await loadModule();
+
+      await openFile(WORKTREE, 12, 5, { id }, true);
+
+      expect(argsOfFirstLaunch(), id).toEqual([WORKTREE]);
+    }
+  });
+
+  it("discovered editors are directory-aware too, not just the configured one", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    // No config at all: the target reaches `code` through the discovery loop.
+    await openFile(WORKTREE, undefined, undefined, null, true);
+
+    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+  });
+
+  it("renders the default custom template as a bare directory, not 'dir::'", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      5,
+      { id: "custom", customCommand: "myeditor", customTemplate: "{file}:{line}:{col}" },
+      true
+    );
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "myeditor",
+      [WORKTREE],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  it("keeps the surrounding flags of a custom template when coordinates go away", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      5,
+      { id: "custom", customCommand: "code", customTemplate: "--reuse-window {file}:{line}:{col}" },
+      true
+    );
+
+    expect(argsOfFirstLaunch()).toEqual(["--reuse-window", WORKTREE]);
+  });
+
+  it("drops a token that exists only to carry a coordinate", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      undefined,
+      { id: "custom", customCommand: "nvim-qt", customTemplate: "+{line} {file}" },
+      true
+    );
+
+    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+  });
+
+  // The same stranded punctuation was already reachable for a file opened with
+  // no line — the settings UI defaults every custom editor to this template.
+  it("renders a file with no line as a bare path under the default template", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", undefined, undefined, {
+      id: "custom",
+      customCommand: "myeditor",
+      customTemplate: "{file}:{line}:{col}",
+    });
+
+    expect(argsOfFirstLaunch()).toEqual(["/abs/file.ts"]);
+  });
+
+  it("keeps the line but drops the missing column", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, undefined, {
+      id: "custom",
+      customCommand: "myeditor",
+      customTemplate: "{file}:{line}:{col}",
+    });
+
+    expect(argsOfFirstLaunch()).toEqual(["/abs/file.ts:12"]);
+  });
+
+  it("still renders both coordinates when they are present", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, 5, {
+      id: "custom",
+      customCommand: "myeditor",
+      customTemplate: "{file}:{line}:{col}",
+    });
+
+    expect(argsOfFirstLaunch()).toEqual(["/abs/file.ts:12:5"]);
+  });
+
+  it("skips the macOS plain-text fallback for a directory and reveals it instead", async () => {
+    setPlatform("darwin");
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, null, true);
+
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).toHaveBeenCalledWith(WORKTREE);
+  });
+
+  it("still uses the macOS plain-text fallback for a file", async () => {
+    setPlatform("darwin");
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", undefined, undefined, null, false);
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "open",
+      ["-t", "/abs/file.ts"],
+      expect.objectContaining({ detached: true })
+    );
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("reaches shell.openPath for a directory only after every editor has failed", async () => {
+    setPlatform("darwin");
+    mockExistingFiles(["/usr/local/bin/code"]);
+    mockExecaChildren(execaMock.execa, ["enoent"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, { id: "vscode" }, true);
+
+    // Configured attempt, then the discovery loop's — both with folder argv,
+    // neither an `open -t`.
+    for (const call of execaMock.execa.mock.calls) {
+      expect(call[0]).toBe("/usr/local/bin/code");
+      expect(call[1]).toEqual([WORKTREE]);
+    }
+    expect(shellMock.openPath).toHaveBeenCalledWith(WORKTREE);
+  });
+});

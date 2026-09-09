@@ -324,6 +324,22 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
   }: SystemOpenInEditorPayload) => {
     const realTarget = await assertPathAllowed(targetPath, "editor");
 
+    // The worktree "Open in Editor" action targets a folder (#12329), and
+    // EditorService needs to know: a folder takes different argv on the VS Code
+    // family and cannot go through the macOS plain-text fallback at all.
+    // Classified here rather than declared by the renderer, so it describes the
+    // resolved target the sink actually receives and no IPC field is needed.
+    // `assertPathAllowed` already realpath'd it, so the target existed a moment
+    // ago; a stat that fails now lost a race, and reading that as "not a
+    // directory" leaves the file path behaving exactly as it does today.
+    let isDirectory = false;
+    try {
+      const stats = await nodeFs.promises.stat(realTarget);
+      isDirectory = stats.isDirectory();
+    } catch {
+      // ignore — treat an unclassifiable target as a file
+    }
+
     let editorConfig = null;
     if (projectId) {
       try {
@@ -335,7 +351,7 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     }
 
     const { openFile } = await import("../../services/EditorService.js");
-    await openFile(realTarget, line, col, editorConfig);
+    await openFile(realTarget, line, col, editorConfig, isDirectory);
   };
   handlers.push(
     typedHandleValidated(

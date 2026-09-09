@@ -544,7 +544,7 @@ export function registerWorktreeContextActions(
     defineAction({
       id: "worktree.openEditor",
       title: "Open in Editor",
-      description: "Open a worktree folder in the OS file manager / editor",
+      description: "Open a worktree folder in the project's configured external editor",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -558,7 +558,14 @@ export function registerWorktreeContextActions(
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
         if (!worktree) return;
 
-        await systemClient.openPath(worktree.path);
+        // `openInEditor`, not `openPath` — the latter is the OS default handler,
+        // which is what made this indistinguishable from "Reveal Worktree"
+        // below (#12329). The project id decides which editor preference the
+        // main process reads; omitting it silently falls back to discovery
+        // order (#12327). `ctx.projectId` resolves through this view's own
+        // workspace id, so it names this view's project rather than whichever
+        // one a sibling window last switched to.
+        await systemClient.openInEditor({ path: worktree.path, projectId: ctx.projectId });
       },
     })
   );
