@@ -138,10 +138,14 @@ export class WriteQueue {
       // forgotten: `cancelled` says Daintree dropped it, where silence would
       // read back as `unknown` and leave the caller unable to tell a dropped
       // submission from one this incarnation never saw.
-      if (token !== undefined) this.finalizeSubmission(token, "cancelled");
+      if (token !== undefined) this.noteRejectedSubmission(token);
       return;
     }
-    if (token !== undefined) {
+    // A token already in flight keeps its own record: overwriting would push a
+    // live `writing` back to `queued` and answer the earlier submission with
+    // the later one's phase. Only `sendCommand`'s minted UUIDs reach here
+    // normally, so this guards a direct-IPC caller reusing a token.
+    if (token !== undefined && !this.pendingSubmissions.has(token)) {
       this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
     }
     this.submitQueue.push({ text, token });
@@ -173,7 +177,12 @@ export class WriteQueue {
    * a token this incarnation never saw.
    */
   noteRejectedSubmission(token: string): void {
-    this.finalizeSubmission(token, "cancelled");
+    if (this.pendingSubmissions.has(token)) {
+      this.finalizeIfPending(token, "cancelled");
+      return;
+    }
+    if (this.finalizedSubmissions.some((record) => record.token === token)) return;
+    this.retainFinalized(token, "cancelled");
   }
 
   /** Advance a still-pending submission. No-op once it has been finalised. */
@@ -185,17 +194,29 @@ export class WriteQueue {
   }
 
   /**
-   * Move a submission to its final phase and retain it. Idempotent by
-   * construction: a token that is no longer pending has already been
-   * finalised, so the first outcome wins and a late `cancelled` can never
-   * overwrite a `pty_written` that already landed.
+   * Move a submission to its final phase, but ONLY while it is still pending.
+   *
+   * Pending membership is the whole guard, and it has to be, because the
+   * retained ring is not a reliable record of what has already finished. A
+   * submission that completed can be evicted by 32 later ones before its own
+   * drain continuation resumes; checking the ring would then find nothing and
+   * happily write a second, contradicting outcome — reporting a delivered
+   * submission as `cancelled`. Deleting from the pending map is the one
+   * operation that can only succeed once.
    */
-  private finalizeSubmission(token: string, phase: TerminalSubmissionPhase): void {
-    if (this.pendingSubmissions.delete(token) === false) {
-      // Not pending. Either already finalised (keep the first answer) or from a
-      // disposed-queue submit that was never admitted — retain that one.
-      if (this.finalizedSubmissions.some((record) => record.token === token)) return;
-    }
+  private finalizeIfPending(token: string, phase: TerminalSubmissionPhase): void {
+    if (this.pendingSubmissions.delete(token) === false) return;
+    this.retainFinalized(token, phase);
+  }
+
+  /**
+   * Append to the retained ring, keeping at most one record per token so a
+   * reused token cannot leave two answers behind for `getSubmission` to pick
+   * the wrong one of.
+   */
+  private retainFinalized(token: string, phase: TerminalSubmissionPhase): void {
+    const existing = this.finalizedSubmissions.findIndex((record) => record.token === token);
+    if (existing !== -1) this.finalizedSubmissions.splice(existing, 1);
     this.finalizedSubmissions.push({ token, phase, at: Date.now() });
     while (this.finalizedSubmissions.length > MAX_RETAINED_SUBMISSIONS) {
       this.finalizedSubmissions.shift();
@@ -291,7 +312,7 @@ export class WriteQueue {
     const queued = this.submitQueue;
     this.submitQueue = [];
     for (const job of queued) {
-      if (job.token !== undefined) this.finalizeSubmission(job.token, "cancelled");
+      if (job.token !== undefined) this.finalizeIfPending(job.token, "cancelled");
     }
   }
 
@@ -359,7 +380,7 @@ export class WriteQueue {
           const startedAt = Date.now();
           const work = this.options.performSubmit(next.text, {
             markPtyWritten: () => {
-              if (token !== undefined) this.finalizeSubmission(token, "pty_written");
+              if (token !== undefined) this.finalizeIfPending(token, "pty_written");
             },
           });
           this.armSlowSubmitReporting(startedAt);
@@ -371,14 +392,14 @@ export class WriteQueue {
           // from every path that abandons the Enter. Still pending here means
           // `markPtyWritten` never fired, so the submission was dropped rather
           // than handed over (#12337).
-          if (token !== undefined) this.finalizeSubmission(token, "cancelled");
+          if (token !== undefined) this.finalizeIfPending(token, "cancelled");
         } catch (error) {
           // A rejected submit is over — it will never write again — so the lane
           // drains normally and the exclusive-ownership invariant still holds.
           // It still surfaces, because the body may already be sitting in the
           // composer with no Enter behind it.
           this.emitSubmitStatus("failed");
-          if (token !== undefined) this.finalizeSubmission(token, "failed");
+          if (token !== undefined) this.finalizeIfPending(token, "failed");
           this.options.onWriteError?.(error, { operation: "performSubmit" });
         } finally {
           this.clearSubmitStatusTimer();

@@ -19,7 +19,7 @@ import type {
   TerminalResizeResult,
 } from "@shared/types/pty-host";
 import type { PanelTitleMode } from "@shared/types/panel";
-import type { TerminalSubmissionRecord } from "@shared/types/terminalSubmission";
+import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -374,13 +374,14 @@ export const terminalClient = {
   },
 
   /**
-   * Resolve one submission token across several terminals (#12337). A terminal
-   * that was read but holds no record for the token maps to `null`.
+   * Resolve one submission token across several terminals (#12337). Answers
+   * `found` / `absent` / `unreadable` per id, so a terminal that could not be
+   * read is never mistaken for one holding no record.
    */
   getSubmissions: (
     terminalIds: string[],
     submissionToken: string
-  ): Promise<Record<string, TerminalSubmissionRecord | null>> => {
+  ): Promise<Record<string, TerminalSubmissionLookup>> => {
     return window.electron.terminal.getSubmissions(terminalIds, submissionToken);
   },
 

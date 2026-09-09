@@ -1602,7 +1602,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               submission: {
                 description:
-                  "Delivery record for the `submissionToken` this call named. Absent when no token was asked for, and on any entry with an `error` — there the terminal could not be read, which is not the same as holding no record.",
+                  "Delivery record for the token this call named. Absent when no token was asked for, or when this terminal could not be read — which is not the same as it holding no record.",
                 type: "object",
                 properties: {
                   token: {
@@ -1999,6 +1999,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         command: {
           type: "string",
+          description:
+            "The submitted text, truncated past 1024 characters — an echo, not a receipt.",
         },
         submissionToken: {
           type: "string",

@@ -13,7 +13,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { TerminalStatusEntry } from "@shared/types/terminalStatus";
-import type { TerminalSubmissionRecord } from "@shared/types/terminalSubmission";
+import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -29,6 +29,16 @@ import {
   isClientMetadataEligible,
 } from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+
+/**
+ * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
+ *
+ * Bounded because the result advertises an output schema: over the 50 KiB
+ * response budget the transport drops `structuredContent` and flags the call
+ * `isError`, so an unbounded echo would turn a successful large submission into
+ * a reported failure with its own correlation token truncated away.
+ */
+const MAX_ECHOED_COMMAND_CHARS = 1024;
 
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
@@ -395,7 +405,7 @@ export function registerTerminalQueryActions(
       // Delivery records live in the pty-host, so this is the one thing the
       // panel store cannot answer (#12337). One batched hop, and only when a
       // token was asked for — the default poll path issues no extra IPC.
-      let submissions: Record<string, TerminalSubmissionRecord | null> | null = null;
+      let submissions: Record<string, TerminalSubmissionLookup> | null = null;
       let submissionError: string | undefined;
       if (submissionToken !== undefined) {
         const idsToLookUp = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
@@ -461,13 +471,19 @@ export function registerTerminalQueryActions(
             // would assert the terminal has no such submission.
             appendError(submissionError);
           } else if (submissions !== null) {
-            // A read terminal with no record answers `unknown`; a null from an
-            // unreadable or unowned terminal answers the same way, because
-            // either way this surface saw no record for the token.
-            entry.submission = submissions[terminal.id] ?? {
-              token: submissionToken,
-              phase: "unknown",
-            };
+            const lookup = submissions[terminal.id] ?? { status: "unreadable" as const };
+            if (lookup.status === "found") {
+              entry.submission = lookup.record;
+            } else if (lookup.status === "absent") {
+              // The terminal WAS read and holds nothing, so absence is
+              // evidence and `unknown` is a claim we can make.
+              entry.submission = { token: submissionToken, phase: "unknown" };
+            } else {
+              // Nothing was observed. Saying `unknown` here would assert this
+              // terminal has no such submission on the strength of an RPC that
+              // failed — the false certainty this issue exists to remove.
+              appendError("Submission status unavailable for this terminal");
+            }
           }
         }
 
@@ -695,7 +711,13 @@ export function registerTerminalQueryActions(
       return {
         sent: true,
         terminalId,
-        command,
+        // Echoed back bounded, never whole. The result now advertises an output
+        // schema, and an oversized result does not merely truncate: it drops
+        // `structuredContent` and comes back flagged `isError`. A large context
+        // injection echoed in full would therefore report a submission that DID
+        // go out as a failed call, with the token it needs to check that gone
+        // from the truncated body — the exact silent loss this issue closes.
+        command: command.slice(0, MAX_ECHOED_COMMAND_CHARS),
         submissionToken,
         message: `Submission queued. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
       };

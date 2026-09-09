@@ -1780,7 +1780,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "terminal:get-submissions": {
     args: [terminalIds: string[], submissionToken: string];
-    result: Record<string, import("../terminalSubmission.js").TerminalSubmissionRecord | null>;
+    result: Record<string, import("../terminalSubmission.js").TerminalSubmissionLookup>;
   };
   "terminal:graceful-kill": {
     args: [id: string];

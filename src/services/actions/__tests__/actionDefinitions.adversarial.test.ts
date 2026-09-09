@@ -451,11 +451,13 @@ describe("terminal action hardening", () => {
     // because it reads as a confirmation the caller can act on.
     const { submissionToken } = result as { submissionToken: string };
     expect(submissionToken).toEqual(expect.any(String));
-    expect(mocks.terminalClient.submit).toHaveBeenCalledWith(
-      "term-ok",
-      "git status",
-      submissionToken
-    );
+    expect(submissionToken.length).toBeGreaterThan(0);
+    expect(submissionToken.length).toBeLessThanOrEqual(128);
+    // The whole call list, not `toHaveBeenCalledWith` — that matcher passes on
+    // a repeated matching call, which is the very thing this test is named for.
+    expect(mocks.terminalClient.submit.mock.calls).toEqual([
+      ["term-ok", "git status", submissionToken],
+    ]);
     expect(result).toMatchObject({
       sent: true,
       terminalId: "term-ok",
@@ -484,6 +486,36 @@ describe("terminal action hardening", () => {
     // The token identifies a dispatch, not a command. Two identical sends are
     // two submissions and must stay separately answerable.
     expect(second.submissionToken).not.toBe(first.submissionToken);
+    expect(mocks.terminalClient.submit.mock.calls).toEqual([
+      ["term-ok", "git status", first.submissionToken],
+      ["term-ok", "git status", second.submissionToken],
+    ]);
+  });
+
+  it("bounds the echoed command so a large send keeps its token", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const sendCommand = actions.get("terminal.sendCommand")!();
+
+    usePanelStore.setState({
+      panelsById: { "term-ok": createTerminal({ id: "term-ok" }) },
+      panelIds: ["term-ok"],
+    });
+
+    // A context injection is routinely tens of kilobytes. Echoed whole, the
+    // result would blow the 50 KiB response budget — and because this tool now
+    // advertises an output schema, going over does not merely truncate: it
+    // drops structuredContent and comes back flagged isError, losing the token
+    // for a submission that actually went out.
+    const huge = "x".repeat(60_000);
+    const result = (await sendCommand.run(
+      { terminalId: "term-ok", command: huge },
+      {} as never
+    )) as { command: string; submissionToken: string };
+
+    expect(mocks.terminalClient.submit).toHaveBeenCalledWith("term-ok", huge, expect.any(String));
+    expect(result.submissionToken).toEqual(expect.any(String));
+    expect(result.command.length).toBeLessThanOrEqual(1024);
+    expect(JSON.stringify(result).length).toBeLessThan(50 * 1024);
   });
 
   it("does not corrupt dock focus when asked to dock a missing terminal", async () => {

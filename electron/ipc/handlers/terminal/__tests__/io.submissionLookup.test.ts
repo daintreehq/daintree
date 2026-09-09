@@ -100,7 +100,7 @@ describe("terminal:get-submissions (#12337)", () => {
 
   it("resolves a token for a terminal the sender's own project owns", async () => {
     await expect(getSubmissions(SENDER_A, ["term-a"], "tok-1")).resolves.toEqual({
-      "term-a": { token: "tok-1", phase: "pty_written", at: 7 },
+      "term-a": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
     });
     expect(getTerminalAsync).toHaveBeenCalledWith("term-a", "tok-1");
   });
@@ -108,9 +108,10 @@ describe("terminal:get-submissions (#12337)", () => {
   it("never routes an RPC for a terminal owned by another project", async () => {
     const result = await getSubmissions(SENDER_A, ["term-b"], "tok-1");
 
-    // Absent from the map rather than present-and-null: a foreign id must not
-    // be confirmed to exist, and the lookup must not reach its shard at all.
-    expect(result).toEqual({});
+    // `unreadable`, and identical to what an id this host never heard of gets:
+    // the reply shape must not tell a caller which foreign ids exist. The
+    // lookup must also never reach that terminal's shard.
+    expect(result).toEqual({ "term-b": { status: "unreadable" } });
     expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 
@@ -121,25 +122,90 @@ describe("terminal:get-submissions (#12337)", () => {
     getProjectForWebContentsMock.mockReturnValue(null);
 
     await expect(getSubmissions(SENDER_A, ["term-unowned"], "tok-1")).resolves.toEqual({
-      "term-unowned": { token: "tok-1", phase: "pty_written", at: 7 },
+      "term-unowned": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
     });
   });
 
-  it("maps a terminal with no record to null rather than omitting it", async () => {
+  it("reports a read terminal holding no record as absent, not unreadable", async () => {
     getTerminalAsync.mockResolvedValue({ id: "term-a", submission: undefined });
 
     await expect(getSubmissions(SENDER_A, ["term-a"], "tok-1")).resolves.toEqual({
-      "term-a": null,
+      "term-a": { status: "absent" },
     });
   });
 
-  it("maps an unreadable terminal to null instead of failing the whole call", async () => {
-    // `getTerminalAsync` folds an RPC failure into null; one bad shard must not
-    // cost the caller every other answer in the batch.
+  it("reports a terminal whose read failed as unreadable, never as absent", async () => {
+    // `getTerminalAsync` folds an RPC failure into null. Calling that "no such
+    // submission" would be a claim made on the strength of a query that failed,
+    // and one bad shard must not cost the caller the rest of the batch either.
     getTerminalAsync.mockResolvedValue(null);
 
     await expect(getSubmissions(SENDER_A, ["term-a"], "tok-1")).resolves.toEqual({
-      "term-a": null,
+      "term-a": { status: "unreadable" },
+    });
+  });
+
+  it("tells the three outcomes apart within one batch", async () => {
+    getTerminalProjectId.mockReturnValue("project-a");
+    getTerminalAsync.mockImplementation(async (id: string, token?: string) => {
+      if (id === "term-gone") return null;
+      if (id === "term-empty") return { id, submission: undefined };
+      return { id, submission: { token, phase: "pty_written", at: 7 } };
+    });
+
+    await expect(
+      getSubmissions(SENDER_A, ["term-a", "term-empty", "term-gone"], "tok-1")
+    ).resolves.toEqual({
+      "term-a": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
+      "term-empty": { status: "absent" },
+      "term-gone": { status: "unreadable" },
+    });
+  });
+
+  it("gives an unknown id the same answer a foreign one gets", async () => {
+    // Both are `unreadable` and neither is routed, so the reply cannot be used
+    // to probe which terminals exist outside the caller's project.
+    const foreign = await getSubmissions(SENDER_A, ["term-b"], "tok-1");
+    // Only the RPC spy is reset — `vi.clearAllMocks()` would also wipe the
+    // `ipcMain.handle` call record the helper resolves the handler through.
+    getTerminalAsync.mockClear();
+    const unknown = await getSubmissions(SENDER_A, ["term-never-existed"], "tok-1");
+
+    expect(foreign).toEqual({ "term-b": { status: "unreadable" } });
+    expect(unknown).toEqual({ "term-never-existed": { status: "unreadable" } });
+    expect(getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("refuses a project-bound sender a projectless terminal", async () => {
+    // Null is an identity in both directions: it matches null, and nothing else.
+    const result = await getSubmissions(SENDER_A, ["term-unowned"], "tok-1");
+
+    expect(result).toEqual({ "term-unowned": { status: "unreadable" } });
+    expect(getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unbound sender a project-owned terminal", async () => {
+    getProjectForWebContentsMock.mockReturnValue(null);
+
+    const result = await getSubmissions(SENDER_A, ["term-a"], "tok-1");
+
+    expect(result).toEqual({ "term-a": { status: "unreadable" } });
+    expect(getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("serves each project its own terminal in the same session", async () => {
+    const [a, b] = await Promise.all([
+      getSubmissions(SENDER_A, ["term-a", "term-b"], "tok-1"),
+      getSubmissions(SENDER_B, ["term-a", "term-b"], "tok-2"),
+    ]);
+
+    expect(a).toEqual({
+      "term-a": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
+      "term-b": { status: "unreadable" },
+    });
+    expect(b).toEqual({
+      "term-a": { status: "unreadable" },
+      "term-b": { status: "found", record: { token: "tok-2", phase: "pty_written", at: 7 } },
     });
   });
 
@@ -149,19 +215,48 @@ describe("terminal:get-submissions (#12337)", () => {
     expect(getTerminalAsync).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a missing or empty token rather than reading anything", async () => {
-    await expect(getSubmissions(SENDER_A, ["term-a"], "")).rejects.toBeTruthy();
-    await expect(getSubmissions(SENDER_A, ["term-a"], undefined)).rejects.toBeTruthy();
+  it.each([
+    ["empty", ""],
+    ["missing", undefined],
+    ["non-string", 42],
+    ["over the length bound", "x".repeat(129)],
+  ])("rejects a %s token as VALIDATION without reading anything", async (_label, token) => {
+    // The preload is reachable without the action's own schema, so these bounds
+    // have to hold here too rather than only on the MCP surface.
+    await expect(getSubmissions(SENDER_A, ["term-a"], token)).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
     expect(getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("accepts a token exactly at the length bound", async () => {
+    const token = "x".repeat(128);
+    await expect(getSubmissions(SENDER_A, ["term-a"], token)).resolves.toEqual({
+      "term-a": { status: "found", record: { token, phase: "pty_written", at: 7 } },
+    });
   });
 
   it("rejects a non-array id list", async () => {
-    await expect(getSubmissions(SENDER_A, "term-a", "tok-1")).rejects.toBeTruthy();
+    await expect(getSubmissions(SENDER_A, "term-a", "tok-1")).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
     expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 
-  it("caps the id list so one call cannot fan out without bound", async () => {
-    const ids = Array.from({ length: 300 }, (_, i) => `term-${i}`);
+  it("rejects an oversized id list instead of silently dropping the tail", async () => {
+    // Truncating would answer `unreadable` for ids the caller asked about and
+    // give it no way to learn that its request was clipped.
+    const ids = Array.from({ length: 257 }, (_, i) => `term-${i}`);
+    getTerminalProjectId.mockReturnValue("project-a");
+
+    await expect(getSubmissions(SENDER_A, ids, "tok-1")).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("serves a list right at the bound", async () => {
+    const ids = Array.from({ length: 256 }, (_, i) => `term-${i}`);
     getTerminalProjectId.mockReturnValue("project-a");
 
     await getSubmissions(SENDER_A, ids, "tok-1");

@@ -537,7 +537,7 @@ export const TerminalStatusEntrySchema = z.object({
       "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`."
     ),
   submission: TerminalSubmissionRecordSchema.optional().describe(
-    "Delivery record for the `submissionToken` this call named. Absent when no token was asked for, and on any entry with an `error` — there the terminal could not be read, which is not the same as holding no record."
+    "Delivery record for the token this call named. Absent when no token was asked for, or when this terminal could not be read — which is not the same as it holding no record."
   ),
   error: z
     .string()
@@ -554,7 +554,9 @@ export const TerminalSendCommandResultSchema = z.object({
       "Accepted onto the terminal's lane. Not evidence of delivery — use `submissionToken` for that."
     ),
   terminalId: z.string(),
-  command: z.string(),
+  command: z
+    .string()
+    .describe("The submitted text, truncated past 1024 characters — an echo, not a receipt."),
   submissionToken: z
     .string()
     .describe(

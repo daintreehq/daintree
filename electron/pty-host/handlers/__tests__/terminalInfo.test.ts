@@ -7,6 +7,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
     isInTrash: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
+    getSubmission: vi.fn(() => undefined),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -262,5 +263,49 @@ describe("narrowDetectedAgentId", () => {
     expect(narrowDetectedAgentId("definitely-not-real")).toBeUndefined();
     expect(narrowDetectedAgentId(42)).toBeUndefined();
     expect(narrowDetectedAgentId(undefined)).toBeUndefined();
+  });
+});
+
+describe("mapTerminalInfo submission projection (#12337)", () => {
+  function ctxWith(getSubmission: ReturnType<typeof vi.fn>): HostContext {
+    return createCtx({
+      ptyManager: {
+        isInTrash: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active" as const),
+        getSubmission,
+      } as unknown as HostContext["ptyManager"],
+    });
+  }
+
+  it("projects the record for the token the query named", () => {
+    const getSubmission = vi.fn(() => ({ token: "tok-1", phase: "pty_written", at: 9 }));
+    const t = makeTerminal({ id: "term-1" });
+
+    const result = mapTerminalInfo(t, ctxWith(getSubmission), "tok-1");
+
+    expect(getSubmission).toHaveBeenCalledWith("term-1", "tok-1");
+    expect(result.submission).toEqual({ token: "tok-1", phase: "pty_written", at: 9 });
+  });
+
+  it("does not look up a submission when no token was named", () => {
+    // This is the one conditional field on an otherwise unconditional mapper.
+    // Every bulk query family (`get-all-terminals` and friends) omits the
+    // argument, and must keep the payload it always had.
+    const getSubmission = vi.fn(() => ({ token: "tok-1", phase: "pty_written" }));
+
+    const result = mapTerminalInfo(makeTerminal(), ctxWith(getSubmission));
+
+    expect(getSubmission).not.toHaveBeenCalled();
+    expect(result.submission).toBeUndefined();
+  });
+
+  it("leaves the field absent when the terminal holds no record for the token", () => {
+    const getSubmission = vi.fn(() => undefined);
+
+    const result = mapTerminalInfo(makeTerminal(), ctxWith(getSubmission), "tok-missing");
+
+    // Absent, not a fabricated `unknown`: synthesising that is the reader's
+    // job, and only it knows whether the record was actually readable.
+    expect(result.submission).toBeUndefined();
   });
 });

@@ -70,6 +70,26 @@ export interface TerminalSubmissionRecord {
 }
 
 /**
+ * One terminal's answer to a submission-token lookup.
+ *
+ * Three outcomes, not two, because "this terminal holds no record for your
+ * token" and "this terminal could not be read at all" are different claims and
+ * only the first is evidence. Collapsing them would let a timed-out RPC report
+ * as an authoritative `unknown`, which is the same class of false certainty
+ * #12337 exists to remove.
+ */
+export type TerminalSubmissionLookup =
+  /** The terminal was read and holds this record. */
+  | { status: "found"; record: TerminalSubmissionRecord }
+  /** The terminal was read and holds nothing for this token. */
+  | { status: "absent" }
+  /**
+   * The terminal could not be read — gone, not owned by the caller, or its
+   * backend query failed. Nothing was observed, so nothing is claimed.
+   */
+  | { status: "unreadable" };
+
+/**
  * Finalised outcomes retained per terminal incarnation, oldest evicted first.
  *
  * Only tokened submissions are retained at all — in-app typing and fleet

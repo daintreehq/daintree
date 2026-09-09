@@ -21,10 +21,12 @@ import { getProjectForWebContents } from "../../../window/webContentsRegistry.js
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
-import type { TerminalSubmissionRecord } from "../../../../shared/types/terminalSubmission.js";
+import type { TerminalSubmissionLookup } from "../../../../shared/types/terminalSubmission.js";
 
 /** Mirrors `terminal.getStatus`'s own `terminalIds` bound. */
 const MAX_SUBMISSION_LOOKUP_IDS = 256;
+/** Mirrors the bound `terminal.sendCommand`/`getStatus` put on the token. */
+const MAX_SUBMISSION_TOKEN_LENGTH = 128;
 
 export function registerTerminalIOHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -117,11 +119,11 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         submissionToken !== undefined &&
         (typeof submissionToken !== "string" ||
           submissionToken.length === 0 ||
-          submissionToken.length > 128)
+          submissionToken.length > MAX_SUBMISSION_TOKEN_LENGTH)
       ) {
         throw new AppError({
           code: "VALIDATION",
-          message: "submissionToken must be a non-empty string of at most 128 characters",
+          message: `submissionToken must be a non-empty string of at most ${MAX_SUBMISSION_TOKEN_LENGTH} characters`,
           context: { terminalId: id },
         });
       }
@@ -451,33 +453,51 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
    *
    * Scoped to the sender's own project before any terminal-keyed RPC is issued,
    * mirroring the viewless status reader: routing a foreign id would confirm it
-   * exists by its latency even when the payload says nothing. A terminal the
-   * sender does not own, or one that cannot be read, maps to `null` — the
-   * caller reports that as an unreadable entry rather than as a missing record,
-   * which is a different claim.
+   * exists by its latency even when the payload says nothing.
    *
-   * `null` for a terminal that WAS read means it holds no record for this
-   * token; `terminal.getStatus` renders that as the `unknown` phase.
+   * Answers all three outcomes rather than folding them to two. `absent` says
+   * the terminal was read and holds nothing for this token; `unreadable` says
+   * nothing was observed at all. Collapsing them would let a timed-out RPC or a
+   * terminal that has gone away report as an authoritative "no such
+   * submission", which is exactly the false certainty this issue removes.
+   *
+   * Every requested id gets an entry, including ones the sender does not own,
+   * so the shape of the reply carries no information about which foreign ids
+   * exist.
    */
   const handleTerminalGetSubmissions = async (
     ctx: IpcContext,
     terminalIds: string[],
     submissionToken: string
-  ): Promise<Record<string, TerminalSubmissionRecord | null>> => {
+  ): Promise<Record<string, TerminalSubmissionLookup>> => {
     // Declared types are the renderer-facing contract; the runtime checks stay
-    // because IPC arguments arrive unvalidated regardless of the signature.
-    if (typeof submissionToken !== "string" || submissionToken === "") {
+    // because IPC arguments arrive unvalidated regardless of the signature —
+    // the preload is reachable without going through the action's own schema.
+    if (
+      typeof submissionToken !== "string" ||
+      submissionToken === "" ||
+      submissionToken.length > MAX_SUBMISSION_TOKEN_LENGTH
+    ) {
       throw new AppError({
         code: "VALIDATION",
-        message: "submissionToken must be a non-empty string",
+        message: `submissionToken must be a non-empty string of at most ${MAX_SUBMISSION_TOKEN_LENGTH} characters`,
       });
     }
     if (!Array.isArray(terminalIds)) {
       throw new AppError({ code: "VALIDATION", message: "terminalIds must be an array" });
     }
+    // Rejected, not truncated: silently dropping the tail would answer
+    // `unreadable` for ids the caller asked about and never learn why. Bounded
+    // before dedup so the raw fan-out is what is capped.
+    if (terminalIds.length > MAX_SUBMISSION_LOOKUP_IDS) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: `terminalIds accepts at most ${MAX_SUBMISSION_LOOKUP_IDS} entries`,
+      });
+    }
     const uniqueIds = [
       ...new Set(terminalIds.filter((id): id is string => typeof id === "string" && id !== "")),
-    ].slice(0, MAX_SUBMISSION_LOOKUP_IDS);
+    ];
     // Null is an identity here, not a wildcard, matching the ingest-port gate
     // above: an unbound window (the project picker) sits on a null project and
     // its own terminals carry no owner either, so null must match null or those
@@ -486,12 +506,17 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     const records = await Promise.all(
       owned.map((id) => ptyClient.getTerminalAsync(id, submissionToken))
     );
-    const out: Record<string, TerminalSubmissionRecord | null> = {};
+    const out: Record<string, TerminalSubmissionLookup> = {};
+    // Unowned ids stay `unreadable` — true, and identical to what an id this
+    // host never heard of gets.
+    for (const id of uniqueIds) out[id] = { status: "unreadable" };
     owned.forEach((id, index) => {
-      // `getTerminalAsync` folds an RPC failure into `null`, which is why an
-      // unreadable terminal and an unowned one land in the same bucket: the
-      // caller only ever learns "no record available for this id".
-      out[id] = records[index]?.submission ?? null;
+      const info = records[index];
+      // `getTerminalAsync` folds an RPC failure into `null`, so a null record
+      // is genuinely "not observed" and must not become `absent`.
+      if (!info) return;
+      const record = info.submission;
+      out[id] = record === undefined ? { status: "absent" } : { status: "found", record };
     });
     return out;
   };

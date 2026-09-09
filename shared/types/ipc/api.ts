@@ -4,7 +4,7 @@ import type { GitStatus, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup, PanelTitleMode } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
-import type { TerminalSubmissionRecord } from "../terminalSubmission.js";
+import type { TerminalSubmissionLookup } from "../terminalSubmission.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -290,13 +290,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     submit(id: string, text: string, submissionToken?: string): Promise<void>;
     /**
-     * Resolve one submission token across several terminals (#12337). A
-     * terminal that was read but holds no record for the token maps to `null`.
+     * Resolve one submission token across several terminals (#12337). Answers
+     * `found` / `absent` / `unreadable` per id — a terminal that could not be
+     * read is never reported as holding no record.
      */
     getSubmissions(
       terminalIds: string[],
       submissionToken: string
-    ): Promise<Record<string, TerminalSubmissionRecord | null>>;
+    ): Promise<Record<string, TerminalSubmissionLookup>>;
     resize(id: string, cols: number, rows: number): void;
     kill(id: string): Promise<void>;
     gracefulKill(id: string): Promise<string | null>;
