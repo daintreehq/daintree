@@ -412,6 +412,10 @@ describe("EditorService directory targets", () => {
         [WORKTREE],
         expect.objectContaining({ detached: true })
       );
+      // A launch that succeeded must end the chain — no discovery pass behind
+      // it, and above all no reveal, which is the bug this fixes.
+      expect(execaMock.execa).toHaveBeenCalledTimes(1);
+      expect(shellMock.openPath).not.toHaveBeenCalled();
     });
 
     it(`${id} still uses --goto for a file target`, async () => {
@@ -479,6 +483,8 @@ describe("EditorService directory targets", () => {
       [WORKTREE],
       expect.objectContaining({ detached: true })
     );
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
   it("keeps the surrounding flags of a custom template when coordinates go away", async () => {
@@ -495,18 +501,32 @@ describe("EditorService directory targets", () => {
     expect(argsOfFirstLaunch()).toEqual(["--reuse-window", WORKTREE]);
   });
 
-  it("drops a token that exists only to carry a coordinate", async () => {
+  // A token that interpolates away must still be passed, empty: a positional
+  // template would otherwise slide the path into the vacated slot.
+  it("keeps a stranded token's argv slot rather than shifting the ones after it", async () => {
     const { openFile } = await loadModule();
 
     await openFile(
       WORKTREE,
       12,
       undefined,
-      { id: "custom", customCommand: "nvim-qt", customTemplate: "+{line} {file}" },
+      { id: "custom", customCommand: "wrapper", customTemplate: '"{line}" "{col}" "{file}"' },
       true
     );
 
-    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+    expect(argsOfFirstLaunch()).toEqual(["", "", WORKTREE]);
+  });
+
+  it("keeps the argv slot for a file opened without a column too", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, undefined, {
+      id: "custom",
+      customCommand: "wrapper",
+      customTemplate: '"{line}" "{col}" "{file}"',
+    });
+
+    expect(argsOfFirstLaunch()).toEqual(["12", "", "/abs/file.ts"]);
   });
 
   // The same stranded punctuation was already reachable for a file opened with
@@ -579,12 +599,71 @@ describe("EditorService directory targets", () => {
 
     await openFile(WORKTREE, undefined, undefined, { id: "vscode" }, true);
 
-    // Configured attempt, then the discovery loop's — both with folder argv,
-    // neither an `open -t`.
-    for (const call of execaMock.execa.mock.calls) {
-      expect(call[0]).toBe("/usr/local/bin/code");
-      expect(call[1]).toEqual([WORKTREE]);
-    }
+    // Exactly two attempts — the configured editor, then the discovery loop's
+    // — both with folder argv, and no `open -t` between them. Asserting the
+    // count is what stops a reveal-without-trying regression passing here.
+    expect(execaMock.execa.mock.calls).toEqual([
+      ["/usr/local/bin/code", [WORKTREE], expect.objectContaining({ detached: true })],
+      ["/usr/local/bin/code", [WORKTREE], expect.objectContaining({ detached: true })],
+    ]);
     expect(shellMock.openPath).toHaveBeenCalledWith(WORKTREE);
+  });
+
+  it("keeps the directory flag when the configured editor is missing", async () => {
+    // Configured Zed, but only `code` is installed: the configured branch finds
+    // no executable, so discovery answers — still as a folder.
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, 12, 5, { id: "zed" }, true);
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+  });
+
+  it("keeps the directory flag when the configured editor fails and another answers", async () => {
+    mockExistingFiles(["/usr/local/bin/code", "/usr/local/bin/subl"]);
+    // The configured launch fails; the discovery loop's first candidate wins.
+    mockExecaChildren(execaMock.execa, ["enoent", "spawned"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, { id: "sublime" }, true);
+
+    expect(execaMock.execa.mock.calls[0]![0]).toBe("/usr/local/bin/subl");
+    expect(execaMock.execa.mock.calls[1]).toEqual([
+      "/usr/local/bin/code",
+      [WORKTREE],
+      expect.objectContaining({ detached: true }),
+    ]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("appends a directory to $VISUAL without touching its flags", async () => {
+    process.env.VISUAL = "code --reuse-window";
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, 12, 5, null, true);
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "code",
+      ["--reuse-window", WORKTREE],
+      expect.objectContaining({ detached: true })
+    );
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("falls past a terminal-editor $VISUAL to $EDITOR for a directory", async () => {
+    process.env.VISUAL = "vim";
+    process.env.EDITOR = "code";
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, null, true);
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "code",
+      [WORKTREE],
+      expect.objectContaining({ detached: true })
+    );
   });
 });

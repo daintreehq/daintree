@@ -365,6 +365,26 @@ describe("system:open-in-editor containment", () => {
     expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith("proj-1");
     expect(openFileMock).toHaveBeenCalledWith(dirPath, undefined, undefined, preferredEditor, true);
   });
+
+  it("keeps the directory flag when the settings read fails", async () => {
+    projectStoreMock.getProjectSettings.mockRejectedValue(new Error("db closed"));
+    fsMock.promises.stat.mockResolvedValue({ isFile: () => false, isDirectory: () => true });
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+    const dirPath = path.join(PROJECT_ROOT, "packages", "app");
+
+    await handler(fakeEvent, { path: dirPath, projectId: "proj-1" });
+
+    expect(openFileMock).toHaveBeenCalledWith(dirPath, undefined, undefined, null, true);
+  });
+
+  it("propagates a launch failure to the renderer", async () => {
+    openFileMock.mockRejectedValueOnce(new Error("no editor"));
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+
+    await expect(
+      handler(fakeEvent, { path: path.join(PROJECT_ROOT, "src", "app.ts") })
+    ).rejects.toThrow("no editor");
+  });
 });
 
 describe("system:show-item-in-folder containment", () => {

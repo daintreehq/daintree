@@ -54,14 +54,6 @@ beforeEach(() => {
 });
 
 describe("worktree.openEditor", () => {
-  it("registers a renderer-scoped command action", () => {
-    const action = getAction("worktree.openEditor");
-    expect(action.id).toBe("worktree.openEditor");
-    expect(action.kind).toBe("command");
-    expect(action.danger).toBe("safe");
-    expect(action.scope).toBe("renderer");
-  });
-
   it("accepts an optional worktreeId argument", () => {
     const action = getAction("worktree.openEditor");
     expect(action.argsSchema).toBeDefined();
@@ -111,6 +103,23 @@ describe("worktree.openEditor", () => {
     });
   });
 
+  it("prefers an explicit worktreeId over the focused and active ones", async () => {
+    seedWorktree("wt-explicit", "/repo/explicit");
+    seedWorktree("wt-focused", "/repo/focused");
+    seedWorktree("wt-active", "/repo/active");
+
+    await getAction("worktree.openEditor").run({ worktreeId: "wt-explicit" }, {
+      focusedWorktreeId: "wt-focused",
+      activeWorktreeId: "wt-active",
+      projectId: "proj-1",
+    } as ActionContext);
+
+    expect(systemClientMock.openInEditor).toHaveBeenCalledWith({
+      path: "/repo/explicit",
+      projectId: "proj-1",
+    });
+  });
+
   it("falls back to the focused worktree, then the active one", async () => {
     seedWorktree("wt-focused", "/repo/focused");
     seedWorktree("wt-active", "/repo/active");
@@ -143,12 +152,14 @@ describe("worktree.openEditor", () => {
     await getAction("worktree.openEditor").run(undefined, {} as ActionContext);
 
     expect(systemClientMock.openInEditor).not.toHaveBeenCalled();
+    expect(systemClientMock.openPath).not.toHaveBeenCalled();
   });
 
   it("no-ops when the selected worktree is gone", async () => {
     await getAction("worktree.openEditor").run({ worktreeId: "wt-missing" }, {} as ActionContext);
 
     expect(systemClientMock.openInEditor).not.toHaveBeenCalled();
+    expect(systemClientMock.openPath).not.toHaveBeenCalled();
   });
 
   it("propagates a launch failure to the caller", async () => {

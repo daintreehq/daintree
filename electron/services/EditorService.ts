@@ -342,12 +342,12 @@ type CustomPlaceholder = "file" | "line" | "col";
  * That is unconditional for a directory (folders have no coordinates) and was
  * already reachable for any file opened without one.
  *
- * A token that held placeholders and interpolated away entirely is dropped
- * rather than passed as an empty argv entry, so a `+{line}` token disappears
- * with its coordinate. A separate flag token that names a coordinate
- * (`--line {line}`) is left standing — stripping arbitrary flags out of a
- * command the user wrote is not something this can do safely, and an
- * unaccompanied flag is no worse than today's empty argument.
+ * Only punctuation *inside* a token is dropped, and the token itself always
+ * survives — a template can be positional (`"{line}" "{col}" "{file}"`), where
+ * removing an empty argument would slide the path into the column's slot. For
+ * the same reason a flag token that names a coordinate (`--line {line}`) is
+ * left standing: guessing which of a user's own arguments were only there to
+ * carry a line is not something this can do safely.
  */
 function buildCustomArgs(
   template: string,
@@ -362,21 +362,12 @@ function buildCustomArgs(
     col: col !== undefined ? String(col) : "",
   };
 
-  const args: string[] = [];
-  for (const token of tokenizeArgString(template)) {
-    let hadPlaceholder = false;
-    const interpolated = token.replace(
-      CUSTOM_PLACEHOLDER,
-      (_match, separator: string | undefined, name: CustomPlaceholder) => {
-        hadPlaceholder = true;
-        const value = values[name];
-        if (value === "") return "";
-        return `${separator ?? ""}${value}`;
-      }
-    );
-    if (hadPlaceholder && interpolated === "") continue;
-    args.push(interpolated);
-  }
+  const args = tokenizeArgString(template).map((token) =>
+    token.replace(CUSTOM_PLACEHOLDER, (_match, separator: string | undefined, name) => {
+      const value = values[name as CustomPlaceholder];
+      return value === "" ? "" : `${separator ?? ""}${value}`;
+    })
+  );
   return { binary: command, args };
 }
 
