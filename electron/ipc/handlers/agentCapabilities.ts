@@ -1,3 +1,8 @@
+import {
+  CapabilitySearchRequestSchema,
+  CapabilityGetRequestSchema,
+} from "../../../shared/types/agentCapabilities.js";
+import { agentCapabilityService } from "../../services/AgentCapabilityService.js";
 // eager-import-allow: reads agent-capability settings via store.get synchronously in the IPC handler
 import { store } from "../../store.js";
 import { CcrConfigService } from "../../services/CcrConfigService.js";
@@ -16,7 +21,7 @@ import type {
 } from "../../../shared/types/ipc/agentCapabilities.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import { isAgentPinned } from "../../../shared/utils/agentPinned.js";
-import { defineIpcNamespace, op } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { AGENT_CAPABILITIES_METHOD_CHANNELS } from "./agentCapabilities.preload.js";
 import { getAgentModelCatalogService } from "../../window/serviceRefs.js";
 
@@ -57,6 +62,17 @@ function toAgentRegistryEntry(config: AgentConfig): AgentRegistryEntry {
 export const agentCapabilitiesNamespace = defineIpcNamespace({
   name: "agentCapabilities",
   ops: {
+    search: opValidated(
+      AGENT_CAPABILITIES_METHOD_CHANNELS.search,
+      CapabilitySearchRequestSchema,
+      (request) => agentCapabilityService.search(request)
+    ),
+    get: opValidated(
+      AGENT_CAPABILITIES_METHOD_CHANNELS.get,
+      CapabilityGetRequestSchema,
+      (request) => agentCapabilityService.get(request)
+    ),
+
     getRegistry: op(
       AGENT_CAPABILITIES_METHOD_CHANNELS.getRegistry,
       async (): Promise<AgentRegistry> => {

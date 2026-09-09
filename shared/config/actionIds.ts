@@ -173,6 +173,8 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- slashCommandsActions --
   "slashCommands.list",
+  "agentCapabilities.search",
+  "agentCapabilities.get",
 
   // -- skillActions --
   "skills.search",
