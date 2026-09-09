@@ -66,7 +66,8 @@ vi.mock("../../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../../panelStore");
 const { MAX_EXTENSION_STATE_BYTES } = await import("../extensionState");
-const { MAX_CLIENT_METADATA_BYTES } = await import("@shared/utils/mcpClientMetadata");
+const { MAX_CLIENT_METADATA_BYTES, MAX_CLIENT_METADATA_DEPTH: MAX_DEPTH } =
+  await import("@shared/utils/mcpClientMetadata");
 
 function makePluginPanel(overrides: Partial<PanelInstance> = {}): PanelInstance {
   // `PanelInstance` is a closed union of the built-in kinds, so a
@@ -158,6 +159,16 @@ describe("setPanelExtensionState", () => {
     // `initialArgs` and persisted view state are one bag, so persisting must
     // not discard what the panel was spawned with.
     expect(stateOf("p1")).toEqual({ path: "/repo/a.ts", scroll: 40 });
+  });
+
+  it("schedules a layout save for a write that changed something", () => {
+    saveMock.mockClear();
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
+
+    // Paired with the no-op case below: asserting only that an unchanged write
+    // is free would stay green if the save call were dropped altogether.
+    expect(saveMock).toHaveBeenCalled();
   });
 
   it("does not touch the store or schedule a save for an unchanged write", () => {
@@ -557,21 +568,132 @@ describe("setPanelClientMetadata", () => {
     expect(stateOf("t1")).toBeUndefined();
   });
 
-  it("refuses a record that nests past the depth limit", () => {
-    let deep: unknown = "leaf";
-    for (let i = 0; i < 5_000; i++) deep = [deep];
+  it("accepts a record exactly at the depth limit and refuses one past it", () => {
+    const store = usePanelStore.getState();
+    const nest = (levels: number): unknown => {
+      let value: unknown = "leaf";
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
 
-    expect(usePanelStore.getState().setPanelClientMetadata("t1", { deep })).toEqual({
+    // Both fixtures are a few dozen bytes, so only the depth rule can be
+    // deciding — a fixture thousands of levels deep would also pass against a
+    // limit accidentally relaxed to hundreds.
+    expect(store.setPanelClientMetadata("t1", { deep: nest(MAX_DEPTH - 1) })).toEqual({
+      ok: true,
+      changed: true,
+    });
+    expect(store.setPanelClientMetadata("t1", { deep: nest(MAX_DEPTH) })).toEqual({
       ok: false,
       reason: "too-deep",
     });
   });
 
-  it("refuses a record that cannot round-trip through JSON", () => {
+  it("still calls a stack-overflowing value too deep, not unserializable", () => {
+    let bomb: unknown = "leaf";
+    for (let i = 0; i < 20_000; i++) bomb = [bomb];
+
+    // `JSON.stringify` recurses, so serializing first would throw RangeError and
+    // report `invalid-json` — the one answer that does not tell the caller what
+    // to change. The depth walk runs first precisely so this stays actionable.
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { bomb })).toEqual({
+      ok: false,
+      reason: "too-deep",
+    });
+  });
+
+  it("measures the representation it stores, not the one it was handed", () => {
+    // `toJSON` is passed the key it is serializing under, so a value that
+    // answers differently for "" and for "mcp" is measured as one record and
+    // persisted as another — passing the 2KB check and storing well over it.
+    const shapeShifter = {
+      toJSON: (key: string) => (key === "" ? { small: true } : { blob: "x".repeat(3000) }),
+    };
+
+    const result = usePanelStore.getState().setPanelClientMetadata("t1", { shapeShifter });
+
+    const stored = JSON.stringify(stateOf("t1") ?? {});
+    if (result.ok) expect(stored.length).toBeLessThanOrEqual(MAX_CLIENT_METADATA_BYTES + 200);
+    else expect(result.reason).toBe("metadata-too-large");
+  });
+
+  it("refuses a valid record that will not fit the panel's remaining state", () => {
+    // The slice is small but the bag it merges into is already near the whole-
+    // panel ceiling, so the rejection has to name the panel's limit rather than
+    // the metadata one.
+    seed([
+      makeTerminalPanel({
+        extensionState: { presetEnv: { BIG: "x".repeat(MAX_EXTENSION_STATE_BYTES - 40) } },
+      }),
+    ]);
+    saveMock.mockClear();
+
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { session: "gc-1" })).toEqual({
+      ok: false,
+      reason: "state-too-large",
+    });
+    expect(stateOf("t1")).not.toHaveProperty("mcp");
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it("can still delete its record out of an already oversized bag", () => {
+    seed([
+      makeTerminalPanel({
+        extensionState: {
+          mcp: { session: "gc-1" },
+          presetEnv: { BIG: "x".repeat(MAX_EXTENSION_STATE_BYTES) },
+        },
+      }),
+    ]);
+
+    // Shrinking is the one direction an over-cap bag must always allow, or the
+    // caller is locked out of the only operation that could fix it.
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", null)).toEqual({
+      ok: true,
+      changed: true,
+    });
+    expect(stateOf("t1")).not.toHaveProperty("mcp");
+  });
+
+  it("counts the byte length of a record, not its UTF-16 length", () => {
+    // ~1200 CJK characters measure well under 2048 as code units and about
+    // 3600 bytes once encoded.
+    const cjk = { note: "文".repeat(1200) };
+
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", cjk)).toEqual({
+      ok: false,
+      reason: "metadata-too-large",
+    });
+  });
+
+  it("schedules a layout save for a write that changed something", () => {
+    saveMock.mockClear();
+
+    usePanelStore.getState().setPanelClientMetadata("t1", { session: "gc-1" });
+
+    // The negative case below asserts an unchanged write is free; without this
+    // one, dropping the save call entirely would pass both.
+    expect(saveMock).toHaveBeenCalled();
+  });
+
+  it("refuses a cyclic record as unbounded depth, without recursing into it", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic["self"] = cyclic;
 
+    // A cycle IS infinite depth, and the iterative walk reaches the limit and
+    // stops rather than following it — which is the point of checking depth
+    // before handing the value to a recursive `JSON.stringify`. The reason is
+    // reported as depth because that is what was measured; the caller-facing
+    // message names both.
     expect(usePanelStore.getState().setPanelClientMetadata("t1", { cyclic })).toEqual({
+      ok: false,
+      reason: "too-deep",
+    });
+    expect(stateOf("t1")).toBeUndefined();
+  });
+
+  it("refuses a shallow value that cannot round-trip through JSON", () => {
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { big: 1n })).toEqual({
       ok: false,
       reason: "invalid-json",
     });

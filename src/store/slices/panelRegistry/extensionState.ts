@@ -3,7 +3,7 @@ import type { PanelInstance } from "@shared/types/panel";
 import { saveNormalized } from "./persistence";
 import { logWarn } from "@/utils/logger";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import { isEphemeralPanel } from "./panelCount";
+import { isClientMetadataEligible } from "./panelCount";
 import {
   MCP_CLIENT_METADATA_KEY,
   MAX_CLIENT_METADATA_BYTES,
@@ -87,9 +87,10 @@ function mergePatch(
  * that never passed through here — must still be shrinkable, or the writer is
  * locked out of the only operation that could fix it.
  */
-function withinCap(bytes: number, currentBytes: number): boolean {
+function withinCap(bytes: number, currentBytes: () => number): boolean {
   if (bytes <= MAX_EXTENSION_STATE_BYTES) return true;
-  return currentBytes > MAX_EXTENSION_STATE_BYTES && bytes < currentBytes;
+  const current = currentBytes();
+  return current > MAX_EXTENSION_STATE_BYTES && bytes < current;
 }
 
 interface CommitOutcome {
@@ -155,20 +156,6 @@ function commitMergedState(
 }
 
 /**
- * Panels an external MCP client may attach its own correlation metadata to
- * (#12340).
- *
- * Exactly the inverse of the plugin gate, so the two write policies are
- * disjoint by construction and the reserved key can never collide with a bag a
- * plugin owns. Ephemeral panels are excluded for the reason `terminal.list`
- * already excludes them: they are tooling-internal, and a surface that cannot
- * enumerate them must not be able to write to them either.
- */
-function isClientMetadataEligible(panel: PanelInstance): boolean {
-  return panel.kind === "terminal" && panel.pluginId === undefined && !isEphemeralPanel(panel);
-}
-
-/**
  * Merge a patch into a plugin panel's `extensionState`.
  *
  * This is the write half of the bag a view reads as `PanelViewProps.initialArgs`
@@ -200,7 +187,6 @@ export const createExtensionStateActions = (
       if (panel.pluginId === undefined) return state;
 
       const current = panel.extensionState ?? {};
-      const currentSerialized = serializeOrUndefined(current);
       const draft = mergePatch(current, patch);
 
       const serialized = serializeOrUndefined(draft);
@@ -215,8 +201,12 @@ export const createExtensionStateActions = (
         return state;
       }
 
+      // Measured only when the draft is actually over, and deliberately not
+      // through `serializeOrUndefined`: `current` is whatever a previous write
+      // or a spawn seeded, and this path has always let an unserializable one
+      // throw rather than silently measuring it as zero bytes.
       const bytes = byteLength(serialized);
-      if (!withinCap(bytes, byteLength(currentSerialized ?? ""))) {
+      if (!withinCap(bytes, () => byteLength(JSON.stringify(current) ?? ""))) {
         logWarn("Plugin panel state exceeds the size limit; ignoring the update", {
           panelId: id,
           pluginId: panel.pluginId,
@@ -248,7 +238,7 @@ export const createExtensionStateActions = (
         state,
         id,
         panel,
-        currentSerialized,
+        serializeOrUndefined(current),
         serialized,
         extensionStateVersion
       ).next;
@@ -275,16 +265,29 @@ export const createExtensionStateActions = (
       // The slice is validated on its own before it reaches the bag, so a
       // rejection names what the caller actually got wrong rather than
       // reporting the whole panel's state as oversized.
+      //
+      // Depth goes FIRST, before anything recursive touches the value.
+      // `JSON.stringify` recurses, so a value nested past the engine's stack
+      // throws `RangeError` — caught, and then reported as `invalid-json`,
+      // which is the one explanation that does not tell the caller what to do.
+      // The walk below is iterative, so it answers on any input.
+      let canonical: Record<string, unknown> | null = null;
       if (value !== null) {
+        if (exceedsClientMetadataDepth(value)) {
+          outcome = { ok: false, reason: "too-deep" };
+          return state;
+        }
         const sliceSerialized = serializeOrUndefined(value);
         if (sliceSerialized === undefined) {
           outcome = { ok: false, reason: "invalid-json" };
           return state;
         }
-        if (exceedsClientMetadataDepth(value)) {
-          outcome = { ok: false, reason: "too-deep" };
-          return state;
-        }
+        // Measured and stored as ONE representation. `toJSON` is handed the key
+        // it is serializing under, so a value that answers differently for ""
+        // and for "mcp" would otherwise be measured as one record and stored as
+        // another — passing a 2KB check and persisting something larger.
+        // Canonicalizing here means the bytes checked are the bytes kept.
+        canonical = parseCanonical(sliceSerialized);
         if (byteLength(sliceSerialized) > MAX_CLIENT_METADATA_BYTES) {
           outcome = { ok: false, reason: "metadata-too-large" };
           return state;
@@ -298,7 +301,7 @@ export const createExtensionStateActions = (
       // whole thing would drop the environment a "Run anyway" relaunch rebuilds
       // itself from.
       const draft = mergePatch(current, {
-        [MCP_CLIENT_METADATA_KEY]: value === null ? undefined : value,
+        [MCP_CLIENT_METADATA_KEY]: canonical ?? undefined,
       });
 
       const serialized = serializeOrUndefined(draft);
@@ -308,7 +311,7 @@ export const createExtensionStateActions = (
         outcome = { ok: false, reason: "invalid-json" };
         return state;
       }
-      if (!withinCap(byteLength(serialized), byteLength(currentSerialized ?? ""))) {
+      if (!withinCap(byteLength(serialized), () => byteLength(currentSerialized ?? ""))) {
         outcome = { ok: false, reason: "state-too-large" };
         return state;
       }

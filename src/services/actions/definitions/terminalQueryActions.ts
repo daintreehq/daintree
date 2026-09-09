@@ -19,34 +19,11 @@ import {
   WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
-import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import {
+  isEphemeralPanel,
+  isClientMetadataEligible,
+} from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
-
-/**
- * Headroom below the MCP transport's 50KB `tools/call` ceiling.
- *
- * Left for the envelope the renderer never sees — the JSON-RPC frame and the
- * text half the structured content is duplicated into.
- */
-const CLIENT_METADATA_LISTING_MAX_BYTES = 40 * 1024;
-
-/**
- * Refuse a metadata-bearing listing that the transport would mangle.
- *
- * Over its ceiling `buildToolCallTextResult` truncates the text and drops
- * `structuredContent` entirely, so an unguarded fleet-wide read would hand the
- * caller a half-listing with a generic size notice and no way to tell which
- * rows it lost. Failing here instead names the filters that make the same read
- * fit — and the caller's own records are what pushed it over, so this is
- * actionable rather than an internal limit leaking out.
- */
-function assertListingWithinTransportBudget(rows: unknown[]): void {
-  const bytes = new TextEncoder().encode(JSON.stringify({ terminals: rows })).length;
-  if (bytes <= CLIENT_METADATA_LISTING_MAX_BYTES) return;
-  throw new Error(
-    `Listing ${rows.length} terminals with client metadata is ${bytes} bytes, over the ${CLIENT_METADATA_LISTING_MAX_BYTES}-byte response budget. Narrow it with terminalId, worktreeId or location, or store smaller records.`
-  );
-}
 
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
@@ -92,7 +69,7 @@ export function registerTerminalQueryActions(
           .boolean()
           .optional()
           .describe(
-            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId if a listing is refused."
+            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId on a large fleet."
           ),
       })
       .optional(),
@@ -160,14 +137,22 @@ export function registerTerminalQueryActions(
         agentState: isPtyPanel(t) ? (t.agentState ?? null) : null,
         isInputLocked: isPtyPanel(t) ? (t.isInputLocked ?? false) : false,
         isFocused: t.id === state.focusedId,
-        // ONLY the reserved key, never the bag it sits in. `extensionState`
-        // also carries `presetEnv` on a terminal — a real subprocess
-        // environment, session-scoped secrets included — and this listing is
-        // reachable by every api-key client.
-        ...(includeClientMetadata ? { clientMetadata: readClientMetadata(t.extensionState) } : {}),
+        // ONLY the reserved key, and only off a panel the writer could have
+        // written to. Two separate leaks live here. `extensionState` also
+        // carries `presetEnv` on a terminal — a real subprocess environment,
+        // session-scoped secrets included. And a plugin owns its whole bag
+        // under keys it chooses, so one that happens to persist its own `mcp`
+        // key would have it read out here despite no external caller being
+        // able to write it. Gating the read on the same predicate as the write
+        // is what keeps the two halves describing the same thing.
+        ...(includeClientMetadata
+          ? {
+              clientMetadata: isClientMetadataEligible(t)
+                ? readClientMetadata(t.extensionState)
+                : null,
+            }
+          : {}),
       }));
-
-      if (includeClientMetadata) assertListingWithinTransportBudget(result);
 
       return { terminals: result };
     },

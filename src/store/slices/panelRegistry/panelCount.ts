@@ -11,9 +11,42 @@
  */
 
 /** A panel carrier entry — only the fields the count actually reads. */
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+
 interface CountablePanel {
   location?: string;
   excludeFromPersistence?: boolean;
+}
+
+/** A panel as the client-metadata eligibility rule needs to see it. */
+interface MetadataCandidatePanel extends CountablePanel {
+  kind?: string;
+  pluginId?: string;
+}
+
+/**
+ * Panels an external MCP client may attach its own correlation record to
+ * (#12340).
+ *
+ * Exactly the inverse of the plugin `extensionState` gate, so the two write
+ * policies are disjoint by construction and the reserved key can never collide
+ * with a bag a plugin owns. Ephemeral panels are excluded for the reason
+ * `terminal.list` already excludes them: they are tooling-internal, and a
+ * surface that cannot enumerate them must not be able to write to them either.
+ *
+ * It lives here rather than beside the setter because BOTH halves need it — the
+ * listing gates its read on the same rule — and this module imports nothing, so
+ * the action definitions can reach it without pulling the store's persistence
+ * graph into every test that mocks `@/clients`.
+ */
+export function isClientMetadataEligible(panel: MetadataCandidatePanel | undefined): boolean {
+  if (!panel) return false;
+  // Asked of the registry rather than compared against `"terminal"`: what the
+  // record attaches to is a terminal, and the registry is what decides which
+  // kinds are one. A built-in PTY kind added later is eligible by construction.
+  return (
+    panelKindHasPty(panel.kind ?? "") && panel.pluginId === undefined && !isEphemeralPanel(panel)
+  );
 }
 
 /**

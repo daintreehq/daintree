@@ -387,17 +387,18 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `terminalId` description was kept under the 160 B target instead.
   //
   // 52_500 → 52_600 for #12340's `terminal.setClientMetadata` plus the two
-  // arguments it adds to `terminal.list`. Most of the spend is the read half:
-  // carrying it on the existing listing rather than as a second tool is what
-  // holds the feature to one allowlist slot, and `includeClientMetadata` and
-  // `terminalId` are what make that read opt-in and narrowable instead of
-  // making every discovery call pay for records up to 2 KB each. The write
-  // half's own schema is two fields, one of them an opaque map that carries no
-  // per-key prose because the host does not know what is in it.
+  // arguments it adds to `terminal.list`. Roughly two thirds of the 1_647 B is
+  // the writer itself — 376 B description, 542 B input schema, 214 B output —
+  // and the rest is the read: 392 B of input for `includeClientMetadata` and
+  // `terminalId`, 123 B of output for the row field. Carrying the read on the
+  // existing listing rather than as a second tool is what holds the feature to
+  // one allowlist slot; those two arguments are what make it opt-in and
+  // narrowable instead of making every discovery call pay for records up to
+  // 2 KB each.
   //
-  // Trimmed before raising: both new property descriptions were brought under
-  // the 160 B one-clause target, which saved 182 B and left
-  // MAX_PROPERTIES_OVER_TARGET untouched at 49.
+  // Trimmed before raising, so the spend is the tool and not its prose: both
+  // new property descriptions were brought under the 160 B one-clause target,
+  // leaving MAX_PROPERTIES_OVER_TARGET untouched at 49.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 52_600;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
@@ -451,8 +452,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // from one and not the other.
   // Measured at 207_890 B — the same 3_255 B on top of develop's 204_635.
   //
-  // 207_900 → 208_000 for the same #12340 additions. It is on every tier from
-  // `action` up, so the in-app assistant is advertised the identical schemas.
+  // 207_900 → 208_000 for the same #12340 additions. On this branch alone the
+  // feature fitted under 204_400 with 5 B to spare, the difference being one
+  // redundant word in the tool description. #12338, #12342, #12343 and #12345
+  // have since landed on develop and spent that window, so the cohort now
+  // carries the same additions as a raise rather than absorbing them.
   const MAX_COHORT_PAYLOAD_BYTES = 208_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;

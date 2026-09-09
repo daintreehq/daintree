@@ -21,10 +21,27 @@ const REJECTION_MESSAGES: Record<ClientMetadataRejection, string> = {
   "not-eligible":
     "Client metadata attaches to open terminals only — not to plugin-owned or tooling-internal panels",
   "invalid-json": "Client metadata must be a JSON object: no cycles, BigInts or custom toJSON",
-  "too-deep": `Client metadata nests deeper than ${MAX_CLIENT_METADATA_DEPTH} levels`,
+  "too-deep": `Client metadata nests deeper than ${MAX_CLIENT_METADATA_DEPTH} levels, or is cyclic`,
   "metadata-too-large": `Client metadata exceeds ${MAX_CLIENT_METADATA_BYTES} bytes of JSON`,
   "state-too-large": "The terminal's stored state is full; delete or shrink its client metadata",
 };
+
+const SetClientMetadataArgsSchema = z
+  .object({
+    terminalId: z
+      .string()
+      .min(1)
+      .describe(
+        "Identifies the terminal to annotate, using a panel id from the terminal-listing capability."
+      ),
+    clientMetadata: z
+      .record(z.string(), z.unknown())
+      .nullable()
+      .describe(
+        `Replaces the whole record — send every key you want kept, not a patch. Max ${MAX_CLIENT_METADATA_BYTES} bytes of JSON, ${MAX_CLIENT_METADATA_DEPTH} deep. Null deletes it. Namespace your keys: this is shared.`
+      ),
+  })
+  .strict();
 
 export function registerTerminalMetaActions(
   actions: ActionRegistry,
@@ -34,7 +51,7 @@ export function registerTerminalMetaActions(
     id: "terminal.setClientMetadata",
     title: "Set Terminal Client Metadata",
     description:
-      "Attach your own small JSON record to a terminal, so a reconnecting client can tell which panel is which instead of keeping a sidecar that goes stale. It outlives your connection, survives a restart, and is deleted with the panel. Read it back from the terminal listing; null clears it. Shared namespace: every external client sees the same record, and it confers no ownership.",
+      "Attach your own JSON record to a terminal, so a reconnecting client can tell which panel is which instead of keeping a sidecar that goes stale. It outlives your connection, survives a restart, and is deleted with the panel. Read it back from the terminal listing; null clears it. Shared namespace: every external client sees the same record, and it confers no ownership.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -58,22 +75,7 @@ export function registerTerminalMetaActions(
       idempotentHint: true,
       openWorldHint: false,
     },
-    argsSchema: z
-      .object({
-        terminalId: z
-          .string()
-          .min(1)
-          .describe(
-            "Identifies the terminal to annotate, using a panel id from the terminal-listing capability."
-          ),
-        clientMetadata: z
-          .record(z.string(), z.unknown())
-          .nullable()
-          .describe(
-            `Replaces the whole record — send every key you want kept, not a patch. Max ${MAX_CLIENT_METADATA_BYTES} bytes of JSON, ${MAX_CLIENT_METADATA_DEPTH} deep. Null deletes it. Namespace your keys: this is shared.`
-          ),
-      })
-      .strict(),
+    argsSchema: SetClientMetadataArgsSchema,
     examples: [
       {
         args: { terminalId: "term-abc123", clientMetadata: { session: "gc-42", role: "reviewer" } },
@@ -97,10 +99,10 @@ export function registerTerminalMetaActions(
     }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { terminalId, clientMetadata } = args as {
-        terminalId: string;
-        clientMetadata: Record<string, unknown> | null;
-      };
+      // Parsed rather than asserted: `run` receives `unknown`, and narrowing it
+      // by assertion would put the one shape this action must not get wrong
+      // outside the type system.
+      const { terminalId, clientMetadata } = SetClientMetadataArgsSchema.parse(args);
 
       const outcome = usePanelStore.getState().setPanelClientMetadata(terminalId, clientMetadata);
       if (!outcome.ok) throw new Error(REJECTION_MESSAGES[outcome.reason]);

@@ -237,6 +237,42 @@ describe("terminal.list client metadata", () => {
     expect(JSON.stringify(row)).not.toContain("expanded");
   });
 
+  it("does not read a plugin's own key that happens to be named 'mcp'", async () => {
+    seedTerminals({
+      p1: {
+        id: "p1",
+        kind: "acme.explorer",
+        location: "grid",
+        pluginId: "acme.explorer-plugin",
+        extensionState: { mcp: { serverToken: "plugin-secret" } },
+      },
+    });
+
+    const [row] = await callList(setupActions(), { includeClientMetadata: true });
+
+    // The reserved key is only reserved on panels the WRITER can reach. A
+    // plugin owns its whole bag under keys it chooses, so reading `mcp` off
+    // every listed panel would publish plugin state no external caller could
+    // have written — and would escape this slice's 2KB and depth bounds too.
+    expect(row).toMatchObject({ clientMetadata: null });
+    expect(JSON.stringify(row)).not.toContain("plugin-secret");
+  });
+
+  it("does not read the key off a non-terminal built-in panel", async () => {
+    seedTerminals({
+      f1: {
+        id: "f1",
+        kind: "file",
+        location: "grid",
+        extensionState: { mcp: { note: "not-writable-here" } },
+      },
+    });
+
+    const [row] = await callList(setupActions(), { includeClientMetadata: true });
+
+    expect(row).toMatchObject({ clientMetadata: null });
+  });
+
   it("narrows to one terminal by id, and to none when nothing matches", async () => {
     seedTerminals({
       "term-a": { id: "term-a", kind: "terminal", location: "grid" },
@@ -250,7 +286,7 @@ describe("terminal.list client metadata", () => {
     expect(await callList(setupActions(), { terminalId: "term-zzz" })).toEqual([]);
   });
 
-  it("refuses a metadata read too large for the transport, naming the filters", async () => {
+  it("answers a large metadata read rather than refusing it", async () => {
     const panelsById: Record<string, unknown> = {};
     for (let i = 0; i < 40; i++) {
       panelsById[`term-${i}`] = {
@@ -262,31 +298,19 @@ describe("terminal.list client metadata", () => {
     }
     seedTerminals(panelsById);
 
-    // Over the transport's ceiling the text is truncated and structuredContent
-    // is dropped outright, so an unguarded read would hand back a half-listing
-    // with no way to tell which rows went missing.
-    await expect(callList(setupActions(), { includeClientMetadata: true })).rejects.toThrow(
-      /Narrow it with terminalId, worktreeId or location/
-    );
-  });
+    // A byte guard belongs downstream of the ownership filter, not here: main
+    // strips `owned` before dispatch and intersects the rows only after this
+    // returns, so refusing at renderer scope would fail `{ owned: true }` for a
+    // caller whose own share of the fleet is one row, or none. Oversize is left
+    // to the transport, which truncates and says so.
+    const rows = await callList(setupActions(), { includeClientMetadata: true });
+    expect(rows).toHaveLength(40);
 
-  it("still answers a narrowed read from the same oversized fleet", async () => {
-    const panelsById: Record<string, unknown> = {};
-    for (let i = 0; i < 40; i++) {
-      panelsById[`term-${i}`] = {
-        id: `term-${i}`,
-        kind: "terminal",
-        location: "grid",
-        extensionState: { mcp: { blob: "x".repeat(2000) } },
-      };
-    }
-    seedTerminals(panelsById);
-
-    const rows = await callList(setupActions(), {
+    // ...and narrowing still works, which is what the description points at.
+    const narrowed = await callList(setupActions(), {
       includeClientMetadata: true,
       terminalId: "term-7",
     });
-
-    expect(rows).toHaveLength(1);
+    expect(narrowed).toHaveLength(1);
   });
 });
