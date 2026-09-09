@@ -1,0 +1,442 @@
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EditorView } from "@codemirror/view";
+import { EditorState, EditorSelection } from "@codemirror/state";
+import { openSearchPanel } from "@codemirror/search";
+import type { LanguageSupport } from "@codemirror/language";
+import { AlertTriangle, ExternalLink, FileWarning, RefreshCw, Save, XCircle } from "lucide-react";
+import type { FileEditorViewProps } from "@/registry/fileEditorRegistry";
+import { loadMarkdownSupport } from "@/components/FileViewer/codeMirrorLanguages";
+import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
+import { activateMarkdownLink } from "@/components/Markdown/markdownRenderPolicy";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
+import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import { formatBytes } from "@/lib/formatBytes";
+import { cn } from "@/lib/utils";
+import { DocumentController } from "./documentController.js";
+import { currentText, useDocumentStateStore, type DocumentRecord } from "./documentStateStore.js";
+import {
+  buildMarkdownEditorExtensions,
+  themeCompartment,
+  wrapCompartment,
+} from "./markdownEditorExtensions.js";
+import { getDaintreeEditorTheme } from "@/components/FileViewer/editorTheme";
+import { unifiedDiff } from "./unifiedDiff.js";
+
+// The diff surface is the app's own; it stays out of this chunk until a
+// conflict actually asks for it.
+const LazyDiffViewer = lazy(() =>
+  import("@/components/Worktree/DiffViewer").then((m) => ({ default: m.DiffViewer }))
+);
+
+const REFUSAL_COPY: Record<NonNullable<DocumentRecord["refusal"]>, string> = {
+  NOT_MARKDOWN: "Only Markdown files can be edited here",
+  NOT_UTF8: "This file isn't valid UTF-8, so editing it here could corrupt it",
+  TOO_LARGE: "This file is over 2 MiB, the editor's limit",
+  SYMLINK: "This file is a symlink; edit the file it points to instead",
+  NOT_A_FILE: "This path isn't a file",
+};
+
+function EditorSkeleton() {
+  return (
+    <div className="p-4 space-y-3">
+      <Skeleton label="Loading editor">
+        <SkeletonBone className="h-5 w-1/3" />
+        <SkeletonText lines={12} />
+      </Skeleton>
+    </div>
+  );
+}
+
+/**
+ * The file panel's Edit mode for Markdown (#12323): a CodeMirror buffer over
+ * the document the controller owns. The view is transient — it mounts and
+ * unmounts with the mode — so every piece of document state lives in the
+ * controller and the store, and this component only renders them.
+ */
+export function MarkdownEditorView(props: FileEditorViewProps) {
+  const controller = DocumentController.acquire({
+    panelId: props.panelId,
+    filePath: props.filePath,
+    fileName: props.fileName,
+    rootPath: props.rootPath,
+    worktreePath: props.worktreePath,
+    projectId: props.projectId,
+  });
+  const record = useDocumentStateStore((state) => state.records[controller.key]);
+  const polarity = useActiveAppScheme().type;
+
+  useEffect(() => {
+    controller.sync({ changeTick: props.changeTick });
+  }, [controller, props.changeTick]);
+
+  const [language, setLanguage] = useState<LanguageSupport | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadMarkdownSupport()
+      .then((support) => {
+        if (!cancelled) setLanguage(support);
+      })
+      .catch(() => {
+        // Plain-text editing still works without the grammar.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  // The text this view last handed the controller, so a store update that
+  // echoes our own typing is not re-applied to the buffer.
+  const lastLocalTextRef = useRef<string | null>(null);
+  const [showCompare, setShowCompare] = useState(false);
+  const [confirmLoadDisk, setConfirmLoadDisk] = useState(false);
+  const [saveAsPath, setSaveAsPath] = useState<string | null>(null);
+  const [saveAsError, setSaveAsError] = useState<string | null>(null);
+
+  const ready = record?.status === "ready" && record.base !== null && language !== null;
+  const loadGeneration = record?.loadGeneration ?? 0;
+
+  // One EditorView per (document load); a fresh EditorState — and a fresh
+  // undo history — on first load, on a clean reload after an external
+  // change, and on taking the disk version over a conflict.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!ready || !host || !language) return;
+    const text = currentText(controller.record()) ?? "";
+    lastLocalTextRef.current = text;
+    const restore = controller.viewState;
+    const clampedAnchor = restore ? Math.min(restore.anchor, text.length) : 0;
+    const clampedHead = restore ? Math.min(restore.head, text.length) : 0;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: text,
+        selection: EditorSelection.single(clampedAnchor, clampedHead),
+        extensions: buildMarkdownEditorExtensions({
+          language,
+          polarity,
+          wrapLines: props.wrapLines,
+          ariaLabel: props.fileName,
+          callbacks: {
+            onChange: (next) => {
+              lastLocalTextRef.current = next;
+              controller.setText(next);
+            },
+            onSave: () => void controller.save(),
+            onFollowLink: (href) =>
+              activateMarkdownLink(href, { filePath: props.filePath, rootPath: props.rootPath }),
+          },
+        }),
+      }),
+      parent: host,
+    });
+    viewRef.current = view;
+    if (restore) view.scrollDOM.scrollTop = restore.scrollTop;
+    return () => {
+      controller.viewState = {
+        anchor: view.state.selection.main.anchor,
+        head: view.state.selection.main.head,
+        scrollTop: view.scrollDOM.scrollTop,
+      };
+      view.destroy();
+      viewRef.current = null;
+    };
+    // polarity and wrapLines are reconfigured in place below; the file
+    // identity and callbacks are fixed for the controller's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, language, loadGeneration, controller]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: wrapCompartment.reconfigure(props.wrapLines ? EditorView.lineWrapping : []),
+    });
+  }, [props.wrapLines]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: themeCompartment.reconfigure(getDaintreeEditorTheme(polarity)),
+    });
+  }, [polarity]);
+
+  // A sibling panel on the same document typed: catch the buffer up.
+  const textVersion = record?.textVersion ?? 0;
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !record) return;
+    const text = currentText(record);
+    if (text === null || text === lastLocalTextRef.current) return;
+    const doc = view.state.doc;
+    if (doc.toString() === text) return;
+    lastLocalTextRef.current = text;
+    view.dispatch({ changes: { from: 0, to: doc.length, insert: text } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [textVersion]);
+
+  // Cmd+F from the panel chrome lands in this editor's find bar while the
+  // panel is focused, as it does for Source mode.
+  useEffect(() => {
+    if (!props.isFocused) return;
+    const handler = () => {
+      if (viewRef.current) openSearchPanel(viewRef.current);
+    };
+    window.addEventListener("daintree:find-in-panel", handler);
+    return () => window.removeEventListener("daintree:find-in-panel", handler);
+  }, [props.isFocused]);
+
+  const handleSave = useCallback(() => void controller.save(), [controller]);
+  const handleLoadDisk = useCallback(async () => {
+    setConfirmLoadDisk(false);
+    setShowCompare(false);
+    await controller.loadDiskVersion();
+    viewRef.current?.focus();
+  }, [controller]);
+  const handleSaveAs = useCallback(async () => {
+    if (!saveAsPath) return;
+    const result = await controller.saveAs(saveAsPath);
+    if (result.status === "saved") {
+      setSaveAsPath(null);
+      setSaveAsError(null);
+      return;
+    }
+    setSaveAsError(
+      result.status === "exists"
+        ? "A file already exists at that path"
+        : result.status === "refused"
+          ? "Pick a Markdown path under 2 MiB"
+          : result.message
+    );
+  }, [controller, saveAsPath]);
+
+  const compareDiff = useMemo(() => {
+    if (!showCompare || !record?.conflict || record.conflict.text === null) return null;
+    return unifiedDiff(record.conflict.text, currentText(record) ?? "", {
+      path: props.fileName,
+    });
+  }, [showCompare, record, props.fileName]);
+
+  if (!record || record.status === "loading" || (record.status === "ready" && language === null)) {
+    return <EditorSkeleton />;
+  }
+
+  if (record.status === "refused") {
+    return (
+      <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          icon={<FileWarning className="h-6 w-6" />}
+          title="Can't edit this file here"
+          description={REFUSAL_COPY[record.refusal ?? "NOT_A_FILE"]}
+          action={
+            <Button variant="outline" size="sm" onClick={props.onOpenExternalEditor}>
+              <ExternalLink />
+              Open in editor
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (record.status === "unavailable" && !record.base) {
+    return (
+      <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          icon={<FileWarning className="h-6 w-6" />}
+          title="File isn't available"
+          description="It may have been deleted, moved, or its worktree removed."
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void controller.load({ restoreDraft: true })}
+            >
+              <RefreshCw />
+              Retry
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  const base = record.base;
+  const text = currentText(record) ?? "";
+  const dirty = record.draft !== null;
+  const lineCount = text.length === 0 ? 0 : text.split("\n").length;
+  const eolLabel = base?.eol === "\r\n" ? "CRLF" : "LF";
+
+  return (
+    <div className="flex min-h-full flex-col" data-testid="markdown-editor">
+      <div
+        data-testid="markdown-editor-status"
+        className="flex items-center gap-3 px-3 py-1 border-b border-border-default text-xs text-muted-foreground font-mono shrink-0"
+      >
+        <span className="truncate">
+          {lineCount} lines · {formatBytes(new TextEncoder().encode(text).byteLength)} · UTF-8
+          {base?.hasBom ? " with BOM" : ""} · {eolLabel}
+        </span>
+        {base?.mixedEol && (
+          <span className="truncate" data-testid="markdown-editor-mixed-eol">
+            Mixed line endings — saving normalises to {eolLabel}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-2">
+          <span aria-live="polite" data-testid="markdown-editor-dirty-state">
+            {record.saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"}
+          </span>
+          <Button
+            variant="contrast"
+            size="xs"
+            onClick={handleSave}
+            disabled={!dirty || record.saving || record.conflict !== null}
+            loading={record.saving}
+            aria-label="Save file"
+            data-testid="markdown-editor-save"
+          >
+            <Save />
+            Save
+          </Button>
+        </span>
+      </div>
+
+      {record.status === "unavailable" && (
+        <InlineStatusBanner
+          severity="warning"
+          icon={AlertTriangle}
+          title="File isn't where it was"
+          description="The draft is kept. Save it somewhere else, or retry once the file is back."
+          role="status"
+          ariaLive="polite"
+          actions={[
+            {
+              id: "retry-unavailable",
+              label: "Retry",
+              icon: RefreshCw,
+              onClick: () => void controller.revalidate(),
+            },
+            {
+              id: "save-as-unavailable",
+              label: "Save draft as…",
+              onClick: () => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1")),
+            },
+          ]}
+        />
+      )}
+
+      {record.conflict && (
+        <InlineStatusBanner
+          severity="warning"
+          icon={AlertTriangle}
+          title="File changed on disk"
+          description="Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
+          role="status"
+          ariaLive="polite"
+          actions={[
+            {
+              id: "compare",
+              label: showCompare ? "Hide comparison" : "Compare",
+              onClick: () => setShowCompare((value) => !value),
+              disabled: record.conflict.text === null,
+            },
+            {
+              id: "load-disk",
+              label: "Load disk version",
+              onClick: () => setConfirmLoadDisk(true),
+            },
+            {
+              id: "save-as",
+              label: "Save draft as…",
+              onClick: () => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1")),
+            },
+          ]}
+        />
+      )}
+
+      {record.error && (
+        <InlineStatusBanner
+          severity="error"
+          icon={XCircle}
+          title="Couldn't save"
+          description={record.error}
+          action={{ id: "retry-save", label: "Retry", icon: RefreshCw, onClick: handleSave }}
+        />
+      )}
+
+      {record.storageWarning && (
+        <InlineStatusBanner
+          severity="warning"
+          icon={AlertTriangle}
+          title="Draft isn't backed up"
+          description={record.storageWarning}
+          role="status"
+          ariaLive="polite"
+          actions={[
+            {
+              id: "copy-draft",
+              label: "Copy draft",
+              onClick: () => void navigator.clipboard.writeText(text),
+            },
+          ]}
+        />
+      )}
+
+      {compareDiff !== null && (
+        <div
+          className="border-b border-border-default diff-scroll-root"
+          data-testid="markdown-editor-compare"
+        >
+          <Suspense fallback={<EditorSkeleton />}>
+            <LazyDiffViewer diff={compareDiff} viewType="unified" wrapLines />
+          </Suspense>
+        </div>
+      )}
+
+      <div
+        ref={hostRef}
+        className={cn(
+          "flex-1 text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+          !ready && "hidden"
+        )}
+        data-testid="markdown-editor-host"
+      />
+
+      <ConfirmDialog
+        isOpen={confirmLoadDisk}
+        onClose={() => setConfirmLoadDisk(false)}
+        variant="destructive"
+        zIndex="nested"
+        title={`Discard the draft of '${props.fileName}'?`}
+        description="The disk version replaces your unsaved edits. This can't be undone."
+        confirmLabel="Discard draft"
+        onConfirm={handleLoadDisk}
+      />
+
+      <ConfirmDialog
+        isOpen={saveAsPath !== null}
+        onClose={() => {
+          setSaveAsPath(null);
+          setSaveAsError(null);
+        }}
+        title="Save draft as"
+        description="A new Markdown file inside the same root. The original file and its draft are left as they are."
+        confirmLabel="Save file"
+        onConfirm={handleSaveAs}
+        hint={saveAsError ?? undefined}
+      >
+        <input
+          value={saveAsPath ?? ""}
+          onChange={(event) => setSaveAsPath(event.target.value)}
+          aria-label="New file path"
+          className="w-full rounded-md border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-xs text-text-primary focus:outline-hidden focus-visible:ring-1 focus-visible:ring-border-strong"
+          data-testid="markdown-editor-save-as-path"
+        />
+      </ConfirmDialog>
+    </div>
+  );
+}
