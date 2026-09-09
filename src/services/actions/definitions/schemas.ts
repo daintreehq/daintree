@@ -504,6 +504,12 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`."
     ),
+  hasPty: z
+    .boolean()
+    .optional()
+    .describe(
+      "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`."
+    ),
   error: z
     .string()
     .optional()
@@ -520,7 +526,7 @@ export const TerminalStatusResultSchema = z.object({
       "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
     ),
   unavailableFields: z
-    .array(z.enum(["armed", "lastCheckResult", "exitCode"]))
+    .array(z.enum(["armed", "lastCheckResult", "exitCode", "hasPty"]))
     .describe(
       "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),

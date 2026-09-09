@@ -21,9 +21,11 @@ import type { PtyClient } from "../PtyClient.js";
  * answerable here, the same way `terminalInventoryPrefetch.ts` builds a
  * project's inventory straight off `PtyClient` with no view.
  *
- * Deliberately a *fallback*, not a replacement. The renderer answer is strictly
- * richer, and the two are told apart on the wire by `source` rather than by the
- * client guessing from which fields happen to be present.
+ * Deliberately a *fallback*, not a replacement: the renderer answer carries the
+ * panel-shaped fields this one cannot see. It is not strictly richer, though —
+ * `hasPty` is computed here and only this answer reports it (#12336) — so the
+ * two are told apart on the wire by `source` and `unavailableFields` rather
+ * than by the client guessing from which fields happen to be present.
  */
 
 /**
@@ -45,6 +47,10 @@ import type { PtyClient } from "../PtyClient.js";
  * `armed: false` and a borrowed exit code are both interpretations main has no
  * evidence for. `agentState` still distinguishes `completed` from `exited`, so
  * "the run finished, and how" survives without the numeric code.
+ *
+ * `hasPty` is deliberately *not* here. It is computed in the pty-host itself
+ * (`mapTerminalInfo`), so this is the surface that can observe it — the
+ * renderer's panel copy is the one that never gets written (#12336).
  */
 export const VIEWLESS_STATUS_UNAVAILABLE_FIELDS: readonly TerminalStatusUnavailableField[] = [
   "armed",
@@ -193,6 +199,15 @@ function buildEntry(record: TerminalRecord): TerminalStatusEntry {
     lastTransitionAt: record.lastStateChange,
     spawnedAt: record.spawnedAt,
   };
+
+  // `!wasKilled && !isExited` off the pty-host record (#12336). A pane that
+  // exits cleanly is deliberately preserved, so the record outlives its
+  // process and `false` is a real reading rather than a missing row. Assigned
+  // only when the backend actually reported it: an older record without the
+  // field is unobserved, and `false` there would be an invented exit.
+  if (record.hasPty !== undefined) {
+    entry.hasPty = record.hasPty;
+  }
 
   if (agentState === "waiting" && record.waitingReason !== undefined) {
     entry.waitingReason = record.waitingReason;

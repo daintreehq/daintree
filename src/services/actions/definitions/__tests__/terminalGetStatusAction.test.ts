@@ -17,6 +17,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindHasPty: (kind: string) => kind === "terminal" || kind === "agent",
 }));
 
+import type { TerminalStatusResult } from "@shared/types/terminalStatus";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
 
 /**
@@ -35,27 +36,11 @@ function snapshotMap(
   );
 }
 
-type StatusEntry = {
-  terminalId: string;
-  agentId: string | null;
-  agentState: string | null;
-  waitingReason?: string;
-  lastTransitionAt?: number;
-  exitCode?: number | null;
-  spawnedAt?: number;
-  lastCheckResult?: {
-    command: string | null;
-    passed: boolean;
-    ranAt: number;
-    failureSummary: string | null;
-    truncated: boolean;
-  };
-  recentOutput?: string | null;
-  armed?: boolean;
-  error?: string;
-};
-
-type StatusResult = { terminals: StatusEntry[]; source: string; unavailableFields: string[] };
+// The shared wire types rather than a third hand-maintained mirror that drifts
+// from the contract it copies. It does NOT catch a builder omission: every
+// added field is optional and `callGetStatus` casts, so TypeScript has nothing
+// to complain about. The behavioural assertions below carry that weight.
+type StatusResult = TerminalStatusResult;
 
 function setupActions(): ActionRegistry {
   const actions: ActionRegistry = new Map();
@@ -87,10 +72,12 @@ beforeEach(() => {
 });
 
 describe("terminal.getStatus", () => {
-  it("names its source and reports nothing as unobservable (#12316)", async () => {
+  it("names its source and declares only hasPty unobservable (#12316, #12336)", async () => {
     // The same envelope the main-process fallback answers in. A live view saw
-    // everything, so `unavailableFields` is empty — which is what tells a
-    // client that a missing `armed` here means "not armed", not "unknown".
+    // the panel-shaped fields, so their absence is evidence — a missing `armed`
+    // here means "not armed", not "unknown". `hasPty` is the exception: the
+    // pty-host computes it and the renderer's panel copy is never written, so
+    // this surface says it could not look rather than reporting silence.
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1"],
       panelsById: {
@@ -101,8 +88,48 @@ describe("terminal.getStatus", () => {
     const result = await callGetStatus(setupActions());
 
     expect(result.source).toBe("renderer");
-    expect(result.unavailableFields).toEqual([]);
+    expect(result.unavailableFields).toEqual(["hasPty"]);
     expect(result.terminals[0]?.armed).toBe(false);
+  });
+
+  it("emits no hasPty key rather than a value it cannot observe (#12336)", async () => {
+    // Nothing in the renderer writes `PtyPanelData.hasPty` — not `addPanel`,
+    // not `statePatcher` on restore or reconnect, not the `onExit` listener —
+    // and `fleetEligibility.ts` records that it lags. Forwarding the stale
+    // property, or deriving one from `runtimeStatus`, would publish an
+    // interpretation as a process fact. Read off the serialized payload,
+    // because an explicit `hasPty: undefined` would vanish on the wire while
+    // still satisfying an in-memory property check.
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["live", "stale", "plain"],
+      panelsById: {
+        live: { id: "live", kind: "terminal", location: "grid", agentState: "working" },
+        // A panel carrying the vestigial property must not be believed either.
+        stale: {
+          id: "stale",
+          kind: "terminal",
+          location: "grid",
+          agentState: "exited",
+          hasPty: true,
+          runtimeStatus: "exited",
+        },
+        plain: { id: "plain", kind: "file", location: "grid" },
+      },
+    });
+
+    const result = await callGetStatus(setupActions());
+
+    expect(result.terminals).toHaveLength(3);
+    for (const entry of result.terminals) {
+      expect(JSON.parse(JSON.stringify(entry))).not.toHaveProperty("hasPty");
+    }
+    // Pin that these are resolved rows: three error rows would satisfy the
+    // omission check above while proving nothing about a populated answer.
+    expect(result.terminals.map((t) => t.terminalId)).toEqual(["live", "stale", "plain"]);
+    for (const entry of result.terminals) expect(entry.error).toBeUndefined();
+    // The non-PTY panel resolves with null agent identity rather than erroring.
+    expect(result.terminals[2]).toMatchObject({ agentId: null, agentState: null });
+    expect(result.unavailableFields).toEqual(["hasPty"]);
   });
 
   it("returns a `terminals` object wrapper, never a raw array", async () => {

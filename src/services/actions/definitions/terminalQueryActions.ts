@@ -399,9 +399,23 @@ export function registerTerminalQueryActions(
 
       // `source` and `unavailableFields` are the same envelope the main-process
       // fallback answers in (#12316), so a client reads one shape whether or not
-      // its workspace had a live view. A view saw everything, so nothing is
-      // unavailable here.
-      return { terminals: entries, source: "renderer" as const, unavailableFields: [] };
+      // its workspace had a live view.
+      //
+      // `hasPty` is the one field this richer surface cannot observe (#12336).
+      // `PtyPanelData.hasPty` exists on the type but nothing in the renderer
+      // ever writes it — not `addPanel`, not `statePatcher` on restore or
+      // reconnect, and not the `onExit` listener in `store/listeners/panel/
+      // lifecycle.ts` — which is why `fleetEligibility.ts` records that it lags
+      // and reaches for `runtimeStatus` instead. Forwarding it would emit
+      // nothing while claiming a view saw everything; deriving it from
+      // `runtimeStatus` would publish an interpretation as a process fact. The
+      // pty-host computes it, so the reduced answer reports it and this one
+      // says it could not look.
+      return {
+        terminals: entries,
+        source: "renderer" as const,
+        unavailableFields: ["hasPty" as const],
+      };
     },
   }));
 
