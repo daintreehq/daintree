@@ -503,6 +503,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // holding an earlier reading has nothing else to tell that session from its
   // successor, and would otherwise go on addressing a conversation that ended.
   // Its description was written under the property target rather than over it.
+  //
+  // Then again for the `closed` idle reason on both wait tools. A terminal the user
+  // closes only goes hidden and is killed `TRASH_TTL_MS` later, so without it a waiter
+  // reads the user's own close as an ordinary exit up to 20 s after the fact.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 62_200;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
@@ -622,6 +626,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // descriptions were cut to the target before measuring.
   // 226_350 → 226_600 for #12535, measured at 226_541 B: the same spend as the
   // external raise above, on a tool that is on both surfaces.
+  //
+  // Then again for this branch's `closed` idle reason, the same spend the external
+  // ceiling above carries, seen from the full surface.
   const MAX_COHORT_PAYLOAD_BYTES = 226_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
