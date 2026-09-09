@@ -183,8 +183,8 @@ export function registerTerminalInputActions(
     }),
     resultSchema: TerminalInterruptResultSchema,
     mcpOutputSchema: true,
-    run: async (args: unknown) => {
-      const { terminalId } = args as { terminalId: string };
+    run: async (args: { terminalId: string }) => {
+      const { terminalId } = args;
       const state = usePanelStore.getState();
       // `Object.hasOwn` rather than a truthiness read: `panelsById` is a plain
       // object, so an id like "constructor" would otherwise resolve off the
