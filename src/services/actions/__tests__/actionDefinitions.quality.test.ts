@@ -337,7 +337,7 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // cancel key is refused rather than reported stopped. Cutting the last clause
   // buys 90 B and costs the caller the one thing the maintainer asked for: an
   // unsupported target named instead of a success returned at it.
-  // 11_082 → 11_200 for #12340's `terminal.setClientMetadata`, a 376 B
+  // 11_082 → 11_452 for #12340's `terminal.setClientMetadata`, a 370 B
   // description against the 400 B per-description ceiling and a surface with no
   // headroom left. What the prose has to carry is the two things a caller gets
   // wrong at opposite ends. The record is SHARED — one external API key means
@@ -348,7 +348,9 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // `closeOwned` to come back with it has misread the ownership ledger, which
   // is written from dispatch results and cannot be reached from here. Dropping
   // either clause buys ~90 B and costs a caller one of those two mistakes.
-  const MAX_EXTERNAL_TOTAL_BYTES = 11_200;  // Raised from 48_000 by #11908, which put seven tools on the in-app surface
+  const MAX_EXTERNAL_TOTAL_BYTES = 11_452;
+
+  // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
   // in `mcpWireBudget.test.ts`; the total simply reflects seven more of them.
@@ -395,11 +397,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // tier for that same subset invariant. Its 341 B is the whole of the increase,
   // so this stays the measured total rather than an allowance — the raw
   // `terminal.interrupt` it delegates to is on no tier and costs nothing here.
-  // 53_517 → 53_600 for #12340's `terminal.setClientMetadata`. Exactly the 376 B
+  // 53_517 → 53_887 for #12340's `terminal.setClientMetadata`. Exactly the 370 B
   // of the same description the external ceiling above pays for: the tool sits
   // on the action tier as well, so the in-app cohort is advertised the identical
   // prose rather than a second wording of it.
-  const MAX_COHORT_TOTAL_BYTES = 53_600;
+  const MAX_COHORT_TOTAL_BYTES = 53_887;
+
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
   async function cohortDefinitions() {
