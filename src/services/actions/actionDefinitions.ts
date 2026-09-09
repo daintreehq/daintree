@@ -20,6 +20,7 @@ import { registerProjectActions } from "./definitions/projectActions";
 import { registerRecipeActions } from "./definitions/recipeActions";
 import { registerSystemActions } from "./definitions/systemActions";
 import { registerTerminalQueryActions } from "./definitions/terminalQueryActions";
+import { registerTerminalMetaActions } from "./definitions/terminalMetaActions";
 import { registerTerminalSpawnActions } from "./definitions/terminalSpawnActions";
 import { registerTerminalLifecycleActions } from "./definitions/terminalLifecycleActions";
 import { registerTerminalNavigationActions } from "./definitions/terminalNavigationActions";
@@ -47,6 +48,7 @@ export function createActionDefinitions(
   actions ??= new Map();
 
   registerTerminalQueryActions(actions, callbacks);
+  registerTerminalMetaActions(actions, callbacks);
   registerTerminalSpawnActions(actions, callbacks);
   registerTerminalLifecycleActions(actions, callbacks);
   registerTerminalNavigationActions(actions, callbacks);

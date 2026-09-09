@@ -385,7 +385,21 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // AJV-validated client-side; the descriptions were tightened instead.
   // MAX_PROPERTIES_OVER_TARGET was deliberately NOT raised — `waitUntilIdle`'s
   // `terminalId` description was kept under the 160 B target instead.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 52_500;
+  //
+  // 52_500 → 54_100 for #12340's `terminal.setClientMetadata` plus the two
+  // arguments it adds to `terminal.list`, measured at 54_039 B. The writer is
+  // 1_126 B of the measured 1_634 — 370 B description, 542 B input schema,
+  // 214 B output — and the rest
+  // is the read: `includeClientMetadata` and `terminalId` on the existing
+  // listing, plus the row field they return. Carrying the read there rather
+  // than as a second tool is what holds the feature to one allowlist slot;
+  // those two arguments are what make it opt-in and narrowable instead of
+  // making every discovery call pay for records up to 2 KB each.
+  //
+  // Trimmed before raising, so the spend is the tool and not its prose: both
+  // new property descriptions were brought under the 160 B one-clause target,
+  // leaving MAX_PROPERTIES_OVER_TARGET untouched at 49.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_100;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -437,7 +451,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // they had different headroom to begin with, not because anything was trimmed
   // from one and not the other.
   // Measured at 207_890 B — the same 3_255 B on top of develop's 204_635.
-  const MAX_COHORT_PAYLOAD_BYTES = 207_900;
+  //
+  // 207_900 → 209_600 for the same #12340 additions, measured at 209_524 B —
+  // the identical 1_634 B, because every tool it touches is on both tiers. On
+  // this branch alone the feature fitted under 204_400 with 5 B to spare, the
+  // difference being one redundant word in the tool description. #12338,
+  // #12342, #12343 and #12345 have all landed on develop since and spent that
+  // window, so the cohort now carries the same additions as a raise rather
+  // than absorbing them.
+  const MAX_COHORT_PAYLOAD_BYTES = 209_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

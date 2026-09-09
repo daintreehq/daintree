@@ -1,7 +1,15 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type { PanelInstance } from "@shared/types/panel";
 import { saveNormalized } from "./persistence";
 import { logWarn } from "@/utils/logger";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import { isClientMetadataEligible } from "./panelCount";
+import {
+  MCP_CLIENT_METADATA_KEY,
+  MAX_CLIENT_METADATA_BYTES,
+  exceedsClientMetadataDepth,
+  type ClientMetadataRejection,
+} from "@shared/utils/mcpClientMetadata";
 
 type Set = PanelRegistryStoreApi["setState"];
 
@@ -36,6 +44,118 @@ function parseCanonical(serialized: string): Record<string, unknown> {
 }
 
 /**
+ * `JSON.stringify`, with both of its failure modes collapsed to `undefined`.
+ *
+ * It throws on a cyclic value, a BigInt or a throwing `toJSON`, and it also
+ * *returns* `undefined` outright for a value whose `toJSON` returns undefined —
+ * which is not an exception and would crash the caller rather than being
+ * rejected.
+ */
+function serializeOrUndefined(value: unknown): string | undefined {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Byte length, not `String.length`: the latter counts UTF-16 code units, so
+// ~30k CJK characters would measure as well under a 64KB cap while occupying
+// ~90KB once encoded.
+function byteLength(serialized: string): number {
+  return new TextEncoder().encode(serialized).length;
+}
+
+/** Merge a patch into a bag, with `undefined` removing the key. */
+function mergePatch(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const draft: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete draft[key];
+    else draft[key] = value;
+  }
+  return draft;
+}
+
+/**
+ * Whether a bag that serializes to `bytes` may replace one of `currentBytes`.
+ *
+ * A bag that is somehow already over the cap — legacy state, or spawn arguments
+ * that never passed through here — must still be shrinkable, or the writer is
+ * locked out of the only operation that could fix it.
+ */
+function withinCap(bytes: number, currentBytes: () => number): boolean {
+  if (bytes <= MAX_EXTENSION_STATE_BYTES) return true;
+  const current = currentBytes();
+  return current > MAX_EXTENSION_STATE_BYTES && bytes < current;
+}
+
+interface CommitOutcome {
+  /** State to hand back from the zustand updater. */
+  next: PanelRegistrySlice | Partial<PanelRegistrySlice>;
+  /** False when the store already held the caller's desired bag. */
+  changed: boolean;
+}
+
+/**
+ * Canonicalize a merged bag, compare it against what is stored, and commit.
+ *
+ * The shared half of both write policies: what differs between them is who may
+ * write, what they may write, and whether the version moves — not how the
+ * result is stored.
+ */
+function commitMergedState(
+  state: PanelRegistrySlice,
+  id: string,
+  panel: PanelInstance,
+  currentSerialized: string | undefined,
+  serialized: string,
+  extensionStateVersion: number | undefined
+): CommitOutcome {
+  // Store what will actually be persisted, not what the caller handed us.
+  //
+  // Two things fall out of the round trip. The value is *detached*: a caller
+  // holding a reference to a patch it submitted — or to the `initialArgs`
+  // object it read — can no longer mutate store state behind the setter's
+  // back, skipping validation, the cap and every subscriber. And it is
+  // *canonical*: `NaN` and a `Date` become `null` and an ISO string here
+  // rather than silently at the next restart, so what the view reads back on
+  // remount is what it will read back after a restart.
+  const merged = parseCanonical(serialized);
+
+  // A view that re-persists identical state on every render — the common
+  // shape when the state is derived — must not churn the store or schedule
+  // a layout save. Compared on the canonical form, because the patch carries
+  // fresh object identities every time.
+  if (currentSerialized === serialized) {
+    // ...unless the VERSION still has to move. A migration whose result is
+    // byte-identical to what it read is a real migration — the plugin has
+    // confirmed the bag matches its current schema — and returning here
+    // without re-stamping would leave the record on the old version, so the
+    // plugin would migrate the same bag again on every single mount.
+    if (extensionStateVersion === panel.extensionStateVersion) {
+      return { next: state, changed: false };
+    }
+    const restamped = {
+      ...state.panelsById,
+      [id]: { ...panel, extensionStateVersion },
+    };
+    saveNormalized(restamped, state.panelIds);
+    return { next: { panelsById: restamped }, changed: false };
+  }
+
+  const newById = {
+    ...state.panelsById,
+    [id]: { ...panel, extensionState: merged, extensionStateVersion },
+  };
+  saveNormalized(newById, state.panelIds);
+  return { next: { panelsById: newById }, changed: true };
+}
+
+/**
  * Merge a patch into a plugin panel's `extensionState`.
  *
  * This is the write half of the bag a view reads as `PanelViewProps.initialArgs`
@@ -50,7 +170,7 @@ function parseCanonical(serialized: string): Record<string, unknown> {
  */
 export const createExtensionStateActions = (
   set: Set
-): Pick<PanelRegistrySlice, "setPanelExtensionState"> => ({
+): Pick<PanelRegistrySlice, "setPanelExtensionState" | "setPanelClientMetadata"> => ({
   setPanelExtensionState: (id, patch) => {
     // Reported back to the caller so a view is not told it persisted when the
     // host rejected the write. Set inside the updater, which zustand runs
@@ -61,29 +181,19 @@ export const createExtensionStateActions = (
       if (!panel) return state;
       // Built-in kinds carry no plugin view and reach their state through their
       // own typed setters; letting this write to one would put unvalidated
-      // content on a record whose serializer does not expect it.
+      // content on a record whose serializer does not expect it. The one thing
+      // an external caller may write to a built-in terminal goes through
+      // `setPanelClientMetadata`, which owns a single reserved key.
       if (panel.pluginId === undefined) return state;
 
       const current = panel.extensionState ?? {};
-      const draft: Record<string, unknown> = { ...current };
-      for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined) delete draft[key];
-        else draft[key] = value;
-      }
+      const draft = mergePatch(current, patch);
 
-      let serialized: string | undefined;
-      try {
-        serialized = JSON.stringify(draft);
-      } catch {
+      const serialized = serializeOrUndefined(draft);
+      if (serialized === undefined) {
         // A cyclic value, a BigInt, or a throwing `toJSON` would otherwise fail
         // later inside the layout save, where it reads as a persistence bug
         // rather than as a plugin handing us something that cannot round-trip.
-        serialized = undefined;
-      }
-      // `JSON.stringify` also returns `undefined` outright — for a value whose
-      // `toJSON` returns `undefined`, say — which is not an exception and would
-      // crash the next line rather than being rejected.
-      if (typeof serialized !== "string") {
         logWarn("Plugin panel state was not serializable; ignoring the update", {
           panelId: id,
           pluginId: panel.pluginId,
@@ -91,47 +201,21 @@ export const createExtensionStateActions = (
         return state;
       }
 
-      // Byte length, not `String.length`: the latter counts UTF-16 code units,
-      // so ~30k CJK characters would measure as well under a 64KB cap while
-      // occupying ~90KB once encoded.
-      const bytes = new TextEncoder().encode(serialized).length;
-      if (bytes > MAX_EXTENSION_STATE_BYTES) {
-        const currentBytes = new TextEncoder().encode(JSON.stringify(current) ?? "").length;
-        // A bag that is somehow already over the cap — legacy state, or spawn
-        // arguments that never passed through here — must still be shrinkable,
-        // or the plugin is locked out of the only action that could fix it.
-        if (currentBytes <= MAX_EXTENSION_STATE_BYTES || bytes >= currentBytes) {
-          logWarn("Plugin panel state exceeds the size limit; ignoring the update", {
-            panelId: id,
-            pluginId: panel.pluginId,
-            bytes,
-            limit: MAX_EXTENSION_STATE_BYTES,
-          });
-          return state;
-        }
+      // Measured only when the draft is actually over, and deliberately not
+      // through `serializeOrUndefined`: `current` is whatever a previous write
+      // or a spawn seeded, and this path has always let an unserializable one
+      // throw rather than silently measuring it as zero bytes.
+      const bytes = byteLength(serialized);
+      if (!withinCap(bytes, () => byteLength(JSON.stringify(current) ?? ""))) {
+        logWarn("Plugin panel state exceeds the size limit; ignoring the update", {
+          panelId: id,
+          pluginId: panel.pluginId,
+          bytes,
+          limit: MAX_EXTENSION_STATE_BYTES,
+        });
+        return state;
       }
 
-      // Store what will actually be persisted, not what the plugin handed us.
-      //
-      // Two things fall out of the round trip. The value is *detached*: a plugin
-      // holding a reference to a patch it submitted — or to the `initialArgs`
-      // object it read — can no longer mutate store state behind the setter's
-      // back, skipping validation, the cap and every subscriber. And it is
-      // *canonical*: `NaN` and a `Date` become `null` and an ISO string here
-      // rather than silently at the next restart, so what the view reads back on
-      // remount is what it will read back after a restart.
-      const merged = parseCanonical(serialized);
-
-      // A view that re-persists identical state on every render — the common
-      // shape when the state is derived — must not churn the store or schedule
-      // a layout save. Compared on the canonical form, because the patch carries
-      // fresh object identities every time.
-      let currentSerialized: string | undefined;
-      try {
-        currentSerialized = JSON.stringify(current);
-      } catch {
-        currentSerialized = undefined;
-      }
       // The write gate is the only place the state version moves (#12280). A
       // plugin that writes has, by doing so, produced a bag at the version it
       // currently declares — and it can only reach inside `extensionState`, so
@@ -146,34 +230,109 @@ export const createExtensionStateActions = (
       const extensionStateVersion =
         kindConfig !== undefined ? kindConfig.stateVersion : panel.extensionStateVersion;
 
-      if (currentSerialized === serialized) {
-        // Nothing to write, but the caller's desired state IS what is stored —
-        // reporting failure here would make every idempotent re-persist look
-        // like a rejection.
-        accepted = true;
-        // ...unless the VERSION still has to move. A migration whose result is
-        // byte-identical to what it read is a real migration — the plugin has
-        // confirmed the bag matches its current schema — and returning here
-        // without re-stamping would leave the record on the old version, so the
-        // plugin would migrate the same bag again on every single mount.
-        if (extensionStateVersion === panel.extensionStateVersion) return state;
-        const restamped = {
-          ...state.panelsById,
-          [id]: { ...panel, extensionStateVersion },
-        };
-        saveNormalized(restamped, state.panelIds);
-        return { panelsById: restamped };
-      }
-
-      const newById = {
-        ...state.panelsById,
-        [id]: { ...panel, extensionState: merged, extensionStateVersion },
-      };
-      saveNormalized(newById, state.panelIds);
+      // Nothing to write is still a success: the caller's desired state IS what
+      // is stored, and reporting failure would make every idempotent re-persist
+      // look like a rejection.
       accepted = true;
-      return { panelsById: newById };
+      return commitMergedState(
+        state,
+        id,
+        panel,
+        serializeOrUndefined(current),
+        serialized,
+        extensionStateVersion
+      ).next;
     });
     return accepted;
+  },
+
+  setPanelClientMetadata: (id, value) => {
+    let outcome: { ok: true; changed: boolean } | { ok: false; reason: ClientMetadataRejection } = {
+      ok: false,
+      reason: "not-found",
+    };
+    set((state) => {
+      const panel = state.panelsById[id];
+      if (!panel) {
+        outcome = { ok: false, reason: "not-found" };
+        return state;
+      }
+      if (!isClientMetadataEligible(panel)) {
+        outcome = { ok: false, reason: "not-eligible" };
+        return state;
+      }
+
+      // The slice is validated on its own before it reaches the bag, so a
+      // rejection names what the caller actually got wrong rather than
+      // reporting the whole panel's state as oversized.
+      //
+      // Depth goes FIRST, before anything recursive touches the value.
+      // `JSON.stringify` recurses, so a value nested past the engine's stack
+      // throws `RangeError` — caught, and then reported as `invalid-json`,
+      // which is the one explanation that does not tell the caller what to do.
+      // The walk below is iterative, so it answers on any input.
+      let canonical: Record<string, unknown> | null = null;
+      if (value !== null) {
+        if (exceedsClientMetadataDepth(value)) {
+          outcome = { ok: false, reason: "too-deep" };
+          return state;
+        }
+        const sliceSerialized = serializeOrUndefined(value);
+        if (sliceSerialized === undefined) {
+          outcome = { ok: false, reason: "invalid-json" };
+          return state;
+        }
+        // Measured and stored as ONE representation. `toJSON` is handed the key
+        // it is serializing under, so a value that answers differently for ""
+        // and for "mcp" would otherwise be measured as one record and stored as
+        // another — passing a 2KB check and persisting something larger.
+        // Canonicalizing here means the bytes checked are the bytes kept.
+        canonical = parseCanonical(sliceSerialized);
+        if (byteLength(sliceSerialized) > MAX_CLIENT_METADATA_BYTES) {
+          outcome = { ok: false, reason: "metadata-too-large" };
+          return state;
+        }
+      }
+
+      const current = panel.extensionState ?? {};
+      const currentSerialized = serializeOrUndefined(current);
+      // Merged into the bag, never replacing it. A built-in terminal's bag
+      // already carries `presetEnv` on the missing-CLI path, and replacing the
+      // whole thing would drop the environment a "Run anyway" relaunch rebuilds
+      // itself from.
+      const draft = mergePatch(current, {
+        [MCP_CLIENT_METADATA_KEY]: canonical ?? undefined,
+      });
+
+      const serialized = serializeOrUndefined(draft);
+      if (serialized === undefined) {
+        // Reachable even with a valid slice: the rest of the bag is not this
+        // caller's to keep serializable.
+        outcome = { ok: false, reason: "invalid-json" };
+        return state;
+      }
+      if (!withinCap(byteLength(serialized), () => byteLength(currentSerialized ?? ""))) {
+        outcome = { ok: false, reason: "state-too-large" };
+        return state;
+      }
+
+      // The version stamp stays exactly where it was, which is the one place
+      // this parts company with the plugin policy. `terminal` IS a registered
+      // kind and declares no `stateVersion`, so reusing that branch would stamp
+      // `undefined` and erase a version a restore had carried forward — on
+      // behalf of a caller that wrote nothing the panel's own schema describes.
+      const committed = commitMergedState(
+        state,
+        id,
+        panel,
+        currentSerialized,
+        serialized,
+        panel.extensionStateVersion
+      );
+      outcome = { ok: true, changed: committed.changed };
+      return committed.next;
+    });
+    return outcome;
   },
 });
 

@@ -19,7 +19,12 @@ import {
   WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
-import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import {
+  isEphemeralPanel,
+  isClientMetadataEligible,
+} from "@/store/slices/panelRegistry/panelCount";
+import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -53,15 +58,30 @@ export function registerTerminalQueryActions(
           .describe(
             "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none."
           ),
+        terminalId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Restricts the listing to one terminal, using a panel id. An id that is not open yields an empty listing rather than an error."
+          ),
+        includeClientMetadata: z
+          .boolean()
+          .optional()
+          .describe(
+            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId on a large fleet."
+          ),
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { worktreeId, location, owned } = (args ?? {}) as {
+      const { worktreeId, location, owned, terminalId, includeClientMetadata } = (args ?? {}) as {
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
         owned?: boolean;
+        terminalId?: string;
+        includeClientMetadata?: boolean;
       };
       // `owned` is answered in main and never here (#12308): ownership is
       // keyed by the MCP session id, which the renderer deliberately never
@@ -91,6 +111,12 @@ export function registerTerminalQueryActions(
         terminals = terminals.filter((t) => t.worktreeId === worktreeId);
       }
 
+      // A narrowing filter, not a lookup: an id nothing matches yields an empty
+      // listing, the same answer every other filter here gives.
+      if (terminalId) {
+        terminals = terminals.filter((t) => t.id === terminalId);
+      }
+
       // Filter by location if specified
       if (location) {
         terminals = terminals.filter((t) => t.location === location);
@@ -111,6 +137,21 @@ export function registerTerminalQueryActions(
         agentState: isPtyPanel(t) ? (t.agentState ?? null) : null,
         isInputLocked: isPtyPanel(t) ? (t.isInputLocked ?? false) : false,
         isFocused: t.id === state.focusedId,
+        // ONLY the reserved key, and only off a panel the writer could have
+        // written to. Two separate leaks live here. `extensionState` also
+        // carries `presetEnv` on a terminal — a real subprocess environment,
+        // session-scoped secrets included. And a plugin owns its whole bag
+        // under keys it chooses, so one that happens to persist its own `mcp`
+        // key would have it read out here despite no external caller being
+        // able to write it. Gating the read on the same predicate as the write
+        // is what keeps the two halves describing the same thing.
+        ...(includeClientMetadata
+          ? {
+              clientMetadata: isClientMetadataEligible(t)
+                ? readClientMetadata(t.extensionState)
+                : null,
+            }
+          : {}),
       }));
 
       return { terminals: result };

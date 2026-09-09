@@ -441,7 +441,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.kill` | Kill Terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.killAll` | Kill All Terminals | confirm | `confirmed?` |
 | `terminal.killBatch` | Kill terminals | confirm | `terminalIds` |
-| `terminal.list` | List Terminals | safe | `location?`, `owned?`, `worktreeId?` |
+| `terminal.list` | List Terminals | safe | `includeClientMetadata?`, `location?`, `owned?`, `terminalId?`, `worktreeId?` |
 | `terminal.moveToDock` | Move to Dock | safe | `terminalId?` |
 | `terminal.moveToGrid` | Move to Grid | safe | `terminalId?` |
 | `terminal.moveToNewWorktree` | Move to New Worktree… | safe | `terminalId?` |

@@ -174,6 +174,30 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "terminal.interruptOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
+  // The one piece of state an orchestrator owns that Daintree had nowhere to
+  // put (#12340). Panel lifetime is ours and the metadata about panels is the
+  // client's, so the two drift by construction: every external orchestrator
+  // kept a sidecar mapping panel ids to its own logical sessions, and that
+  // sidecar dies with the client process, is invisible to every other client,
+  // and silently keeps an entry for a panel the user has closed. Reconciling
+  // after a reconnect is exactly the operation that needs it to be right.
+  //
+  // What earns the slot is that nothing else on this surface can carry it.
+  // `requestedId` is write-once at creation and is an id, not a payload; the
+  // title is a user-visible field `agent.launch` deliberately pins; `env`
+  // writes into the agent's own process environment. The store itself is not
+  // new — `extensionState` is opaque, capped and rides the layout save — so
+  // this is one reserved key on a bag that already shipped, not a key-value
+  // service. It is bounded at 2KB, invisible in the UI, deleted with the
+  // panel, and confers nothing: metadata cannot put a panel in the ownership
+  // ledger, so it buys no `closeOwned` or `revealOwned` authority (#12308).
+  //
+  // Namespaced, not scoped, and the read is deliberately shared. One external
+  // API key means every client hashes to the same bearer entry, so there is no
+  // durable client identity to isolate by — the same answer Kubernetes
+  // annotations and Docker labels give. `terminal.list` carries the read
+  // behind an opt-in flag, which is what keeps this to one slot.
+  "terminal.setClientMetadata",
 
   "worktree.list",
   "worktree.getCurrent",

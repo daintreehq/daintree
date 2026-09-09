@@ -15,6 +15,9 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.waitUntilIdleBatch",
   "terminal.resumeSessions",
 
+  // -- terminalMetaActions --
+  "terminal.setClientMetadata",
+
   // -- panelActions --
   "panel.list",
   "panel.focus",
@@ -552,6 +555,7 @@ export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "plugin.reloadWindow",
   "terminal.sendCommand",
+  "terminal.setClientMetadata",
   "terminal.paste",
   "project.runCheck",
   // Reloading a project's plugins unloads and re-runs every one of them,

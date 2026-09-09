@@ -197,6 +197,12 @@ const PERMISSIVE_ALLOWLIST: ReadonlyArray<{ actionId: string; pointer: string; r
 
   // --- open by nature ------------------------------------------------------
   {
+    actionId: "terminal.list",
+    pointer: "/properties/terminals/items/properties/clientMetadata/anyOf/0/additionalProperties",
+    reason:
+      "open by nature: the external client's own correlation record (#12340), opaque to the host by contract — and a closed node here would have AJV's removeAdditional strip the very payload the field exists to carry",
+  },
+  {
     actionId: "agentSettings.get",
     pointer: "/properties/agents/additionalProperties/additionalProperties",
     reason: "open by nature: per-agent user settings, keyed and shaped by each agent's own config",

@@ -66,6 +66,8 @@ vi.mock("../../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../../panelStore");
 const { MAX_EXTENSION_STATE_BYTES } = await import("../extensionState");
+const { MAX_CLIENT_METADATA_BYTES, MAX_CLIENT_METADATA_DEPTH: MAX_DEPTH } =
+  await import("@shared/utils/mcpClientMetadata");
 
 function makePluginPanel(overrides: Partial<PanelInstance> = {}): PanelInstance {
   // `PanelInstance` is a closed union of the built-in kinds, so a
@@ -90,8 +92,24 @@ function seed(panels: PanelInstance[]): void {
   });
 }
 
+/** A plain built-in terminal — no plugin, no plugin kind, ordinary grid panel. */
+function makeTerminalPanel(overrides: Partial<PanelInstance> = {}): PanelInstance {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- partial panel fixture
+  return {
+    id: "t1",
+    kind: "terminal",
+    title: "Terminal",
+    location: "grid",
+    ...overrides,
+  } as PanelInstance;
+}
+
 function stateOf(id: string): Record<string, unknown> | undefined {
   return usePanelStore.getState().panelsById[id]?.extensionState;
+}
+
+function versionOf(id: string): number | undefined {
+  return usePanelStore.getState().panelsById[id]?.extensionStateVersion;
 }
 
 describe("setPanelExtensionState", () => {
@@ -141,6 +159,16 @@ describe("setPanelExtensionState", () => {
     // `initialArgs` and persisted view state are one bag, so persisting must
     // not discard what the panel was spawned with.
     expect(stateOf("p1")).toEqual({ path: "/repo/a.ts", scroll: 40 });
+  });
+
+  it("schedules a layout save for a write that changed something", () => {
+    saveMock.mockClear();
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
+
+    // Paired with the no-op case below: asserting only that an unchanged write
+    // is free would stay green if the save call were dropped altogether.
+    expect(saveMock).toHaveBeenCalled();
   });
 
   it("does not touch the store or schedule a save for an unchanged write", () => {
@@ -315,10 +343,6 @@ describe("setPanelExtensionState state versioning (#12280)", () => {
     });
   }
 
-  function versionOf(id: string): number | undefined {
-    return usePanelStore.getState().panelsById[id]?.extensionStateVersion;
-  }
-
   it("stamps the registered kind's declared version when the plugin writes", () => {
     registerKind(2);
     seed([makePluginPanel()]);
@@ -396,5 +420,300 @@ describe("setPanelExtensionState state versioning (#12280)", () => {
     usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
 
     expect(usePanelStore.getState().panelsById["p1"]).toBe(before);
+  });
+});
+
+/**
+ * The write policy an external MCP client reaches (#12340).
+ *
+ * Deliberately not a relaxation of the plugin gate above but its inverse: the
+ * two are disjoint, so the reserved key can never land in a bag a plugin owns
+ * and a plugin can never reach a terminal's. What it must not disturb is
+ * everything else on the record — `presetEnv` rides this same bag on a
+ * terminal, and the version stamp belongs to a schema this caller knows
+ * nothing about.
+ */
+describe("setPanelClientMetadata", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      electron: {},
+    });
+    seed([makeTerminalPanel()]);
+  });
+
+  it("stores a record under the reserved key on a built-in terminal", () => {
+    const result = usePanelStore.getState().setPanelClientMetadata("t1", { session: "gc-1" });
+
+    expect(result).toEqual({ ok: true, changed: true });
+    expect(stateOf("t1")).toEqual({ mcp: { session: "gc-1" } });
+  });
+
+  it("preserves the rest of the bag, so a terminal keeps its preset env", () => {
+    seed([makeTerminalPanel({ extensionState: { presetEnv: { TOKEN: "x" } } })]);
+
+    usePanelStore.getState().setPanelClientMetadata("t1", { session: "gc-1" });
+
+    // `readPresetEnv` rebuilds a real subprocess environment from this key, and
+    // "Run anyway" relaunches the gate from it. Replacing the bag would drop it.
+    expect(stateOf("t1")).toEqual({
+      presetEnv: { TOKEN: "x" },
+      mcp: { session: "gc-1" },
+    });
+  });
+
+  it("replaces the record wholesale rather than merging into it", () => {
+    const store = usePanelStore.getState();
+    store.setPanelClientMetadata("t1", { session: "gc-1", role: "reviewer" });
+    store.setPanelClientMetadata("t1", { session: "gc-2" });
+
+    // One nullable setter is the whole write surface, so the caller always
+    // sends the full record — there is no per-key delete sentinel to confuse
+    // with a legitimately stored null.
+    expect(stateOf("t1")).toEqual({ mcp: { session: "gc-2" } });
+  });
+
+  it("deletes the key on null without touching its neighbours", () => {
+    seed([makeTerminalPanel({ extensionState: { presetEnv: { TOKEN: "x" } } })]);
+    const store = usePanelStore.getState();
+    store.setPanelClientMetadata("t1", { session: "gc-1" });
+
+    expect(store.setPanelClientMetadata("t1", null)).toEqual({ ok: true, changed: true });
+    expect(stateOf("t1")).toEqual({ presetEnv: { TOKEN: "x" } });
+  });
+
+  it("reports an idempotent write as unchanged without churning the store", () => {
+    const store = usePanelStore.getState();
+    store.setPanelClientMetadata("t1", { session: "gc-1" });
+    const afterFirst = usePanelStore.getState().panelsById["t1"];
+    saveMock.mockClear();
+
+    expect(store.setPanelClientMetadata("t1", { session: "gc-1" })).toEqual({
+      ok: true,
+      changed: false,
+    });
+    expect(usePanelStore.getState().panelsById["t1"]).toBe(afterFirst);
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it("reports deleting an absent record as unchanged", () => {
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", null)).toEqual({
+      ok: true,
+      changed: false,
+    });
+  });
+
+  it("never moves the version stamp", () => {
+    // `terminal` IS a registered kind and declares no `stateVersion`, so
+    // reusing the plugin branch would stamp `undefined` here and erase a
+    // version a restore had carried forward — on behalf of a caller that wrote
+    // nothing the panel's own schema describes.
+    seed([makeTerminalPanel({ extensionStateVersion: 4 } as Partial<PanelInstance>)]);
+
+    usePanelStore.getState().setPanelClientMetadata("t1", { session: "gc-1" });
+
+    expect(versionOf("t1")).toBe(4);
+  });
+
+  it("refuses a plugin-owned panel", () => {
+    seed([makePluginPanel()]);
+
+    expect(usePanelStore.getState().setPanelClientMetadata("p1", { session: "gc-1" })).toEqual({
+      ok: false,
+      reason: "not-eligible",
+    });
+    expect(stateOf("p1")).toBeUndefined();
+  });
+
+  it("refuses a non-terminal built-in and an unknown panel", () => {
+    const builtin: FilePanelData = {
+      id: "f1",
+      kind: "file",
+      title: "File",
+      location: "grid",
+      filePath: "/repo/a.md",
+    };
+    seed([builtin]);
+
+    expect(usePanelStore.getState().setPanelClientMetadata("f1", { a: 1 })).toEqual({
+      ok: false,
+      reason: "not-eligible",
+    });
+    expect(usePanelStore.getState().setPanelClientMetadata("gone", { a: 1 })).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+  });
+
+  it("refuses a tooling-internal terminal the listing cannot enumerate", () => {
+    seed([makeTerminalPanel({ excludeFromPersistence: true } as Partial<PanelInstance>)]);
+
+    // A surface that cannot see the Daintree Assistant's own dock terminal must
+    // not be able to write to it either.
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { a: 1 })).toEqual({
+      ok: false,
+      reason: "not-eligible",
+    });
+  });
+
+  it("names the metadata cap rather than the panel's when the record is too big", () => {
+    const oversized = { blob: "x".repeat(MAX_CLIENT_METADATA_BYTES) };
+
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", oversized)).toEqual({
+      ok: false,
+      reason: "metadata-too-large",
+    });
+    expect(stateOf("t1")).toBeUndefined();
+  });
+
+  it("accepts a record exactly at the depth limit and refuses one past it", () => {
+    const store = usePanelStore.getState();
+    const nest = (levels: number): unknown => {
+      let value: unknown = "leaf";
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
+
+    // Both fixtures are a few dozen bytes, so only the depth rule can be
+    // deciding — a fixture thousands of levels deep would also pass against a
+    // limit accidentally relaxed to hundreds.
+    expect(store.setPanelClientMetadata("t1", { deep: nest(MAX_DEPTH - 1) })).toEqual({
+      ok: true,
+      changed: true,
+    });
+    expect(store.setPanelClientMetadata("t1", { deep: nest(MAX_DEPTH) })).toEqual({
+      ok: false,
+      reason: "too-deep",
+    });
+  });
+
+  it("still calls a stack-overflowing value too deep, not unserializable", () => {
+    let bomb: unknown = "leaf";
+    for (let i = 0; i < 20_000; i++) bomb = [bomb];
+
+    // `JSON.stringify` recurses, so serializing first would throw RangeError and
+    // report `invalid-json` — the one answer that does not tell the caller what
+    // to change. The depth walk runs first precisely so this stays actionable.
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { bomb })).toEqual({
+      ok: false,
+      reason: "too-deep",
+    });
+  });
+
+  it("measures the representation it stores, not the one it was handed", () => {
+    // `toJSON` is passed the key it is serializing under, so a value that
+    // answers differently for "" and for "mcp" is measured as one record and
+    // persisted as another — passing the 2KB check and storing well over it.
+    const shapeShifter = {
+      toJSON: (key: string) => (key === "" ? { small: true } : { blob: "x".repeat(3000) }),
+    };
+
+    const result = usePanelStore.getState().setPanelClientMetadata("t1", { shapeShifter });
+
+    const stored = JSON.stringify(stateOf("t1") ?? {});
+    if (result.ok) expect(stored.length).toBeLessThanOrEqual(MAX_CLIENT_METADATA_BYTES + 200);
+    else expect(result.reason).toBe("metadata-too-large");
+  });
+
+  it("refuses a valid record that will not fit the panel's remaining state", () => {
+    // The slice is small but the bag it merges into is already near the whole-
+    // panel ceiling, so the rejection has to name the panel's limit rather than
+    // the metadata one.
+    seed([
+      makeTerminalPanel({
+        extensionState: { presetEnv: { BIG: "x".repeat(MAX_EXTENSION_STATE_BYTES - 40) } },
+      }),
+    ]);
+    saveMock.mockClear();
+
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { session: "gc-1" })).toEqual({
+      ok: false,
+      reason: "state-too-large",
+    });
+    expect(stateOf("t1")).not.toHaveProperty("mcp");
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it("can still delete its record out of an already oversized bag", () => {
+    seed([
+      makeTerminalPanel({
+        extensionState: {
+          mcp: { session: "gc-1" },
+          presetEnv: { BIG: "x".repeat(MAX_EXTENSION_STATE_BYTES) },
+        },
+      }),
+    ]);
+
+    // Shrinking is the one direction an over-cap bag must always allow, or the
+    // caller is locked out of the only operation that could fix it.
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", null)).toEqual({
+      ok: true,
+      changed: true,
+    });
+    expect(stateOf("t1")).not.toHaveProperty("mcp");
+  });
+
+  it("counts the byte length of a record, not its UTF-16 length", () => {
+    // ~1200 CJK characters measure well under 2048 as code units and about
+    // 3600 bytes once encoded.
+    const cjk = { note: "文".repeat(1200) };
+
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", cjk)).toEqual({
+      ok: false,
+      reason: "metadata-too-large",
+    });
+  });
+
+  it("schedules a layout save for a write that changed something", () => {
+    saveMock.mockClear();
+
+    usePanelStore.getState().setPanelClientMetadata("t1", { session: "gc-1" });
+
+    // The negative case below asserts an unchanged write is free; without this
+    // one, dropping the save call entirely would pass both.
+    expect(saveMock).toHaveBeenCalled();
+  });
+
+  it("refuses a cyclic record as unbounded depth, without recursing into it", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+
+    // A cycle IS infinite depth, and the iterative walk reaches the limit and
+    // stops rather than following it — which is the point of checking depth
+    // before handing the value to a recursive `JSON.stringify`. The reason is
+    // reported as depth because that is what was measured; the caller-facing
+    // message names both.
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { cyclic })).toEqual({
+      ok: false,
+      reason: "too-deep",
+    });
+    expect(stateOf("t1")).toBeUndefined();
+  });
+
+  it("refuses a shallow value that cannot round-trip through JSON", () => {
+    expect(usePanelStore.getState().setPanelClientMetadata("t1", { big: 1n })).toEqual({
+      ok: false,
+      reason: "invalid-json",
+    });
+    expect(stateOf("t1")).toBeUndefined();
+  });
+
+  it("detaches the stored record from the object the caller passed", () => {
+    const submitted = { session: "gc-1" };
+    usePanelStore.getState().setPanelClientMetadata("t1", submitted);
+
+    submitted.session = "mutated";
+
+    // Same reason the plugin path round-trips: a caller holding its own patch
+    // must not be able to edit store state behind the setter's back.
+    expect(stateOf("t1")).toEqual({ mcp: { session: "gc-1" } });
+  });
+
+  it("keeps a literal __proto__ key as data", () => {
+    usePanelStore.getState().setPanelClientMetadata("t1", { ["__proto__"]: { polluted: true } });
+
+    expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
   });
 });

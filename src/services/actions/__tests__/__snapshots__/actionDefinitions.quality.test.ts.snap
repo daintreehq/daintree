@@ -5376,6 +5376,36 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Attach your own JSON record to a terminal, so a reconnecting client can tell which panel is which instead of keeping a sidecar that goes stale. It outlives your connection, survives a restart, and is deleted with the panel. Read it back from the terminal listing; null clears it. Shared namespace: every external client sees the same record, and it confers no ownership.",
+    "examples": [
+      {
+        "args": {
+          "clientMetadata": {
+            "role": "reviewer",
+            "session": "gc-42",
+          },
+          "terminalId": "term-abc123",
+        },
+        "description": "Record which of your logical sessions a terminal belongs to",
+      },
+      {
+        "args": {
+          "clientMetadata": null,
+          "terminalId": "term-abc123",
+        },
+        "description": "Clear the record you stored against a terminal",
+      },
+    ],
+    "id": "terminal.setClientMetadata",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Set Terminal Client Metadata",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Park the current hybrid input draft to a temporary stash slot",
     "examples": undefined,
     "id": "terminal.stashInput",
