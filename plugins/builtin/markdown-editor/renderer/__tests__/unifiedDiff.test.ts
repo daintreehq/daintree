@@ -120,7 +120,7 @@ describe("unifiedDiff (#12323)", () => {
     const files = parseDiff(patch);
     expect(files).toHaveLength(1);
     expect(files[0]?.hunks).toHaveLength(1);
-    const changes = files[0]!.hunks[0]!.changes.map((change) => change.type);
+    const changes = files[0]!.hunks[0]!.changes.map((change: { type: string }) => change.type);
     expect(changes).toEqual(["normal", "delete", "insert", "normal", "insert"]);
   });
 });
