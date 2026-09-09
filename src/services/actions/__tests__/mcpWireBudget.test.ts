@@ -428,7 +428,18 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // on develop under this branch. This PR's own spend is unchanged at 1_811 B
   // over whatever develop measures; the step from 54_100 is that constant plus
   // #12346's inherited baseline, not a wider spend here.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_900;
+  //
+  // 55_900 → 56_300 for the `closed` idle reason on both wait tools, measured
+  // at 56_236 B. A terminal the user closes only goes hidden and is killed
+  // `TRASH_TTL_MS` later, so without it a waiter reads the user's own close as
+  // an ordinary exit up to 20 s after the fact. Nearly all of the 386 B is the
+  // `idleReason` caveat on `terminal.waitUntilIdle` saying there is no exit
+  // code yet and the terminal should be treated as gone — the same kind of
+  // honesty text the entry above refused to trade. The batch description was
+  // rewritten shorter in the same change, so the enum arms cost less than they
+  // otherwise would. On this branch alone the spend fitted; #12337, #12340 and
+  // #12346 landed on develop underneath it and took the headroom.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_300;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -500,7 +511,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `withProjectLocation` schema every project-scoped forge open action already
   // carries, and the tool is on this surface at all because every forge action has
   // to be reachable by the in-app assistant (`tierAuth.test.ts`).
-  const MAX_COHORT_PAYLOAD_BYTES = 212_000;
+  //
+  // 212_000 → 212_400 for the same `closed` idle reason as the external ceiling
+  // above, measured at 212_336 B. Both wait tools are on the external tier, so
+  // this is the same 355 B spend seen from the full surface, re-measured over
+  // #12354's `forge.openRepo` landing underneath it.
+  const MAX_COHORT_PAYLOAD_BYTES = 212_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
