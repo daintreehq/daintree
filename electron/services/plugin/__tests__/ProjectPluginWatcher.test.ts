@@ -10,6 +10,7 @@ import {
   type ProjectPluginWatcherDeps,
 } from "../ProjectPluginWatcher.js";
 import { discoverProjectPlugins } from "../projectPluginDiscovery.js";
+import { settleParcelWatcherLifecycle } from "../../../utils/parcelWatcherBackend.js";
 
 /**
  * Driven with REAL platform watcher subscriptions over REAL temp directories.
@@ -29,6 +30,7 @@ const watchers: ProjectPluginWatcher[] = [];
 /** Fast cadence so backoff costs milliseconds rather than seconds. */
 const FAST = {
   debounceMs: 40,
+  sentinelPollMs: 30,
   gitLockPollMs: 30,
   gitLockMaxDeferMs: 3_000,
   invalidManifestRetryMs: 40,
@@ -121,8 +123,7 @@ async function settleFor(ms: number): Promise<void> {
 
 afterEach(async () => {
   for (const watcher of watchers.splice(0)) watcher.dispose();
-  // Give the native unsubscribes a tick before the directories vanish.
-  await settleFor(50);
+  await settleParcelWatcherLifecycle();
   for (const root of roots.splice(0)) {
     await fsp.rm(root, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -535,10 +536,13 @@ describe("ProjectPluginWatcher", () => {
     await watcher.ensure(PROJECT_ID, root);
     expect(watcher.isWatching(PROJECT_ID)).toBe(false);
 
-    await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
-    // Let the sentinel notice the ancestor and re-arm on it before the leaf
-    // directory appears.
-    await settleFor(200);
+    const daintreeDir = path.join(root, ".daintree");
+    await fsp.mkdir(daintreeDir, { recursive: true });
+    // This case exercises the inward handoff before creating the leaf. Native
+    // event delivery under the full suite is not bounded by a 200ms sleep.
+    expect(
+      await waitFor(() => watcher["states"].get(PROJECT_ID)?.sentinelPath === daintreeDir)
+    ).toBe(true);
 
     const pluginDir = path.join(root, ".daintree", "plugins", "acme.hello");
     await fsp.mkdir(path.join(pluginDir, "dist"), { recursive: true });

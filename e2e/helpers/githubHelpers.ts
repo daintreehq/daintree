@@ -22,6 +22,15 @@ import { activateE2EPlugin } from "./plugins";
 /** A throwaway token shaped like a classic PAT. Never validated against GitHub. */
 export const E2E_GITHUB_TOKEN = "ghp_e2e_fake_token_0000000000000000000000";
 
+/** Provider registration order can make another forge the initial settings selection. */
+export async function selectGitHubSettingsProvider(window: Page): Promise<void> {
+  await window.getByTestId("forge-provider-selector-trigger").click();
+  await window
+    .getByRole("listbox", { name: "Forge providers" })
+    .getByRole("option", { name: "GitHub", exact: true })
+    .click();
+}
+
 /** Seed an in-memory GitHub token in the main process (no network validation). */
 export async function seedGitHubToken(
   app: ElectronApplication,

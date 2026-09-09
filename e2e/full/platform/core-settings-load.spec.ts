@@ -4,6 +4,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { selectGitHubSettingsProvider } from "../../helpers/githubHelpers";
 
 import { openSettings, selectSettingsScope } from "../../helpers/panels";
 let ctx: AppContext;
@@ -250,6 +251,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
     await expect(window.locator("text=Loading forge settings...")).not.toBeVisible({
       timeout: T_MEDIUM,
     });
+    await selectGitHubSettingsProvider(window);
 
     // Wait for loading to finish
     await expect(window.locator("text=Loading GitHub settings...")).not.toBeVisible({

@@ -371,8 +371,10 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
+          test -s /etc/apt/sources.list
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y \
             libgbm1 \
             libgtk-3-0 \
             libnss3 \

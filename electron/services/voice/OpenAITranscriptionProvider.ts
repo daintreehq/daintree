@@ -1221,7 +1221,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Terminates the VAD worker and clears all VAD-derived state. Safe to call
+   * Retires the VAD worker and clears all VAD-derived state. Safe to call
    * when no worker is running. Does not touch `vadDegraded` so a degraded
    * session that's being torn down doesn't briefly re-arm speech gating.
    */
@@ -1232,14 +1232,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.preRollBytes = 0;
     const worker = this.vadWorker;
     this.vadWorker = null;
-    if (worker) {
-      worker.removeAllListeners();
-      try {
-        worker.postMessage({ type: "destroy" } satisfies VadWorkerInbound);
-      } catch {
-        // Worker may already be dead — terminate regardless.
-      }
-      void worker.terminate();
+    if (worker) this.retireVadWorker(worker);
+  }
+
+  private retireVadWorker(worker: Worker): void {
+    // Terminating a thread during ONNX initialization/inference can abort the
+    // whole process in a native callback. Let its destroy handler drain that
+    // work and release the model. Retain the guarded error/exit listeners.
+    worker.removeAllListeners("message");
+    worker.unref();
+    try {
+      worker.postMessage({ type: "destroy" } satisfies VadWorkerInbound);
+    } catch {
+      // The worker has already exited.
     }
   }
 
@@ -1255,10 +1260,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isSpeaking = false;
     const worker = this.vadWorker;
     this.vadWorker = null;
-    if (worker) {
-      worker.removeAllListeners();
-      void worker.terminate();
-    }
+    if (worker) this.retireVadWorker(worker);
     logWarn(`${P} VAD degraded — committing on ${VAD_MAX_SEGMENT_MS}ms backstop only`);
     this.startBackstopTimer("vad-degraded-backstop");
   }

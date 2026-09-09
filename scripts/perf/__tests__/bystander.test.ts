@@ -1,3 +1,4 @@
+import { performance as nodePerformance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
 import {
   armBystanderProbe,
@@ -283,28 +284,36 @@ describe("bystander probe", () => {
   });
 
   it("reports a gap percentile well below the one freeze that dominates the max", async () => {
-    const probe = await armBystanderProbe({ cadenceMs: 8 });
-    // Many ordinary gaps around a single long block, so the distribution and
-    // its extreme are far apart and a p95 cannot be confused with either.
-    await sleep(120);
-    blockFor(120);
-    await sleep(120);
-    const reading = probe.stop();
+    // Control the observation gaps: a shared runner can stall during the idle
+    // windows too, so wall-clock gaps cannot prove the percentile calculation.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let now = 0;
+    const clock = vi.spyOn(nodePerformance, "now").mockImplementation(() => now);
+    let probe: BystanderProbe | undefined;
+    try {
+      const arming = armBystanderProbe({ cadenceMs: 8 });
+      now = 8;
+      await vi.advanceTimersToNextTimerAsync();
+      probe = await arming;
 
-    expect(reading.ticksObserved).toBeGreaterThan(10);
-    // The block owns the max...
-    expect(reading.longestStallMs).toBeGreaterThan(100);
-    // ...but it is one sample among many, so it must not own the percentile.
-    // This is what fails for an implementation returning the maximum.
-    expect(reading.p95StallMs).toBeLessThan(reading.longestStallMs / 2);
-    // And a real cadence still separates it from an implementation that
-    // returns a constant zero.
-    expect(reading.p95StallMs).toBeGreaterThan(0);
-    // Strictly between the two bounds, which is what separates a real excess
-    // calculation from the two ways of getting it wrong: hardcoding zero, and
-    // reporting the same figure as the raw gap percentile.
-    expect(reading.p95DelayMs).toBeGreaterThan(0);
-    expect(reading.p95DelayMs).toBeLessThan(reading.p95StallMs);
+      // One outlier among 60 ordinary gaps separates the percentile from the
+      // maximum; 10ms gaps also leave a nonzero excess over the 8ms cadence.
+      const gaps = [...Array<number>(30).fill(10), 120, ...Array<number>(30).fill(10)];
+      for (const gap of gaps) {
+        now += gap;
+        await vi.advanceTimersToNextTimerAsync();
+      }
+      const reading = probe.stop();
+
+      expect(reading.ticksObserved).toBe(61);
+      expect(reading.longestStallMs).toBe(120);
+      expect(reading.p95StallMs).toBe(10);
+      expect(reading.p95DelayMs).toBe(2);
+    } finally {
+      probe?.stop();
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("analyses once, so a second stop() returns the same reading it already computed", () => {

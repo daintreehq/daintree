@@ -141,6 +141,7 @@ type VadListener = (...args: unknown[]) => void;
 
 class MockVadWorker {
   posted: Array<Record<string, unknown>> = [];
+  unrefCalls = 0;
   terminateCalls = 0;
   private listeners: Map<string, Set<VadListener>> = new Map();
 
@@ -162,6 +163,11 @@ class MockVadWorker {
 
   postMessage(message: Record<string, unknown>): void {
     this.posted.push(message);
+  }
+
+  unref(): this {
+    this.unrefCalls++;
+    return this;
   }
 
   terminate(): Promise<number> {
@@ -983,6 +989,9 @@ describe("OpenAITranscriptionProvider", () => {
     const worker = latestVadWorker();
 
     worker.emitWorkerError("model load failed");
+    expect(worker.terminateCalls).toBe(0);
+    expect(worker.posted).toContainEqual({ type: "destroy" });
+    expect(worker.unrefCalls).toBe(1);
     // Degraded mode: no speech events, audio still streams, backstop commits.
     feedCommittableAudio(service);
     vi.advanceTimersByTime(8_000);
@@ -1031,13 +1040,15 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("terminates the VAD worker on stop", async () => {
+  it("requests native VAD cleanup without terminating pending work on stop", async () => {
     const service = new OpenAITranscriptionProvider();
     await bringSessionReady(service);
     const worker = latestVadWorker();
     expect(worker.terminateCalls).toBe(0);
     service.stop();
-    expect(worker.terminateCalls).toBe(1);
+    expect(worker.terminateCalls).toBe(0);
+    expect(worker.posted).toContainEqual({ type: "destroy" });
+    expect(worker.unrefCalls).toBe(1);
   });
 
   it("commitParagraphBoundary flushes the current segment when enough audio has streamed", async () => {

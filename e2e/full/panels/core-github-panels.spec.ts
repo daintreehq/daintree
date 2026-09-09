@@ -117,13 +117,17 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
     await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 }, window);
+    await stubListIssues(ctx.app, [makeFixtureIssue(100, "Unfiltered issue")]);
+    await openIssuesDropdown(window);
+    await expect(window.locator(SEL.github.item(100))).toBeVisible({ timeout: T_LONG });
+
+    // Wait for a result unique to the searched response. An unfiltered row
+    // can still be visible before the debounce clears the list and its menu.
     await stubListIssues(ctx.app, [
       makeFixtureIssue(101, "E2E issue one"),
       makeFixtureIssue(102, "E2E issue two"),
       makeFixtureIssue(103, "E2E issue three"),
     ]);
-
-    await openIssuesDropdown(window);
 
     await window.locator(SEL.github.searchIssues).fill("e2e");
     await expect(window.locator(SEL.github.item(101))).toBeVisible({ timeout: T_LONG });
