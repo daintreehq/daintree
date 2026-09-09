@@ -555,8 +555,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   const updatedLabel = formatTimeSince(pulse.generatedAt, Date.now());
 
   // pulse.rangeDays, not the selector's — the chip describes the same snapshot
-  // the coach line above it does.
-  const healthSection = usableHealth ? (
+  // the coach line above it does. A provider with no `projectHealth`
+  // capability (`unsupported`) is neither an error nor a missing remote —
+  // there is no signal to wait for, so the section stays out instead of
+  // hinting at recovery steps that wouldn't help.
+  const healthSection = health?.unsupported ? null : usableHealth ? (
     <HealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
   ) : healthLoading ? (
     <HealthSectionSkeleton />
