@@ -517,6 +517,35 @@ describe("EditorService directory targets", () => {
     expect(argsOfFirstLaunch()).toEqual(["", "", WORKTREE]);
   });
 
+  // Only `:` — the form the settings UI documents — is treated as a coordinate
+  // separator. Other punctuation in a hand-written template means whatever the
+  // user's own command says it means.
+  it("leaves a bare vim '+' alone when there is no line to attach to it", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      5,
+      { id: "custom", customCommand: "gvim", customTemplate: "+{line} {file}" },
+      true
+    );
+
+    expect(argsOfFirstLaunch()).toEqual(["+", WORKTREE]);
+  });
+
+  it("leaves a comma delimiter's empty field in place", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, undefined, {
+      id: "custom",
+      customCommand: "wrapper",
+      customTemplate: "{line},{col},{file}",
+    });
+
+    expect(argsOfFirstLaunch()).toEqual(["12,,/abs/file.ts"]);
+  });
+
   it("keeps the argv slot for a file opened without a column too", async () => {
     const { openFile } = await loadModule();
 

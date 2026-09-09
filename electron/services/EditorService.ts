@@ -325,12 +325,14 @@ export function discover(): DiscoveredEditor[] {
 }
 
 /**
- * A placeholder together with the separator that introduces it, so an absent
- * coordinate takes its own punctuation with it. `:` is the documented form
- * (`{file}:{line}:{col}`); `,` and `+` cover the other conventions users write
- * by hand.
+ * A placeholder together with the `:` that introduces it, so an absent
+ * coordinate takes its own punctuation with it. Deliberately only `:` — the
+ * form this app's settings UI documents and defaults to. Punctuation in a
+ * hand-written template can carry meaning we have no basis to reinterpret: a
+ * bare `+` is vim's "start at the last line", and a `,` may be a field
+ * delimiter whose empty slot the wrapper still counts.
  */
-const CUSTOM_PLACEHOLDER = /([:,+])?\{(file|line|col)\}/g;
+const CUSTOM_PLACEHOLDER = /(:)?\{(file|line|col)\}/g;
 
 type CustomPlaceholder = "file" | "line" | "col";
 
@@ -342,12 +344,12 @@ type CustomPlaceholder = "file" | "line" | "col";
  * That is unconditional for a directory (folders have no coordinates) and was
  * already reachable for any file opened without one.
  *
- * Only punctuation *inside* a token is dropped, and the token itself always
- * survives — a template can be positional (`"{line}" "{col}" "{file}"`), where
- * removing an empty argument would slide the path into the column's slot. For
- * the same reason a flag token that names a coordinate (`--line {line}`) is
- * left standing: guessing which of a user's own arguments were only there to
- * carry a line is not something this can do safely.
+ * Nothing else about the template is second-guessed. The token itself always
+ * survives, because a template can be positional (`"{line}" "{col}" "{file}"`)
+ * and removing an empty argument would slide the path into the column's slot;
+ * and a flag token that names a coordinate (`--line {line}`) is left standing,
+ * since working out which of a user's own arguments existed only to carry a
+ * line means guessing at a command grammar we don't know.
  */
 function buildCustomArgs(
   template: string,
