@@ -1,5 +1,6 @@
 // eager-import-allow: multi-window service initialization
 import { app, BrowserWindow, dialog, webContents } from "electron";
+import fs from "fs";
 import os from "os";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
@@ -724,11 +725,19 @@ export async function setupWindowServices(
       // captured reference would keep a disposed manager alive.
       getManager: () => opts.projectViewManager,
       projectIds: [...opts.backgroundProjectIds],
-      resolveWorkspacePath: (projectId) =>
-        resolveRestoreWorkspace(projectId, {
-          getProjectById: (id) => projectStore.getProjectById(id),
-          getScratchById: (id) => scratchStore.getScratchById(id),
-        }).workspace?.path ?? null,
+      resolveWorkspacePath: (projectId) => {
+        const workspacePath =
+          resolveRestoreWorkspace(projectId, {
+            getProjectById: (id) => projectStore.getProjectById(id),
+            getScratchById: (id) => scratchStore.getScratchById(id),
+          }).workspace?.path ?? null;
+        // A row is not a folder: an unmounted drive or a deleted directory
+        // still resolves, and a restore that reaches hydration anyway respawns
+        // its agents under the cwd fallback — the home directory — with this
+        // project's identity. The queue treats null as "gone" and skips it; the
+        // user can still open the project by hand once the folder is back.
+        return workspacePath !== null && fs.existsSync(workspacePath) ? workspacePath : null;
+      },
     });
   }
 

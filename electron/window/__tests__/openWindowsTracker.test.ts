@@ -335,6 +335,36 @@ describe("saveOpenWindowsNow", () => {
     saveOpenWindowsNow(2);
     expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
   });
+
+  describe("the last window closing", () => {
+    const platform = process.platform;
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: platform });
+    });
+
+    it.each(["win32", "linux"])(
+      "keeps the previous fleet on %s, where that close is the quit (#12320)",
+      (value) => {
+        Object.defineProperty(process, "platform", { value });
+        initOpenWindowsTracker({
+          registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+          readOnly: false,
+        });
+        saveOpenWindowsNow(1);
+        expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+      }
+    );
+
+    it("still records an empty set on darwin, where the app survives windowless", () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      initOpenWindowsTracker({
+        registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+        readOnly: false,
+      });
+      saveOpenWindowsNow(1);
+      expect(lastWritten()).toEqual([]);
+    });
+  });
 });
 
 describe("fan-out suppression", () => {

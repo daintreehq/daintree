@@ -147,7 +147,21 @@ export function GitLabSettingsTab() {
    */
   const persistInstanceUrlIfDirty = async (): Promise<void> => {
     const normalized = normalizeInstanceUrl(instanceUrl);
-    if (normalized === savedInstanceUrl) return;
+    // Compared against a fresh read, not this tab's load-time snapshot. The
+    // setting is shared across windows, and main validates against whatever is
+    // STORED: if another window repointed the instance since this tab loaded,
+    // trusting the snapshot would skip the write and send a token typed for
+    // the URL on screen to the other window's instance.
+    const snapshot = await window.electron.plugin.getSettingValues(GITLAB_PLUGIN_ID, "user", null);
+    const storedRaw = snapshot.values[INSTANCE_URL_SETTING];
+    const stored =
+      typeof storedRaw === "string" && storedRaw.trim().length > 0
+        ? storedRaw
+        : DEFAULT_INSTANCE_URL;
+    if (normalized === stored) {
+      if (stored !== savedInstanceUrl) setSavedInstanceUrl(stored);
+      return;
+    }
     await window.electron.plugin.setSettingValue(
       GITLAB_PLUGIN_ID,
       INSTANCE_URL_SETTING,
@@ -158,7 +172,10 @@ export function GitLabSettingsTab() {
     setInstanceUrl(normalized);
     setSavedInstanceUrl(normalized);
     instanceUrlDirtyRef.current = false;
-    if (hasToken) {
+    // Same reason for the credential: a token the other window saved for its
+    // instance is exactly the one that must not be re-scoped to this one.
+    const status = await window.electron.forge.getCredentialStatus(BUILTIN_GITLAB_PROVIDER_ID);
+    if (status.hasCredential || hasToken) {
       await window.electron.forge.clearCredential(BUILTIN_GITLAB_PROVIDER_ID);
       setHasToken(false);
       setNotice("Instance changed — enter a token for the new instance");

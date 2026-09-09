@@ -264,9 +264,16 @@ function persist(excludeWindowId?: number): void {
       // A disposing PtyClient must cost the orphan sweep, not the manifest.
       liveWorkspaceIds = undefined;
     }
-    writeOpenWindowsManifest(
-      buildOpenWindowRecords(state.registry, excludeWindowId, liveWorkspaceIds)
-    );
+    const records = buildOpenWindowRecords(state.registry, excludeWindowId, liveWorkspaceIds);
+    // On Windows and Linux the last window closing IS the quit: its `closed`
+    // listener runs before `window-all-closed` reaches `app.quit()`, so an
+    // empty record set here never describes a session the user chose to keep
+    // — it describes the one they are leaving. Writing it would replace the
+    // fleet the previous save captured with nothing, and the next launch would
+    // fall back to a single project (#12320). macOS survives windowless, so an
+    // empty set there is a real state and still lands.
+    if (records.length === 0 && process.platform !== "darwin") return;
+    writeOpenWindowsManifest(records);
   } catch (error) {
     // Losing the manifest costs the user a manual window next launch. It must
     // never take down a window close or the shutdown chain with it.

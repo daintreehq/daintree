@@ -2,6 +2,7 @@
 import type { ForgeAuditResult, ForgeProviderMethodName } from "../../../shared/types/ipc/forge.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { auditRingStore } from "../persistence/auditRingStore.js";
 import { store } from "../../store.js";
 import { ForgeAuditService, type ForgeAuditLogStore } from "./auditLog.js";
@@ -82,7 +83,10 @@ export async function auditForgeCall<T>(
       ...meta,
       durationMs: Date.now() - start,
       result: "error",
-      errorMessage: formatErrorMessage(err, "forge provider call failed"),
+      // Scrubbed at the boundary the record crosses into durable storage: a
+      // provider error can carry the credential it was handed, and the shape
+      // it takes is the provider's, not the host's to anticipate.
+      errorMessage: scrubSecrets(formatErrorMessage(err, "forge provider call failed")),
     });
     throw err;
   }
