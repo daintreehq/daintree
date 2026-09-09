@@ -66,7 +66,30 @@ const controllers = new Map<string, DocumentController>();
  * close and reopen, or a put minted in the new lifetime could fall below the
  * tombstone the old one's discard left in main.
  */
-const identities = new Map<string, { generation: number; controllers: Set<DocumentController> }>();
+interface IdentityState {
+  generation: number;
+  controllers: Set<DocumentController>;
+  /**
+   * Load requests are ordered per document, not per panel: a replacement one
+   * panel started must not land over a newer one a sibling finished.
+   */
+  loadRequest: number;
+}
+const identities = new Map<string, IdentityState>();
+
+function identityState(key: string): IdentityState {
+  let shared = identities.get(key);
+  if (!shared) {
+    shared = { generation: 0, controllers: new Set(), loadRequest: 0 };
+    identities.set(key, shared);
+  }
+  return shared;
+}
+
+/** A controller still bound to this document, if any. */
+function survivor(key: string): DocumentController | undefined {
+  return identities.get(key)?.controllers.values().next().value;
+}
 
 /**
  * Generations order a document's puts and deletes in main: a put at or below
@@ -105,15 +128,13 @@ export class DocumentController {
   readonly fileName: string;
   readonly rootPath: string;
   /** Caret and scroll the last editor view left behind, restored on remount. */
-  viewState: EditorViewState | null = null;
+  private viewState: EditorViewState | null = null;
 
   private disposed = false;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private revalidateTimer: ReturnType<typeof setTimeout> | null = null;
   private lastChangeTick: number | undefined;
   private readonly unsubscribers: Array<() => void> = [];
-  /** A load in flight; a later completion for an older request is dropped. */
-  private loadRequest = 0;
 
   static acquire(props: DocumentControllerProps): DocumentController {
     const existing = controllers.get(props.panelId);
@@ -148,12 +169,7 @@ export class DocumentController {
     };
     this.key = identityKey(this.identity);
 
-    let shared = identities.get(this.key);
-    if (!shared) {
-      shared = { generation: 0, controllers: new Set() };
-      identities.set(this.key, shared);
-    }
-    shared.controllers.add(this);
+    identityState(this.key).controllers.add(this);
     const existing = useDocumentStateStore.getState().records[this.key];
     if (!existing) {
       useDocumentStateStore.getState().set(this.key, createDocumentRecord(this.identity));
@@ -204,6 +220,25 @@ export class DocumentController {
   private readonly flushOnUnload = (): void => {
     void this.flushPersist();
   };
+
+  rememberViewState(state: EditorViewState): void {
+    this.viewState = state;
+  }
+
+  takeViewState(): EditorViewState | null {
+    return this.viewState;
+  }
+
+  /** Mint the next load request for this document; a stale completion checks it. */
+  private beginLoad(): number {
+    const shared = identityState(this.key);
+    shared.loadRequest += 1;
+    return shared.loadRequest;
+  }
+
+  private loadIsCurrent(request: number): boolean {
+    return !this.disposed && identityState(this.key).loadRequest === request;
+  }
 
   private async attach(): Promise<void> {
     try {
@@ -272,9 +307,9 @@ export class DocumentController {
   }
 
   async load(options: { restoreDraft: boolean }): Promise<void> {
-    const request = ++this.loadRequest;
+    const request = this.beginLoad();
     const result = await this.read();
-    if (this.disposed || request !== this.loadRequest) return;
+    if (!this.loadIsCurrent(request)) return;
     if (result === null || result.status === "unavailable") {
       // The file is not there, but a stored draft may be: surface it so the
       // panel shows the unsaved mark and the draft can be copied, rather than
@@ -282,7 +317,7 @@ export class DocumentController {
       let draft = this.record().draft;
       if (options.restoreDraft && draft === null) {
         const stored = await this.readStoredDraft();
-        if (this.disposed || request !== this.loadRequest) return;
+        if (!this.loadIsCurrent(request)) return;
         if (stored) draft = { text: stored.draftText, baseRevision: stored.baseRevision };
       }
       this.update((record) => ({
@@ -301,7 +336,7 @@ export class DocumentController {
     let draft: DocumentRecord["draft"] = null;
     if (options.restoreDraft) {
       const stored = await this.readStoredDraft();
-      if (this.disposed || request !== this.loadRequest) return;
+      if (!this.loadIsCurrent(request)) return;
       if (stored && stored.draftText !== base.text) {
         draft = { text: stored.draftText, baseRevision: stored.baseRevision };
       } else if (stored) {
@@ -448,7 +483,9 @@ export class DocumentController {
           // document dirty again; report what is true now.
           clean = (useDocumentStateStore.getState().records[key]?.draft ?? null) === null;
         } else {
-          this.schedulePersist();
+          // The draft that remains belongs to the document; if this panel has
+          // closed meanwhile, a sibling carries its persistence.
+          (this.disposed ? survivor(key) : this)?.schedulePersist();
         }
         if (!this.disposed) announce("Saved");
         return clean;
@@ -503,10 +540,23 @@ export class DocumentController {
     }
   }
 
+  /**
+   * Drop the draft. The recovery record goes first: while it cannot be
+   * removed the in-memory draft stays and the call rejects, so a close that
+   * asked to discard is cancelled rather than reported done.
+   */
   async discard(): Promise<void> {
     const record = this.record();
     if (!record.draft && !record.conflict) return;
     this.cancelPersist();
+    const removed = await this.deleteStoredDraft();
+    if (!removed) {
+      this.update((current) => ({
+        ...current,
+        error: "Couldn't remove the draft's recovery copy, so the draft is kept",
+      }));
+      throw new Error("markdown-editor: draft recovery record could not be removed");
+    }
     this.update((current) => ({
       ...current,
       draft: null,
@@ -516,7 +566,6 @@ export class DocumentController {
       loadGeneration: current.loadGeneration + 1,
       textVersion: current.textVersion + 1,
     }));
-    await this.deleteStoredDraft();
     // The base may be stale if the discard resolved a conflict, or absent if
     // the file was never readable: take the disk version where there is one.
     if (record.conflict || record.base === null) await this.load({ restoreDraft: false });
@@ -531,9 +580,9 @@ export class DocumentController {
   async loadDiskVersion(): Promise<void> {
     const record = this.record();
     if (!record.conflict) return;
-    const request = ++this.loadRequest;
+    const request = this.beginLoad();
     const result = await this.read();
-    if (this.disposed || request !== this.loadRequest) return;
+    if (!this.loadIsCurrent(request)) return;
     if (result === null || result.status !== "ok") {
       this.update((current) => ({
         ...current,
@@ -703,14 +752,17 @@ export class DocumentController {
     );
   }
 
-  private async deleteStoredDraft(): Promise<void> {
+  /** Remove the recovery record. Resolves false when main could not. */
+  private async deleteStoredDraft(): Promise<boolean> {
     try {
       await invoke(CHANNELS.draftDelete, {
         identity: this.identity,
         generation: this.nextGeneration(),
       });
+      return true;
     } catch (error) {
       logError("[markdown-editor] drafts.delete failed", error);
+      return false;
     }
   }
 
@@ -739,7 +791,13 @@ export class DocumentController {
       shared.controllers.delete(this);
       // The identity entry stays for its generation counter; only the record
       // goes when the last panel leaves.
-      if (shared.controllers.size === 0) useDocumentStateStore.getState().remove(this.key);
+      if (shared.controllers.size === 0) {
+        useDocumentStateStore.getState().remove(this.key);
+      } else if (useDocumentStateStore.getState().records[this.key]?.status === "loading") {
+        // This panel was the one loading the document; a sibling that only
+        // attached would otherwise wait forever.
+        void survivor(this.key)?.load({ restoreDraft: true });
+      }
     }
   }
 

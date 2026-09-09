@@ -106,6 +106,15 @@ describe("unifiedDiff (#12323)", () => {
     expect(apply(before, patch)).toBe(after);
   });
 
+  it("stays bounded for very long inputs that differ on every line", () => {
+    const before = "a\n".repeat(100_000);
+    const after = "b\n".repeat(100_000);
+    const started = Date.now();
+    const patch = unifiedDiff(before, after, { path: "f.md" });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(apply(before, patch)).toBe(after);
+  });
+
   it("parses with the same parser DiffViewer uses", () => {
     const patch = unifiedDiff("a\nb\nc\n", "a\nB\nc\nd\n", { path: "docs/plan.md" });
     const files = parseDiff(patch);

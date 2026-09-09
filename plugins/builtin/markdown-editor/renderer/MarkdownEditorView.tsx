@@ -58,7 +58,7 @@ function EditorSkeleton() {
  * controller and the store, and this component only renders them.
  */
 export function MarkdownEditorView(props: FileEditorViewProps) {
-  const { panelId, filePath, fileName, rootPath, worktreePath, projectId } = props;
+  const { panelId, filePath, fileName, rootPath, worktreePath, projectId, wrapLines } = props;
   const key = identityKey({ projectId, worktreePath, filePath });
   // The controller is acquired in an effect, never during render: acquiring
   // starts the document read and its subscriptions, which a discarded render
@@ -105,15 +105,25 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     controller !== null && record?.status === "ready" && record.base !== null && language !== null;
   const loadGeneration = record?.loadGeneration ?? 0;
 
+  // Inputs the editor reads at creation but must not be recreated for: wrap
+  // and theme are reconfigured in place below, and the link policy's root is
+  // fixed for the document's life. Synced in an effect so the creation effect
+  // can read them without listing them as reasons to rebuild.
+  const liveInputsRef = useRef({ polarity, wrapLines, filePath, rootPath, fileName });
+  useEffect(() => {
+    liveInputsRef.current = { polarity, wrapLines, filePath, rootPath, fileName };
+  }, [polarity, wrapLines, filePath, rootPath, fileName]);
+
   // One EditorView per (document load); a fresh EditorState — and a fresh
   // undo history — on first load, on a clean reload after an external
   // change, and on taking the disk version over a conflict.
   useEffect(() => {
     const host = hostRef.current;
     if (!ready || !host || !language || !controller) return;
+    const inputs = liveInputsRef.current;
     const text = currentText(controller.record()) ?? "";
     lastLocalTextRef.current = text;
-    const restore = controller.viewState;
+    const restore = controller.takeViewState();
     const clampedAnchor = restore ? Math.min(restore.anchor, text.length) : 0;
     const clampedHead = restore ? Math.min(restore.head, text.length) : 0;
     const view = new EditorView({
@@ -122,17 +132,19 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         selection: EditorSelection.single(clampedAnchor, clampedHead),
         extensions: buildMarkdownEditorExtensions({
           language,
-          polarity,
-          wrapLines: props.wrapLines,
-          ariaLabel: props.fileName,
+          polarity: inputs.polarity,
+          wrapLines: inputs.wrapLines,
+          ariaLabel: inputs.fileName,
           callbacks: {
             onChange: (next) => {
               lastLocalTextRef.current = next;
               controller.setText(next);
             },
             onSave: () => void controller.save(),
-            onFollowLink: (href) =>
-              activateMarkdownLink(href, { filePath: props.filePath, rootPath: props.rootPath }),
+            onFollowLink: (href) => {
+              const { filePath: file, rootPath: root } = liveInputsRef.current;
+              activateMarkdownLink(href, { filePath: file, rootPath: root });
+            },
           },
         }),
       }),
@@ -141,24 +153,21 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     viewRef.current = view;
     if (restore) view.scrollDOM.scrollTop = restore.scrollTop;
     return () => {
-      controller.viewState = {
+      controller.rememberViewState({
         anchor: view.state.selection.main.anchor,
         head: view.state.selection.main.head,
         scrollTop: view.scrollDOM.scrollTop,
-      };
+      });
       view.destroy();
       viewRef.current = null;
     };
-    // polarity and wrapLines are reconfigured in place below; the file
-    // identity and callbacks are fixed for the controller's life.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, language, loadGeneration, controller]);
 
   useEffect(() => {
     viewRef.current?.dispatch({
-      effects: wrapCompartment.reconfigure(props.wrapLines ? EditorView.lineWrapping : []),
+      effects: wrapCompartment.reconfigure(wrapLines ? EditorView.lineWrapping : []),
     });
-  }, [props.wrapLines]);
+  }, [wrapLines]);
 
   useEffect(() => {
     viewRef.current?.dispatch({
@@ -166,19 +175,21 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     });
   }, [polarity]);
 
-  // A sibling panel on the same document typed: catch the buffer up.
+  // A sibling panel on the same document typed: catch the buffer up. The
+  // record is read from the store at that moment rather than captured, so the
+  // effect keys on the version alone.
   const textVersion = record?.textVersion ?? 0;
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || !record) return;
-    const text = currentText(record);
+    const latest = useDocumentStateStore.getState().records[key];
+    if (!view || !latest) return;
+    const text = currentText(latest);
     if (text === null || text === lastLocalTextRef.current) return;
     const doc = view.state.doc;
     if (doc.toString() === text) return;
     lastLocalTextRef.current = text;
     view.dispatch({ changes: { from: 0, to: doc.length, insert: text } });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [textVersion]);
+  }, [textVersion, key]);
 
   // Cmd+F from the panel chrome lands in this editor's find bar while the
   // panel is focused, as it does for Source mode.
@@ -450,6 +461,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           setSaveAsPath(null);
           setSaveAsError(null);
         }}
+        variant="default"
         title="Save draft as"
         description="A new Markdown file inside the same root. The original file and its draft are left as they are."
         confirmLabel="Save file"

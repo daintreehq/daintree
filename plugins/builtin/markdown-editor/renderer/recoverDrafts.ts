@@ -21,7 +21,12 @@ const DRAFT_LOAD_TIMEOUT_MS = 5000;
  * that no longer exists resolves to a different identity).
  */
 function waitForDraft(panelId: string, key: string): Promise<boolean> {
-  const matches = () => useFileDocumentStore.getState().byPanelId[panelId]?.identityKey === key;
+  const matches = () => {
+    const projection = useFileDocumentStore.getState().byPanelId[panelId];
+    // The identity is published before the stored draft is read; the draft
+    // has actually been recovered once the projection turns dirty.
+    return projection?.identityKey === key && projection.dirty;
+  };
   if (matches()) return Promise.resolve(true);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {

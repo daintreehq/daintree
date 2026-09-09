@@ -14,6 +14,8 @@ type Op = { kind: "equal" | "delete" | "insert"; line: string };
  * coarser — rather than letting a Compare click eat the renderer.
  */
 const MAX_EDIT_STEPS = 1500;
+/** Trace memory the search may hold before it gives up — one V-array copy per step. */
+const TRACE_BYTE_BUDGET = 48 * 1024 * 1024;
 
 function splitLines(text: string): string[] {
   if (text === "") return [];
@@ -35,8 +37,10 @@ function myers(a: string[], b: string[]): Op[] | null {
   const offset = max;
   const v = new Int32Array(2 * max + 2);
   const trace: Int32Array[] = [];
+  // Each step copies the whole V-array, so long inputs get fewer steps.
+  const stepBudget = Math.min(MAX_EDIT_STEPS, Math.floor(TRACE_BYTE_BUDGET / (v.byteLength || 1)));
   outer: for (let d = 0; d <= max; d++) {
-    if (d > MAX_EDIT_STEPS) return null;
+    if (d > stepBudget) return null;
     trace.push(v.slice());
     for (let k = -d; k <= d; k += 2) {
       let x: number;
@@ -214,7 +218,10 @@ export function unifiedDiff(before: string, after: string, options: UnifiedDiffO
     // An empty side starts at the line before, as git prints it (`-0,0`).
     const oldStart = oldCount === 0 ? oldLine - 1 : oldLine;
     const newStart = newCount === 0 ? newLine - 1 : newLine;
-    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`, ...body);
+    // Pushed line by line: spreading a hunk of a hundred thousand lines into
+    // one call overflows the stack.
+    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+    for (const line of body) out.push(line);
     for (; cursor <= hunk.end; cursor++) {
       const op = ops[cursor]!;
       if (op.kind !== "insert") oldLine++;

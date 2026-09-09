@@ -440,22 +440,28 @@ export function FilePane({
     () => (content === null ? 0 : new TextEncoder().encode(content).byteLength),
     [content]
   );
-  // Edit joins the toggle only for a file the reader loaded as text (which
-  // already excludes binary, oversized and LFS-pointer files), inside a
-  // governed root, under the editor's own byte ceiling, and only in the panel:
-  // the file viewer dialog stays read-only in v1.
-  const isEditable =
-    editor !== null &&
-    location !== "dialog" &&
-    loadState === "loaded" &&
-    isInsideGovernedRoot &&
-    contentBytes <= editor.registration.maxBytes;
-
   // The editor plugin's projection of this panel's document (#12323): the
   // draft Rendered previews, the dirty flag the chrome shows in every mode,
   // and the Save / Discard operations the close prompt calls back into.
   const draftText = useFileDocumentDraftText(id);
   const { dirty: isDirty, conflict: hasConflict } = useFileDocumentFlags(id);
+
+  // Edit joins the toggle for a file a built-in editor claims, inside a
+  // governed root, and only in the panel (the file viewer dialog stays
+  // read-only). Offered once the reader loaded it as text under the editor's
+  // byte ceiling — and kept while Edit is the mode already asked for or a
+  // draft is standing, so a file that is deleted, or a recovered draft whose
+  // file is missing, still reaches the editor's own unavailable state rather
+  // than a read-only error that hides the draft. The editor refuses what it
+  // cannot edit (binary, oversized, undecodable) itself.
+  const requestedMode = panel?.fileViewMode ?? "source";
+  const isEditable =
+    editor !== null &&
+    location !== "dialog" &&
+    isInsideGovernedRoot &&
+    (loadState === "loaded"
+      ? contentBytes <= editor.registration.maxBytes
+      : requestedMode === "edit" || isDirty);
 
   // Rendered, Diff and Edit are independent capabilities. One derived list
   // drives both the toggle and the clamp, so a persisted mode whose capability
@@ -471,7 +477,6 @@ export function FilePane({
     ],
     [isRenderable, localChangeStatus, isEditable]
   );
-  const requestedMode = panel?.fileViewMode ?? "source";
   const viewMode: FileViewMode = availableModes.includes(requestedMode) ? requestedMode : "source";
   const toggleOptions = useMemo(
     () => availableModes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] })),
@@ -1371,7 +1376,7 @@ export function FilePane({
           </div>
         )}
 
-        {filePath && viewMode !== "diff" && loadState === "loading" && (
+        {filePath && viewMode !== "diff" && viewMode !== "edit" && loadState === "loading" && (
           <div className="p-4 space-y-3">
             <Skeleton label="Loading file">
               <SkeletonBone className="h-5 w-1/3" />
@@ -1380,29 +1385,33 @@ export function FilePane({
           </div>
         )}
 
-        {filePath && viewMode !== "diff" && loadState === "error" && errorCode && (
-          <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
-            <p className="text-sm text-muted-foreground">
-              {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
-            </p>
-            {/* An unsupported format is deterministic — retrying the same
+        {filePath &&
+          viewMode !== "diff" &&
+          viewMode !== "edit" &&
+          loadState === "error" &&
+          errorCode && (
+            <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
+              <p className="text-sm text-muted-foreground">
+                {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
+              </p>
+              {/* An unsupported format is deterministic — retrying the same
                 extension can never succeed, so the action would be dead. A
                 directory is the same: it never becomes a readable file
                 (#12309). */}
-            {errorCode !== "NOT_A_FILE" &&
-              !isUnsupportedVideoFilePath(filePath) &&
-              !isUnsupportedAudioFilePath(filePath) && (
-                <button
-                  type="button"
-                  onClick={() => loadFile("explicit")}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-primary bg-border-default hover:bg-daintree-border/80 rounded transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  Retry
-                </button>
-              )}
-          </div>
-        )}
+              {errorCode !== "NOT_A_FILE" &&
+                !isUnsupportedVideoFilePath(filePath) &&
+                !isUnsupportedAudioFilePath(filePath) && (
+                  <button
+                    type="button"
+                    onClick={() => loadFile("explicit")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-primary bg-border-default hover:bg-daintree-border/80 rounded transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Retry
+                  </button>
+                )}
+            </div>
+          )}
 
         {filePath && viewMode !== "diff" && (loadState === "image" || loadState === "svg") && (
           <FileImagePreview
@@ -1463,7 +1472,7 @@ export function FilePane({
           />
         )}
 
-        {filePath && viewMode === "edit" && editor && loadState === "loaded" && (
+        {filePath && viewMode === "edit" && editor && (
           <Suspense fallback={<EditorLoadingSkeleton />}>
             <editor.Component
               panelId={id}

@@ -451,6 +451,69 @@ describe("DocumentController (#12323)", () => {
     expect(again.record().storageWarning).toBeNull();
   });
 
+  it("a discard whose recovery record cannot be removed keeps the draft and rejects", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\nkeep\n");
+    main.overrides.set(CHANNELS.draftDelete, () => {
+      throw new Error("EACCES");
+    });
+    await expect(getFileDocumentProjection("panel-1")!.discard()).rejects.toThrow();
+    expect(controller.record().draft?.text).toBe("# Plan\n\nkeep\n");
+    expect(controller.record().error).toMatch(/recovery copy/);
+    expect(getFileDocumentProjection("panel-1")?.dirty).toBe(true);
+  });
+
+  it("a sibling that only attached is loaded by itself when the loading panel leaves", async () => {
+    let releaseRead: (value: unknown) => void = () => {};
+    main.overrides.set(
+      CHANNELS.read,
+      () =>
+        new Promise((resolve) => {
+          releaseRead = resolve;
+        })
+    );
+    main.files.set(PROPS.filePath, "# Plan\n");
+    DocumentController.acquire(PROPS);
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    expect(second.record().status).toBe("loading");
+    // The first panel's read is still pending when it leaves; the survivor's
+    // own read goes to the real document.
+    main.overrides.delete(CHANNELS.read);
+    panelStore().setState({ panelsById: { "panel-2": { id: "panel-2" } } });
+    await flush();
+    releaseRead({ status: "unavailable" });
+    await flush();
+    expect(second.record().status).toBe("ready");
+    expect(second.record().base?.text).toBe("# Plan\n");
+  });
+
+  it("a draft left standing by a save whose panel closed is persisted by the sibling", async () => {
+    const first = await open();
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    first.setText("# Plan\n\nsaved\n");
+    let release: (value: unknown) => void = () => {};
+    main.overrides.set(
+      CHANNELS.save,
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    const saving = first.save();
+    await flush();
+    second.setText("# Plan\n");
+    panelStore().setState({ panelsById: { "panel-2": { id: "panel-2" } } });
+    await flush();
+    main.calls.length = 0;
+    release({ status: "saved", revision: sha("# Plan\n\nsaved\n"), wrote: true });
+    await saving;
+    await flush(1000);
+    const put = main.calls.find((c) => c.channel === CHANNELS.draftPut);
+    expect(put?.args).toMatchObject({ record: { draftText: "# Plan\n" } });
+  });
+
   it("a file missing at open still surfaces its stored draft, and loads once the file is back", async () => {
     main.drafts.set(KEY, {
       generation: 1,

@@ -3525,6 +3525,38 @@ describe("FilePane edit mode (#12323)", () => {
     expect(toggleLabels()).toEqual(["Source", "Rendered"]);
   });
 
+  it("keeps Edit reachable when it was asked for and the preview read failed", async () => {
+    seedWorktree();
+    readMock.mockRejectedValue(new ClientAppError("NOT_FOUND", "gone"));
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "edit",
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+    expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    expect(screen.queryByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeNull();
+  });
+
+  it("does not offer Edit for an unreadable file nobody asked to edit", async () => {
+    seedWorktree();
+    readMock.mockRejectedValue(new ClientAppError("NOT_FOUND", "gone"));
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+    expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+  });
+
   it("keeps the dialog read-only", async () => {
     seedWorktree();
     await renderPane({ location: "dialog" });
