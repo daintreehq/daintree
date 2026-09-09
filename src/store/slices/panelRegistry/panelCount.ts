@@ -10,9 +10,9 @@
  * have too.
  */
 
-/** A panel carrier entry — only the fields the count actually reads. */
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
+/** A panel carrier entry — only the fields the count actually reads. */
 interface CountablePanel {
   location?: string;
   excludeFromPersistence?: boolean;
@@ -35,9 +35,9 @@ interface MetadataCandidatePanel extends CountablePanel {
  * surface that cannot enumerate them must not be able to write to them either.
  *
  * It lives here rather than beside the setter because BOTH halves need it — the
- * listing gates its read on the same rule — and this module imports nothing, so
- * the action definitions can reach it without pulling the store's persistence
- * graph into every test that mocks `@/clients`.
+ * listing gates its read on the same rule — and this module pulls in nothing but
+ * the panel-kind registry, so the action definitions can reach it without
+ * pulling the store's persistence graph into every test that mocks `@/clients`.
  */
 export function isClientMetadataEligible(panel: MetadataCandidatePanel | undefined): boolean {
   if (!panel) return false;
