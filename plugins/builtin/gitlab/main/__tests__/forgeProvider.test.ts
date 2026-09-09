@@ -1140,6 +1140,33 @@ async function primeInstanceCache(): Promise<void> {
   fetchMock().mockClear();
 }
 
+describe("PR-head refspec", () => {
+  // The host's default is GitHub-shaped (`pull/<n>/head`), which GitLab does
+  // not serve. Without this, checking out an MR whose source branch isn't
+  // already local fails with "couldn't find remote ref".
+  it("fetches from GitLab's merge-requests namespace", () => {
+    expect(gitlabForgeProvider.buildPRHeadRefspec?.(42, "feature-x")).toBe(
+      "refs/merge-requests/42/head:feature-x"
+    );
+  });
+
+  // `merge-requests/` is not a hierarchy git expands on its own, so a bare
+  // source ref would not resolve.
+  it("fully qualifies the source ref", () => {
+    expect(gitlabForgeProvider.buildPRHeadRefspec?.(1, "b")?.startsWith("refs/")).toBe(true);
+  });
+
+  // The host rejects a refspec whose destination isn't the requested branch
+  // and silently falls back to its default, so this has to land exactly there.
+  it("writes only to the branch the host asked for", () => {
+    const spec = gitlabForgeProvider.buildPRHeadRefspec?.(7, "topic") ?? "";
+    const [source, destination, ...rest] = spec.split(":");
+    expect(rest).toEqual([]);
+    expect(destination).toBe("topic");
+    expect(source).not.toMatch(/^[+\-^]|\*|\s/);
+  });
+});
+
 describe("self-hosted deployment path", () => {
   // A relative install serves clone URLs under its deployment path, but the
   // path is part of the instance base — not of the project namespace.

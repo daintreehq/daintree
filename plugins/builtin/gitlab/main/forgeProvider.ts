@@ -274,6 +274,21 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
   },
 
+  /**
+   * GitLab publishes merge-request heads under `refs/merge-requests/<iid>/head`,
+   * not GitHub's `pull/<n>/head`, so without this the host's default refspec
+   * fails with "couldn't find remote ref" on any MR whose source branch isn't
+   * already local (a fork MR, or one never fetched).
+   *
+   * Fully qualified on purpose: `merge-requests/` is not one of the hierarchies
+   * git expands on its own, so the bare form would not resolve. `prNumber` is
+   * the project-scoped `iid` the MR's URL shows, which is what this provider
+   * numbers merge requests by throughout.
+   */
+  buildPRHeadRefspec(prNumber: number, headRefName: string): string {
+    return `refs/merge-requests/${prNumber}/head:${headRefName}`;
+  },
+
   createIssue: createIssueImpl,
   assignIssue: assignIssueImpl,
   unassignIssue: unassignIssueImpl,
