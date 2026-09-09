@@ -134,8 +134,7 @@ describe("EditorService adversarial", () => {
     setPlatform("darwin");
     process.env.PATH = "";
     mockExistingFiles([ANTIGRAVITY_LAUNCHER]);
-    const child = { unref: vi.fn(), catch: vi.fn() };
-    execaMock.execa.mockReturnValue(child);
+    const children = mockExecaChildren(execaMock.execa, ["spawned"]);
 
     const { openFile } = await loadModule();
     await openFile("/repo with spaces/src/app.ts", 12, 5, { id: "antigravity-ide" });
@@ -144,6 +143,7 @@ describe("EditorService adversarial", () => {
     const [binary, , options] = execaMock.execa.mock.calls[0];
     expect(binary).toBe(ANTIGRAVITY_LAUNCHER);
     expect(options).toMatchObject({ detached: true, stdio: "ignore", cleanup: false });
+    const child = children[0]!;
     expect(child.unref).toHaveBeenCalledTimes(1);
     expect(child.catch).toHaveBeenCalledWith(expect.any(Function));
     expect(shellMock.openPath).not.toHaveBeenCalled();
