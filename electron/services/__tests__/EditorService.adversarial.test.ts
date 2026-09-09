@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockExecaChildren } from "./helpers/editorChild.js";
 
 const fsMock = vi.hoisted(() => ({
   statSync: vi.fn<(path: string) => { isFile: () => boolean }>(),
@@ -57,7 +58,7 @@ describe("EditorService adversarial", () => {
     delete process.env.EDITOR;
     setPlatform("linux");
     shellMock.openPath.mockResolvedValue("");
-    execaMock.execa.mockReturnValue({ unref: vi.fn(), catch: vi.fn() });
+    mockExecaChildren(execaMock.execa, ["spawned"]);
   });
 
   afterEach(() => {

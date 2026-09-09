@@ -17,6 +17,14 @@ vi.mock("@/clients", () => ({
   systemClient: { openPath: vi.fn(), openInEditor: vi.fn(), showItemInFolderUnconfined: vi.fn() },
 }));
 
+const { PROJECT_ID } = vi.hoisted(() => ({ PROJECT_ID: "proj-terminal-1" }));
+
+// The addon lazily imports the project store (a static import would close the
+// projectStore -> TerminalInstanceService -> FileLinksAddon cycle).
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: { getState: () => ({ currentProject: { id: PROJECT_ID } }) },
+}));
+
 describe("FileLinksAddon", () => {
   const createMockTerminal = () => {
     return {
@@ -1050,10 +1058,19 @@ describe("FileLinksAddon", () => {
       vi.mocked(systemClient.openInEditor).mockRejectedValue(new Error("no editor configured"));
 
       link!.activate(makeClick({ metaKey: true }), link!.text);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The fallback awaits a dynamic import, so a single macrotask is not a
+      // completion barrier — wait for the observable call instead.
+      await vi.waitFor(() => expect(systemClient.openInEditor).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
 
-      expect(systemClient.openInEditor).toHaveBeenCalledTimes(1);
-      expect(notify).toHaveBeenCalledTimes(1);
+      // The fallback has to carry the project id too, or it launches whatever
+      // editor discovery finds first instead of the configured one (#12327).
+      expect(systemClient.openInEditor).toHaveBeenCalledWith({
+        path: "/home/user/project/src/App.tsx",
+        line: 10,
+        col: undefined,
+        projectId: PROJECT_ID,
+      });
       const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
       expect(payload.message).toContain("no editor configured");
     });
@@ -1120,10 +1137,9 @@ describe("FileLinksAddon", () => {
       );
 
       link!.activate(makeClick({ metaKey: true }), link!.text);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(systemClient.openInEditor).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
 
-      expect(systemClient.openInEditor).toHaveBeenCalledTimes(1);
-      expect(notify).toHaveBeenCalledTimes(1);
       const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
       expect(payload.message).toContain("Path is not a valid file");
     });
