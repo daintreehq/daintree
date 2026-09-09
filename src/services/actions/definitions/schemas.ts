@@ -463,6 +463,15 @@ export const TerminalSummarySchema = z.object({
   agentState: z.string().nullable(),
   isInputLocked: z.boolean(),
   isFocused: z.boolean(),
+  // The caller's own record (#12340), present only when the listing was asked
+  // for it and null on a terminal carrying none. Optional rather than always
+  // emitted because the default listing is a cheap inventory and these bags are
+  // up to 2KB each.
+  //
+  // `z.record`, never `z.object({})`: this is opaque by contract, and a strict
+  // client running AJV with `removeAdditional` would strip every key out of an
+  // empty object schema — dropping the very payload the field exists to carry.
+  clientMetadata: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export const TerminalStatusEntrySchema = z.object({

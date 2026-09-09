@@ -615,7 +615,20 @@ describe("external tool surface budget (#11585)", () => {
   // missing rather than a signal API — no signal argument, no key sequence, just
   // the id — and it stays bounded the same way its two siblings do, by acting
   // only on a panel this session created.
-  const EXTERNAL_BUDGET_MAX = 31;
+  //
+  // 31 → 32 for #12340's `terminal.setClientMetadata`. The surface had a place
+  // to put every kind of state except the caller's own: panel lifetime is
+  // Daintree's and metadata about panels is the client's, so every external
+  // orchestrator kept a sidecar that died with its process and kept entries for
+  // panels the user had closed. Nothing already here can carry it —
+  // `requestedId` is write-once and is an id rather than a payload, the title
+  // is a pinned user-visible field, and `env` writes into the agent's own
+  // process environment. What bounds the cost is that the store is not new:
+  // this is one reserved key on the `extensionState` bag that already ships,
+  // capped at 2KB, and the read rides `terminal.list` behind a flag rather than
+  // taking a second slot. It confers nothing — metadata cannot reach the
+  // ownership ledger, so it buys no `closeOwned` or `revealOwned` authority.
+  const EXTERNAL_BUDGET_MAX = 32;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);

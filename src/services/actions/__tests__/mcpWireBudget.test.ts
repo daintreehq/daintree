@@ -385,7 +385,20 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // AJV-validated client-side; the descriptions were tightened instead.
   // MAX_PROPERTIES_OVER_TARGET was deliberately NOT raised — `waitUntilIdle`'s
   // `terminalId` description was kept under the 160 B target instead.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 52_500;
+  //
+  // 52_500 → 52_600 for #12340's `terminal.setClientMetadata` plus the two
+  // arguments it adds to `terminal.list`. Most of the spend is the read half:
+  // carrying it on the existing listing rather than as a second tool is what
+  // holds the feature to one allowlist slot, and `includeClientMetadata` and
+  // `terminalId` are what make that read opt-in and narrowable instead of
+  // making every discovery call pay for records up to 2 KB each. The write
+  // half's own schema is two fields, one of them an opaque map that carries no
+  // per-key prose because the host does not know what is in it.
+  //
+  // Trimmed before raising: both new property descriptions were brought under
+  // the 160 B one-clause target, which saved 182 B and left
+  // MAX_PROPERTIES_OVER_TARGET untouched at 49.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 52_600;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -437,7 +450,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // they had different headroom to begin with, not because anything was trimmed
   // from one and not the other.
   // Measured at 207_890 B — the same 3_255 B on top of develop's 204_635.
-  const MAX_COHORT_PAYLOAD_BYTES = 207_900;
+  //
+  // 207_900 → 208_000 for the same #12340 additions. It is on every tier from
+  // `action` up, so the in-app assistant is advertised the identical schemas.
+  const MAX_COHORT_PAYLOAD_BYTES = 208_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

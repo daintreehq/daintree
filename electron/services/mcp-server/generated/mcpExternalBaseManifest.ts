@@ -1738,6 +1738,17 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none.",
           type: "boolean",
         },
+        terminalId: {
+          description:
+            "Restricts the listing to one terminal, using a panel id. An id that is not open yields an empty listing rather than an error.",
+          type: "string",
+          minLength: 1,
+        },
+        includeClientMetadata: {
+          description:
+            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId if a listing is refused.",
+          type: "boolean",
+        },
       },
     },
     kind: "query",
@@ -1814,6 +1825,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               isFocused: {
                 type: "boolean",
+              },
+              clientMetadata: {
+                anyOf: [
+                  {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {},
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
               },
             },
             required: [
@@ -1938,6 +1963,88 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     name: "terminal.sendCommand",
     requiresArgs: true,
     title: "Submit text to terminal",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Attach your own small JSON record to a terminal, so a reconnecting client can tell which panel is which instead of keeping a sidecar that goes stale. It outlives your connection, survives a restart, and is deleted with the panel. Read it back from the terminal listing; null clears it. Shared namespace: every external client sees the same record, and it confers no ownership.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          terminalId: "term-abc123",
+          clientMetadata: {
+            session: "gc-42",
+            role: "reviewer",
+          },
+        },
+        description: "Record which of your logical sessions a terminal belongs to",
+      },
+      {
+        args: {
+          terminalId: "term-abc123",
+          clientMetadata: null,
+        },
+        description: "Clear the record you stored against a terminal",
+      },
+    ],
+    id: "terminal.setClientMetadata",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Identifies the terminal to annotate, using a panel id from the terminal-listing capability.",
+        },
+        clientMetadata: {
+          anyOf: [
+            {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {},
+            },
+            {
+              type: "null",
+            },
+          ],
+          description:
+            "Replaces the whole record — send every key you want kept, not a patch. Max 2048 bytes of JSON, 16 deep. Null deletes it. Namespace your keys: this is shared.",
+        },
+      },
+      required: ["terminalId", "clientMetadata"],
+      additionalProperties: false,
+    },
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    name: "terminal.setClientMetadata",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+        },
+        changed: {
+          type: "boolean",
+        },
+      },
+      required: ["terminalId", "changed"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Set Terminal Client Metadata",
   },
   {
     band: "reversible",

@@ -20,6 +20,34 @@ import {
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+
+/**
+ * Headroom below the MCP transport's 50KB `tools/call` ceiling.
+ *
+ * Left for the envelope the renderer never sees — the JSON-RPC frame and the
+ * text half the structured content is duplicated into.
+ */
+const CLIENT_METADATA_LISTING_MAX_BYTES = 40 * 1024;
+
+/**
+ * Refuse a metadata-bearing listing that the transport would mangle.
+ *
+ * Over its ceiling `buildToolCallTextResult` truncates the text and drops
+ * `structuredContent` entirely, so an unguarded fleet-wide read would hand the
+ * caller a half-listing with a generic size notice and no way to tell which
+ * rows it lost. Failing here instead names the filters that make the same read
+ * fit — and the caller's own records are what pushed it over, so this is
+ * actionable rather than an internal limit leaking out.
+ */
+function assertListingWithinTransportBudget(rows: unknown[]): void {
+  const bytes = new TextEncoder().encode(JSON.stringify({ terminals: rows })).length;
+  if (bytes <= CLIENT_METADATA_LISTING_MAX_BYTES) return;
+  throw new Error(
+    `Listing ${rows.length} terminals with client metadata is ${bytes} bytes, over the ${CLIENT_METADATA_LISTING_MAX_BYTES}-byte response budget. Narrow it with terminalId, worktreeId or location, or store smaller records.`
+  );
+}
+
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -53,15 +81,30 @@ export function registerTerminalQueryActions(
           .describe(
             "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none."
           ),
+        terminalId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Restricts the listing to one terminal, using a panel id. An id that is not open yields an empty listing rather than an error."
+          ),
+        includeClientMetadata: z
+          .boolean()
+          .optional()
+          .describe(
+            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId if a listing is refused."
+          ),
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { worktreeId, location, owned } = (args ?? {}) as {
+      const { worktreeId, location, owned, terminalId, includeClientMetadata } = (args ?? {}) as {
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
         owned?: boolean;
+        terminalId?: string;
+        includeClientMetadata?: boolean;
       };
       // `owned` is answered in main and never here (#12308): ownership is
       // keyed by the MCP session id, which the renderer deliberately never
@@ -91,6 +134,12 @@ export function registerTerminalQueryActions(
         terminals = terminals.filter((t) => t.worktreeId === worktreeId);
       }
 
+      // A narrowing filter, not a lookup: an id nothing matches yields an empty
+      // listing, the same answer every other filter here gives.
+      if (terminalId) {
+        terminals = terminals.filter((t) => t.id === terminalId);
+      }
+
       // Filter by location if specified
       if (location) {
         terminals = terminals.filter((t) => t.location === location);
@@ -111,7 +160,14 @@ export function registerTerminalQueryActions(
         agentState: isPtyPanel(t) ? (t.agentState ?? null) : null,
         isInputLocked: isPtyPanel(t) ? (t.isInputLocked ?? false) : false,
         isFocused: t.id === state.focusedId,
+        // ONLY the reserved key, never the bag it sits in. `extensionState`
+        // also carries `presetEnv` on a terminal — a real subprocess
+        // environment, session-scoped secrets included — and this listing is
+        // reachable by every api-key client.
+        ...(includeClientMetadata ? { clientMetadata: readClientMetadata(t.extensionState) } : {}),
       }));
+
+      if (includeClientMetadata) assertListingWithinTransportBudget(result);
 
       return { terminals: result };
     },

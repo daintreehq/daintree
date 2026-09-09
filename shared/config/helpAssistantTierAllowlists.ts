@@ -118,6 +118,11 @@ export const WORKBENCH_TIER_TOOLS = [
 ] as const satisfies readonly BuiltInActionId[];
 
 export const ACTION_TIER_ADDONS = [
+  // Carried here for the subset invariant alone: the external tier must never
+  // reach past the in-app assistant (#12340). The assistant has no reconnect
+  // problem to solve — it is in-process — but an action it cannot call while
+  // an api-key client can is the drift that invariant exists to catch.
+  "terminal.setClientMetadata",
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
