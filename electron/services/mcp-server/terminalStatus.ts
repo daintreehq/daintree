@@ -21,9 +21,11 @@ import type { PtyClient } from "../PtyClient.js";
  * answerable here, the same way `terminalInventoryPrefetch.ts` builds a
  * project's inventory straight off `PtyClient` with no view.
  *
- * Deliberately a *fallback*, not a replacement. The renderer answer is strictly
- * richer, and the two are told apart on the wire by `source` rather than by the
- * client guessing from which fields happen to be present.
+ * Deliberately a *fallback*, not a replacement: the renderer answer carries the
+ * panel-shaped fields this one cannot see. It is not strictly richer, though —
+ * `hasPty` is computed here and only this answer reports it (#12336) — so the
+ * two are told apart on the wire by `source` and `unavailableFields` rather
+ * than by the client guessing from which fields happen to be present.
  */
 
 /**

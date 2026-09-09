@@ -148,9 +148,13 @@ describe("buildViewlessTerminalStatus results", () => {
   });
 
   it.each([
-    ["another workspace's terminal", record({ id: "x", projectId: "ws-other" })],
-    ["a dev-preview PTY", record({ id: "x", kind: "dev-preview" })],
-    ["the assistant's terminal", record({ id: "x", isAssistantTerminal: true })],
+    // Each carries a live `hasPty` so the exact-equality assertion below is
+    // actually load-bearing for it: a regression that copied the flag onto a
+    // rejected row would otherwise be invisible, and it would confirm to a
+    // bound session that an id it has no route to exists.
+    ["another workspace's terminal", record({ id: "x", projectId: "ws-other", hasPty: true })],
+    ["a dev-preview PTY", record({ id: "x", kind: "dev-preview", hasPty: true })],
+    ["the assistant's terminal", record({ id: "x", isAssistantTerminal: true, hasPty: true })],
   ])("hides %s behind the same not-found answer", async (_label, hidden) => {
     // A bound session must not be able to confirm an id it has no route to, and
     // tooling-internal PTYs never report state to an MCP caller — so all three
@@ -271,21 +275,45 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(result.unavailableFields).toContain("exitCode");
   });
 
-  it("reports hasPty off the pty-host record, in both polarities (#12336)", async () => {
+  it("reports hasPty off the pty-host record, independently of agentState (#12336)", async () => {
     // The point of the field: a pane that exits cleanly is deliberately
     // preserved, so its record outlives its process. `false` here is the
     // lifecycle fact an orchestrator could not get from `agentState`, which is
     // a passive heuristic, or from `exitCode`, which this surface cannot see.
+    //
+    // The pairings are deliberately crossed. With `true`/working and
+    // `false`/completed, an implementation that derived the flag from
+    // `agentState` would pass — and reporting a finished agent's surviving
+    // keep-open shell as having no PTY is the exact interpretation this field
+    // exists to avoid.
     const result = await buildViewlessTerminalStatus(
       deps([
-        record({ id: "live", hasPty: true }),
-        record({ id: "ended", hasPty: false, agentState: "completed" }),
+        record({ id: "kept-open", hasPty: true, agentState: "completed" }),
+        record({ id: "killed", hasPty: false, agentState: "working" }),
       ]),
       WORKSPACE,
-      { terminalIds: ["live", "ended"] }
+      { terminalIds: ["kept-open", "killed"] }
     );
 
     expect(result.terminals.map((t) => t.hasPty)).toEqual([true, false]);
+    // The states must survive intact too, or the crossing proves nothing.
+    expect(result.terminals.map((t) => t.agentState)).toEqual(["completed", "working"]);
+    for (const entry of result.terminals) expect(entry.error).toBeUndefined();
+  });
+
+  it("keeps hasPty through the output attachment, in both polarities", async () => {
+    // `recentOutput` is assigned onto the entry after `buildEntry` returns, so
+    // the two must not clobber each other.
+    const result = await buildViewlessTerminalStatus(
+      deps([record({ id: "a", hasPty: true }), record({ id: "b", hasPty: false })], {
+        serialized: { a: { data: "out-a\n" }, b: null },
+      }),
+      WORKSPACE,
+      { terminalIds: ["a", "b"], includeOutput: {} }
+    );
+
+    expect(result.terminals[0]).toMatchObject({ hasPty: true, recentOutput: "out-a" });
+    expect(result.terminals[1]).toMatchObject({ hasPty: false, recentOutput: null });
   });
 
   it("keeps a hasPty:false terminal a resolved row, not a not-found one", async () => {

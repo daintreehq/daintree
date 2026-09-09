@@ -1595,7 +1595,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               hasPty: {
                 description:
-                  'Whether this terminal still holds a live PTY. False once the process ended on a pane kept for review, separating that from "the pane is gone", which reports `error`. A lifecycle fact, not a health probe: a keep-open shell or a wedged agent still reads true.',
+                  "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`.",
                 type: "boolean",
               },
               error: {

@@ -292,8 +292,14 @@ describe("result descriptions explain what a value cannot say for itself", () =>
     // the field starts reading as the health check it explicitly is not — so
     // the disclaimer is the assertion, not the happy-path meaning.
     const hasPty = statusProperties().hasPty?.description ?? "";
-    expect(hasPty).toMatch(/not a health probe|not a (?:liveness|health) (?:probe|check)/i);
-    expect(hasPty).toMatch(/keep-open|wedged/i);
+    expect(hasPty).toMatch(/not a health probe/i);
+    // Both examples, and the polarity: "still reads true" is the whole caveat.
+    // `/keep-open|wedged/` alone would accept a text naming one of them and
+    // saying they read *false*, which inverts the warning into a promise.
+    expect(hasPty).toMatch(/keep-open/i);
+    expect(hasPty).toMatch(/wedged/i);
+    expect(hasPty).toMatch(/still reads true/i);
+    expect(hasPty).not.toMatch(/still reads false/i);
   });
 
   it("explains a per-entry error rather than letting it read as a whole-call failure", () => {

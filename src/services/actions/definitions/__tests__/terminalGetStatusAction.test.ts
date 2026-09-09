@@ -36,9 +36,10 @@ function snapshotMap(
   );
 }
 
-// The shared wire types rather than a third hand-maintained mirror: a field
-// added to `TerminalStatusEntry` and forgotten in the builder now fails here
-// instead of being invisible to a copy that drifted.
+// The shared wire types rather than a third hand-maintained mirror that drifts
+// from the contract it copies. It does NOT catch a builder omission: every
+// added field is optional and `callGetStatus` casts, so TypeScript has nothing
+// to complain about. The behavioural assertions below carry that weight.
 type StatusResult = TerminalStatusResult;
 
 function setupActions(): ActionRegistry {
@@ -116,13 +117,19 @@ describe("terminal.getStatus", () => {
       },
     });
 
-    const wire = JSON.parse(JSON.stringify(await callGetStatus(setupActions()))) as StatusResult;
+    const result = await callGetStatus(setupActions());
 
-    expect(wire.terminals).toHaveLength(3);
-    for (const entry of wire.terminals) {
-      expect(entry).not.toHaveProperty("hasPty");
+    expect(result.terminals).toHaveLength(3);
+    for (const entry of result.terminals) {
+      expect(JSON.parse(JSON.stringify(entry))).not.toHaveProperty("hasPty");
     }
-    expect(wire.unavailableFields).toEqual(["hasPty"]);
+    // Pin that these are resolved rows: three error rows would satisfy the
+    // omission check above while proving nothing about a populated answer.
+    expect(result.terminals.map((t) => t.terminalId)).toEqual(["live", "stale", "plain"]);
+    for (const entry of result.terminals) expect(entry.error).toBeUndefined();
+    // The non-PTY panel resolves with null agent identity rather than erroring.
+    expect(result.terminals[2]).toMatchObject({ agentId: null, agentState: null });
+    expect(result.unavailableFields).toEqual(["hasPty"]);
   });
 
   it("returns a `terminals` object wrapper, never a raw array", async () => {
