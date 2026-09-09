@@ -45,6 +45,10 @@ class GitHubTokenHealthServiceImpl {
   private lastCheckedAt = 0;
   private tokenVersionAtLastCheck = -1;
   private pendingCheck: Promise<void> | null = null;
+  /** Token version the in-flight probe was started for; `-1` while idle. */
+  private pendingVersion = -1;
+  /** At most one queued re-probe for a credential that changed mid-flight. */
+  private followUp: Promise<void> | null = null;
   private readonly listeners = new Set<StateChangeListener>();
   /**
    * Lifecycle gate owned by GitHub plugin activation (#9304 follow-up).
@@ -155,6 +159,8 @@ class GitHubTokenHealthServiceImpl {
     this.lastCheckedAt = 0;
     this.tokenVersionAtLastCheck = -1;
     this.pendingCheck = null;
+    this.pendingVersion = -1;
+    this.followUp = null;
     // Reset into the operational (started) posture: probe-behavior tests
     // exercise a running service; the lifecycle gate has its own tests.
     this.started = true;
@@ -171,9 +177,30 @@ class GitHubTokenHealthServiceImpl {
   }
 
   private async runCheck(context: { reason: string }): Promise<void> {
-    // Coalesce concurrent probes — two wake/focus events firing back-to-back
-    // shouldn't produce two in-flight requests.
-    if (this.pendingCheck) return this.pendingCheck;
+    if (this.pendingCheck) {
+      // Coalesce concurrent probes — two wake/focus events firing back-to-back
+      // shouldn't produce two in-flight requests.
+      if (GitHubAuth.getTokenVersion() === this.pendingVersion) return this.pendingCheck;
+
+      // The in-flight probe belongs to a superseded credential, so it will
+      // discard its own result on the token-version guard below. Joining it
+      // would silently swallow this request — which is exactly how a "token
+      // expired" banner survived saving a valid token (#12325): the save bumps
+      // the version, then the credential-change re-probe folds into the dead
+      // probe and no check ever runs for the new token. Queue one follow-up
+      // instead; concurrent requests share it, and it re-reads the current
+      // credential rather than capturing this caller's.
+      this.followUp ??= this.pendingCheck
+        .catch(() => {
+          // A failed predecessor must not cancel the re-probe it displaced.
+        })
+        .then(() => {
+          this.followUp = null;
+          // Back through refresh() so a stop() while we waited still gates it.
+          return this.refresh({ force: true });
+        });
+      return this.followUp;
+    }
 
     const token = GitHubAuth.getToken();
     if (!token) {
@@ -200,6 +227,7 @@ class GitHubTokenHealthServiceImpl {
     }
 
     const versionAtStart = GitHubAuth.getTokenVersion();
+    this.pendingVersion = versionAtStart;
 
     this.pendingCheck = (async () => {
       try {
@@ -273,6 +301,7 @@ class GitHubTokenHealthServiceImpl {
       }
     })().finally(() => {
       this.pendingCheck = null;
+      this.pendingVersion = -1;
     });
 
     return this.pendingCheck;
