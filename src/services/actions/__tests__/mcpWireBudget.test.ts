@@ -438,6 +438,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // round. The description stays on all three because the name alone reads as
   // raw output time, and spinner redraws are exactly what it leaves out. It was
   // trimmed from 152 B before raising.
+  //
+  // 56_400 → PLACEHOLDER for the `closed` idle reason on both wait tools. A terminal
+  // the user closes only goes hidden and is killed `TRASH_TTL_MS` later, so without it
+  // a waiter reads the user's own close as an ordinary exit up to 20 s after the fact.
+  // Nearly all of it is the `idleReason` caveat on `terminal.waitUntilIdle` saying
+  // there is no exit code yet and the terminal should be treated as gone — the same
+  // kind of honesty text the entry above refused to trade. The batch description was
+  // rewritten shorter in the same change, so the enum arms cost less than they
+  // otherwise would.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 56_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
@@ -532,6 +541,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   //
   // 214_300 → 214_900 for #12428, measured at 214_853 B: the same 567 B as the
   // external ceiling above, since all three tools are on both surfaces.
+  //
+  // 214_900 → PLACEHOLDER for this branch's `closed` idle reason, the same spend the
+  // external ceiling above carries. Both wait tools are on the external tier, so this
+  // is that spend seen from the full surface.
   const MAX_COHORT_PAYLOAD_BYTES = 214_900;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
