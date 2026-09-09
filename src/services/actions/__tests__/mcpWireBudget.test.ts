@@ -512,6 +512,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the background — without it a supervisor reads a string of expired waits
   // on a backgrounded project as "no PR yet". The property descriptions were
   // cut to the target before measuring.
+  //
+  // Then again for the `closed` idle reason on both wait tools. A terminal the user
+  // closes only goes hidden and is killed `TRASH_TTL_MS` later, so without it a waiter
+  // reads the user's own close as an ordinary exit up to 20 s after the fact.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 63_300;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
@@ -635,6 +639,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // In-app only, on the action tier, so the external ceiling above does not
   // move. The spend is its 257 B description, the `panelId` argument, and the
   // output schema: the scheduling outcome is read back as structured content.
+  //
+  // Then again for this branch's `closed` idle reason, the same spend the external
+  // ceiling above carries, seen from the full surface.
   const MAX_COHORT_PAYLOAD_BYTES = 227_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
