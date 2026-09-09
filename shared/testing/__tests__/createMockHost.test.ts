@@ -1158,6 +1158,28 @@ describe("createMockHost production-parity validation (#10617)", () => {
     });
   });
 
+  describe("fs.writeFile checked path (#12323)", () => {
+    it("reports a revision and honours expectedRevision, null and mismatch", async () => {
+      const host = createMockHost();
+      const first = await host.fs.writeFile("/repo/doc.md", "v1");
+      expect(first.revision).toMatch(/^[0-9a-f]{64}$/);
+      const second = await host.fs.writeFile("/repo/doc.md", "v2", {
+        expectedRevision: first.revision,
+      });
+      expect(second.revision).not.toBe(first.revision);
+      await expect(
+        host.fs.writeFile("/repo/doc.md", "v3", { expectedRevision: first.revision })
+      ).rejects.toMatchObject({ code: "REVISION_MISMATCH", currentRevision: second.revision });
+      await expect(
+        host.fs.writeFile("/repo/doc.md", "v3", { expectedRevision: null })
+      ).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+      await expect(
+        host.fs.writeFile("/repo/new.md", "v1", { expectedRevision: "a".repeat(64) })
+      ).rejects.toMatchObject({ code: "TARGET_UNAVAILABLE" });
+      expect(await host.fs.readFile("/repo/doc.md")).toBe("v2");
+    });
+  });
+
   describe("fs.readdir", () => {
     it("lists files and subdirectories previously written under the directory", async () => {
       const host = createMockHost();
