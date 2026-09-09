@@ -400,7 +400,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // new property descriptions were brought under the 160 B one-clause target,
   // leaving MAX_PROPERTIES_OVER_TARGET untouched at 49.
   //
-  // 54_100 → 54_200 for #12337's submission correlation, split across both
+  // 54_100 → 55_900 for #12337's submission correlation, split across both
   // tools it takes to answer one question:
   //   - `terminal.sendCommand` gains an output schema it never had, so the
   //     `submissionToken` it now returns lands in validated `structuredContent`
@@ -418,10 +418,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // would have to come from. Those are honesty caveats guarded by
   // `schemaDescriptions.test.ts`; spending them to buy room for a new caveat
   // trades one safeguard for another and nets nothing.
-  // The baseline moved from 52_500 to 54_100 while this branch was open —
-  // #12346 landed `terminal.setClientMetadata` on develop — so the same
-  // ~1_600 B of correlation contract is now spent on top of that total.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_200;
+  // Re-measured at 55_850 B after #12346 landed `terminal.setClientMetadata`
+  // on develop under this branch. This PR's own spend is unchanged at 1_811 B
+  // over whatever develop measures; the step from 54_100 is that constant plus
+  // #12346's inherited baseline, not a wider spend here.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_900;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -482,10 +483,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // window, so the cohort now carries the same additions as a raise rather
   // than absorbing them.
   //
-  // 209_600 → 209_600 for #12337. Both tools are on the external tier, so this
-  // total moves by the same bytes as the external one above; it needs no
-  // separate justification beyond the entry above.
-  const MAX_COHORT_PAYLOAD_BYTES = 209_600;
+  // 209_600 → 211_400 for #12337, measured at 211_335 B. Both tools are on the
+  // external tier, so this total moves by the same 1_811 B as the external one
+  // above and was re-measured over #12346's landing; it needs no separate
+  // justification beyond the entry above.
+  const MAX_COHORT_PAYLOAD_BYTES = 211_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

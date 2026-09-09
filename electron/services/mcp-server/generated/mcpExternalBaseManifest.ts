@@ -1600,6 +1600,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`.",
                 type: "boolean",
               },
+              hasPty: {
+                description:
+                  "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`.",
+                type: "boolean",
+              },
               submission: {
                 description:
                   "Delivery record for the token this call named. Absent when no token was asked for, or when this terminal could not be read — which is not the same as it holding no record.",
@@ -1642,7 +1647,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "array",
           items: {
             type: "string",
-            enum: ["armed", "lastCheckResult", "exitCode"],
+            enum: ["armed", "lastCheckResult", "exitCode", "hasPty"],
           },
           description:
             "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",
