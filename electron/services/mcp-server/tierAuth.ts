@@ -986,10 +986,11 @@ export function buildAnnotations(entry: ActionManifestEntry): ToolAnnotations {
  * main-process tool returns its result without going through `ActionService`, so
  * it never gets the `resultSchema` check that covers renderer-dispatched
  * actions, and the client's AJV pass is the only validation there is. That gap
- * is latent rather than live today — the main-process tools do not currently opt
- * into `mcpOutputSchema`, so no output schema is advertised for them at all —
- * but the moment one does, this projection would be the thing that silently
- * disarmed it.
+ * is live, not hypothetical: `terminal.waitUntilIdle` and
+ * `terminal.waitUntilIdleBatch` short-circuit in `sessionServer` and attach
+ * `structuredContent` themselves, and both opt into `mcpOutputSchema` (#12339),
+ * so this projection is all that stands between their payloads and the client's
+ * AJV check.
  */
 export function buildToolOutputSchema(
   entry: ActionManifestEntry

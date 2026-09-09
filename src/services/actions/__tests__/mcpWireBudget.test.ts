@@ -365,7 +365,27 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 48_865 → 49_150 for the `hasPty` field #12342 added to `terminal.getStatus`
   // on develop; the tool is externally advertised, so this branch inherits the
   // 285 B on rebase rather than spending them.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 49_150;
+  // 49_150 is develop's own measured total, not headroom: #12342's `hasPty` and
+  // #12345's interrupt tools both landed while this branch was open, so it
+  // inherits their bytes on rebase and spends only the 3_255 B below.
+  // 49_150 → 52_500 for #12339's two wait tools, measured at 52_405 B. Almost
+  // all of it is the output schemas they never advertised: 1_865 B for
+  // `terminal.waitUntilIdle` and 1_366 B for the batch, against a net wait-tool
+  // growth of 3_255 B.
+  // Both carried a hand-written `rawOutputSchema` without `mcpOutputSchema`, so
+  // `computeSchemas` produced nothing and `tools/list` published no output
+  // contract at all — while the main-process short-circuit was already
+  // attaching `structuredContent` on every call, with no advertised schema for
+  // a client to validate it against. Turning the flag on is what closes that
+  // mismatch, and the bytes are the contract itself, not decoration: the point
+  // of the issue is that a reconciler cannot tell an agent that finished from a
+  // session that is gone, and `trackingState` is only actionable if a generated
+  // client can see it.
+  // Not paid for by weakening the output schemas, whose structure is
+  // AJV-validated client-side; the descriptions were tightened instead.
+  // MAX_PROPERTIES_OVER_TARGET was deliberately NOT raised — `waitUntilIdle`'s
+  // `terminalId` description was kept under the 160 B target instead.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 52_500;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -411,7 +431,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // contradictions a strict client would have validated as fine.
   // 204_400 → 204_685 for the same 285 B: `terminal.getStatus` sits on both
   // tiers, so the cohort total moved by the identical amount.
-  const MAX_COHORT_PAYLOAD_BYTES = 204_685;
+  // 204_685 → 207_900 for the same two output schemas as the external ceiling
+  // above. Both wait tools are on the external tier, so both totals take the
+  // identical spend; the two ceilings move by different amounts only because
+  // they had different headroom to begin with, not because anything was trimmed
+  // from one and not the other.
+  // Measured at 207_890 B — the same 3_255 B on top of develop's 204_635.
+  const MAX_COHORT_PAYLOAD_BYTES = 207_900;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

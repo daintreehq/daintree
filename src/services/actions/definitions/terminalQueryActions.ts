@@ -435,12 +435,11 @@ export function registerTerminalQueryActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
-      terminalId: z
-        .string()
-        .min(1)
-        .describe(
-          "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked resolves as idle rather than failing."
-        ),
+      terminalId: z.string().min(1).describe(
+        // Kept under the 160 B property target; `trackingState` is explained
+        // in the tool description and its own output-schema entry.
+        "Identifies the terminal to act on, using a panel id from the terminal-listing capability. A closed or unknown id resolves as idle rather than failing."
+      ),
       timeoutMs: z
         .number()
         .int()
@@ -452,6 +451,10 @@ export function registerTerminalQueryActions(
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+    // Without this, `computeSchemas` leaves `outputSchema` undefined and
+    // tools/list advertises nothing — even though the main-process path already
+    // attaches `structuredContent` unconditionally (#12339).
+    mcpOutputSchema: true,
     mcpAnnotations: {
       readOnlyHint: true,
       idempotentHint: false,
@@ -481,7 +484,7 @@ export function registerTerminalQueryActions(
         .min(1)
         .max(MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS)
         .describe(
-          `Identifies the terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}), using panel ids from the terminal-listing capability. Ids no longer tracked count as already finished rather than failing the batch.`
+          `Identifies the terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}), using panel ids from the terminal-listing capability. Closed or unknown ids count as already settled rather than failing the batch; each row's \`trackingState\` says which.`
         ),
       mode: z
         .enum(["first", "all"])
@@ -500,6 +503,8 @@ export function registerTerminalQueryActions(
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
+    // See the note on terminal.waitUntilIdle above.
+    mcpOutputSchema: true,
     mcpAnnotations: {
       readOnlyHint: true,
       idempotentHint: false,

@@ -128,13 +128,46 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(required).not.toContain("type");
   });
 
-  // The watchout from the issue: do not flip the flag on neighbours. waitUntilIdle
-  // uses the main-process rawOutputSchema path (no mcpOutputSchema flag), and
-  // sendCommand has no resultSchema at all — both must stay schema-less here.
-  it("does not emit an outputSchema for terminal.waitUntilIdle or terminal.sendCommand", () => {
-    const service = registerAll();
-    expect(outputSchema(service, "terminal.waitUntilIdle")).toBeUndefined();
-    expect(outputSchema(service, "terminal.sendCommand")).toBeUndefined();
+  // Still the watchout from #10676: do not flip the flag on neighbours.
+  // sendCommand has no resultSchema at all and must stay schema-less. (The two
+  // wait tools deliberately opted in under #12339 — covered below.)
+  it("does not emit an outputSchema for terminal.sendCommand", () => {
+    expect(outputSchema(registerAll(), "terminal.sendCommand")).toBeUndefined();
+  });
+});
+
+// #12339 — both wait tools carry a hand-written rawOutputSchema but never set
+// `mcpOutputSchema`, so `computeSchemas` left `outputSchema` undefined and
+// tools/list advertised nothing — while the main-process path was already
+// attaching `structuredContent` with no schema to validate it against.
+describe("wait tools advertise their output schema (#12339)", () => {
+  const WAIT_TOOLS = ["terminal.waitUntilIdle", "terminal.waitUntilIdleBatch"];
+
+  it.each(WAIT_TOOLS)("%s generates an object-typed outputSchema", (id) => {
+    const schema = outputSchema(registerAll(), id);
+    expect(schema).toBeDefined();
+    // buildToolOutputSchema (tierAuth) drops anything that is not a top-level
+    // object, which would silently re-disarm the advertisement.
+    expect(schema!.type).toBe("object");
+    expect(schema!.properties).toBeDefined();
+  });
+
+  it("terminal.waitUntilIdle advertises trackingState as a required enum", () => {
+    const schema = outputSchema(registerAll(), "terminal.waitUntilIdle")!;
+    const props = schema.properties as Record<string, { enum?: string[] }>;
+    expect(props.trackingState?.enum).toEqual(["tracked", "closed", "unknown"]);
+    // Required so a reconciler can rely on it being present on every result
+    // rather than treating its absence as tracked.
+    expect(schema.required as string[]).toContain("trackingState");
+  });
+
+  it("terminal.waitUntilIdleBatch advertises trackingState on every row", () => {
+    const schema = outputSchema(registerAll(), "terminal.waitUntilIdleBatch")!;
+    const items = (schema.properties as { results: { items?: Record<string, unknown> } }).results
+      .items!;
+    const props = items.properties as Record<string, { enum?: string[] }>;
+    expect(props.trackingState?.enum).toEqual(["tracked", "closed", "unknown"]);
+    expect(items.required as string[]).toContain("trackingState");
   });
 });
 
