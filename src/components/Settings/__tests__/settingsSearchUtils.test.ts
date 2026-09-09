@@ -108,6 +108,13 @@ describe("filterSettings", () => {
     ).toBe(true);
   });
 
+  it("matches the external editor entry for an antigravity query", () => {
+    for (const query of ["antigravity", "Antigravity IDE"]) {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(results.some((r) => r.id === "editor-external")).toBe(true);
+    }
+  });
+
   it("matches the forge access-token entry for a github token query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "github token");
     expect(results.some((r) => r.id === "forge-access-token")).toBe(true);

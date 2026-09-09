@@ -5,6 +5,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
+import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
 import { useProjectStore } from "@/store";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -14,24 +15,13 @@ const EDITOR_LABELS: Record<KnownEditorId, string> = {
   "vscode-insiders": "VS Code Insiders",
   cursor: "Cursor",
   windsurf: "Windsurf",
+  "antigravity-ide": "Antigravity IDE",
   zed: "Zed",
   neovim: "Neovim",
   webstorm: "WebStorm / IntelliJ",
   sublime: "Sublime Text",
   custom: "Custom…",
 };
-
-const ORDERED_KNOWN_IDS: KnownEditorId[] = [
-  "vscode",
-  "vscode-insiders",
-  "cursor",
-  "windsurf",
-  "zed",
-  "neovim",
-  "webstorm",
-  "sublime",
-  "custom",
-];
 
 export function EditorIntegrationTab() {
   const [discoveredEditors, setDiscoveredEditors] = useState<DiscoveredEditor[]>([]);
@@ -174,7 +164,7 @@ export function EditorIntegrationTab() {
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
                 className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
               >
-                {ORDERED_KNOWN_IDS.map((id) => {
+                {KNOWN_EDITOR_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
                   const available = id === "custom" ? true : (disc?.available ?? false);
                   return (

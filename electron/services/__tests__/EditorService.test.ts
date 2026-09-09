@@ -151,6 +151,54 @@ describe("EditorService.discover", () => {
     );
   });
 
+  it("discovers Antigravity IDE via .app bundle on macOS", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    mockExistingFiles([
+      "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
+    ]);
+
+    const discover = await loadDiscover();
+    const results = discover();
+    const antigravity = results.find((e) => e.id === "antigravity-ide");
+
+    expect(antigravity).toBeDefined();
+    expect(antigravity!.available).toBe(true);
+    expect(antigravity!.executablePath).toBe(
+      "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
+    );
+  });
+
+  it("discovers Antigravity IDE in ~/Applications on macOS", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    mockExistingFiles([
+      "/Users/testuser/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
+    ]);
+
+    const discover = await loadDiscover();
+    const results = discover();
+    const antigravity = results.find((e) => e.id === "antigravity-ide");
+
+    expect(antigravity).toBeDefined();
+    expect(antigravity!.available).toBe(true);
+    expect(antigravity!.executablePath).toBe(
+      "/Users/testuser/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
+    );
+  });
+
+  it("discovers Antigravity IDE via PATH when the launcher is installed there", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    process.env.PATH = "/usr/local/bin";
+    mockExistingFiles(["/usr/local/bin/antigravity-ide"]);
+
+    const discover = await loadDiscover();
+    const results = discover();
+    const antigravity = results.find((e) => e.id === "antigravity-ide");
+
+    expect(antigravity).toBeDefined();
+    expect(antigravity!.available).toBe(true);
+    expect(antigravity!.executablePath).toBe("/usr/local/bin/antigravity-ide");
+  });
+
   it("does not search .app bundle paths on Linux", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     mockExistingFiles(["/Applications/WebStorm.app/Contents/MacOS/webstorm"]);

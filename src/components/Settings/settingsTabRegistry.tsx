@@ -1218,6 +1218,7 @@ export const SETTINGS_REGISTRY = [
       "editor",
       "vscode",
       "cursor",
+      "antigravity",
       "ide",
       "image",
       "viewer",
@@ -1229,7 +1230,7 @@ export const SETTINGS_REGISTRY = [
         section: "External editor",
         title: "External editor",
         description:
-          "Configure external editor: VS Code, Cursor, Windsurf, Zed, Neovim, WebStorm, Sublime Text, or custom",
+          "Configure external editor: VS Code, Cursor, Windsurf, Antigravity IDE, Zed, Neovim, WebStorm, Sublime Text, or custom",
         keywords: [
           "editor",
           "vscode",
@@ -1242,6 +1243,7 @@ export const SETTINGS_REGISTRY = [
           "open",
           "ide",
           "windsurf",
+          "antigravity",
         ],
       },
       {
