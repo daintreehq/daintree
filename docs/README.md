@@ -24,6 +24,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [keyboard-shortcuts.md](./keyboard-shortcuts.md) | Default keyboard shortcuts (generated — `npm run codegen:keybindings`). |
 | [vision.md](./vision.md) | What Daintree is, the agent-orchestration workflow, and where it sits. |
 | [feature-curation.md](./feature-curation.md) | What Daintree is and isn't — the rubric for deciding what not to build. |
+| [markdown-editing.md](./markdown-editing.md) | The file panel's Edit mode for Markdown: what a save writes, the conflict contract and its residual race, draft recovery and its window. |
 
 ## Architecture
 

@@ -142,6 +142,7 @@ If the answer is **Workshop**, we don't build the feature. At most, we build a *
 | Random Theme Cycler | **APPROVE** | Habitat principle: helps users discover the theme that feels right. Reinforces identity through exploration. |
 | Git Graph/Tree | **REJECT** | Red Light: reinvents Git GUI. Too much visual noise. |
 | Code Editing in FileViewer | **REJECT** | Red Light: reinvents code editor. Workshop feature. Read-only is the line. |
+| Markdown editing (built-in plugin) | **APPROVE (bounded)** | Plans, specs, checklists and drafts are the working documents of an agent workflow — prose artefacts, not code. A plain-text Markdown editor in the file panel, shipped as a built-in plugin with a revision-checked save and draft recovery, is the smallest thing that removes the round trip to another app. The Markdown allowlist is the boundary: Source stays read-only, code editing stays rejected, and widening to other file types is a separate decision with its own issue (#12323). |
 | Settings with 10 toggles | **REJECT** | Red Light: excessive configuration. Feature should work out of the box. |
 | Merge Conflict Resolution | **REJECT** | Red Light: reinvents Git GUI. Send to VS Code. |
 | PR Context in Review Hub | **APPROVE (Read-only)** | Surface PR number, state, and CI rollup on worktree cards and the Review Hub chip. Read-only signals that bridge the gap to GitHub without reinventing review UI. Click-through opens GitHub for any deeper interaction. |
