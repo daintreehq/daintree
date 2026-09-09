@@ -4,7 +4,7 @@ import type { BranchInfo } from "../../../../shared/types/git.js";
 import { generateWorktreePath, validatePathPattern } from "../../../../shared/utils/pathPattern.js";
 import { resolveWorktreePattern } from "../../../utils/worktreePattern.js";
 import { gitServiceCache } from "../../../services/GitServiceCache.js";
-import { resolveForgeRemoteNameForCwd } from "../forgeResolution.js";
+import { resolveForgeRemoteNameForCwd, resolvePRHeadRefspecForCwd } from "../forgeResolution.js";
 import { defineIpcNamespace, op } from "../../define.js";
 
 export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () => void {
@@ -42,11 +42,32 @@ export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () =>
     // than falling back: PR numbers are per-repository, so guessing a remote
     // could fetch an unrelated PR that happens to share the number.
     const remoteName = await resolveForgeRemoteNameForCwd(payload.rootPath);
+    // Strictly after the remote name: that call fails closed on a stale or
+    // unverifiable remote, and the refspec resolver swallows everything into a
+    // GitHub-shaped fallback, so resolving it first would bury that failure.
+    //
+    // The ref shape is the forge's, not the host's (#12324) — GitHub serves
+    // `pull/<n>/head`, GitLab `refs/merge-requests/<n>/head`. `undefined` means
+    // we could not determine it and the host's GitHub-shaped default applies.
+    const refspec = await resolvePRHeadRefspecForCwd(
+      payload.rootPath,
+      payload.prNumber,
+      payload.headRefName
+    );
+    if (refspec === null) {
+      // The provider positively told us this forge has no fetchable PR-head
+      // ref, so the default would fail with a confusing "couldn't find remote
+      // ref" instead of saying what is actually wrong.
+      throw new Error(
+        `This forge doesn't publish a fetchable ref for pull request #${payload.prNumber}. Fetch the "${payload.headRefName}" branch yourself, then create the worktree from that existing branch.`
+      );
+    }
     await deps.worktreeService.fetchPRBranch(
       payload.rootPath,
       payload.prNumber,
       payload.headRefName,
-      remoteName ?? undefined
+      remoteName ?? undefined,
+      refspec
     );
   };
 

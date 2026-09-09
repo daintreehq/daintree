@@ -224,6 +224,92 @@ export async function resolveForgeRemoteNameForCwd(cwd: string): Promise<string 
   return null;
 }
 
+/**
+ * Accept a provider's refspec only if it maps one source ref onto exactly the
+ * branch the caller asked for. The provider owns the source hierarchy; the
+ * destination is the host's, and this is where that stops being a convention.
+ *
+ * The value goes into `git fetch` argv, and git updates whatever destination it
+ * is handed. Everything rejected here is something git would otherwise accept
+ * and do:
+ *
+ *  - `...:refs/heads/main` fast-forwards an unrelated local branch. A leading
+ *    `+` is not required for that, and outside `refs/heads/*` and `refs/tags/*`
+ *    git takes even non-fast-forward updates without one.
+ *  - `:feature/x` is not a delete on fetch the way it is on push — it fetches
+ *    the remote's HEAD, so the worktree would be built on the default branch
+ *    instead of the PR, silently and successfully.
+ *  - `refs/merge-requests/42/head:` fetches the objects and creates no branch,
+ *    which the host would still report as a successful fetch.
+ *  - A leading `-` is parsed as an option rather than a refspec, which drops the
+ *    mapping and lets the repo's configured fetch refspecs apply instead.
+ *  - A `*` maps a whole hierarchy, writing refs nobody asked for.
+ *
+ * Whitespace is rejected rather than trimmed: a ref name cannot contain any, so
+ * its presence means the provider built the string wrong, and trimming would
+ * hide that. It also keeps JS whitespace semantics from quietly reshaping a ref
+ * name git would have read differently.
+ */
+function isRefspecForBranch(refspec: string, headRefName: string): boolean {
+  if (/^[+^-]/.test(refspec) || /\s/.test(refspec) || refspec.includes("*")) return false;
+  const parts = refspec.split(":");
+  if (parts.length !== 2) return false;
+  const [src, dst] = parts;
+  if (!src || !dst) return false;
+  return dst === headRefName || dst === `refs/heads/${headRefName}`;
+}
+
+/**
+ * The provider-shaped refspec that fetches a PR's head into `headRefName`, for
+ * the checkout fallback that runs when the head branch isn't already local
+ * (#12324). Resolved here, next to the remote name, so the workspace host never
+ * gains a forge-provider dependency.
+ *
+ * Three outcomes, and the difference between the last two is the whole point:
+ *
+ *  - a string — the provider's refspec, used verbatim.
+ *  - `null` — the provider says this forge has no fetchable PR-head ref at all
+ *    (Bitbucket Cloud). The caller reports that instead of fetching.
+ *  - `undefined` — we could not find out. No provider is registered for this
+ *    repo, none is installed, the plugin failed to activate, the capability is
+ *    absent, or the builder threw or returned something unusable. The caller
+ *    falls back to the GitHub-shaped default, which is exactly the pre-#12324
+ *    behavior — a repo whose PR fetch worked before must never start failing
+ *    because a *capability lookup* did (#10192).
+ *
+ * Unlike {@link resolveForgeRemoteNameForCwd} this does activate the provider:
+ * the builder lives on the implementation, and there is no manifest-level
+ * declaration to read instead. Deciding the refspec from whichever plugins
+ * happen to be warm would make the same repo fetch differently run to run. The
+ * cost is bounded — activation is coalesced by PluginService, and the caller
+ * is about to do a network fetch regardless.
+ *
+ * Callers must resolve the remote name BEFORE calling this. That call fails
+ * closed on a stale or unverifiable remote, and this function's catch-all would
+ * otherwise swallow the same failure into a silent GitHub-shaped fallback.
+ */
+export async function resolvePRHeadRefspecForCwd(
+  cwd: string,
+  prNumber: number,
+  headRefName: string
+): Promise<string | null | undefined> {
+  let refspec: string | null;
+  try {
+    const { impl } = await resolveForCwd(cwd);
+    // Truthiness, never `in`: a capability explicitly set to `undefined` still
+    // satisfies `in` and would be called as a non-function.
+    if (!impl.buildPRHeadRefspec) return undefined;
+    refspec = impl.buildPRHeadRefspec(prNumber, headRefName);
+  } catch {
+    return undefined;
+  }
+  if (refspec === null) return null;
+  // A provider bug must not become a surprising local-ref write, so anything
+  // that doesn't land on exactly the requested branch degrades to the default.
+  if (typeof refspec !== "string" || !isRefspecForBranch(refspec, headRefName)) return undefined;
+  return refspec;
+}
+
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {
   if (typeof cwd !== "string" || !cwd) {
     throw new Error("Invalid working directory");

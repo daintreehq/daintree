@@ -60,7 +60,11 @@ const pluginServiceMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServiceMock }));
 
-import { resolveForCwd, resolveForgeRemoteNameForCwd } from "../forgeResolution.js";
+import {
+  resolveForCwd,
+  resolveForgeRemoteNameForCwd,
+  resolvePRHeadRefspecForCwd,
+} from "../forgeResolution.js";
 
 const giteaEntry: ForgeProviderEntry = {
   pluginId: "acme",
@@ -615,5 +619,191 @@ describe("resolveForgeRemoteNameForCwd", () => {
     gitServiceMock.listRemotes.mockResolvedValue([]);
 
     await expect(resolveForgeRemoteNameForCwd("/repo")).resolves.toBeNull();
+  });
+});
+
+describe("resolvePRHeadRefspecForCwd", () => {
+  const GITLAB_REFSPEC = "refs/merge-requests/42/head:feature/my-branch";
+
+  /** A resolvable provider whose impl is whatever the test hands in. */
+  function withProvider(impl: Record<string, unknown>): void {
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      parseRemote: vi.fn(() => ({ owner: "owner", repo: "repo" })),
+      ...impl,
+    });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
+    gitServiceMock.getRemoteUrl.mockResolvedValue("https://gitea.example.com/owner/repo.git");
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+    ]);
+    gitServiceMock.getRepositoryRoot.mockResolvedValue("/repo");
+    projectStoreMock.getProjectByPath.mockResolvedValue({ id: "project-1", path: "/repo" });
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://gitea.example.com/owner/repo.git" },
+    ]);
+    registryMock.listMatchingProviders.mockReturnValue([{}]);
+  });
+
+  it("returns the provider's refspec verbatim", async () => {
+    const buildPRHeadRefspec = vi.fn(() => GITLAB_REFSPEC);
+    withProvider({ buildPRHeadRefspec });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/my-branch")).resolves.toBe(
+      GITLAB_REFSPEC
+    );
+    expect(buildPRHeadRefspec).toHaveBeenCalledWith(42, "feature/my-branch");
+  });
+
+  it("activates a lazily bound provider to read the capability", async () => {
+    const buildPRHeadRefspec = vi.fn(() => GITLAB_REFSPEC);
+    registryMock.getForgeProviderImpl.mockReturnValueOnce(undefined);
+    pluginServiceMock.activatePluginForForgeProvider.mockImplementationOnce(async () => {
+      registryMock.getForgeProviderImpl.mockReturnValue({
+        parseRemote: vi.fn(() => ({ owner: "owner", repo: "repo" })),
+        buildPRHeadRefspec,
+      });
+    });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/my-branch")).resolves.toBe(
+      GITLAB_REFSPEC
+    );
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith("acme.gitea");
+  });
+
+  it("preserves an explicit null — the forge has no fetchable PR ref", async () => {
+    // Bitbucket Cloud. Distinct from `undefined`: the caller reports it rather
+    // than attempting a fetch that cannot succeed.
+    withProvider({ buildPRHeadRefspec: vi.fn(() => null) });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeNull();
+  });
+
+  it("returns undefined when the provider has no such capability", async () => {
+    withProvider({});
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined for a capability explicitly set to undefined", async () => {
+    // The `in` operator would report this as present and then call a non-function.
+    withProvider({ buildPRHeadRefspec: undefined });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined when no provider is registered, never another's shape", async () => {
+    resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined when the plugin fails to activate", async () => {
+    registryMock.getForgeProviderImpl.mockReturnValue(undefined);
+    pluginServiceMock.activatePluginForForgeProvider.mockRejectedValueOnce(
+      new Error("activation failed")
+    );
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined when the builder throws", async () => {
+    // A throw is "capability unknown", not "unsupported" — only `null` says that.
+    withProvider({
+      buildPRHeadRefspec: vi.fn(() => {
+        throw new Error("provider blew up");
+      }),
+    });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined for a path that is not a git repository", async () => {
+    gitServiceCacheMock.getGitService.mockReturnValue(null);
+
+    await expect(
+      resolvePRHeadRefspecForCwd("/not-a-repo", 42, "feature/x")
+    ).resolves.toBeUndefined();
+  });
+
+  it("swallows a stale-remote failure rather than rethrowing it", async () => {
+    // Callers resolve the remote name first precisely because this one cannot
+    // be trusted to surface that failure — asserted here so the ordering
+    // requirement in `branches.ts` stays visibly load-bearing.
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://gitea.example.com/owner/repo.git" },
+    ]);
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeRemote: "gone",
+    });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it("accepts a fully-qualified destination for the same branch", async () => {
+    withProvider({
+      buildPRHeadRefspec: vi.fn(() => "refs/merge-requests/42/head:refs/heads/feature/x"),
+    });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBe(
+      "refs/merge-requests/42/head:refs/heads/feature/x"
+    );
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["whitespace only", "   "],
+    ["no destination at all", "refs/merge-requests/42/head"],
+    ["an empty destination", "refs/merge-requests/42/head:"],
+    ["an empty source", ":feature/x"],
+    ["more than one mapping separator", "refs/merge-requests/42/head:feature/x:extra"],
+    ["a wildcard mapping", "refs/merge-requests/*:refs/heads/*"],
+    ["surrounding whitespace", " refs/merge-requests/42/head:feature/x "],
+    ["a smuggled second argument", "refs/merge-requests/42/head:feature/x --depth=1"],
+    ["a non-string", 42 as unknown as string],
+  ])("rejects %s and falls back", async (_label, value) => {
+    withProvider({ buildPRHeadRefspec: vi.fn(() => value) });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["a force refspec", "+refs/merge-requests/42/head:feature/x"],
+    ["a negative refspec", "^refs/merge-requests/42/head:feature/x"],
+    ["something git would read as an option", "--filter=blob:none"],
+  ])("rejects %s so git cannot reinterpret the argument", async (_label, value) => {
+    withProvider({ buildPRHeadRefspec: vi.fn(() => value) });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["an unrelated local branch", "refs/merge-requests/42/head:refs/heads/main"],
+    ["the bare name of another branch", "refs/merge-requests/42/head:main"],
+    ["a ref outside refs/heads", "refs/merge-requests/42/head:refs/daintree/pwned"],
+    ["a near-miss on the requested name", "refs/merge-requests/42/head:feature/x2"],
+  ])("refuses to write to %s", async (_label, value) => {
+    // git needs no `+` to fast-forward another branch, and outside
+    // refs/heads/* it will take a non-fast-forward update too.
+    withProvider({ buildPRHeadRefspec: vi.fn(() => value) });
+
+    await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
   });
 });

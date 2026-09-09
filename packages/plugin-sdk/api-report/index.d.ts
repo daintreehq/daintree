@@ -1043,6 +1043,37 @@ interface ForgeProviderImpl {
      */
     buildPRFileUrl?(repo: RepoRef, number: number, path: string): string;
     /**
+     * Optional. Build the refspec that fetches a pull request's head into the
+     * local branch `headRefName`, for the fallback checkout path that runs when
+     * the head branch isn't already known locally (a fork PR, or one never
+     * fetched). Returns the complete `src:dst` pair — the provider knows its own
+     * ref hierarchy, so the host never reconstructs a forge-shaped ref.
+     *
+     * Omit the field to accept the host's GitHub-shaped default,
+     * `pull/<n>/head:<headRefName>`, which Gitea and Forgejo also serve. GitLab
+     * would return `refs/merge-requests/${prNumber}/head:${headRefName}` — fully
+     * qualified, since `merge-requests/` is not a hierarchy git expands on its
+     * own. `prNumber` is the project-scoped number the PR's URL shows (GitLab's
+     * `iid`), not a forge-global id.
+     *
+     * Return `null` when the forge exposes no fetchable PR-head ref at all
+     * (Bitbucket Cloud) — the host then reports that rather than attempting a
+     * fetch that cannot succeed. Throwing is not a way to signal this: the host
+     * treats a throw as "capability unknown" and falls back to the default.
+     *
+     * You choose the source ref; the destination is the host's. It must be
+     * exactly `headRefName` or `refs/heads/${headRefName}` — the host rejects a
+     * refspec that would write anywhere else and falls back to the default,
+     * because git would otherwise happily update an unrelated local branch. For
+     * the same reason it rejects a leading `+`, `-` or `^`, a `*` wildcard,
+     * whitespace, more than one `:`, and an empty half on either side.
+     *
+     * Note the PR-head ref is not guaranteed to be permanent — GitLab prunes
+     * merged/closed MR refs after roughly two weeks, so an old PR can stop being
+     * fetchable.
+     */
+    buildPRHeadRefspec?(prNumber: number, headRefName: string): string | null;
+    /**
      * Create a new issue and return the normalized {@link Issue}. Providers that
      * can't create issues throw `"Not supported"`, matching the assignment
      * convention. The host clears its issue caches after a successful create so
