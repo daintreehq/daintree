@@ -25,6 +25,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.listPresets` | List Agent Presets | safe | `agentId`, `projectId?` |
 | `agent.listToolbar` | List Toolbar Agents | safe | — |
 | `agent.terminal` | Launch Terminal | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agentCapabilities.get` | Read agent capability | safe | `id`, `agentId?`, `catalogRevision?`, `offset?`, `sourceRevision?`, `terminalId?`, `worktreeId?`, `worktreePath?` |
+| `agentCapabilities.search` | Search agent capabilities | safe | `query`, `agentId?`, `cursor?`, `kinds?`, `limit?`, `refresh?`, `terminalId?`, `worktreeId?`, `worktreePath?` |
 | `agentSessionHistory.list` | List Resumable Sessions | safe | `limit?`, `offset?`, `projectId?`, `worktreeId?` |
 | `agentSessionHistory.resume` | Resume Agent Session | safe | `sessionId`, `worktreeId?`, `worktreePath?` |
 | `session.bookmark.delete` | Delete bookmark | confirm | `sessionId` |

@@ -553,6 +553,8 @@ export const CHANNELS = {
   APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
   // Agent Capabilities channels
+  AGENT_CAPABILITIES_SEARCH: "agent-capabilities:search",
+  AGENT_CAPABILITIES_GET: "agent-capabilities:get",
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",
   AGENT_CAPABILITIES_GET_AGENT_IDS: "agent-capabilities:get-agent-ids",
   AGENT_CAPABILITIES_GET_AGENT_METADATA: "agent-capabilities:get-agent-metadata",

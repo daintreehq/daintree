@@ -653,6 +653,8 @@ describe("system action hardening", () => {
       "cliAvailability.refresh",
       "files.search",
       "slashCommands.list",
+      "agentCapabilities.search",
+      "agentCapabilities.get",
       "artifact.saveToFile",
       "artifact.applyPatch",
       "copyTree.isAvailable",
@@ -697,9 +699,7 @@ describe("system action hardening", () => {
     // return never matched the client contract, and nothing caught it until
     // dispatch started parsing results (#11539).
     mocks.filesClient.search.mockResolvedValueOnce({ files: ["src/main.ts"] });
-    // A realistic SlashCommand. `insertText` and `aliases` are real fields the
-    // action's resultSchema does not declare; parsing is what stops them
-    // reaching agents.
+    // Invocation metadata must survive the public result schema.
     mocks.slashCommandsClient.list.mockResolvedValueOnce([
       {
         id: "review",
@@ -729,8 +729,7 @@ describe("system action hardening", () => {
     await expect(
       service.dispatch("files.search", { cwd: "/repo", query: "main", limit: 5 })
     ).resolves.toEqual({ ok: true, result: { files: ["src/main.ts"] } });
-    // insertText/aliases/trigger are stripped: the schema never declared them,
-    // and dispatch now makes that declaration binding.
+    // Display labels are not a substitute for the canonical invocation token.
     await expect(
       service.dispatch("slashCommands.list", { agentId: "codex", projectPath: "/repo" })
     ).resolves.toEqual({
@@ -743,6 +742,9 @@ describe("system action hardening", () => {
             description: "Review the diff",
             scope: "project",
             agentId: "codex",
+            insertText: "/review",
+            aliases: ["r"],
+            trigger: "/",
           },
         ],
       },

@@ -14,6 +14,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["accessibility:get-enabled"]["result"]>;
   };
   agentCapabilities: {
+    get(
+      ...args: IpcInvokeMap["agent-capabilities:get"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:get"]["result"]>;
     getAgentIds(
       ...args: IpcInvokeMap["agent-capabilities:get-agent-ids"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:get-agent-ids"]["result"]>;
@@ -32,6 +35,9 @@ export interface GeneratedElectronAPI {
     isAgentEnabled(
       ...args: IpcInvokeMap["agent-capabilities:is-agent-enabled"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:is-agent-enabled"]["result"]>;
+    search(
+      ...args: IpcInvokeMap["agent-capabilities:search"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:search"]["result"]>;
   };
   app: {
     getVersionInfo(

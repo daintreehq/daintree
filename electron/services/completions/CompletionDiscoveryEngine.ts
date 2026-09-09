@@ -1,14 +1,18 @@
 import * as os from "os";
 import * as path from "path";
-import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { SlashCommand, SlashCommandScope } from "../../../shared/types/index.js";
 import type {
   CompletionDerivation,
   CompletionLocation,
   CompletionSourceConfig,
 } from "../../../shared/types/completionSources.js";
-import { getCompletionParser, type RawCompletionEntry } from "./completionParsers.js";
+import {
+  collectCompletionWarnings,
+  getCompletionParser,
+  type RawCompletionEntry,
+} from "./completionParsers.js";
 import {
   resolveLocationDir,
   resolveProjectRoot,
@@ -38,14 +42,23 @@ interface Contribution {
   cmd: SlashCommand;
 }
 
+export interface CompletionSnapshot {
+  commands: SlashCommand[];
+  warnings: string[];
+}
+
 interface CachedResult {
-  promise: Promise<SlashCommand[]>;
+  promise: Promise<CompletionSnapshot>;
   expires: number;
 }
 
 /** Shallow-clone each result so callers can't mutate a cached entry. */
 function cloneResults(results: SlashCommand[]): SlashCommand[] {
   return results.map((cmd) => ({ ...cmd }));
+}
+
+function cloneSnapshot(snapshot: CompletionSnapshot): CompletionSnapshot {
+  return { commands: cloneResults(snapshot.commands), warnings: [...snapshot.warnings] };
 }
 
 /**
@@ -70,9 +83,17 @@ export class CompletionDiscoveryEngine {
     this.resultCache.clear();
   }
 
-  async list(agentId: BuiltInAgentId, projectPath?: string): Promise<SlashCommand[]> {
-    const sources = getAgentConfig(agentId)?.completionSources;
-    if (!sources || sources.length === 0) return [];
+  async list(agentId: string, projectPath?: string): Promise<SlashCommand[]> {
+    return (await this.discover(agentId, projectPath)).commands;
+  }
+
+  async discover(
+    agentId: string,
+    projectPath?: string,
+    refresh = false
+  ): Promise<CompletionSnapshot> {
+    const sources = getEffectiveAgentConfig(agentId)?.completionSources;
+    if (!sources || sources.length === 0) return { commands: [], warnings: [] };
 
     const projectRoot = projectPath ? await resolveProjectRoot(projectPath) : undefined;
     const ctx: PathResolveContext = {
@@ -82,23 +103,25 @@ export class CompletionDiscoveryEngine {
       env: process.env,
     };
 
-    const key = this.resultKey(agentId, projectRoot, ctx);
+    const key = this.resultKey(agentId, projectRoot, ctx) + JSON.stringify(sources);
     const now = Date.now();
-    const cached = this.resultCache.get(key);
-    if (cached && cached.expires > now) return cached.promise.then(cloneResults);
+    const cached = refresh ? undefined : this.resultCache.get(key);
+    if (cached && cached.expires > now) return cached.promise.then(cloneSnapshot);
 
-    const promise = this.compute(agentId, sources, ctx).catch((err) => {
-      if (this.resultCache.get(key)?.promise === promise) this.resultCache.delete(key);
-      throw err;
-    });
+    const promise = collectCompletionWarnings(() => this.compute(agentId, sources, ctx)).catch(
+      (err) => {
+        if (this.resultCache.get(key)?.promise === promise) this.resultCache.delete(key);
+        throw err;
+      }
+    );
     this.resultCache.set(key, { promise, expires: now + RESULT_CACHE_TTL_MS });
     // Clone so a caller can never mutate a cached entry (element-level, not just
     // the array) on the next cache hit.
-    return promise.then(cloneResults);
+    return promise.then(cloneSnapshot);
   }
 
   private async compute(
-    agentId: BuiltInAgentId,
+    agentId: string,
     sources: readonly CompletionSourceConfig[],
     ctx: PathResolveContext
   ): Promise<SlashCommand[]> {
@@ -110,6 +133,7 @@ export class CompletionDiscoveryEngine {
       const discovery = source.discovery;
 
       if (discovery.method === "static") {
+        if (!isBuiltInAgentId(agentId)) continue;
         for (const cmd of adaptBuiltinSlashCommands(agentId, source.trigger)) {
           contributions.push({
             scopeRank: SCOPE_RANK[cmd.scope],
@@ -182,7 +206,7 @@ export class CompletionDiscoveryEngine {
     loc: CompletionLocation,
     source: CompletionSourceConfig,
     derivation: CompletionDerivation,
-    agentId: BuiltInAgentId
+    agentId: string
   ): SlashCommand {
     const joiner = derivation.nestingJoiner ?? ":";
     const name = entry.nameParts.join(joiner);
@@ -214,7 +238,7 @@ export class CompletionDiscoveryEngine {
   }
 
   private resultKey(
-    agentId: BuiltInAgentId,
+    agentId: string,
     projectRoot: string | undefined,
     ctx: PathResolveContext
   ): string {
