@@ -1,10 +1,16 @@
 import type {
+  CapabilitySearchRequest,
+  CapabilityGetRequest,
+} from "@shared/types/agentCapabilities";
+import type {
   AgentRegistry,
   AgentMetadata,
   ResolvedModelCatalog,
 } from "@shared/types/ipc/agentCapabilities";
 
 export const agentCapabilitiesClient = {
+  search: (request: CapabilitySearchRequest) => window.electron.agentCapabilities.search(request),
+  get: (request: CapabilityGetRequest) => window.electron.agentCapabilities.get(request),
   getRegistry: (): Promise<AgentRegistry> => {
     return window.electron.agentCapabilities.getRegistry();
   },

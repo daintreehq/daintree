@@ -46,7 +46,7 @@ export type CompletionKind = "command" | "skill" | "app" | "plugin";
  *    (fallback `.claude-plugin/plugin.json`) for the name/description.
  */
 export type CompletionParserName =
-  "markdown-frontmatter" | "toml" | "skill-dir" | "codex-plugin-registry";
+  "markdown-frontmatter" | "toml" | "skill-dir" | "codex-plugin-registry" | "codex-plugin-skills";
 
 /** Platforms a location applies to. Matches `process.platform` values. */
 export type CompletionPlatform = "darwin" | "win32" | "linux";

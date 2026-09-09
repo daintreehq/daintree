@@ -1,7 +1,27 @@
+import { load } from "js-yaml";
+import { rcompare, valid } from "semver";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { FileHandle } from "fs/promises";
 import { promises as fs } from "fs";
 import * as path from "path";
 import type { CompletionParserName } from "../../../shared/types/completionSources.js";
+
+const scanWarnings = new AsyncLocalStorage<string[]>();
+
+export async function collectCompletionWarnings<T>(
+  scan: () => Promise<T>
+): Promise<{ commands: T; warnings: string[] }> {
+  const warnings: string[] = [];
+  const commands = await scanWarnings.run(warnings, scan);
+  return { commands, warnings: [...new Set(warnings)].sort().slice(0, 50) };
+}
+
+function scanFailure(filePath: string, error: unknown): null {
+  if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+    scanWarnings.getStore()?.push(`Could not fully read ${filePath}`);
+  }
+  return null;
+}
 
 const FRONTMATTER_MAX_BYTES = 8 * 1024;
 const TOML_MAX_BYTES = 16 * 1024;
@@ -29,20 +49,9 @@ export interface RawCompletionEntry {
 
 export type CompletionParser = (rootDir: string) => Promise<RawCompletionEntry[]>;
 
-function stripWrappingQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1).trim();
-  }
-  return trimmed;
-}
-
 async function readYamlFrontmatter(
   filePath: string
-): Promise<{ description: string | null; userInvocable: boolean }> {
+): Promise<{ description: string | null; userInvocable: boolean; name?: string }> {
   let handle: FileHandle | null = null;
   try {
     handle = await fs.open(filePath, "r");
@@ -55,27 +64,29 @@ async function readYamlFrontmatter(
 
     const endIndex = normalized.indexOf("\n---", 3);
     if (endIndex === -1) {
+      scanWarnings.getStore()?.push(`Truncated frontmatter: ${filePath}`);
       console.warn(
         `[SlashCommandService] frontmatter truncated: closing --- not found within ${FRONTMATTER_MAX_BYTES} bytes in ${filePath}`
       );
       return { description: null, userInvocable: true };
     }
 
-    const frontmatter = normalized.slice(3, endIndex);
-
-    const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
-    const description = descMatch ? stripWrappingQuotes(descMatch[1] ?? "") : null;
-
-    const invocableMatch = frontmatter.match(/^user-invocable:\s*(.+)$/m);
-    let userInvocable = true;
-    if (invocableMatch) {
-      const val = stripWrappingQuotes(invocableMatch[1] ?? "").toLowerCase();
-      if (val === "false" || val === "no") userInvocable = false;
-    }
-
-    return { description, userInvocable };
-  } catch {
-    return { description: null, userInvocable: true };
+    const metadata = load(normalized.slice(3, endIndex));
+    if (!metadata || typeof metadata !== "object")
+      return { description: null, userInvocable: true };
+    const record = metadata as Record<string, unknown>;
+    const description = typeof record.description === "string" ? record.description.trim() : null;
+    const rawInvocable = record["user-invocable"];
+    const invocable =
+      typeof rawInvocable === "string" ? rawInvocable.trim().toLowerCase() : rawInvocable;
+    return {
+      description,
+      name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : undefined,
+      userInvocable: invocable !== false && invocable !== "false" && invocable !== "no",
+    };
+  } catch (error) {
+    scanFailure(filePath, error);
+    return { description: null, userInvocable: false };
   } finally {
     await handle?.close().catch(() => {});
   }
@@ -115,8 +126,9 @@ async function readTomlDescription(
     }
 
     return { description, userInvocable };
-  } catch {
-    return { description: null, userInvocable: true };
+  } catch (error) {
+    scanFailure(filePath, error);
+    return { description: null, userInvocable: false };
   } finally {
     await handle?.close().catch(() => {});
   }
@@ -131,7 +143,9 @@ async function scanRecursiveFiles(
   const results: RawCompletionEntry[] = [];
 
   const walk = async (currentDir: string): Promise<void> => {
-    const entries = await fs.readdir(currentDir, { withFileTypes: true }).catch(() => null);
+    const entries = await fs
+      .readdir(currentDir, { withFileTypes: true })
+      .catch((error) => scanFailure(currentDir, error));
     if (entries === null) return;
 
     await Promise.all(
@@ -163,7 +177,9 @@ async function scanRecursiveFiles(
 
 /** Immediate child directories that contain a `SKILL.md`, skipping hidden. */
 async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => null);
+  const entries = await fs
+    .readdir(rootDir, { withFileTypes: true })
+    .catch((error) => scanFailure(rootDir, error));
   if (entries === null) return [];
 
   const results: RawCompletionEntry[] = [];
@@ -171,19 +187,20 @@ async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry
   await Promise.all(
     entries.map(async (entry) => {
       if (entry.name.startsWith(".")) return;
-      if (!entry.isDirectory()) return;
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) return;
 
       const skillFile = path.join(rootDir, entry.name, "SKILL.md");
       try {
         const stat = await fs.stat(skillFile);
         if (!stat.isFile()) return;
-      } catch {
+      } catch (error) {
+        scanFailure(skillFile, error);
         return;
       }
 
-      const { description, userInvocable } = await readYamlFrontmatter(skillFile);
+      const { description, userInvocable, name } = await readYamlFrontmatter(skillFile);
       results.push({
-        nameParts: [entry.name],
+        nameParts: [name ?? entry.name],
         relativeSourcePath: path.join(entry.name, "SKILL.md"),
         description,
         userInvocable,
@@ -219,8 +236,8 @@ async function readBoundedText(filePath: string, maxBytes: number): Promise<stri
     const text = buffer.subarray(0, bytesRead).toString("utf8");
     // Strip a leading UTF-8 BOM (U+FEFF) if present.
     return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-  } catch {
-    return null;
+  } catch (error) {
+    return scanFailure(filePath, error);
   } finally {
     await handle?.close().catch(() => {});
   }
@@ -278,13 +295,13 @@ async function readEnabledCodexPluginKeys(configPath: string): Promise<Set<strin
 
 /**
  * Choose a plugin's active version directory. `"local"` always wins outright
- * (mirroring Codex); otherwise the highest by code-unit order — a deterministic
- * best-effort stand-in for Codex's semver sort. Because the completion token is
- * derived from the enabled config key (not the manifest), the version chosen
- * only affects which manifest's description is shown.
+ * (mirroring Codex); otherwise the highest semantic version, with numeric
+ * ordering for non-semver cache names. This also selects bundled skill sources.
  */
 async function pickActivePluginVersion(pluginDir: string): Promise<string | null> {
-  const entries = await fs.readdir(pluginDir, { withFileTypes: true }).catch(() => null);
+  const entries = await fs
+    .readdir(pluginDir, { withFileTypes: true })
+    .catch((error) => scanFailure(pluginDir, error));
   if (entries === null) return null;
 
   const versions = entries
@@ -293,7 +310,9 @@ async function pickActivePluginVersion(pluginDir: string): Promise<string | null
   if (versions.length === 0) return null;
   if (versions.includes("local")) return "local";
 
-  return versions.reduce((best, name) => (name > best ? name : best));
+  return versions.sort((a, b) =>
+    valid(a) && valid(b) ? rcompare(a, b) : b.localeCompare(a, undefined, { numeric: true })
+  )[0]!;
 }
 
 interface PluginManifestEntry {
@@ -355,7 +374,9 @@ async function scanCodexPluginRegistry(codexHome: string): Promise<RawCompletion
   if (enabledKeys.size === 0) return [];
 
   const cacheRoot = path.join(codexHome, "plugins", "cache");
-  const marketplaces = await fs.readdir(cacheRoot, { withFileTypes: true }).catch(() => null);
+  const marketplaces = await fs
+    .readdir(cacheRoot, { withFileTypes: true })
+    .catch((error) => scanFailure(cacheRoot, error));
   if (marketplaces === null) return [];
 
   const results: RawCompletionEntry[] = [];
@@ -365,7 +386,9 @@ async function scanCodexPluginRegistry(codexHome: string): Promise<RawCompletion
       if (marketplace.name.startsWith(".") || !marketplace.isDirectory()) return;
 
       const marketplaceDir = path.join(cacheRoot, marketplace.name);
-      const plugins = await fs.readdir(marketplaceDir, { withFileTypes: true }).catch(() => null);
+      const plugins = await fs
+        .readdir(marketplaceDir, { withFileTypes: true })
+        .catch((error) => scanFailure(marketplaceDir, error));
       if (plugins === null) return;
 
       await Promise.all(
@@ -394,12 +417,58 @@ async function scanCodexPluginRegistry(codexHome: string): Promise<RawCompletion
   return sortByPath(results);
 }
 
+/** Reuse enabled-plugin resolution so cached/disabled plugins cannot contribute skills. */
+async function scanCodexPluginSkills(codexHome: string): Promise<RawCompletionEntry[]> {
+  const plugins = await scanCodexPluginRegistry(codexHome);
+  const results: RawCompletionEntry[] = [];
+  for (const plugin of plugins) {
+    const manifestPath = path.join(codexHome, plugin.relativeSourcePath);
+    const versionDir = path.dirname(path.dirname(manifestPath));
+    const text = await readBoundedText(manifestPath, PLUGIN_MANIFEST_MAX_BYTES);
+    if (!text) continue;
+    let manifest: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        throw new Error("Invalid plugin manifest");
+      manifest = parsed as Record<string, unknown>;
+    } catch (error) {
+      scanFailure(manifestPath, error);
+      continue;
+    }
+    const declared = manifest.skills ?? "skills";
+    const roots =
+      typeof declared === "string" ? [declared] : Array.isArray(declared) ? declared : [];
+    for (const root of roots) {
+      if (typeof root !== "string") continue;
+      const skillRoot = path.resolve(versionDir, root);
+      const relative = path.relative(versionDir, skillRoot);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        scanWarnings.getStore()?.push(`Unsupported plugin skill path: ${manifestPath}`);
+        continue;
+      }
+      for (const skill of await scanSkillDirectories(skillRoot)) {
+        results.push({
+          ...skill,
+          nameParts: [plugin.nameParts[0]!, ...skill.nameParts],
+          relativeSourcePath: path.relative(
+            codexHome,
+            path.join(skillRoot, skill.relativeSourcePath)
+          ),
+        });
+      }
+    }
+  }
+  return sortByPath(results);
+}
+
 /** The closed allow-list of named parsers, resolved from config strings. */
 export const COMPLETION_PARSERS: Record<CompletionParserName, CompletionParser> = {
   "markdown-frontmatter": (rootDir) => scanRecursiveFiles(rootDir, ".md", readYamlFrontmatter),
   toml: (rootDir) => scanRecursiveFiles(rootDir, ".toml", readTomlDescription),
   "skill-dir": (rootDir) => scanSkillDirectories(rootDir),
   "codex-plugin-registry": (rootDir) => scanCodexPluginRegistry(rootDir),
+  "codex-plugin-skills": (rootDir) => scanCodexPluginSkills(rootDir),
 };
 
 export function getCompletionParser(name: CompletionParserName): CompletionParser | undefined {
