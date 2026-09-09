@@ -8,6 +8,47 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-capabilities:get": {
+    args: [
+      request: {
+        agentId: string;
+        worktreePath: string;
+        id: string;
+        catalogRevision?: string | undefined;
+        offset?: number | undefined;
+        sourceRevision?: string | undefined;
+      },
+    ];
+    result: {
+      capability: {
+        id: string;
+        label: string;
+        description: string;
+        scope: string;
+        agentId: string;
+        kind: "command" | "skill" | "plugin" | "app";
+        insertText: string;
+        trigger: "/" | "$" | "@";
+        sourcePath?: string | undefined;
+        aliases?: string[] | undefined;
+      };
+      invocation: {
+        token: string;
+        channel: "interactive-command" | "prompt-reference";
+        startupSupport: "unverified";
+        requiresTask: boolean;
+        argumentHint?: string | undefined;
+      };
+      sourceRevision: string;
+      instructions: string;
+      truncated: boolean;
+      context: { agentId: string; worktreePath: string };
+      catalogRevision: string;
+      coverage: "partial" | "unsupported";
+      warnings: string[];
+      nextOffset?: number | undefined;
+    };
+  };
   "agent-capabilities:get-agent-ids": {
     args: [];
     result: string[];
@@ -31,6 +72,39 @@ export interface GeneratedIpcInvokeMap {
   "agent-capabilities:is-agent-enabled": {
     args: [agentId: string];
     result: boolean;
+  };
+  "agent-capabilities:search": {
+    args: [
+      request: {
+        agentId: string;
+        worktreePath: string;
+        query: string;
+        kinds?: ("command" | "skill" | "plugin" | "app")[] | undefined;
+        limit?: number | undefined;
+        cursor?: string | undefined;
+        refresh?: boolean | undefined;
+      },
+    ];
+    result: {
+      items: {
+        id: string;
+        label: string;
+        description: string;
+        scope: string;
+        agentId: string;
+        kind: "command" | "skill" | "plugin" | "app";
+        insertText: string;
+        trigger: "/" | "$" | "@";
+        sourcePath?: string | undefined;
+        aliases?: string[] | undefined;
+      }[];
+      total: number;
+      context: { agentId: string; worktreePath: string };
+      catalogRevision: string;
+      coverage: "partial" | "unsupported";
+      warnings: string[];
+      nextCursor?: string | undefined;
+    };
   };
   "agent-session:clear": {
     args: [payload: { worktreeId?: string | undefined }];
@@ -1896,7 +1970,7 @@ export interface GeneratedIpcInvokeMap {
               scratchName?: string | undefined;
               scratchPath?: string | undefined;
               dispatchSource?:
-                "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
+                "plugin" | "user" | "menu" | "keybinding" | "agent" | "context-menu" | undefined;
             }
           | undefined;
       },

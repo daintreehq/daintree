@@ -8,7 +8,7 @@ export interface SlashCommand {
   label: string; // display token, e.g. "/compact" or "Plugin Creator"
   description: string;
   scope: SlashCommandScope;
-  agentId: BuiltInAgentId;
+  agentId: string;
   sourcePath?: string;
   kind?: CompletionKind;
   /**
@@ -33,7 +33,7 @@ export interface SlashCommand {
 }
 
 export interface SlashCommandListRequest {
-  agentId: BuiltInAgentId;
+  agentId: string;
   projectPath?: string;
 }
 

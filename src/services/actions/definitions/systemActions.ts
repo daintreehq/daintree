@@ -1,3 +1,4 @@
+import { registerAgentCapabilityActions } from "./agentCapabilityActions";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { defineAction } from "../defineAction";
@@ -175,6 +176,7 @@ function copyTreeRunTitle(base: string, suppliedName: string | undefined): strin
 }
 
 export function registerSystemActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+  registerAgentCapabilityActions(actions);
   actions.set("system.openExternal", () =>
     defineAction({
       id: "system.openExternal",
@@ -367,7 +369,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description:
-        "List the slash commands an agent CLI offers, including any the project defines locally. Use this to discover what a given agent can be driven with before sending it a command. An empty list means the agent exposes none, whereas naming a project that is not open fails.",
+        "List locally discovered commands, skills and plugins, including exact invocation tokens. Prefer bounded capability search and usage lookup for targeted discovery. Empty results can mean unsupported discovery, not absence of capabilities.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -387,6 +389,9 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
             agentId: z.string(),
             sourcePath: z.string().optional(),
             kind: z.string().optional(),
+            insertText: z.string().optional(),
+            trigger: z.enum(["/", "$", "@"]).optional(),
+            aliases: z.array(z.string()).readonly().optional(),
           })
         ),
       }),
