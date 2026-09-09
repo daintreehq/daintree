@@ -18,8 +18,10 @@ const MarkdownEditorView = lazy(() =>
   import("./MarkdownEditorView").then((m) => ({ default: m.MarkdownEditorView }))
 );
 
-registerBuiltinView(EDITOR_SLOT, MarkdownEditorView, {
-  pluginId: PLUGIN_ID,
+// Literal ids on purpose: the `builtinViewRegistrations` drift test reads this
+// file as text and matches them against plugin.json.
+registerBuiltinView("markdown.editor", MarkdownEditorView, {
+  pluginId: "daintree.markdown-editor",
   label: "Markdown editor",
 });
 

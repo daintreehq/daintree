@@ -71,7 +71,6 @@ import { useHeightHold } from "./useHeightHold";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
-import { useFileDocumentCloseGuard } from "./useFileDocumentCloseGuard";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -412,19 +411,23 @@ export function FilePane({
   // Containment root for files.read / daintree-file://: the worktree or
   // project that contains the file, else its parent directory (same
   // outside-root fallback as FileViewerModal).
+  // The worktree that physically contains the file is a root too: a file in a
+  // linked worktree outside the project directory is governed by that
+  // worktree, not by its parent directory (#12323).
   const effectiveRootPath = useMemo(() => {
     if (!filePath) return worktreePath || projectPath;
     return (
-      [worktreePath, projectPath].find((root) => isUnderRoot(filePath, root)) ??
+      [worktreePath, diffWorktreePath, projectPath].find((root) => isUnderRoot(filePath, root)) ??
       parentDirectory(filePath)
     );
-  }, [filePath, worktreePath, projectPath]);
+  }, [filePath, worktreePath, diffWorktreePath, projectPath]);
   // Whether that root is a project or worktree, as opposed to the parent-
   // directory fallback for a file no project owns. Edit is only offered inside
   // a root the host actually governs (#12323).
   const isInsideGovernedRoot =
     filePath !== undefined &&
     ((worktreePath !== "" && isUnderRoot(filePath, worktreePath)) ||
+      (diffWorktreePath !== "" && isUnderRoot(filePath, diffWorktreePath)) ||
       (projectPath !== "" && isUnderRoot(filePath, projectPath)));
 
   const [content, setContent] = useState<string | null>(null);
@@ -1101,7 +1104,11 @@ export function FilePane({
   const modeToggleRef = useRef<HTMLDivElement>(null);
   const wasEditModeRef = useRef(viewMode === "edit");
   useEffect(() => {
-    if (wasEditModeRef.current && viewMode !== "edit") {
+    // Only when the editor's unmount actually dropped focus: a mode that
+    // vanished under a pane nobody was typing in (the plugin toggled off, a
+    // background reload) must not pull focus across the window.
+    const focusLost = document.activeElement === null || document.activeElement === document.body;
+    if (wasEditModeRef.current && viewMode !== "edit" && focusLost) {
       const active = modeToggleRef.current?.querySelector<HTMLButtonElement>(
         'button[aria-pressed="true"]'
       );
@@ -1109,15 +1116,6 @@ export function FilePane({
     }
     wasEditModeRef.current = viewMode === "edit";
   }, [viewMode]);
-
-  // Closing a dirty panel asks Save / Discard / Cancel; the prompt lives here,
-  // not in the editor view, so it survives a switch to Rendered or Source and
-  // a temporary unmount of the editor itself (#12323).
-  const closeGuardDialog = useFileDocumentCloseGuard({
-    panelId: id,
-    dirty: isDirty,
-    fileName: fileName ?? title,
-  });
 
   // The dirty mark in the panel chrome, shown in every mode while a draft
   // exists. A conflict is the same dot with a different name: it says the
@@ -1291,7 +1289,6 @@ export function FilePane({
       onTabRename={onTabRename}
       onAddTab={onAddTab}
     >
-      {closeGuardDialog}
       <div
         ref={heightHold.bodyRef}
         className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
@@ -1473,7 +1470,9 @@ export function FilePane({
               filePath={filePath}
               fileName={fileName ?? filePath}
               rootPath={effectiveRootPath}
-              worktreePath={worktreePath || null}
+              // The worktree that physically contains the file, by containment,
+              // not the one the panel is stamped with (see diffWorktreePath).
+              worktreePath={diffWorktreePath || null}
               projectId={projectId}
               wrapLines={markdownWrapLines}
               isFocused={isFocused}

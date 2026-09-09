@@ -39,6 +39,11 @@ export function hasPanelCloseGuard(panelId: string): boolean {
   return guards.has(panelId);
 }
 
+/** A prompt for this panel is open; a second close gesture should wait for it. */
+export function isPanelClosePending(panelId: string): boolean {
+  return pending.has(panelId);
+}
+
 /**
  * Whether closing `panelIds` may go ahead. Guards run one at a time, in order,
  * and the first cancel wins — a group close with two dirty panels asks about

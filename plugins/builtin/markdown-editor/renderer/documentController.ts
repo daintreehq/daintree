@@ -1,4 +1,5 @@
 import { usePanelStore } from "@/store/panelStore";
+import { isFilePanel } from "@shared/types/panel";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
@@ -31,7 +32,7 @@ import {
  * lifecycle the editor view is too transient to own: the panel switches to
  * Rendered and back, gets maximised away, or sits in a cached project view,
  * and the draft must survive all of that. The controller lives from the first
- * Edit open until the panel itself is removed.
+ * Edit open until the panel itself is removed or shows another file.
  *
  * What it does with the document is published two ways: the full record in
  * the plugin's own document store (keyed by identity, so a second panel on
@@ -59,8 +60,31 @@ const REVALIDATE_COALESCE_MS = 100;
 const TOO_LARGE_MESSAGE = "This draft is over 2 MiB and can't be saved here";
 
 const controllers = new Map<string, DocumentController>();
-/** Per-identity state shared by every controller on the same document. */
+/**
+ * Per-identity state shared by every controller on the same document. The
+ * entry outlives its controllers: `generation` must keep climbing across a
+ * close and reopen, or a put minted in the new lifetime could fall below the
+ * tombstone the old one's discard left in main.
+ */
 const identities = new Map<string, { generation: number; controllers: Set<DocumentController> }>();
+
+/**
+ * Generations order a document's puts and deletes in main: a put at or below
+ * the last delete is ignored there. Wall-clock based so the order survives a
+ * renderer that lost its counters (a closed panel, an evicted project view),
+ * with a strict-increase guard for calls inside one millisecond.
+ */
+function mintGeneration(key: string): number {
+  const shared = identities.get(key);
+  const next = Math.max(Date.now(), (shared?.generation ?? 0) + 1);
+  if (shared) shared.generation = next;
+  return next;
+}
+
+/** Update the shared record without the "this controller is disposed" gate. */
+function updateShared(key: string, mutate: (record: DocumentRecord) => DocumentRecord): void {
+  useDocumentStateStore.getState().upsert(key, mutate);
+}
 
 function invoke<T>(channel: string, args: unknown): Promise<T> {
   return window.electron.plugin.invoke(PLUGIN_ID, channel, args) as Promise<T>;
@@ -93,10 +117,16 @@ export class DocumentController {
 
   static acquire(props: DocumentControllerProps): DocumentController {
     const existing = controllers.get(props.panelId);
-    if (existing && existing.identity.filePath === props.filePath) return existing;
-    // The panel now shows a different file: the old document's draft is
-    // released with its panel binding, and its record stays only while a
-    // sibling panel still holds it.
+    if (
+      existing &&
+      existing.identity.filePath === props.filePath &&
+      existing.identity.worktreePath === props.worktreePath &&
+      existing.identity.projectId === props.projectId
+    ) {
+      return existing;
+    }
+    // The panel now shows a different document: the old binding is released
+    // with its panel, and its record stays only while a sibling still holds it.
     existing?.release();
     const controller = new DocumentController(props);
     controllers.set(props.panelId, controller);
@@ -124,7 +154,8 @@ export class DocumentController {
       identities.set(this.key, shared);
     }
     shared.controllers.add(this);
-    if (!useDocumentStateStore.getState().records[this.key]) {
+    const existing = useDocumentStateStore.getState().records[this.key];
+    if (!existing) {
       useDocumentStateStore.getState().set(this.key, createDocumentRecord(this.identity));
     }
 
@@ -133,11 +164,19 @@ export class DocumentController {
         if (state.records[this.key] !== previous.records[this.key]) this.publishProjection();
       }),
       window.electron.plugin.on(PLUGIN_ID, PUSH_CHANNELS.documentChanged, (payload) => {
-        if ((payload as DocumentChangedPush | null)?.identityKey === this.key)
+        if ((payload as DocumentChangedPush | null)?.identityKey === this.key) {
           this.scheduleRevalidate();
+        }
       }),
       usePanelStore.subscribe((state) => {
-        if (state.panelsById[this.panelId] === undefined) this.release();
+        const panel = state.panelsById[this.panelId];
+        // Gone, or now showing another file: either way this binding is over.
+        if (
+          panel === undefined ||
+          (isFilePanel(panel) && panel.filePath !== this.identity.filePath)
+        ) {
+          this.release();
+        }
       })
     );
     const onFocus = () => this.scheduleRevalidate();
@@ -155,12 +194,24 @@ export class DocumentController {
     );
 
     this.publishProjection();
-    void this.load({ restoreDraft: true });
+    // A sibling panel already holds (or is loading) this document: join it
+    // rather than reloading over its draft. Main still needs this panel on its
+    // refcount so the watch outlives whichever panel opened first.
+    if (existing) void this.attach();
+    else void this.load({ restoreDraft: true });
   }
 
   private readonly flushOnUnload = (): void => {
     void this.flushPersist();
   };
+
+  private async attach(): Promise<void> {
+    try {
+      await invoke(CHANNELS.attach, { identity: this.identity, panelId: this.panelId });
+    } catch (error) {
+      logError("[markdown-editor] document.attach failed", error);
+    }
+  }
 
   record(): DocumentRecord {
     return (
@@ -170,7 +221,7 @@ export class DocumentController {
 
   private update(mutate: (record: DocumentRecord) => DocumentRecord): void {
     if (this.disposed) return;
-    useDocumentStateStore.getState().upsert(this.key, mutate);
+    updateShared(this.key, mutate);
   }
 
   /** Inputs from the panel that change over the controller's life. */
@@ -225,7 +276,21 @@ export class DocumentController {
     const result = await this.read();
     if (this.disposed || request !== this.loadRequest) return;
     if (result === null || result.status === "unavailable") {
-      this.update((record) => ({ ...record, status: "unavailable" }));
+      // The file is not there, but a stored draft may be: surface it so the
+      // panel shows the unsaved mark and the draft can be copied, rather than
+      // hiding it behind a file that never loads.
+      let draft = this.record().draft;
+      if (options.restoreDraft && draft === null) {
+        const stored = await this.readStoredDraft();
+        if (this.disposed || request !== this.loadRequest) return;
+        if (stored) draft = { text: stored.draftText, baseRevision: stored.baseRevision };
+      }
+      this.update((record) => ({
+        ...record,
+        status: "unavailable",
+        draft,
+        textVersion: draft === record.draft ? record.textVersion : record.textVersion + 1,
+      }));
       return;
     }
     if (result.status === "refused") {
@@ -234,30 +299,52 @@ export class DocumentController {
     }
     const base = this.baseFrom(result);
     let draft: DocumentRecord["draft"] = null;
-    let conflict: DocumentRecord["conflict"] = null;
     if (options.restoreDraft) {
       const stored = await this.readStoredDraft();
       if (this.disposed || request !== this.loadRequest) return;
       if (stored && stored.draftText !== base.text) {
         draft = { text: stored.draftText, baseRevision: stored.baseRevision };
-        // A recovered draft is never written automatically: when the disk
-        // moved on since it was taken, it stands as a conflict until the
-        // user compares the two and decides.
-        if (stored.baseRevision !== base.revision) {
-          conflict = {
-            revision: base.revision,
-            text: base.text,
-            hasBom: base.hasBom,
-            eol: base.eol,
-          };
-        }
       } else if (stored) {
         void this.deleteStoredDraft();
       }
     } else {
-      // A reload keeps a draft that is already standing; the caller decided
-      // whether that is safe.
+      // A reload keeps whatever draft is standing — including one typed while
+      // this read was in flight. Such a draft was written against the old
+      // base, so it cannot simply adopt the new one.
       draft = this.record().draft;
+    }
+    // A draft standing on a base that is no longer the disk's is a conflict
+    // until the user compares the two: a recovered draft from an earlier
+    // session, or typing that raced a reload. Never written automatically.
+    if (draft !== null && draft.baseRevision !== base.revision) {
+      const conflict = {
+        revision: base.revision,
+        text: base.text,
+        hasBom: base.hasBom,
+        eol: base.eol,
+      };
+      const previous = this.record().base;
+      // Keep the base the draft was typed against when it is still here, so
+      // the editor keeps showing the user's edit; the recovered case has no
+      // such base and takes the disk as its reference document.
+      if (previous !== null && previous.revision === draft.baseRevision) {
+        this.update((record) => ({ ...record, status: "ready", conflict, error: null }));
+        announce("File changed on disk");
+        return;
+      }
+      this.update((record) => ({
+        ...record,
+        status: "ready",
+        refusal: null,
+        base,
+        draft,
+        conflict,
+        error: null,
+        loadGeneration: record.loadGeneration + 1,
+        textVersion: record.textVersion + 1,
+      }));
+      announce("Recovered draft, file changed on disk");
+      return;
     }
     this.update((record) => ({
       ...record,
@@ -265,12 +352,11 @@ export class DocumentController {
       refusal: null,
       base,
       draft,
-      conflict,
+      conflict: null,
       error: null,
       loadGeneration: record.loadGeneration + 1,
       textVersion: record.textVersion + 1,
     }));
-    if (conflict) announce("Recovered draft, file changed on disk");
   }
 
   // ── Editing ────────────────────────────────────────────────────────
@@ -332,11 +418,14 @@ export class DocumentController {
     } catch (error) {
       result = { status: "error", message: formatErrorMessage(error, "Save failed") };
     }
-    if (this.disposed) return false;
+    // Settled on the shared record, not this controller: a sibling panel on
+    // the same document must never be left in "Saving…" because the panel
+    // that pressed Save closed first.
+    const key = this.key;
     switch (result.status) {
       case "saved": {
         let clean = false;
-        this.update((current) => {
+        updateShared(key, (current) => {
           const newBase: DocumentBase = {
             ...base,
             text: snapshot,
@@ -344,27 +433,28 @@ export class DocumentController {
             mixedEol: result.wrote ? false : base.mixedEol,
             size: utf8Length(snapshot),
           };
-          // Typing that landed during the save stays dirty against the new
-          // revision; otherwise the document is clean.
-          const live = current.draft?.text;
-          const draft =
-            live !== undefined && live !== snapshot
-              ? { text: live, baseRevision: result.revision }
-              : null;
+          // Whatever the buffer holds now — typing that landed during the
+          // save, or an undo back to the old base — stays dirty against the
+          // new revision unless it is exactly what was written.
+          const live = currentText(current) ?? snapshot;
+          const draft = live !== snapshot ? { text: live, baseRevision: result.revision } : null;
           clean = draft === null;
           return { ...current, base: newBase, draft, saving: false, error: null };
         });
         if (clean) {
           this.cancelPersist();
           await this.deleteStoredDraft();
+          // Typing that arrived while the record was being cleared makes the
+          // document dirty again; report what is true now.
+          clean = (useDocumentStateStore.getState().records[key]?.draft ?? null) === null;
         } else {
           this.schedulePersist();
         }
-        announce("Saved");
+        if (!this.disposed) announce("Saved");
         return clean;
       }
       case "conflict":
-        this.update((current) => ({
+        updateShared(key, (current) => ({
           ...current,
           saving: false,
           conflict: {
@@ -374,14 +464,14 @@ export class DocumentController {
             eol: result.eol,
           },
         }));
-        announce("File changed on disk");
+        if (!this.disposed) announce("File changed on disk");
         return false;
       case "unavailable":
-        this.update((current) => ({ ...current, saving: false, status: "unavailable" }));
-        announce("File is no longer available");
+        updateShared(key, (current) => ({ ...current, saving: false, status: "unavailable" }));
+        if (!this.disposed) announce("File is no longer available");
         return false;
       case "refused":
-        this.update((current) => ({
+        updateShared(key, (current) => ({
           ...current,
           saving: false,
           error:
@@ -391,7 +481,7 @@ export class DocumentController {
         }));
         return false;
       case "error":
-        this.update((current) => ({ ...current, saving: false, error: result.message }));
+        updateShared(key, (current) => ({ ...current, saving: false, error: result.message }));
         return false;
     }
   }
@@ -399,14 +489,14 @@ export class DocumentController {
   async saveAs(targetPath: string): Promise<DocumentSaveAsResult> {
     const record = this.record();
     const text = currentText(record);
-    if (text === null || !record.base) return { status: "error", message: "Nothing to save" };
+    if (text === null) return { status: "error", message: "Nothing to save" };
     try {
       return await invoke<DocumentSaveAsResult>(CHANNELS.saveAs, {
         identity: this.identity,
         targetPath,
         text,
-        hasBom: record.base.hasBom,
-        eol: record.base.eol,
+        hasBom: record.base?.hasBom ?? false,
+        eol: record.base?.eol ?? "\n",
       });
     } catch (error) {
       return { status: "error", message: formatErrorMessage(error, "Save as failed") };
@@ -427,20 +517,47 @@ export class DocumentController {
       textVersion: current.textVersion + 1,
     }));
     await this.deleteStoredDraft();
-    // The base may be stale if the discard resolved a conflict: take the
-    // disk version so the editor shows what is actually there.
-    if (record.conflict) await this.load({ restoreDraft: false });
+    // The base may be stale if the discard resolved a conflict, or absent if
+    // the file was never readable: take the disk version where there is one.
+    if (record.conflict || record.base === null) await this.load({ restoreDraft: false });
     announce("Draft discarded");
   }
 
-  /** Resolve a conflict by taking the disk version and dropping the draft. */
+  /**
+   * Resolve a conflict by taking the disk version and dropping the draft. The
+   * replacement is read and proven first; the draft and its recovery record
+   * go only once there is something to put in their place.
+   */
   async loadDiskVersion(): Promise<void> {
     const record = this.record();
     if (!record.conflict) return;
+    const request = ++this.loadRequest;
+    const result = await this.read();
+    if (this.disposed || request !== this.loadRequest) return;
+    if (result === null || result.status !== "ok") {
+      this.update((current) => ({
+        ...current,
+        error:
+          result?.status === "refused"
+            ? "The disk version can't be loaded here; your draft is kept"
+            : "The file isn't available; your draft is kept",
+      }));
+      return;
+    }
     this.cancelPersist();
-    this.update((current) => ({ ...current, draft: null, conflict: null, error: null }));
+    const base = this.baseFrom(result);
+    this.update((current) => ({
+      ...current,
+      status: "ready",
+      refusal: null,
+      base,
+      draft: null,
+      conflict: null,
+      error: null,
+      loadGeneration: current.loadGeneration + 1,
+      textVersion: current.textVersion + 1,
+    }));
     await this.deleteStoredDraft();
-    await this.load({ restoreDraft: false });
   }
 
   // ── External change detection ──────────────────────────────────────
@@ -475,11 +592,18 @@ export class DocumentController {
       }
       return;
     }
+    if (!current.base) {
+      // Never loaded (opened while the file was missing). Now that it
+      // answers, load it for real; a standing draft rides along and is
+      // compared against the new base there.
+      await this.load({ restoreDraft: current.draft === null });
+      return;
+    }
     if (current.status === "unavailable") {
       // Back, possibly rewritten: treat it as an external change below.
       this.update((r) => ({ ...r, status: "ready" }));
     }
-    if (!current.base || result.revision === current.base.revision) return;
+    if (result.revision === current.base.revision) return;
     if (current.conflict && current.conflict.revision === result.revision) return;
     if (current.draft === null) {
       await this.load({ restoreDraft: false });
@@ -487,15 +611,16 @@ export class DocumentController {
       return;
     }
     const fresh = await this.read();
-    if (this.disposed || !fresh || fresh.status !== "ok") return;
+    if (this.disposed) return;
+    const base = current.base;
     this.update((r) => ({
       ...r,
-      conflict: {
-        revision: fresh.revision,
-        text: fresh.text,
-        hasBom: fresh.hasBom,
-        eol: fresh.eol,
-      },
+      // A disk version that cannot be shown (undecodable, gone again) is
+      // still a conflict: the draft's base has moved and Save must hold.
+      conflict:
+        fresh && fresh.status === "ok"
+          ? { revision: fresh.revision, text: fresh.text, hasBom: fresh.hasBom, eol: fresh.eol }
+          : { revision: result.revision, text: null, hasBom: base.hasBom, eol: base.eol },
     }));
     announce("File changed on disk");
   }
@@ -503,10 +628,7 @@ export class DocumentController {
   // ── Draft recovery ─────────────────────────────────────────────────
 
   private nextGeneration(): number {
-    const shared = identities.get(this.key);
-    if (!shared) return 0;
-    shared.generation += 1;
-    return shared.generation;
+    return mintGeneration(this.key);
   }
 
   private async readStoredDraft(): Promise<DraftRecord | null> {
@@ -536,26 +658,30 @@ export class DocumentController {
     }
   }
 
-  /** Write the draft record now; a no-op when the document is clean. */
+  /** Write the draft record now; a no-op when nothing is pending. */
   async flushPersist(): Promise<void> {
     if (this.persistTimer === null) return;
     this.cancelPersist();
     await this.persistNow();
   }
 
-  private async persistNow(): Promise<void> {
-    const record = this.record();
-    if (this.disposed || !record.draft || !record.base) return;
-    const draft: DraftRecord = {
+  private draftRecord(record: DocumentRecord): DraftRecord | null {
+    if (!record.draft) return null;
+    return {
       stateVersion: 1,
       identity: this.identity,
       baseRevision: record.draft.baseRevision,
-      baseText: record.base.text,
+      baseText: record.base?.text ?? "",
       draftText: record.draft.text,
-      hasBom: record.base.hasBom,
-      eol: record.base.eol,
+      hasBom: record.base?.hasBom ?? false,
+      eol: record.base?.eol ?? "\n",
       updatedAt: Date.now(),
     };
+  }
+
+  private async persistNow(): Promise<void> {
+    const draft = this.draftRecord(this.record());
+    if (this.disposed || !draft) return;
     let result: DraftPutResult;
     try {
       result = await invoke<DraftPutResult>(CHANNELS.draftPut, {
@@ -563,7 +689,7 @@ export class DocumentController {
         generation: this.nextGeneration(),
       });
     } catch (error) {
-      result = { status: "error", message: formatErrorMessage(error, "Save failed") };
+      result = { status: "error", message: formatErrorMessage(error, "Draft could not be stored") };
     }
     if (this.disposed) return;
     const warning =
@@ -596,7 +722,7 @@ export class DocumentController {
     this.disposed = true;
     if (this.persistTimer !== null) {
       // The draft outlives the panel in recovery storage: write it now, on
-      // the record as it stood, so an orphaned draft is what Recover finds.
+      // the record as it stands, so an orphaned draft is what Recover finds.
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
       void this.persistRecordDirect();
@@ -611,30 +737,18 @@ export class DocumentController {
     const shared = identities.get(this.key);
     if (shared) {
       shared.controllers.delete(this);
-      if (shared.controllers.size === 0) {
-        identities.delete(this.key);
-        useDocumentStateStore.getState().remove(this.key);
-      }
+      // The identity entry stays for its generation counter; only the record
+      // goes when the last panel leaves.
+      if (shared.controllers.size === 0) useDocumentStateStore.getState().remove(this.key);
     }
   }
 
   private async persistRecordDirect(): Promise<void> {
     const record = useDocumentStateStore.getState().records[this.key];
-    if (!record?.draft || !record.base) return;
-    const shared = identities.get(this.key);
-    const generation = shared ? ++shared.generation : 0;
-    const draft: DraftRecord = {
-      stateVersion: 1,
-      identity: this.identity,
-      baseRevision: record.draft.baseRevision,
-      baseText: record.base.text,
-      draftText: record.draft.text,
-      hasBom: record.base.hasBom,
-      eol: record.base.eol,
-      updatedAt: Date.now(),
-    };
+    const draft = record ? this.draftRecord(record) : null;
+    if (!draft) return;
     try {
-      await invoke(CHANNELS.draftPut, { record: draft, generation });
+      await invoke(CHANNELS.draftPut, { record: draft, generation: mintGeneration(this.key) });
     } catch (error) {
       logError("[markdown-editor] final draft persist failed", error);
     }

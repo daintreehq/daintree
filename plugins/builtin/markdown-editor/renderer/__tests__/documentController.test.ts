@@ -100,7 +100,7 @@ describe("DocumentController (#12323)", () => {
     await flush(1000);
     const put = main.calls.find((c) => c.channel === CHANNELS.draftPut);
     expect(put?.args).toMatchObject({
-      generation: 1,
+      generation: expect.any(Number),
       record: { draftText: "# Plan\n\nedit\n", baseRevision: sha("# Plan\n") },
     });
   });
@@ -302,6 +302,183 @@ describe("DocumentController (#12323)", () => {
     await flush();
     expect(useDocumentStateStore.getState().records[KEY]).toBeUndefined();
     expect(main.calls.filter((c) => c.channel === CHANNELS.release)).toHaveLength(2);
+  });
+
+  it("a sibling panel joins the document without reloading over its draft", async () => {
+    const first = await open();
+    first.setText("# Plan\n\nunsaved\n");
+    main.calls.length = 0;
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    expect(second.record().draft?.text).toBe("# Plan\n\nunsaved\n");
+    expect(main.calls.some((c) => c.channel === CHANNELS.read)).toBe(false);
+    expect(main.calls.some((c) => c.channel === CHANNELS.attach)).toBe(true);
+  });
+
+  it("a save finished by a panel that has since closed still settles the shared record", async () => {
+    const first = await open();
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    first.setText("# Plan\n\nboth\n");
+    let release: (value: unknown) => void = () => {};
+    main.overrides.set(
+      CHANNELS.save,
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    const saving = first.save();
+    await flush();
+    expect(second.record().saving).toBe(true);
+    panelStore().setState({ panelsById: { "panel-2": { id: "panel-2" } } });
+    await flush();
+    release({ status: "saved", revision: sha("# Plan\n\nboth\n"), wrote: true });
+    await saving;
+    expect(second.record().saving).toBe(false);
+    expect(second.record().draft).toBeNull();
+    expect(second.record().base?.text).toBe("# Plan\n\nboth\n");
+  });
+
+  it("undoing back to the old base during a save keeps the document dirty against the new one", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\nedit\n");
+    let release: (value: unknown) => void = () => {};
+    main.overrides.set(
+      CHANNELS.save,
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    const saving = controller.save();
+    await flush();
+    controller.setText("# Plan\n");
+    release({ status: "saved", revision: sha("# Plan\n\nedit\n"), wrote: true });
+    await expect(saving).resolves.toBe(false);
+    const record = controller.record();
+    expect(record.base?.text).toBe("# Plan\n\nedit\n");
+    expect(record.draft).toEqual({ text: "# Plan\n", baseRevision: sha("# Plan\n\nedit\n") });
+  });
+
+  it("typing while a clean reload is in flight becomes a conflict, never a silent overwrite", async () => {
+    const controller = await open();
+    let releaseRead: (value: unknown) => void = () => {};
+    main.overrides.set(
+      CHANNELS.read,
+      () =>
+        new Promise((resolve) => {
+          releaseRead = resolve;
+        })
+    );
+    main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
+    main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+    await flush(200);
+    controller.setText("# Plan\n\nme\n");
+    releaseRead({
+      status: "ok",
+      text: "# Plan\n\nagent\n",
+      revision: sha("# Plan\n\nagent\n"),
+      hasBom: false,
+      eol: "\n",
+      mixedEol: false,
+      size: 14,
+    });
+    await flush();
+    const record = controller.record();
+    expect(record.draft?.text).toBe("# Plan\n\nme\n");
+    expect(record.base?.text).toBe("# Plan\n");
+    expect(record.conflict).toMatchObject({ text: "# Plan\n\nagent\n" });
+  });
+
+  it("Load disk version keeps the draft when the disk version cannot be read", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\nmine\n");
+    main.files.set(PROPS.filePath, "# Plan\n\ntheirs\n");
+    await controller.save();
+    expect(controller.record().conflict).not.toBeNull();
+    main.overrides.set(CHANNELS.read, () => ({ status: "refused", reason: "NOT_UTF8" }));
+    await controller.loadDiskVersion();
+    const record = controller.record();
+    expect(record.draft?.text).toBe("# Plan\n\nmine\n");
+    expect(record.conflict).not.toBeNull();
+    expect(record.error).toMatch(/draft is kept/);
+    expect(main.calls.some((c) => c.channel === CHANNELS.draftDelete)).toBe(false);
+  });
+
+  it("an external change whose new version cannot be read still holds Save", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\nmine\n");
+    main.files.set(PROPS.filePath, "changed");
+    main.overrides.set(CHANNELS.read, () => ({ status: "refused", reason: "NOT_UTF8" }));
+    main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+    await flush(200);
+    expect(controller.record().conflict).toMatchObject({ text: null, revision: sha("changed") });
+    await expect(controller.save()).resolves.toBe(false);
+  });
+
+  it("the panel switching to another file releases the binding", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\ndraft\n");
+    panelStore().setState({
+      panelsById: {
+        "panel-1": { id: "panel-1", kind: "file", filePath: "/repo/other.md" } as never,
+        "panel-2": { id: "panel-2" },
+      },
+    });
+    await flush();
+    expect(DocumentController.get("panel-1")).toBeUndefined();
+    expect(getFileDocumentProjection("panel-1")).toBeUndefined();
+    // The orphaned draft was written for recovery on the way out.
+    expect(main.drafts.get(KEY)?.record.draftText).toBe("# Plan\n\ndraft\n");
+  });
+
+  it("a draft discarded, closed and reopened persists again with a later generation", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\none\n");
+    await flush(1000);
+    await controller.discard();
+    panelStore().setState({ panelsById: { "panel-2": { id: "panel-2" } } });
+    await flush();
+    panelStore().setState({
+      panelsById: { "panel-1": { id: "panel-1" }, "panel-2": { id: "panel-2" } },
+    });
+    const again = DocumentController.acquire(PROPS);
+    await flush();
+    again.setText("# Plan\n\ntwo\n");
+    await flush(1000);
+    expect(main.drafts.get(KEY)?.record.draftText).toBe("# Plan\n\ntwo\n");
+    expect(again.record().storageWarning).toBeNull();
+  });
+
+  it("a file missing at open still surfaces its stored draft, and loads once the file is back", async () => {
+    main.drafts.set(KEY, {
+      generation: 1,
+      record: {
+        stateVersion: 1,
+        identity: IDENTITY,
+        baseRevision: sha("# Plan\n"),
+        baseText: "# Plan\n",
+        draftText: "# Plan\n\nkept\n",
+        hasBom: false,
+        eol: "\n",
+        updatedAt: 1,
+      },
+    });
+    const controller = DocumentController.acquire(PROPS);
+    await flush();
+    expect(controller.record().status).toBe("unavailable");
+    expect(controller.record().draft?.text).toBe("# Plan\n\nkept\n");
+    expect(getFileDocumentProjection("panel-1")).toMatchObject({ dirty: true, conflict: true });
+
+    main.files.set(PROPS.filePath, "# Plan\n");
+    main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+    await flush(200);
+    const record = controller.record();
+    expect(record.status).toBe("ready");
+    expect(record.base?.text).toBe("# Plan\n");
+    expect(record.draft?.text).toBe("# Plan\n\nkept\n");
+    expect(record.conflict).toBeNull();
   });
 
   it("a panel removed mid-draft persists the record immediately for recovery", async () => {

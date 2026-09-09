@@ -162,6 +162,19 @@ describe("DraftStore (#12323)", () => {
     ).resolves.toEqual({ status: "stored" });
   });
 
+  it("holds the record cap under concurrent puts for different identities", async () => {
+    for (let i = 0; i < 49; i++) {
+      await store.put(record({ identity: { ...identity, filePath: `/repo/${i}.md` } }), 1);
+    }
+    const results = await Promise.all([
+      store.put(record({ identity: { ...identity, filePath: "/repo/x.md" } }), 1),
+      store.put(record({ identity: { ...identity, filePath: "/repo/y.md" } }), 1),
+    ]);
+    expect(results.filter((r) => r.status === "stored")).toHaveLength(1);
+    expect(results.filter((r) => r.status === "full")).toHaveLength(1);
+    expect(await store.list()).toHaveLength(50);
+  });
+
   it("refuses a record that would push storage past the byte cap", async () => {
     const big = record({ draftText: "x".repeat(9 * 1024 * 1024) });
     await expect(store.put(big, 1)).resolves.toEqual({ status: "stored" });

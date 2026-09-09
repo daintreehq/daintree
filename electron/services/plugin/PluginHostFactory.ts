@@ -2094,8 +2094,10 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       // other host-mediated writer to the same file. Distinct paths never wait
       // on each other.
       const revision = await runExclusive(resolved, async () => {
-        requireLoaded("writeFile");
         if (!checked) {
+          // The plain write, exactly as before: no further liveness check, so
+          // a plugin unloading while its write was queued still lands it, as
+          // it did when the write started immediately after consent.
           await fs.writeFile(resolved, contents, "utf-8");
           return sha256Hex(Buffer.from(contents, "utf-8"));
         }
@@ -2125,19 +2127,42 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
             `Plugin "${pluginId}" fs.writeFile: refusing to write through a symlink`
           );
         }
-        const current = await fs.readFile(resolved).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        });
         const expected = options.expectedRevision;
+        const bytes = Buffer.from(contents, "utf-8");
         if (expected === null) {
-          if (current !== null) {
+          // Create-new is an exclusive create at the filesystem, not a check
+          // followed by a replace: two writers racing on names that only
+          // differ in case would otherwise both see "absent" and both win on
+          // a case-insensitive volume. A directory or any other entry at the
+          // leaf reads as "exists" without being opened.
+          if (leafStat !== null) {
             throw fsWriteError(
               "TARGET_EXISTS",
               `Plugin "${pluginId}" fs.writeFile: the target already exists`
             );
           }
-        } else if (expected !== undefined) {
+          requireLoaded("writeFile");
+          try {
+            await fs.writeFile(resolved, bytes, { flag: "wx" });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+              throw fsWriteError(
+                "TARGET_EXISTS",
+                `Plugin "${pluginId}" fs.writeFile: the target already exists`
+              );
+            }
+            throw error;
+          }
+          return sha256Hex(bytes);
+        }
+        if (expected !== undefined) {
+          // Only a revision compare needs the current bytes; a bare `{}`
+          // never reads the target, so an unreadable or oversized file still
+          // gets its atomic replace.
+          const current = await fs.readFile(resolved).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          });
           if (current === null) {
             throw fsWriteError(
               "TARGET_UNAVAILABLE",
@@ -2154,10 +2179,12 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
             throw error;
           }
         }
-        const bytes = Buffer.from(contents, "utf-8");
         // Preserve the file's mode across the replace so an executable script
         // or a read-only note keeps its bits; a new file takes the umask.
         const mode = leafStat && !leafStat.isSymbolicLink() ? leafStat.mode & 0o777 : undefined;
+        // Last liveness check before the bytes land: the consent prompt and the
+        // queue wait above can outlive the plugin.
+        requireLoaded("writeFile");
         await resilientAtomicWriteFile(
           resolved,
           bytes,

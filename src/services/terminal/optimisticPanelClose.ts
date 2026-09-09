@@ -46,6 +46,12 @@ export interface PanelCloseRequest {
   hideIds: string[];
   /** The canonical teardown, run once after paint (e.g. `trashPanelGroup`). */
   commit: () => void;
+  /**
+   * Whether the close went ahead (#12323). Called synchronously for an
+   * unguarded close; after the prompt for a guarded one. `false` means a
+   * close guard cancelled it and nothing was hidden.
+   */
+  onOutcome?: (accepted: boolean) => void;
 }
 
 const EMPTY: ReadonlySet<string> = new Set<string>();
@@ -272,19 +278,29 @@ export function requestPanelClose(request: PanelCloseRequest): void {
 
   if (fresh.some(hasPanelCloseGuard)) {
     void consultPanelCloseGuards(fresh).then((proceed) => {
-      if (!proceed) return;
-      // The prompt took time; the panel may have gone elsewhere meanwhile.
+      if (!proceed) {
+        request.onOutcome?.(false);
+        return;
+      }
+      // The prompt took time; the panel may have gone elsewhere meanwhile —
+      // removed, already trashed by another path, or closing.
       const state = panelStoreApi.getState();
-      const stillOpen = request.hideIds.filter(
-        (id) => state.panelsById[id] !== undefined && !closingIds.has(id)
-      );
-      if (stillOpen.length === 0) return;
+      const stillOpen = request.hideIds.filter((id) => {
+        const panel = state.panelsById[id];
+        return panel !== undefined && panel.location !== "trash" && !closingIds.has(id);
+      });
+      if (stillOpen.length === 0) {
+        request.onOutcome?.(false);
+        return;
+      }
       hideAndCommit({ hideIds: stillOpen, commit: request.commit });
+      request.onOutcome?.(true);
     });
     return;
   }
 
   hideAndCommit(request);
+  request.onOutcome?.(true);
 }
 
 function hideAndCommit(request: PanelCloseRequest): void {

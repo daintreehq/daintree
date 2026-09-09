@@ -1,8 +1,41 @@
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { logError } from "@/utils/logger";
-import { CHANNELS, PLUGIN_ID, PUSH_CHANNELS, type RecoverDraftPush } from "../shared/protocol.js";
+import {
+  CHANNELS,
+  identityKey,
+  PLUGIN_ID,
+  PUSH_CHANNELS,
+  type RecoverDraftPush,
+} from "../shared/protocol.js";
+
+const DRAFT_LOAD_TIMEOUT_MS = 5000;
+
+/**
+ * Resolves once the panel's editor publishes a projection for exactly the
+ * draft's identity — the moment the stored draft has been found — or false
+ * when it never does. Acknowledging earlier would tell main the draft was
+ * recovered when the panel may have opened a different document (a worktree
+ * that no longer exists resolves to a different identity).
+ */
+function waitForDraft(panelId: string, key: string): Promise<boolean> {
+  const matches = () => useFileDocumentStore.getState().byPanelId[panelId]?.identityKey === key;
+  if (matches()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      resolve(false);
+    }, DRAFT_LOAD_TIMEOUT_MS);
+    const unsubscribe = useFileDocumentStore.subscribe(() => {
+      if (!matches()) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(true);
+    });
+  });
+}
 
 /**
  * The renderer side of "Markdown: Recover drafts…" (#12323). Main lists the
@@ -32,7 +65,12 @@ async function handle(push: RecoverDraftPush): Promise<void> {
       return;
     }
     const panelId = (result.result as { panelId?: string } | undefined)?.panelId;
-    if (panelId) usePanelStore.getState().setFileViewMode(panelId, "edit");
+    if (!panelId) return;
+    usePanelStore.getState().setFileViewMode(panelId, "edit");
+    // Only a panel that ended up on the draft's own document counts; main
+    // keeps asking (and finally says where the draft is) otherwise.
+    const loaded = await waitForDraft(panelId, identityKey(push.identity));
+    if (!loaded) return;
     await window.electron.plugin.invoke(PLUGIN_ID, CHANNELS.recoverAck, {
       requestId: push.requestId,
     });

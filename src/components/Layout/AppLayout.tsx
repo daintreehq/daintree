@@ -50,6 +50,7 @@ import {
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
+import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
 
 function preloadGlobalBannerCoordinator() {
   return import("../Recovery/GlobalBannerCoordinator");
@@ -863,6 +864,10 @@ export function AppLayout({
       }}
     >
       <PortalVisibilityController />
+      {/* Save / Discard / Cancel for a dirty file panel, hosted above every
+          pane so an unmounted (inactive-tab, maximised-away) panel keeps its
+          guard (#12323). */}
+      <FileDocumentCloseGuardHost />
       {/* Wraps the coordinator and nothing else so its height IS the banner
           height, which useGlobalBannerHeightVar measures (#11893). shrink-0
           keeps #9530's guarantee that the banner's height is subtracted from

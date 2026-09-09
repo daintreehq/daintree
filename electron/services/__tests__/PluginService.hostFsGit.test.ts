@@ -1080,6 +1080,31 @@ describe("host.fs.writeFile checked path (#12323)", () => {
     expect(await fs.readFile(target, "utf-8")).toBe("new");
   });
 
+  it("create-new refuses a directory at the target without opening it", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "dir.md");
+    await fs.mkdir(target);
+    await expect(host.fs.writeFile(target, "x", { expectedRevision: null })).rejects.toMatchObject({
+      code: "TARGET_EXISTS",
+    });
+    expect((await fs.stat(target)).isDirectory()).toBe(true);
+  });
+
+  it("an options-only write replaces atomically without reading the target", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "opaque.md");
+    await fs.writeFile(target, "v1");
+    const readSpy = vi.spyOn(fs, "readFile");
+    try {
+      const result = await host.fs.writeFile(target, "v2", {});
+      expect(result.revision).toBe(sha("v2"));
+      expect(readSpy.mock.calls.some((call) => call[0] === target)).toBe(false);
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(await fs.readFile(target, "utf-8")).toBe("v2");
+  });
+
   it("refuses to write through a symlink on the checked path", async () => {
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const real = join(allowed, "real.md");

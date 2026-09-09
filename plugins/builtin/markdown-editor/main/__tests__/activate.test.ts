@@ -377,6 +377,19 @@ describe("markdown-editor main (#12323)", () => {
   });
 
   describe("document.saveAs", () => {
+    it("refuses a target outside the document's own root", async () => {
+      const outside = path.join(dir, "elsewhere.md");
+      const result = await call<DocumentSaveAsResult>(CHANNELS.saveAs, {
+        identity,
+        targetPath: outside,
+        text: "draft\n",
+        hasBom: false,
+        eol: "\n",
+      });
+      expect(result).toEqual({ status: "refused", reason: "OUTSIDE_ROOT" });
+      await expect(fs.stat(outside)).rejects.toThrow();
+    });
+
     it("creates a new Markdown file and refuses an existing one", async () => {
       const target = path.join(dir, "repo", "docs", "plan-draft.md");
       const first = await call<DocumentSaveAsResult>(CHANNELS.saveAs, {
@@ -418,6 +431,36 @@ describe("markdown-editor main (#12323)", () => {
       expect(watcher.disposed).toBe(false);
       await call(CHANNELS.release, { identity, panelId: "b" });
       expect(watcher.disposed).toBe(true);
+    });
+
+    it("concurrent reads of one document share a single watch", async () => {
+      await fs.writeFile(identity.filePath, "# Plan\n");
+      await Promise.all([
+        call(CHANNELS.read, { identity, panelId: "a" }),
+        call(CHANNELS.read, { identity, panelId: "b" }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fake.watchers).toHaveLength(1);
+    });
+
+    it("a second panel attaches without a read and keeps the watch alive after the first leaves", async () => {
+      await fs.writeFile(identity.filePath, "# Plan\n");
+      await call(CHANNELS.read, { identity, panelId: "a" });
+      expect(await call(CHANNELS.attach, { identity, panelId: "b" })).toEqual({ attached: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await call(CHANNELS.release, { identity, panelId: "a" });
+      expect(fake.watchers[0]?.disposed).toBe(false);
+      await call(CHANNELS.release, { identity, panelId: "b" });
+      expect(fake.watchers[0]?.disposed).toBe(true);
+    });
+
+    it("a release that lands while the read is in flight leaves no watch behind", async () => {
+      await fs.writeFile(identity.filePath, "# Plan\n");
+      const reading = call(CHANNELS.read, { identity, panelId: "a" });
+      await call(CHANNELS.release, { identity, panelId: "a" });
+      await reading;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fake.watchers.filter((w) => !w.disposed)).toHaveLength(0);
     });
 
     it("a wake re-hashes open documents and announces the ones that moved", async () => {

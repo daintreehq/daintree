@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import {
   CHANNELS,
+  DocumentAttachArgsSchema,
+  DocumentAttachResultSchema,
   DocumentReadArgsSchema,
   DocumentReadResultSchema,
   DocumentReleaseArgsSchema,
@@ -56,7 +58,20 @@ interface OpenDocument {
   panelIds: Set<string>;
   /** Last revision this side observed, so a wake resync can tell a change from a re-read. */
   lastRevision: string | null;
-  disposeWatch: (() => void) | null;
+  /** The watch being created or already created; one per document, shared by every panel. */
+  watch: Promise<() => void> | null;
+}
+
+/** Paths as the watcher and the identity spell them, on this platform. */
+function samePath(a: string, b: string): boolean {
+  const left = path.normalize(a);
+  const right = path.normalize(b);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function isUnder(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 const RECOVER_ACK_TIMEOUT_MS = 10_000;
@@ -109,27 +124,49 @@ export async function activate(
   };
 
   const ensureWatch = (doc: OpenDocument): void => {
-    if (doc.disposeWatch) return;
+    // One creation per document, shared: concurrent reads before the first
+    // watch resolves would otherwise each start a watcher and keep only the
+    // last disposer.
+    if (doc.watch) return;
     const key = identityKey(doc.identity);
-    const target = path.normalize(doc.identity.filePath);
-    void host.fs
-      .watch([path.dirname(doc.identity.filePath)], (changedPath) => {
-        if (path.normalize(changedPath) !== target) return;
-        notifyChanged(key);
-      })
-      .then((dispose) => {
+    const target = doc.identity.filePath;
+    doc.watch = host.fs.watch([path.dirname(target)], (changedPath) => {
+      if (!samePath(changedPath, target)) return;
+      notifyChanged(key);
+    });
+    doc.watch.then(
+      (dispose) => {
         // The document may have been released while the watch was being set up.
-        if (documents.get(key) !== doc) {
-          dispose();
-          return;
-        }
-        doc.disposeWatch = dispose;
-      })
-      .catch((error) => {
+        if (documents.get(key) !== doc) dispose();
+      },
+      (error) => {
         // The watcher is an optimisation; revalidation on focus and before
         // every save is the authority, so a failed watch is not a failed open.
+        doc.watch = null;
         host.logger.warn("directory watch failed", { path: target, error: String(error) });
-      });
+      }
+    );
+  };
+
+  const disposeWatch = (doc: OpenDocument): void => {
+    const pending = doc.watch;
+    doc.watch = null;
+    pending?.then(
+      (dispose) => dispose(),
+      () => {}
+    );
+  };
+
+  /** The document record for an identity, registering the panel on it. */
+  const openDocument = (identity: DocumentIdentity, panelId: string): OpenDocument => {
+    const key = identityKey(identity);
+    let doc = documents.get(key);
+    if (!doc) {
+      doc = { identity, panelIds: new Set(), lastRevision: null, watch: null };
+      documents.set(key, doc);
+    }
+    doc.panelIds.add(panelId);
+    return doc;
   };
 
   const releaseDocument = (key: string, panelId: string): void => {
@@ -138,8 +175,7 @@ export async function activate(
     doc.panelIds.delete(panelId);
     if (doc.panelIds.size > 0) return;
     documents.delete(key);
-    doc.disposeWatch?.();
-    doc.disposeWatch = null;
+    disposeWatch(doc);
   };
 
   await host.registerHandler(
@@ -152,6 +188,12 @@ export async function activate(
     async (_ctx, { identity, panelId }): Promise<DocumentReadResult> => {
       if (!isEditableFilePath(identity.filePath))
         return { status: "refused", reason: "NOT_MARKDOWN" };
+      // Registered before any I/O: a release that lands while the read is in
+      // flight then finds the record and can retire it, instead of the read
+      // completing into a document nobody holds.
+      const doc = openDocument(identity, panelId);
+      const key = identityKey(identity);
+      const stillOpen = () => documents.get(key) === doc && doc.panelIds.has(panelId);
       const symlink = await isSymlinkTarget(identity.filePath);
       if (symlink === true) return { status: "refused", reason: "SYMLINK" };
       let bytes: Uint8Array;
@@ -166,17 +208,22 @@ export async function activate(
       const decoded = decodeDocument(bytes);
       if (!decoded.ok) return { status: "refused", reason: decoded.reason };
 
-      const key = identityKey(identity);
-      let doc = documents.get(key);
-      if (!doc) {
-        doc = { identity, panelIds: new Set(), lastRevision: null, disposeWatch: null };
-        documents.set(key, doc);
+      if (stillOpen()) {
+        doc.lastRevision = decoded.document.revision;
+        ensureWatch(doc);
       }
-      doc.panelIds.add(panelId);
-      doc.lastRevision = decoded.document.revision;
-      ensureWatch(doc);
       const { text, revision, hasBom, eol, mixedEol, size } = decoded.document;
       return { status: "ok", text, revision, hasBom, eol, mixedEol, size };
+    }
+  );
+
+  await host.registerHandler(
+    CHANNELS.attach,
+    { args: DocumentAttachArgsSchema, result: DocumentAttachResultSchema },
+    (_ctx, { identity, panelId }) => {
+      const doc = openDocument(identity, panelId);
+      if (doc.lastRevision !== null) ensureWatch(doc);
+      return { attached: true };
     }
   );
 
@@ -270,8 +317,14 @@ export async function activate(
       result: DocumentSaveAsResultSchema,
       requires: ["fs:project-write"],
     },
-    async (_ctx, { targetPath, text, hasBom, eol }): Promise<DocumentSaveAsResult> => {
+    async (_ctx, { identity, targetPath, text, hasBom, eol }): Promise<DocumentSaveAsResult> => {
       if (!isEditableFilePath(targetPath)) return { status: "refused", reason: "NOT_MARKDOWN" };
+      // The host contains the target to every root this plugin may write; the
+      // editor's own promise is narrower — a new file beside the original, in
+      // the same worktree (or the same directory when there is no worktree).
+      const root = identity.worktreePath ?? path.dirname(identity.filePath);
+      if (!isUnder(root, path.resolve(targetPath)))
+        return { status: "refused", reason: "OUTSIDE_ROOT" };
       const contents = assembleDocument(text, { hasBom, eol });
       if (utf8ByteLength(contents) > MAX_EDITABLE_BYTES)
         return { status: "refused", reason: "TOO_LARGE" };
@@ -424,7 +477,7 @@ export async function activate(
 
   return () => {
     disposeWake();
-    for (const doc of documents.values()) doc.disposeWatch?.();
+    for (const doc of documents.values()) disposeWatch(doc);
     documents.clear();
     for (const settle of pendingRecoveries.values()) settle();
     pendingRecoveries.clear();

@@ -80,7 +80,11 @@ import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
-import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
+import {
+  consultPanelCloseGuards,
+  hasPanelCloseGuard,
+  isPanelClosePending,
+} from "@/services/panelCloseGuard";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -332,10 +336,16 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         trashPanel(tabId);
       };
       // A dirty file panel asks Save / Discard / Cancel first (#12323); every
-      // other tab closes on the synchronous path it always took.
+      // other tab closes on the synchronous path it always took. A second
+      // press while the prompt is open waits for the first answer rather
+      // than trashing twice.
       if (hasPanelCloseGuard(tabId)) {
+        if (isPanelClosePending(tabId)) return;
         void consultPanelCloseGuards([tabId]).then((proceed) => {
-          if (proceed) close();
+          if (!proceed) return;
+          const panel = usePanelStore.getState().panelsById[tabId];
+          if (panel === undefined || panel.location === "trash") return;
+          close();
         });
         return;
       }

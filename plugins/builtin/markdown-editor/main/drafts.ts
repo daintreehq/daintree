@@ -64,8 +64,13 @@ export class DraftStore {
     return path.join(this.dir, `${sha256Hex(identityKey(identity))}.json`);
   }
 
-  private lockKey(identity: DocumentIdentity): string {
-    return `markdown-editor-draft:${this.recordPath(identity)}`;
+  /**
+   * One lock for the whole store, not one per identity: the record and byte
+   * caps are measured against every file in the directory, so two identities
+   * racing past the cap would each see room and both land.
+   */
+  private lockKey(_identity: DocumentIdentity): string {
+    return `markdown-editor-drafts:${this.dir}`;
   }
 
   async get(identity: DocumentIdentity): Promise<DraftRecord | null> {

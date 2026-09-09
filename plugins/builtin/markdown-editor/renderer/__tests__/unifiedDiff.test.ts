@@ -14,7 +14,13 @@ function apply(before: string, patch: string): string {
       while (cursor < start) out.push(lines[cursor++]!);
       continue;
     }
-    if (raw.startsWith("diff ") || raw.startsWith("--- ") || raw.startsWith("+++ ") || raw === "") {
+    if (
+      raw.startsWith("diff ") ||
+      raw.startsWith("--- ") ||
+      raw.startsWith("+++ ") ||
+      raw.startsWith("\\") ||
+      raw === ""
+    ) {
       continue;
     }
     const marker = raw[0];
@@ -67,6 +73,7 @@ describe("unifiedDiff (#12323)", () => {
     const applied = apply(before, patch);
     const normalizedAfter = after === "" ? "" : after.replace(/\n?$/, "\n");
     expect(applied).toBe(normalizedAfter);
+    expect(parseDiff(patch)).toHaveLength(1);
   });
 
   it("splits distant changes into separate hunks with three lines of context", () => {
@@ -74,6 +81,29 @@ describe("unifiedDiff (#12323)", () => {
     const after = before.replace("l2\n", "X\n").replace("l17\n", "Y\n");
     const patch = unifiedDiff(before, after, { path: "f.md" });
     expect(patch.match(/^@@/gm)).toHaveLength(2);
+  });
+
+  it("shows a final-newline change with git's marker", () => {
+    const patch = unifiedDiff("a", "a\n", { path: "f.md" });
+    expect(patch).toContain("@@ -1,1 +1,1 @@");
+    expect(patch).toContain("-a\n\\ No newline at end of file\n+a\n");
+    const files = parseDiff(patch);
+    expect(files[0]?.hunks).toHaveLength(1);
+  });
+
+  it("numbers an empty side from line zero", () => {
+    expect(unifiedDiff("", "new\n", { path: "f.md" })).toContain("@@ -0,0 +1,1 @@");
+    expect(unifiedDiff("gone\n", "", { path: "f.md" })).toContain("@@ -1,1 +0,0 @@");
+  });
+
+  it("falls back to a bounded replace for two large, entirely different texts", () => {
+    const before = Array.from({ length: 12_000 }, (_, i) => `left ${i}`).join("\n") + "\n";
+    const after = Array.from({ length: 12_000 }, (_, i) => `right ${i}`).join("\n") + "\n";
+    const started = Date.now();
+    const patch = unifiedDiff(before, after, { path: "f.md" });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(patch.match(/^@@/gm)).toHaveLength(1);
+    expect(apply(before, patch)).toBe(after);
   });
 
   it("parses with the same parser DiffViewer uses", () => {

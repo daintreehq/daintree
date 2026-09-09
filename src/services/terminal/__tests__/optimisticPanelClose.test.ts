@@ -295,6 +295,8 @@ describe("optimisticPanelClose — close guards (#12323)", () => {
     expect(isOptimisticallyClosing("p1")).toBe(false);
     expect(setFocusedMock).not.toHaveBeenCalled();
 
+    // The guard starts on a microtask; let it hand out its resolver.
+    await vi.advanceTimersByTimeAsync(0);
     resolveGuard!("proceed");
     await vi.advanceTimersByTimeAsync(0);
     expect(cell.style.display).toBe("none");
@@ -338,10 +340,67 @@ describe("optimisticPanelClose — close guards (#12323)", () => {
     // A bulk path removed the panel meanwhile.
     mockState.panelIds = [];
     mockState.panelsById = {};
+    // The guard starts on a microtask; let it hand out its resolver.
+    await vi.advanceTimersByTimeAsync(0);
     resolveGuard!("proceed");
     await vi.advanceTimersByTimeAsync(0);
     expect(isOptimisticallyClosing("p1")).toBe(false);
     flushOptimisticCloses();
     expect(commit).not.toHaveBeenCalled();
+  });
+});
+
+describe("optimisticPanelClose — close outcomes (#12323)", () => {
+  function mountPanel(id: string): HTMLElement {
+    const gridCell = document.createElement("div");
+    gridCell.dataset.terminalId = id;
+    document.body.appendChild(gridCell);
+    return gridCell;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __resetOptimisticPanelCloseForTests();
+    __resetPanelCloseGuardsForTests();
+    setFocusedMock.mockClear();
+    mockState.focusedId = null;
+    mockState.panelIds = ["p1"];
+    mockState.panelsById = { p1: { id: "p1" } };
+    document.body.innerHTML = "";
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    __resetPanelCloseGuardsForTests();
+  });
+
+  it("reports an unguarded close as accepted, synchronously", () => {
+    mountPanel("p1");
+    const onOutcome = vi.fn();
+    requestPanelClose({ hideIds: ["p1"], commit: vi.fn(), onOutcome });
+    expect(onOutcome).toHaveBeenCalledWith(true);
+  });
+
+  it("reports a cancelled guarded close as rejected", async () => {
+    mountPanel("p1");
+    registerPanelCloseGuard("p1", async () => "cancel");
+    const onOutcome = vi.fn();
+    requestPanelClose({ hideIds: ["p1"], commit: vi.fn(), onOutcome });
+    expect(onOutcome).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onOutcome).toHaveBeenCalledWith(false);
+  });
+
+  it("does not re-close a panel another path trashed while the prompt was open", async () => {
+    mountPanel("p1");
+    registerPanelCloseGuard("p1", async () => "proceed");
+    const commit = vi.fn();
+    const onOutcome = vi.fn();
+    requestPanelClose({ hideIds: ["p1"], commit, onOutcome });
+    mockState.panelsById = { p1: { id: "p1", location: "trash" } };
+    await vi.advanceTimersByTimeAsync(0);
+    flushOptimisticCloses();
+    expect(commit).not.toHaveBeenCalled();
+    expect(onOutcome).toHaveBeenCalledWith(false);
   });
 });

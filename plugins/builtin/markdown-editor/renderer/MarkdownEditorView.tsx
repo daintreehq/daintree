@@ -16,6 +16,7 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { formatBytes } from "@/lib/formatBytes";
 import { cn } from "@/lib/utils";
 import { DocumentController } from "./documentController.js";
+import { identityKey } from "../shared/protocol.js";
 import { currentText, useDocumentStateStore, type DocumentRecord } from "./documentStateStore.js";
 import {
   buildMarkdownEditorExtensions,
@@ -57,19 +58,22 @@ function EditorSkeleton() {
  * controller and the store, and this component only renders them.
  */
 export function MarkdownEditorView(props: FileEditorViewProps) {
-  const controller = DocumentController.acquire({
-    panelId: props.panelId,
-    filePath: props.filePath,
-    fileName: props.fileName,
-    rootPath: props.rootPath,
-    worktreePath: props.worktreePath,
-    projectId: props.projectId,
-  });
-  const record = useDocumentStateStore((state) => state.records[controller.key]);
+  const { panelId, filePath, fileName, rootPath, worktreePath, projectId } = props;
+  const key = identityKey({ projectId, worktreePath, filePath });
+  // The controller is acquired in an effect, never during render: acquiring
+  // starts the document read and its subscriptions, which a discarded render
+  // must not do. It outlives this view — see DocumentController.
+  const [controller, setController] = useState<DocumentController | null>(null);
+  useEffect(() => {
+    setController(
+      DocumentController.acquire({ panelId, filePath, fileName, rootPath, worktreePath, projectId })
+    );
+  }, [panelId, filePath, fileName, rootPath, worktreePath, projectId]);
+  const record = useDocumentStateStore((state) => state.records[key]);
   const polarity = useActiveAppScheme().type;
 
   useEffect(() => {
-    controller.sync({ changeTick: props.changeTick });
+    controller?.sync({ changeTick: props.changeTick });
   }, [controller, props.changeTick]);
 
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
@@ -97,7 +101,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   const [saveAsPath, setSaveAsPath] = useState<string | null>(null);
   const [saveAsError, setSaveAsError] = useState<string | null>(null);
 
-  const ready = record?.status === "ready" && record.base !== null && language !== null;
+  const ready =
+    controller !== null && record?.status === "ready" && record.base !== null && language !== null;
   const loadGeneration = record?.loadGeneration ?? 0;
 
   // One EditorView per (document load); a fresh EditorState — and a fresh
@@ -105,7 +110,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   // change, and on taking the disk version over a conflict.
   useEffect(() => {
     const host = hostRef.current;
-    if (!ready || !host || !language) return;
+    if (!ready || !host || !language || !controller) return;
     const text = currentText(controller.record()) ?? "";
     lastLocalTextRef.current = text;
     const restore = controller.viewState;
@@ -186,15 +191,15 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     return () => window.removeEventListener("daintree:find-in-panel", handler);
   }, [props.isFocused]);
 
-  const handleSave = useCallback(() => void controller.save(), [controller]);
+  const handleSave = useCallback(() => void controller?.save(), [controller]);
   const handleLoadDisk = useCallback(async () => {
     setConfirmLoadDisk(false);
     setShowCompare(false);
-    await controller.loadDiskVersion();
+    await controller?.loadDiskVersion();
     viewRef.current?.focus();
   }, [controller]);
   const handleSaveAs = useCallback(async () => {
-    if (!saveAsPath) return;
+    if (!saveAsPath || !controller) return;
     const result = await controller.saveAs(saveAsPath);
     if (result.status === "saved") {
       setSaveAsPath(null);
@@ -217,7 +222,12 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     });
   }, [showCompare, record, props.fileName]);
 
-  if (!record || record.status === "loading" || (record.status === "ready" && language === null)) {
+  if (
+    !controller ||
+    !record ||
+    record.status === "loading" ||
+    (record.status === "ready" && language === null)
+  ) {
     return <EditorSkeleton />;
   }
 
@@ -242,6 +252,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   }
 
   if (record.status === "unavailable" && !record.base) {
+    const orphanDraft = record.draft?.text ?? null;
     return (
       <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
         <EmptyState
@@ -249,16 +260,32 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           scale="canvas"
           icon={<FileWarning className="h-6 w-6" />}
           title="File isn't available"
-          description="It may have been deleted, moved, or its worktree removed."
+          description={
+            orphanDraft === null
+              ? "It may have been deleted, moved, or its worktree removed."
+              : "It may have been deleted, moved, or its worktree removed. An unsaved draft of it is kept here until you save or discard it."
+          }
           action={
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void controller.load({ restoreDraft: true })}
-            >
-              <RefreshCw />
-              Retry
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void controller.load({ restoreDraft: true })}
+              >
+                <RefreshCw />
+                Retry
+              </Button>
+              {orphanDraft !== null && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void navigator.clipboard.writeText(orphanDraft)}
+                  data-testid="markdown-editor-copy-draft"
+                >
+                  Copy draft
+                </Button>
+              )}
+            </div>
           }
         />
       </div>

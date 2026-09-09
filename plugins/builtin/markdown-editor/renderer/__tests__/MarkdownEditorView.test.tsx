@@ -169,6 +169,30 @@ describe("MarkdownEditorView (#12323)", () => {
     expect(document.querySelector(".cm-content")).toBeNull();
   });
 
+  it("a missing file with a stored draft keeps the draft reachable", async () => {
+    main.files.delete(FILE);
+    main.drafts.set("p1 /repo /repo/docs/plan.md", {
+      generation: 1,
+      record: {
+        stateVersion: 1,
+        identity: { projectId: "p1", worktreePath: "/repo", filePath: FILE },
+        baseRevision: "a".repeat(64),
+        baseText: "# Plan\n",
+        draftText: "# Plan\n\norphan\n",
+        hasBom: false,
+        eol: "\n",
+        updatedAt: 1,
+      },
+    });
+    render(view());
+    expect(await screen.findByText("File isn't available")).toBeTruthy();
+    expect(screen.getByTestId("markdown-editor-copy-draft")).toBeTruthy();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "# Plan\n\norphan\n",
+    });
+  });
+
   it("a conflict shows the banner, holds Save, and Compare renders a draft-versus-disk diff", async () => {
     await renderReady();
     await type("\nmine");
