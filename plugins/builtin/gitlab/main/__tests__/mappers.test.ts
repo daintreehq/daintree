@@ -156,7 +156,7 @@ describe("mergeRequestToForgePR", () => {
       mergeRequestToForgePR(baseMR({ detailed_merge_status: "mergeable" }), HOST).mergeable
     ).toBe(true);
     expect(
-      mergeRequestToForgePR(baseMR({ detailed_merge_status: "conflicts" }), HOST).mergeable
+      mergeRequestToForgePR(baseMR({ detailed_merge_status: "conflict" }), HOST).mergeable
     ).toBe(false);
     expect(
       mergeRequestToForgePR(baseMR({ detailed_merge_status: "checking" }), HOST).mergeable

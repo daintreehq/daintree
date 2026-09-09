@@ -132,13 +132,14 @@ export async function unassignIssueImpl(
 ): Promise<ForgeUser[]> {
   const issue = await fetchIssueRaw(repo, issueNumber);
   const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
-  const remaining = assignees
-    .filter((a) => (a.username ?? "").toLowerCase() !== username.toLowerCase())
-    .map((a) => a.id)
-    .filter((id): id is number => typeof id === "number");
+  const kept = assignees.filter((a) => (a.username ?? "").toLowerCase() !== username.toLowerCase());
   // Not assigned in the first place — nothing to write, and the current list
-  // is already the resulting list.
-  if (remaining.length === assignees.length) return gitlabAssigneesToForgeUsers(issue, repo.host);
+  // is already the resulting list. Measured on the username filter ALONE: an
+  // assignee GitLab returned without a numeric id drops out of the id list
+  // below, and comparing that against the full list would read as a removal
+  // and write back an `assignee_ids` that silently unassigns them.
+  if (kept.length === assignees.length) return gitlabAssigneesToForgeUsers(issue, repo.host);
+  const remaining = kept.map((a) => a.id).filter((id): id is number => typeof id === "number");
   const { data } = await gitlabRest<GitLabIssue>({
     host: repo.host,
     method: "PUT",
@@ -151,10 +152,11 @@ export async function unassignIssueImpl(
 }
 
 export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise<PR> {
+  // `isDraftTitle` knows every prefix GitLab itself recognizes — `[Draft]`,
+  // `(Draft)` and `Draft -` as well as `Draft:` — so a title that already
+  // reads as a draft isn't prefixed a second time.
   const title =
-    input.draft === true && !/^\s*draft:/i.test(input.title)
-      ? `Draft: ${input.title}`
-      : input.title;
+    input.draft === true && !isDraftTitle(input.title) ? `Draft: ${input.title}` : input.title;
   const { data } = await gitlabRest<GitLabMergeRequest>({
     host: repo.host,
     method: "POST",
@@ -285,7 +287,11 @@ async function setMRDraftState(
 ): Promise<PRDraftStateResult> {
   const mr = await fetchMRRaw(repo, prNumber);
   if (isDraftMergeRequest(mr) === draft) return { prNumber, isDraft: draft };
-  const title = draft ? `Draft: ${mr.title ?? ""}` : stripDraftPrefix(mr.title ?? "");
+  // Strip first either way: `isDraftMergeRequest` trusts the explicit `draft`
+  // flag over the title, so an MR the server calls ready can still carry a
+  // `[Draft]` prefix — prefixing that unstripped yields "Draft: [Draft] Foo".
+  const base = stripDraftPrefix(mr.title ?? "");
+  const title = draft ? `Draft: ${base}` : base;
   const { data } = await gitlabRest<GitLabMergeRequest>({
     host: repo.host,
     method: "PUT",

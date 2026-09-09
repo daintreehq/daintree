@@ -12,11 +12,18 @@ import {
 /** GitLab REST/GraphQL error with the HTTP status preserved for callers. */
 export class GitLabApiError extends Error {
   readonly status: number;
+  /**
+   * Epoch ms an active rate-limit block lifts, when a 429 said so. Callers
+   * that render a "back at" banner read this rather than re-deriving it from
+   * the message.
+   */
+  readonly rateLimitResetAt: number | undefined;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, rateLimitResetAt?: number) {
     super(message);
     this.name = "GitLabApiError";
     this.status = status;
+    this.rateLimitResetAt = rateLimitResetAt;
   }
 }
 
@@ -169,6 +176,21 @@ function buildQueryString(query: Record<string, QueryValue> | undefined): string
   return qs.length > 0 ? `?${qs}` : "";
 }
 
+/**
+ * When a throttle lifts, in epoch ms, from a 429's own headers. GitLab's two
+ * limiters answer differently: the Rack::Attack throttles send `Retry-After`
+ * (seconds) alongside `RateLimit-Reset` (epoch seconds), while the
+ * application rate limiter sends `Retry-After` only. Read both so either one
+ * yields a real resume time; `undefined` when neither header is usable.
+ */
+function rateLimitResetAtFrom(headers: Headers): number | undefined {
+  const retryAfter = Number.parseInt(headers.get("retry-after") ?? "", 10);
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) return Date.now() + retryAfter * 1000;
+  const reset = Number.parseInt(headers.get("ratelimit-reset") ?? "", 10);
+  if (Number.isFinite(reset) && reset > 0) return reset * 1000;
+  return undefined;
+}
+
 async function parseErrorMessage(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { message?: unknown; error?: unknown };
@@ -214,7 +236,11 @@ export async function gitlabRest<T>(options: GitLabRestOptions): Promise<GitLabR
   if (response.status === 401 && token) markTokenUnhealthy(versionAtRequest);
 
   if (!response.ok) {
-    throw new GitLabApiError(response.status, await parseErrorMessage(response));
+    throw new GitLabApiError(
+      response.status,
+      await parseErrorMessage(response),
+      response.status === 429 ? rateLimitResetAtFrom(response.headers) : undefined
+    );
   }
 
   if (response.status === 204) {
@@ -301,13 +327,32 @@ export async function gitlabGraphQL<T>(
 
   if (response.status === 401 && token) markTokenUnhealthy(versionAtRequest);
   if (!response.ok) {
-    throw new GitLabApiError(response.status, await parseErrorMessage(response));
+    throw new GitLabApiError(
+      response.status,
+      await parseErrorMessage(response),
+      response.status === 429 ? rateLimitResetAtFrom(response.headers) : undefined
+    );
   }
 
-  const payload = (await response.json()) as {
-    data?: T;
-    errors?: Array<{ message?: string }>;
-  };
+  // Same case the REST transport guards: an SSO gateway or captive portal
+  // answers 200 with an HTML sign-in page, which must surface as a
+  // GitLabApiError rather than a bare SyntaxError out of the JSON parse.
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("json")) {
+    throw new GitLabApiError(
+      response.status,
+      `${host} didn't answer with JSON — a sign-in gateway may be intercepting the API`
+    );
+  }
+  let payload: { data?: T; errors?: Array<{ message?: string }> };
+  try {
+    payload = (await response.json()) as {
+      data?: T;
+      errors?: Array<{ message?: string }>;
+    };
+  } catch {
+    throw new GitLabApiError(response.status, `${host} returned an unreadable response`);
+  }
   if (payload.errors && payload.errors.length > 0) {
     throw new GitLabApiError(200, payload.errors[0]?.message ?? "GitLab GraphQL error");
   }

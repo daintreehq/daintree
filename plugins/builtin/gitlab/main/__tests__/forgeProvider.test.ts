@@ -696,6 +696,31 @@ describe("listPRs", () => {
     await gitlabForgeProvider.listPRs(REPO, { cursor: "3" });
     expect(requestUrl(fetchMock().mock.calls[0])).toContain("page=3");
   });
+
+  it("ends pagination when GitLab omits x-next-page", async () => {
+    // The last page carries no next-page header at all. Reporting a cursor
+    // there would leave the host offering a load-more that fetches nothing.
+    fetchMock().mockResolvedValue(
+      jsonResponse([{ iid: 1, title: "One", state: "opened" }], { headers: { "x-total": "1" } })
+    );
+
+    const page = await gitlabForgeProvider.listPRs(REPO, { state: "open" });
+
+    expect(page.nextCursor).toBeNull();
+    expect(page.hasMore).toBe(false);
+    expect(page.totalCount).toBe(1);
+  });
+
+  it("maps the sort onto GitLab's order_by parameter", async () => {
+    // A fresh Response per call: a body is readable exactly once.
+    fetchMock().mockImplementation(async () => jsonResponse([]));
+    await gitlabForgeProvider.listPRs(REPO, { sort: "updated" });
+    expect(requestUrl(fetchMock().mock.calls[0])).toContain("order_by=updated_at");
+
+    fetchMock().mockClear();
+    await gitlabForgeProvider.listPRs(REPO, {});
+    expect(requestUrl(fetchMock().mock.calls[0])).toContain("order_by=created_at");
+  });
 });
 
 describe("getIssue", () => {
@@ -1088,6 +1113,23 @@ describe("mutations", () => {
     expect(assignees.map((u) => u.login)).toEqual(["someone"]);
   });
 
+  it("does not unassign a bystander whose row carries no numeric id", async () => {
+    fetchMock().mockResolvedValueOnce(
+      jsonResponse({
+        iid: 9,
+        state: "opened",
+        // `id` is optional on GitLab's user shape. An assignee that arrives
+        // without one drops out of the id list the write would send — so the
+        // "nothing to remove" guard has to be measured on usernames, or this
+        // writes an assignee_ids that quietly unassigns them.
+        assignees: [{ username: "no-id" }, { id: 3, username: "someone" }],
+      })
+    );
+    const assignees = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+    expect(assignees.map((u) => u.login)).toEqual(["no-id", "someone"]);
+  });
+
   it("pins squash false on an explicit merge method", async () => {
     fetchMock().mockResolvedValue(jsonResponse({ iid: 5, state: "merged" }));
     await gitlabForgeProvider.mergePR(REPO, 5, { mergeMethod: "merge" });
@@ -1350,5 +1392,40 @@ describe("repoStats", () => {
     const stats = await gitlabForgeProvider.repoStats?.getRepoStats(REPO, { bypassCache: true });
     expect(stats?.counts.issueCount).toBeNull();
     expect(stats?.counts.error).toContain("boom");
+  });
+
+  it("surfaces a 429 as a rate-limit block with the time it lifts", async () => {
+    // The host's rate-limit banner and poll pacing read these fields; an
+    // error string alone leaves both blind to a block that has a known end.
+    fetchMock().mockImplementation(async () =>
+      jsonResponse(
+        { message: "Too many requests" },
+        { status: 429, headers: { "ratelimit-reset": "1800000000" } }
+      )
+    );
+
+    const stats = await gitlabForgeProvider.repoStats?.getRepoStats(REPO, { bypassCache: true });
+
+    expect(stats?.counts.rateLimitKind).toBe("primary");
+    expect(stats?.counts.rateLimitResetAt).toBe(1_800_000_000_000);
+  });
+
+  it("prefers Retry-After over the reset header when both are sent", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T00:00:00Z"));
+    try {
+      fetchMock().mockImplementation(async () =>
+        jsonResponse(
+          { message: "Too many requests" },
+          { status: 429, headers: { "retry-after": "60", "ratelimit-reset": "1800000000" } }
+        )
+      );
+
+      const stats = await gitlabForgeProvider.repoStats?.getRepoStats(REPO, { bypassCache: true });
+
+      expect(stats?.counts.rateLimitResetAt).toBe(Date.parse("2026-07-01T00:01:00Z"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

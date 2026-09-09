@@ -46,7 +46,15 @@ import {
 const TOOLTIP_CACHE_TTL_MS = 30_000;
 const AVATAR_CACHE_TTL_MS = 60 * 60 * 1000;
 const REPO_STATS_CACHE_TTL_MS = 30_000;
-const STATS_FIRST_PAGE_SIZE = 20;
+/**
+ * One page size for BOTH the list endpoints and the stats first page — they
+ * cannot diverge. GitLab pages by NUMBER, so the `"2"` cursor the stats page
+ * hands back is only meaningful at the page size that produced it, and the
+ * host seeds its list cache with that cursor
+ * (`src/hooks/useRepositoryStats.ts`). A smaller stats page would make the
+ * first load-more skip every row between the two sizes.
+ */
+const DEFAULT_LIST_PAGE_SIZE = 30;
 
 /** Branches per batched GraphQL branch→MR query. */
 export const GRAPHQL_BRANCH_CHUNK_SIZE = 20;
@@ -114,7 +122,7 @@ function tooltipKey(repo: RepoRef, number: number): string {
 function listQuery(opts: ListOptions, state: string | undefined) {
   return {
     ...(state !== undefined ? { state } : {}),
-    per_page: opts.perPage ?? 30,
+    per_page: opts.perPage ?? DEFAULT_LIST_PAGE_SIZE,
     page: opts.cursor ?? "1",
     order_by: mapListOrderBy(opts.sort),
     sort: opts.direction ?? "desc",
@@ -353,7 +361,7 @@ export async function listReleasesImpl(repo: RepoRef, opts: ListOptions) {
     host: repo.host,
     path: `/projects/${encodeProjectId(repo)}/releases`,
     query: {
-      per_page: opts.perPage ?? 30,
+      per_page: opts.perPage ?? DEFAULT_LIST_PAGE_SIZE,
       page: opts.cursor ?? "1",
     },
   });
@@ -424,6 +432,17 @@ export async function getPRTooltipImpl(
 }
 
 /**
+ * A failure that says nothing about the email itself — a timeout, a throttle,
+ * a server error, or anything the transport didn't classify. Caching `null`
+ * for one of these would blank every commit by that author for the whole
+ * hour-long avatar TTL over a momentary blip.
+ */
+function isDefinitiveAvatarMiss(err: unknown): boolean {
+  if (!(err instanceof GitLabApiError)) return false;
+  return err.status !== 0 && err.status !== 429 && err.status < 500;
+}
+
+/**
  * Commit-author avatar via the public `/avatar?email=` endpoint on the
  * configured instance. Works unauthenticated (it falls back to Gravatar
  * server-side), cached per email.
@@ -453,8 +472,10 @@ export async function resolveAuthorAvatarImpl(
     const url = absolutizeAvatarUrl(data.avatar_url, instanceHost) ?? null;
     cacheSet(avatarCache, key, url, epoch);
     return url;
-  } catch {
-    cacheSet(avatarCache, key, null, epoch);
+  } catch (err) {
+    // Only an answer the instance actually gave is worth remembering as "no
+    // avatar"; a transient failure is retried on the next read instead.
+    if (isDefinitiveAvatarMiss(err)) cacheSet(avatarCache, key, null, epoch);
     return null;
   }
 }
@@ -497,7 +518,7 @@ export async function getRepoStatsImpl(
         path: `/projects/${encodeProjectId(repo)}/issues`,
         query: {
           state: "opened",
-          per_page: STATS_FIRST_PAGE_SIZE,
+          per_page: DEFAULT_LIST_PAGE_SIZE,
           order_by: "created_at",
           sort: "desc",
         },
@@ -507,7 +528,7 @@ export async function getRepoStatsImpl(
         path: `/projects/${encodeProjectId(repo)}/merge_requests`,
         query: {
           state: "opened",
-          per_page: STATS_FIRST_PAGE_SIZE,
+          per_page: DEFAULT_LIST_PAGE_SIZE,
           order_by: "created_at",
           sort: "desc",
         },
@@ -541,15 +562,28 @@ export async function getRepoStatsImpl(
   } catch (err) {
     const stale = repoStatsCache.get(key)?.value;
     const message = formatErrorMessage(err, "GitLab request failed");
+    // A 429 is a block with a known end, not a generic failure: the host
+    // renders its rate-limit banner and paces its polling off these fields,
+    // and gets neither from an error string. GitLab has no equivalent of
+    // GitHub's secondary abuse throttle, so the kind is always the quota.
+    const rateLimit =
+      err instanceof GitLabApiError && err.status === 429
+        ? {
+            rateLimitKind: "primary" as const,
+            ...(err.rateLimitResetAt !== undefined
+              ? { rateLimitResetAt: err.rateLimitResetAt }
+              : {}),
+          }
+        : {};
     if (stale) {
       return {
         ...stale,
-        counts: { ...stale.counts, stale: true, error: message },
+        counts: { ...stale.counts, stale: true, error: message, ...rateLimit },
         source: "memory-cache",
       };
     }
     return {
-      counts: { issueCount: null, prCount: null, error: message },
+      counts: { issueCount: null, prCount: null, error: message, ...rateLimit },
       issues: null,
       prs: null,
       source: "network",
