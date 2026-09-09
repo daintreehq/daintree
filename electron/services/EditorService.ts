@@ -11,8 +11,14 @@ interface EditorDefinition {
   binaries: string[];
   /** Additional directories to search beyond PATH (e.g. JetBrains Toolbox) */
   extraDirs?: () => string[];
-  /** Build the argv for opening a file at line/col */
-  buildArgs(filePath: string, line?: number, col?: number): string[];
+  /**
+   * Build the argv for opening a target at line/col. `isDirectory` is true when
+   * the target is a folder, in which case `line`/`col` are always undefined —
+   * `openFile` drops them before it gets here, since no editor CLI can navigate
+   * to a coordinate inside a directory. Most builders therefore need no branch:
+   * their no-coordinate form (a bare path) is already the folder-open syntax.
+   */
+  buildArgs(filePath: string, line?: number, col?: number, isDirectory?: boolean): string[];
 }
 
 const KNOWN_EDITORS: EditorDefinition[] = [
@@ -22,7 +28,10 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     binaries: ["code"],
     extraDirs: () =>
       macAppBundleDirs([{ name: "Visual Studio Code", subPath: "Contents/Resources/app/bin" }]),
-    buildArgs(filePath, line, col) {
+    // `--goto` names a file to navigate into; handed a folder the whole VS Code
+    // family opens the path as a text buffer instead of the workspace (#12329).
+    buildArgs(filePath, line, col, isDirectory) {
+      if (isDirectory) return [filePath];
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
       return ["--goto", target];
@@ -36,7 +45,8 @@ const KNOWN_EDITORS: EditorDefinition[] = [
       macAppBundleDirs([
         { name: "Visual Studio Code - Insiders", subPath: "Contents/Resources/app/bin" },
       ]),
-    buildArgs(filePath, line, col) {
+    buildArgs(filePath, line, col, isDirectory) {
+      if (isDirectory) return [filePath];
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
       return ["--goto", target];
@@ -47,7 +57,8 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     name: "Cursor",
     binaries: ["cursor"],
     extraDirs: () => macAppBundleDirs([{ name: "Cursor", subPath: "Contents/Resources/app/bin" }]),
-    buildArgs(filePath, line, col) {
+    buildArgs(filePath, line, col, isDirectory) {
+      if (isDirectory) return [filePath];
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
       return ["--goto", target];
@@ -59,7 +70,8 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     binaries: ["windsurf"],
     extraDirs: () =>
       macAppBundleDirs([{ name: "Windsurf", subPath: "Contents/Resources/app/bin" }]),
-    buildArgs(filePath, line, col) {
+    buildArgs(filePath, line, col, isDirectory) {
+      if (isDirectory) return [filePath];
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
       return ["--goto", target];
@@ -143,7 +155,8 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     binaries: ["antigravity-ide"],
     extraDirs: () =>
       macAppBundleDirs([{ name: "Antigravity IDE", subPath: "Contents/Resources/app/bin" }]),
-    buildArgs(filePath, line, col) {
+    buildArgs(filePath, line, col, isDirectory) {
+      if (isDirectory) return [filePath];
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
       return ["--goto", target];
@@ -311,6 +324,33 @@ export function discover(): DiscoveredEditor[] {
   });
 }
 
+/**
+ * A placeholder together with the `:` that introduces it, so an absent
+ * coordinate takes its own punctuation with it. Deliberately only `:` — the
+ * form this app's settings UI documents and defaults to. Punctuation in a
+ * hand-written template can carry meaning we have no basis to reinterpret: a
+ * bare `+` is vim's "start at the last line", and a `,` may be a field
+ * delimiter whose empty slot the wrapper still counts.
+ */
+const CUSTOM_PLACEHOLDER = /(:)?\{(file|line|col)\}/g;
+
+type CustomPlaceholder = "file" | "line" | "col";
+
+/**
+ * Interpolate a custom-editor template, dropping the punctuation an absent
+ * coordinate would otherwise strand. The settings UI defaults the template to
+ * `{file}:{line}:{col}`, so without this a target with no line renders
+ * `/path/to/thing::` — which every editor treats as a different, missing file.
+ * That is unconditional for a directory (folders have no coordinates) and was
+ * already reachable for any file opened without one.
+ *
+ * Nothing else about the template is second-guessed. The token itself always
+ * survives, because a template can be positional (`"{line}" "{col}" "{file}"`)
+ * and removing an empty argument would slide the path into the column's slot;
+ * and a flag token that names a coordinate (`--line {line}`) is left standing,
+ * since working out which of a user's own arguments existed only to carry a
+ * line means guessing at a command grammar we don't know.
+ */
 function buildCustomArgs(
   template: string,
   command: string,
@@ -318,12 +358,17 @@ function buildCustomArgs(
   line?: number,
   col?: number
 ): { binary: string; args: string[] } {
-  const lineStr = line !== undefined ? String(line) : "";
-  const colStr = col !== undefined ? String(col) : "";
+  const values: Record<CustomPlaceholder, string> = {
+    file: filePath,
+    line: line !== undefined ? String(line) : "",
+    col: col !== undefined ? String(col) : "",
+  };
 
-  const tokens = tokenizeArgString(template);
-  const args = tokens.map((token) =>
-    token.replaceAll("{file}", filePath).replaceAll("{line}", lineStr).replaceAll("{col}", colStr)
+  const args = tokenizeArgString(template).map((token) =>
+    token.replace(CUSTOM_PLACEHOLDER, (_match, separator: string | undefined, name) => {
+      const value = values[name as CustomPlaceholder];
+      return value === "" ? "" : `${separator ?? ""}${value}`;
+    })
   );
   return { binary: command, args };
 }
@@ -350,15 +395,33 @@ async function tryEnvEditor(
   return launchEditor(binary, [...extraArgs, filePath]);
 }
 
+/**
+ * Launch `filePath` in the user's editor, trying the configured editor, then
+ * `$VISUAL`/`$EDITOR`, then whatever is discoverable, then the platform
+ * launcher.
+ *
+ * `isDirectory` marks the target as a folder — the worktree "Open in Editor"
+ * action opens one (#12329). Coordinates are meaningless there, so they are
+ * dropped up front: that alone gives most editors their correct folder syntax,
+ * since a bare path is what they already emit with no line. The two places a
+ * folder still needs its own answer are the VS Code family's `--goto` and the
+ * macOS `open -t` step, which forces the plain-text UTI handler and cannot open
+ * a directory at all.
+ */
 export async function openFile(
   filePath: string,
   line?: number,
   col?: number,
-  config?: EditorConfig | null
+  config?: EditorConfig | null,
+  isDirectory = false
 ): Promise<void> {
   if (!path.isAbsolute(filePath)) {
     throw new Error("Only absolute paths are allowed");
   }
+
+  // A folder has no coordinates to navigate to, so they never reach a builder.
+  const targetLine = isDirectory ? undefined : line;
+  const targetCol = isDirectory ? undefined : col;
 
   const { execa } = await import("execa");
 
@@ -397,7 +460,13 @@ export async function openFile(
       const command = config.customCommand?.trim();
       const template = config.customTemplate?.trim() ?? "{file}";
       if (command) {
-        const { binary, args } = buildCustomArgs(template, command, filePath, line, col);
+        const { binary, args } = buildCustomArgs(
+          template,
+          command,
+          filePath,
+          targetLine,
+          targetCol
+        );
         const launched = await launchEditor(binary, args);
         if (launched) return;
       }
@@ -406,7 +475,7 @@ export async function openFile(
       if (def) {
         const executable = findExecutable(def);
         if (executable) {
-          const args = def.buildArgs(filePath, line, col);
+          const args = def.buildArgs(filePath, targetLine, targetCol, isDirectory);
           const launched = await launchEditor(executable, args);
           if (launched) return;
         }
@@ -426,7 +495,7 @@ export async function openFile(
   for (const def of KNOWN_EDITORS) {
     const executable = findExecutable(def);
     if (executable) {
-      const args = def.buildArgs(filePath, line, col);
+      const args = def.buildArgs(filePath, targetLine, targetCol, isDirectory);
       const launched = await launchEditor(executable, args);
       if (launched) return;
     }
@@ -434,13 +503,17 @@ export async function openFile(
 
   // 4. macOS .app fallback (no line support). `-t` opens with the user's default
   // text editor (public.plain-text UTI handler) rather than the file-extension
-  // association, so .ts/.tsx files don't route through Xcode/Cursor.
-  if (process.platform === "darwin") {
+  // association, so .ts/.tsx files don't route through Xcode/Cursor. That same
+  // forcing is why a directory skips this step: a plain-text handler cannot
+  // open a folder, so `open -t` would report success while showing nothing.
+  if (process.platform === "darwin" && !isDirectory) {
     const launched = await launchEditor("open", ["-t", filePath]);
     if (launched) return;
   }
 
-  // 5. shell.openPath as last resort
+  // 5. shell.openPath as last resort — the OS default handler, which for a
+  // directory means the file manager. Reaching it is the failure the worktree
+  // action used to start from, so it stays strictly last.
   const errorString = await shell.openPath(filePath);
   if (errorString) {
     throw new Error(`Failed to open file: ${errorString}`);
