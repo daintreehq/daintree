@@ -353,7 +353,16 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // land, and a spend that drifts into that window will not be caught. Once
   // #12189 (243 B), #12318 and #12319 are in, usage is 47_516 B and the ratchet
   // is back to biting with 84 B of slack.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 47_600;
+  // 47_600 → 49_193 for #12338's `terminal.interruptOwned`. Most of the spend is
+  // its output schema, not its description, and that is the tool rather than its
+  // prose: it is the one tool on this surface whose contract is mostly what it
+  // does NOT confirm. `batchDoubleEscape` is a one-way `ipcRenderer.send`, so
+  // `status` can only ever say `requested`, `agentStateAtDispatch` is a
+  // heuristic that gated the call rather than evidence a turn was running, and
+  // `support` says whether the agent's own CLI even names Escape as its
+  // interrupt. Each of those needs its own advertised field, because a caller
+  // that reads a bare success here retries against an agent it never stopped.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 49_193;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -397,7 +406,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `pr` and `reason` as independent optionals the advertised schema accepted
   // `{status:"found"}` with no PR and `{status:"not_found"}` carrying one —
   // contradictions a strict client would have validated as fine.
-  const MAX_COHORT_PAYLOAD_BYTES = 204_400;
+  // 204_400 → 204_678 for #12338's `terminal.interruptOwned`, carried in-app for
+  // the external⊆system invariant. It moves less than the external half above
+  // because the raw `terminal.interrupt` it delegates to is on no tier at all —
+  // only the ownership-scoped form is advertised anywhere.
+  const MAX_COHORT_PAYLOAD_BYTES = 204_678;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -150,6 +150,28 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // created it — and the ledger is server-authoritative, written from trusted
   // dispatch results, so the id cannot be claimed into it.
   "terminal.revealOwned",
+  // The step between waiting and destroying, which this surface did not have
+  // (#12338). A client could launch an agent and watch it, and if the agent had
+  // misread the task its only lever was `terminal.closeOwned` — which takes the
+  // conversation with it, and on a long session the conversation is the
+  // expensive part. Submitting text is not the missing lever either: an agent
+  // mid-turn is not reading its prompt, so a submission queues behind exactly
+  // the work it was meant to stop.
+  //
+  // What is on the surface is one operation meaning "stop this turn", not a
+  // signal API. There is no caller-supplied signal, no key sequence argument
+  // and no process handle: the id is the only thing that crosses, and Daintree
+  // picks the mechanism. A signal would not have worked anyway — node-pty's
+  // `kill()` reaches our wrapper shell, which carries `trap : INT` and swallows
+  // it before the agent sees anything.
+  //
+  // It refuses more than it accepts, deliberately. An agent whose own CLI
+  // advertises a different cancel key is named and refused rather than written
+  // to, and one that is not mid-turn is refused rather than sent a stray
+  // Escape. What it never does is report an interruption: the transport is
+  // one-way, so the result says the keystrokes were handed over and stops
+  // there.
+  "terminal.interruptOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
 

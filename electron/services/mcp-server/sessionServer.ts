@@ -230,6 +230,18 @@ const OWNED_RESOURCE_TOOLS: Record<
     releasesOwnership: false,
     reveals: true,
   },
+  // Keeps its record for the same reason the reveal above does: interrupting a
+  // turn is not a claim the panel stopped existing, and dropping the record
+  // would cost the session the authority to interrupt it again — or to close it
+  // afterwards, which is the whole point of having a non-destructive stop
+  // (#12338). Nothing beyond the id is forwarded, which is what keeps this from
+  // becoming the general signal-passing surface it was deliberately not.
+  "terminal.interruptOwned": {
+    resourceKind: "terminal",
+    delegateTo: "terminal.interrupt",
+    idArg: "terminalId",
+    releasesOwnership: false,
+  },
 };
 
 /** The listing whose `owned` filter main resolves against the ledger (#12308). */

@@ -11,6 +11,51 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
+
+/**
+ * What an interrupt request can honestly report (#12338).
+ *
+ * Every field describes the moment before the write, because that is the last
+ * moment anything knows: `batchDoubleEscape` is a one-way `ipcRenderer.send`
+ * with no reply channel, and the pty-host silently skips a terminal that exits
+ * between the two Escapes. So `status` is `requested` and nothing else — there
+ * is deliberately no `interrupted`, no `stopped`, and no delivery timestamp,
+ * since a caller reading one would be reading a guess.
+ *
+ * Top-level object, never `.nullable()`: `buildToolOutputSchema` forwards a
+ * manifest schema only when its JSON Schema has `type === "object"`, and zod
+ * renders a nullable object as a top-level `anyOf`, which silently disables
+ * `mcpOutputSchema` and emits no `structuredContent` at all (#11547).
+ */
+const TerminalInterruptResultSchema = z.object({
+  terminalId: z.string().describe("The panel the cancel keystrokes were written to."),
+  agentId: z
+    .string()
+    .describe("The agent Daintree resolved for that panel, from its runtime identity."),
+  agentStateAtDispatch: z
+    .enum(["working", "waiting"])
+    .describe(
+      "What the agent was last observed doing. Read off its own output and often wrong; it gated the request, it is not proof a turn was running."
+    ),
+  method: z
+    .literal("double-escape")
+    .describe("The key sequence written: Escape, a 50ms gap, Escape again."),
+  status: z
+    .literal("requested")
+    .describe(
+      "Always `requested`: the transport takes the keystrokes and never answers, so this says they were handed over, not that they landed."
+    ),
+  support: z
+    .enum(["advertised", "unverified"])
+    .describe(
+      "`advertised` if this agent's CLI names Escape as its interrupt; `unverified` if it names none, so the effect is unknown. A CLI naming another key is refused."
+    ),
+  message: z
+    .string()
+    .describe("The same in prose, including what to check by reading the terminal."),
+});
+
 export function registerTerminalInputActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -113,6 +158,105 @@ export function registerTerminalInputActions(
       } catch {
         // Clipboard API may be denied
       }
+    },
+  }));
+
+  actions.set("terminal.interrupt", () => ({
+    id: "terminal.interrupt",
+    title: "Interrupt Agent",
+    description:
+      "Stop the turn one named agent is running, leaving its panel and conversation intact. Sends cancel keystrokes, not prompt text an agent mid-turn would not read. Delivery is not acknowledged and the agent is not observed stopping, so read the terminal afterwards.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    // Writes control keystrokes into an agent terminal, so it belongs with the
+    // rest of the injection surface behind the `agent:input` capability rather
+    // than reachable through an ungated `safe` action (#10558).
+    denyPluginDispatch: true,
+    scope: "renderer",
+    // No focused-terminal fallback exists here, so there is nothing for a user
+    // picking this out of the palette to act on. `fleet.interrupt` is the
+    // interactive version.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The agent panel to interrupt, as an `id` from the terminal listing. Required: there is no focus fallback, and a mistarget cancels the wrong turn."
+        ),
+    }),
+    resultSchema: TerminalInterruptResultSchema,
+    mcpOutputSchema: true,
+    run: async (args: unknown) => {
+      const { terminalId } = args as { terminalId: string };
+      const state = usePanelStore.getState();
+      // `Object.hasOwn` rather than a truthiness read: `panelsById` is a plain
+      // object, so an id like "constructor" would otherwise resolve off the
+      // prototype and be assessed as if it were a panel.
+      const panel = Object.hasOwn(state.panelsById, terminalId)
+        ? state.panelsById[terminalId]
+        : undefined;
+      const assessment = assessTerminalInterrupt(panel, terminalId);
+      // Refusals throw rather than returning a success-shaped payload with a
+      // false flag in it: a result that validates against the schema below is
+      // read as "the keystrokes went out", and nothing here should be able to
+      // say that when nothing was written (#10813).
+      if (!assessment.eligible) throw new Error(assessment.reason);
+      // Snapshot before the write and return exactly what was true then — the
+      // transport is one-way `ipcRenderer.send`, so there is no later moment
+      // that knows more than this one does.
+      terminalClient.batchDoubleEscape([terminalId]);
+      return {
+        terminalId,
+        agentId: assessment.agentId,
+        agentStateAtDispatch: assessment.agentState,
+        method: "double-escape" as const,
+        status: "requested" as const,
+        support: assessment.support,
+        message:
+          assessment.support === "advertised"
+            ? "Cancel keystrokes were handed to the terminal. This agent advertises Escape as its interrupt, but neither delivery nor the agent stopping was confirmed — read the terminal output before assuming the turn ended."
+            : "Cancel keystrokes were handed to the terminal. This agent does not advertise an interrupt key, so whether Escape cancels its turn is unverified — read the terminal output to see what actually happened before assuming the turn ended.",
+      };
+    },
+  }));
+
+  // Registered here for manifest metadata only — schema, description, tier and
+  // audit registration. Execution lives in the MCP CallTool handler
+  // (electron/services/mcp-server/sessionServer.ts), because the authorization
+  // it needs is session state: the ownership ledger is keyed by MCP session id,
+  // which the renderer cannot see and must never be told. Main checks ownership
+  // first, then delegates to `terminal.interrupt` above, so the eligibility
+  // rules and the honest result shape are the ones already shipped rather than
+  // a second implementation (#12338). `run()` throws if the renderer ever
+  // invokes it directly.
+  actions.set("terminal.interruptOwned", () => ({
+    id: "terminal.interruptOwned",
+    title: "Interrupt Owned Agent",
+    description:
+      "Stop the turn an agent is running in a panel this connection created, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["stop", "cancel", "escape", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The agent panel to interrupt, as an `id` this session got when it created the panel. Required: there is no focus fallback."
+        ),
+    }),
+    resultSchema: TerminalInterruptResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.interruptOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
     },
   }));
 

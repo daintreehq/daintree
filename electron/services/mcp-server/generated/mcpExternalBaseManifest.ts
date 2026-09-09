@@ -1660,6 +1660,84 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
+      "Stop the turn an agent is running in a panel this connection created, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+    enabled: true,
+    id: "terminal.interruptOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "The agent panel to interrupt, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
+        },
+      },
+      required: ["terminalId"],
+    },
+    keywords: ["stop", "cancel", "escape", "owned"],
+    kind: "command",
+    name: "terminal.interruptOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          description: "The panel the cancel keystrokes were written to.",
+        },
+        agentId: {
+          type: "string",
+          description: "The agent Daintree resolved for that panel, from its runtime identity.",
+        },
+        agentStateAtDispatch: {
+          type: "string",
+          enum: ["working", "waiting"],
+          description:
+            "What the agent was last observed doing. Read off its own output and often wrong; it gated the request, it is not proof a turn was running.",
+        },
+        method: {
+          type: "string",
+          const: "double-escape",
+          description: "The key sequence written: Escape, a 50ms gap, Escape again.",
+        },
+        status: {
+          type: "string",
+          const: "requested",
+          description:
+            "Always `requested`: the transport takes the keystrokes and never answers, so this says they were handed over, not that they landed.",
+        },
+        support: {
+          type: "string",
+          enum: ["advertised", "unverified"],
+          description:
+            "`advertised` if this agent's CLI names Escape as its interrupt; `unverified` if it names none, so the effect is unknown. A CLI naming another key is refused.",
+        },
+        message: {
+          type: "string",
+          description: "The same in prose, including what to check by reading the terminal.",
+        },
+      },
+      required: [
+        "terminalId",
+        "agentId",
+        "agentStateAtDispatch",
+        "method",
+        "status",
+        "support",
+        "message",
+      ],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Interrupt Owned Agent",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
       "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     enabled: true,
     id: "terminal.list",

@@ -60,6 +60,8 @@ export const config: AgentConfig = {
     supportsBracketedPaste: true,
     softNewlineSequence: "\x1b\r",
     ignoredInputSequences: ["\x1b\r"],
+    // Prints the same "esc to interrupt" working footer as Claude.
+    interrupt: "double-escape",
   },
   detection: {
     primaryPatterns: [
