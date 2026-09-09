@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { activate } from "../index";
-import { __resetKeyedMutexForTests } from "../../../../../electron/utils/keyedMutex";
+import { activate } from "../index.js";
+import { __resetKeyedMutexForTests } from "../../../../../electron/utils/keyedMutex.js";
 import {
   CHANNELS,
   PUSH_CHANNELS,
@@ -13,12 +13,12 @@ import {
   type DocumentSaveAsResult,
   type DocumentSaveResult,
   type DraftPutResult,
-} from "../../shared/protocol";
+} from "../../shared/protocol.js";
 import type {
   PluginHostApi,
   PluginIpcContext,
   PluginQuickPickItem,
-} from "../../../../../shared/types/plugin";
+} from "../../../../../shared/types/plugin.js";
 
 /**
  * A host stand-in over a real temp directory. `fs.writeFile` reproduces the
@@ -37,7 +37,7 @@ interface FakeHost {
   action: ((args: unknown) => unknown) | null;
   quickPick: (items: PluginQuickPickItem[]) => PluginQuickPickItem | undefined;
   dispatched: Array<{ actionId: string; args: unknown }>;
-  toasts: Array<{ title: string }>;
+  toasts: Array<{ message: string }>;
   activeProjectId: string;
 }
 
@@ -146,8 +146,8 @@ function makeHost(): FakeHost {
         fake.wake = null;
       };
     },
-    showToast: async (options: { title: string }) => {
-      fake.toasts.push({ title: options.title });
+    showToast: async (options: { message: string }) => {
+      fake.toasts.push({ message: options.message });
     },
     showQuickPick: async (items: PluginQuickPickItem[]) => fake.quickPick(items),
     dispatch: async (actionId: string, args: unknown) => {
@@ -534,7 +534,7 @@ describe("markdown-editor main (#12323)", () => {
       await call(CHANNELS.draftPut, { record: { ...record, identity }, generation: 1 });
       fake.quickPick = (items) => items[0];
       await expect(fake.action!({})).resolves.toEqual({ recovered: false });
-      expect(fake.toasts.map((t) => t.title)).toContain("Couldn't open the draft");
+      expect(fake.toasts.some((t) => t.message.startsWith("Couldn't open the draft"))).toBe(true);
       expect(await call(CHANNELS.recoverAck, { requestId: "stale" })).toEqual({
         acknowledged: false,
       });
@@ -542,7 +542,9 @@ describe("markdown-editor main (#12323)", () => {
 
     it("the recover action tells the user when there is nothing to recover", async () => {
       await expect(fake.action!({})).resolves.toEqual({ recovered: false });
-      expect(fake.toasts.map((t) => t.title)).toContain("No Markdown drafts to recover");
+      expect(fake.toasts.some((t) => t.message.startsWith("No Markdown drafts to recover"))).toBe(
+        true
+      );
     });
   });
 });

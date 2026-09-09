@@ -409,8 +409,7 @@ export async function activate(
       if (list.length === 0) {
         await host.showToast({
           type: "info",
-          title: "No Markdown drafts to recover",
-          message: "Every draft has been saved or discarded.",
+          message: "No Markdown drafts to recover — every draft has been saved or discarded.",
         });
         return { recovered: false };
       }
@@ -456,8 +455,7 @@ export async function activate(
       if (!acknowledged) {
         await host.showToast({
           type: "warning",
-          title: "Couldn't open the draft",
-          message: `Open ${draft.identity.filePath} in a file panel and switch it to Edit — the draft is still stored.`,
+          message: `Couldn't open the draft. Open ${draft.identity.filePath} in a file panel and switch it to Edit — the draft is still stored.`,
         });
       }
       return { recovered: acknowledged };

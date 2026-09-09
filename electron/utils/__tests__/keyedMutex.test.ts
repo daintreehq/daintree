@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { __resetKeyedMutexForTests, isKeyBusy, runExclusive } from "../keyedMutex";
+import { __resetKeyedMutexForTests, isKeyBusy, runExclusive } from "../keyedMutex.js";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 

@@ -6,7 +6,7 @@ import {
   encodeDocument,
   hasUtf8Bom,
   sha256Hex,
-} from "../documentCodec";
+} from "../documentCodec.js";
 
 const bytes = (text: string) => new Uint8Array(Buffer.from(text, "utf-8"));
 const BOM = new Uint8Array([0xef, 0xbb, 0xbf]);

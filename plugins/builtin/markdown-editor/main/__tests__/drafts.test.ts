@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DraftStore } from "../drafts";
-import { __resetKeyedMutexForTests } from "../../../../../electron/utils/keyedMutex";
-import type { DocumentIdentity, DraftRecord } from "../../shared/protocol";
-import type { PluginFsApi } from "../../../../../shared/types/plugin";
+import { DraftStore } from "../drafts.js";
+import { __resetKeyedMutexForTests } from "../../../../../electron/utils/keyedMutex.js";
+import type { DocumentIdentity, DraftRecord } from "../../shared/protocol.js";
+import type { PluginFsApi } from "../../../../../shared/types/plugin.js";
 
 /**
  * A host.fs stand-in over a real temp directory: the store only needs the

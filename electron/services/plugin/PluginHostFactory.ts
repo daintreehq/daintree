@@ -2171,12 +2171,13 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
           }
           const currentRevision = sha256Hex(current);
           if (currentRevision !== expected) {
-            const error = fsWriteError(
-              "REVISION_MISMATCH",
-              `Plugin "${pluginId}" fs.writeFile: the file changed since it was read`
-            ) as Error & { currentRevision: string };
-            error.currentRevision = currentRevision;
-            throw error;
+            throw Object.assign(
+              fsWriteError(
+                "REVISION_MISMATCH",
+                `Plugin "${pluginId}" fs.writeFile: the file changed since it was read`
+              ),
+              { currentRevision }
+            );
           }
         }
         // Preserve the file's mode across the replace so an executable script
