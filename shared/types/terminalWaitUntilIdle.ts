@@ -49,14 +49,23 @@ export const WAIT_UNTIL_IDLE_IDLE_REASONS: readonly WaitUntilIdleIdleReason[] = 
  * that a panel is on screen, and a plain shell that never launched an agent is
  * `"unknown"` while being perfectly alive.
  *
- * Known lag, in the safe direction. A kill reaches the main process as two
- * separate messages — the `idle` state change, then `agent:killed` — so a wait
- * that was already in flight settles on the first and can answer `"tracked"`
- * for a terminal whose kill notice is still in transit; the next call reports
- * `"closed"`. It never errs the other way: nothing reports `"closed"` without
- * an observed kill, so a reconciler cannot be told to reap a live session.
- * Closing the window entirely means carrying the kill on the transition
- * itself, which is a pty-host change.
+ * Two known lags, both one call wide, because every arm is reported from what
+ * main has processed so far rather than from a live probe:
+ *
+ * - A kill reaches main as two messages — the `idle` state change, then
+ *   `agent:killed` — so a wait already in flight settles on the first and can
+ *   answer `"tracked"` while the kill notice is still in transit. The next call
+ *   reports `"closed"`.
+ * - Restarting an agent in the same panel reuses the terminal id, and the
+ *   record is only revived when main processes the new `agent:spawned`. A call
+ *   landing in that window reports `"closed"` for a terminal that is coming
+ *   back up.
+ *
+ * So `"closed"` means a kill was observed for this id and no spawn has been
+ * seen since — not that the id can never be live again. Treat it as decisive
+ * only where a restart under the same id is not in play, or confirm with a
+ * second call. Closing either window means carrying the kill and the spawn
+ * generation on the transition itself, which is a pty-host change.
  */
 export type WaitUntilIdleTrackingState = "tracked" | "closed" | "unknown";
 

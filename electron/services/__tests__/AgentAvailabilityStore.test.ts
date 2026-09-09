@@ -721,13 +721,19 @@ describe("AgentAvailabilityStore", () => {
 
       close("term-overflow");
 
-      // Only the single oldest is dropped, and eviction downgrades it to
-      // "not closed" (which the handler reports as `unknown`) — never back to
-      // tracked, since no mapping is recreated.
-      expect(store.isTerminalClosed("term-0")).toBe(false);
+      // Assert the WHOLE retained set, not a few samples: an implementation
+      // that evicted two on overflow would pass a spot check of term-0/term-1.
+      const stillClosed = [
+        ...Array.from({ length: CLOSED_TERMINAL_CAPACITY }, (_, i) => `term-${i}`),
+        "term-overflow",
+      ].filter((id) => store.isTerminalClosed(id));
+      expect(stillClosed).toEqual([
+        ...Array.from({ length: CLOSED_TERMINAL_CAPACITY - 1 }, (_, i) => `term-${i + 1}`),
+        "term-overflow",
+      ]);
+      // Eviction downgrades to "not closed" (which the handler reports as
+      // `unknown`) — never back to tracked, since no mapping is recreated.
       expect(store.getAgentIdForTerminal("term-0")).toBeUndefined();
-      expect(store.isTerminalClosed("term-1")).toBe(true);
-      expect(store.isTerminalClosed("term-overflow")).toBe(true);
     });
 
     it("re-closing an entry refreshes its recency so the next-oldest ages out", () => {

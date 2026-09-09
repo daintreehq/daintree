@@ -369,8 +369,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // so the spend below is measured from 49_150 rather than the 47_600 it was
   // written against.
   // 49_150 → 50_600 for #12339's two wait tools, which is almost entirely the
-  // output schemas they never advertised: 1_849 B for `terminal.waitUntilIdle`
-  // and 1_350 B for the batch, against a net wait-tool growth of 3_223 B.
+  // output schemas they never advertised: 1_865 B for `terminal.waitUntilIdle`
+  // and 1_366 B for the batch, against a net wait-tool growth of 3_255 B.
   // Both carried a hand-written `rawOutputSchema` without `mcpOutputSchema`, so
   // `computeSchemas` produced nothing and `tools/list` published no output
   // contract at all — while the main-process short-circuit was already
