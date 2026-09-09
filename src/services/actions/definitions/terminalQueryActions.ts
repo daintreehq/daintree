@@ -1,6 +1,10 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { TerminalSummarySchema, TerminalStatusResultSchema } from "./schemas";
+import {
+  TerminalSummarySchema,
+  TerminalStatusResultSchema,
+  TerminalSendCommandResultSchema,
+} from "./schemas";
 import { tailCapturedOutput } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
@@ -9,6 +13,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { TerminalStatusEntry } from "@shared/types/terminalStatus";
+import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -24,6 +29,16 @@ import {
   isClientMetadataEligible,
 } from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+
+/**
+ * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
+ *
+ * Bounded because the result advertises an output schema: over the 50 KiB
+ * response budget the transport drops `structuredContent` and flags the call
+ * `isError`, so an unbounded echo would turn a successful large submission into
+ * a reported failure with its own correlation token truncated away.
+ */
+const MAX_ECHOED_COMMAND_CHARS = 1024;
 
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
@@ -254,7 +269,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Snapshot agent and process state across many terminals, with optional output tails. This is the batched polling path: prefer it over listing terminals for agent state, or reading each terminal's output in turn. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the shared fetch failed. Use the blocking wait to proceed the moment an agent finishes.",
+      "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -278,6 +293,14 @@ export function registerTerminalQueryActions(
           .optional()
           .describe(
             "Filter by panel location (ignored when `terminalIds` is provided). Defaults to all locations except trash and background."
+          ),
+        submissionToken: z
+          .string()
+          .min(1)
+          .max(128)
+          .optional()
+          .describe(
+            "A token from the text-submission capability. Adds that submission's delivery record to each entry. Requires `terminalIds`."
           ),
         includeOutput: z
           .object({
@@ -304,12 +327,17 @@ export function registerTerminalQueryActions(
     resultSchema: TerminalStatusResultSchema,
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { terminalIds, worktreeId, location, includeOutput } = (args ?? {}) as {
+      const { terminalIds, worktreeId, location, includeOutput, submissionToken } = (args ??
+        {}) as {
         terminalIds?: string[];
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
         includeOutput?: { lines?: number; stripAnsi?: boolean };
+        submissionToken?: string;
       };
+      if (submissionToken !== undefined && terminalIds === undefined) {
+        throw new Error("terminal.getStatus requires `terminalIds` when `submissionToken` is set.");
+      }
 
       const state = usePanelStore.getState();
       const panelsById = state.panelsById;
@@ -374,6 +402,24 @@ export function registerTerminalQueryActions(
         }
       }
 
+      // Delivery records live in the pty-host, so this is the one thing the
+      // panel store cannot answer (#12337). One batched hop, and only when a
+      // token was asked for — the default poll path issues no extra IPC.
+      let submissions: Record<string, TerminalSubmissionLookup> | null = null;
+      let submissionError: string | undefined;
+      if (submissionToken !== undefined) {
+        const idsToLookUp = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
+        if (idsToLookUp.length > 0) {
+          try {
+            submissions = await terminalClient.getSubmissions(idsToLookUp, submissionToken);
+          } catch (err) {
+            submissionError = formatErrorMessage(err, "Failed to fetch submission status");
+          }
+        } else {
+          submissions = {};
+        }
+      }
+
       const entries: TerminalStatusEntry[] = resolved.map(({ id, terminal }) => {
         if (!terminal) {
           return {
@@ -410,13 +456,44 @@ export function registerTerminalQueryActions(
           entry.waitingReason = terminal.waitingReason;
         }
 
+        // Both batch fetches below can fail independently, and each is a
+        // separate thing the caller lost. Appending rather than assigning stops
+        // the later one reporting as the only failure while the earlier one
+        // vanishes along with the field it would have filled.
+        const appendError = (message: string) => {
+          entry.error = entry.error === undefined ? message : `${entry.error}; ${message}`;
+        };
+
+        if (submissionToken !== undefined) {
+          if (submissionError !== undefined) {
+            // The lookup failed for the whole batch, so no entry can claim a
+            // record. Report that as an error rather than as `unknown`, which
+            // would assert the terminal has no such submission.
+            appendError(submissionError);
+          } else if (submissions !== null) {
+            const lookup = submissions[terminal.id] ?? { status: "unreadable" as const };
+            if (lookup.status === "found") {
+              entry.submission = lookup.record;
+            } else if (lookup.status === "absent") {
+              // The terminal WAS read and holds nothing, so absence is
+              // evidence and `unknown` is a claim we can make.
+              entry.submission = { token: submissionToken, phase: "unknown" };
+            } else {
+              // Nothing was observed. Saying `unknown` here would assert this
+              // terminal has no such submission on the strength of an RPC that
+              // failed — the false certainty this issue exists to remove.
+              appendError("Submission status unavailable for this terminal");
+            }
+          }
+        }
+
         if (includeOutput) {
           if (outputError !== undefined) {
             // The IPC failed for the whole batch (transport-level failure),
             // so every successfully-resolved entry gets the same error.
             // Status fields are kept intact so the caller still has something
             // useful to act on — recentOutput is the only thing we lost.
-            entry.error = outputError;
+            appendError(outputError);
             entry.recentOutput = null;
           } else if (outputs !== null) {
             const serialized = outputs[terminal.id] ?? null;
@@ -562,7 +639,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing off a partial message. This returns once the submission is queued, not once it has been delivered or run, so inspect the terminal afterwards to see what happened. It runs with the terminal's own privileges.",
+      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing a partial message. This returns once the submission is queued, not once it was delivered or run: pass the returned `submissionToken` to the status capability to find out. Runs with the terminal's privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -581,6 +658,15 @@ export function registerTerminalQueryActions(
       terminalId: z
         .string()
         .min(1)
+        // Bounded because it is echoed back in the result, and the result is
+        // schema-advertised: past the response budget the transport drops
+        // `structuredContent` and flags the call `isError`, which would lose
+        // the token for a submission that went out. `agent.launch` accepts an
+        // arbitrary `requestedId`, so an id long enough to do that is
+        // reachable. Panel ids are short; this rejects only pathological ones,
+        // and rejecting is clearer than a truncated success reported as a
+        // failure.
+        .max(512)
         .describe(
           "Identifies the terminal to submit to, using a panel id from the terminal-listing capability."
         ),
@@ -591,6 +677,8 @@ export function registerTerminalQueryActions(
           "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
         ),
     }),
+    resultSchema: TerminalSendCommandResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { terminalId, command } = args as { terminalId: string; command: string };
 
@@ -617,15 +705,30 @@ export function registerTerminalQueryActions(
         throw new Error("Terminal does not have PTY capability");
       }
 
-      // Send command via submit (handles bracketed paste)
-      await terminalClient.submit(terminalId, command);
+      // Minted here rather than in main so the caller gets a correlator even if
+      // the submit itself rejects — and minted after validation, so a token is
+      // only ever handed out for a submission that was actually dispatched
+      // (#12337). Not an idempotency key: two identical commands get two
+      // tokens, because they are two submissions.
+      const submissionToken = crypto.randomUUID();
+
+      // Send command via submit (handles bracketed paste). Resolving means
+      // queued, not written — which is exactly why the token exists.
+      await terminalClient.submit(terminalId, command, submissionToken);
 
       // Return a clear message so the AI model knows not to repeat this action
       return {
         sent: true,
         terminalId,
-        command,
-        message: `Command sent to terminal. Do not send this command again to the same terminal.`,
+        // Echoed back bounded, never whole. The result now advertises an output
+        // schema, and an oversized result does not merely truncate: it drops
+        // `structuredContent` and comes back flagged `isError`. A large context
+        // injection echoed in full would therefore report a submission that DID
+        // go out as a failed call, with the token it needs to check that gone
+        // from the truncated body — the exact silent loss this issue closes.
+        command: command.slice(0, MAX_ECHOED_COMMAND_CHARS),
+        submissionToken,
+        message: `Submission queued. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
       };
     },
   }));

@@ -16,6 +16,7 @@ import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
+import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 
 export type { TerminalFlowStatus };
 
@@ -220,7 +221,7 @@ export type PtyHostRequest =
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "broadcast-write"; ids: string[]; data: string }
-  | { type: "submit"; id: string; text: string }
+  | { type: "submit"; id: string; text: string; submissionToken?: string }
   | { type: "stage"; id: string; text: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
@@ -309,7 +310,7 @@ export type PtyHostRequest =
   | { type: "dispose" }
   | { type: "set-log-level-overrides"; overrides: Record<string, string> }
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
-  | { type: "get-terminal"; id: string; requestId: string }
+  | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
   | { type: "get-serialized-state"; id: string; requestId: string }
   | {
@@ -861,6 +862,12 @@ export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostRes
 /** Terminal info sent from Host → Main for getTerminal queries */
 export interface PtyHostTerminalInfo {
   id: string;
+  /**
+   * The record for the `submissionToken` this query named, when it named one
+   * (#12337). Only ever populated on a targeted `get-terminal` — every other
+   * query family omits it, so bulk inventory reads are unchanged.
+   */
+  submission?: TerminalSubmissionRecord;
   projectId?: string;
   kind?: PanelKind;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */

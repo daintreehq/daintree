@@ -1211,7 +1211,16 @@ function buildElectronApi(): ElectronAPI {
 
       write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
 
-      submit: (id: string, text: string) => _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text),
+      submit: (id: string, text: string, submissionToken?: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken),
+
+      /**
+       * Resolve one submission token across several terminals (#12337). A
+       * terminal that was read but holds no record maps to `null`, which the
+       * caller reports as the `unknown` phase.
+       */
+      getSubmissions: (terminalIds: string[], submissionToken: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_SUBMISSIONS, terminalIds, submissionToken),
 
       resize: (id: string, cols: number, rows: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),

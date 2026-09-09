@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
-const terminalClientMock = vi.hoisted(() => ({ submit: vi.fn() }));
+const terminalClientMock = vi.hoisted(() => ({ submit: vi.fn(), getSubmissions: vi.fn() }));
 const getSerializedStatesMock = vi.hoisted(() => vi.fn());
 const fleetArmingMock = vi.hoisted(() => ({ armedIds: new Set<string>() }));
 
@@ -715,5 +715,197 @@ describe("terminal.getStatus", () => {
     const missing = terminals.find((t) => t.terminalId === "missing");
     expect(missing?.error).toBe("Terminal not found");
     expect(missing?.armed).toBeUndefined();
+  });
+});
+
+describe("terminal.getStatus submission correlation (#12337)", () => {
+  function onePanel() {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "waiting" },
+      },
+    });
+  }
+
+  it("issues no extra lookup when no token was named", async () => {
+    onePanel();
+
+    const result = await callGetStatus(setupActions(), { terminalIds: ["t1"] });
+
+    // The default poll path is the hot one — it must not pay for a feature it
+    // did not ask for.
+    expect(terminalClientMock.getSubmissions).not.toHaveBeenCalled();
+    expect(result.terminals[0]?.submission).toBeUndefined();
+  });
+
+  it("refuses a token without explicit terminalIds", async () => {
+    onePanel();
+
+    // The lookup is terminal-keyed; a filter-only call has no id list to
+    // resolve the token against.
+    await expect(callGetStatus(setupActions(), { submissionToken: "tok-1" })).rejects.toThrow(
+      /terminalIds/
+    );
+  });
+
+  it("attaches the record the host returned", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockResolvedValue({
+      t1: { status: "found", record: { token: "tok-1", phase: "pty_written", at: 4242 } },
+    });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+    });
+
+    expect(terminalClientMock.getSubmissions).toHaveBeenCalledWith(["t1"], "tok-1");
+    expect(result.terminals[0]?.submission).toEqual({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 4242,
+    });
+  });
+
+  it("reports unknown when the terminal was read and holds no record", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockResolvedValue({ t1: { status: "absent" } });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-gone",
+    });
+
+    expect(result.terminals[0]?.submission).toEqual({ token: "tok-gone", phase: "unknown" });
+    expect(result.terminals[0]?.error).toBeUndefined();
+  });
+
+  it("does not claim unknown for a terminal that could not be read at all", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockResolvedValue({ t1: { status: "unreadable" } });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+    });
+
+    // A host RPC that timed out observed nothing. `unknown` would assert this
+    // terminal has no such submission on the strength of a failed query — the
+    // false certainty this whole issue exists to remove.
+    expect(result.terminals[0]?.submission).toBeUndefined();
+    expect(result.terminals[0]?.error).toBeDefined();
+  });
+
+  it("does not claim unknown for an id the lookup omitted entirely", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockResolvedValue({});
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+    });
+
+    expect(result.terminals[0]?.submission).toBeUndefined();
+    expect(result.terminals[0]?.error).toBeDefined();
+  });
+
+  it("keeps each terminal's own outcome in a mixed batch", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2", "t3"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "waiting" },
+        t2: { id: "t2", kind: "terminal", location: "grid", agentState: "waiting" },
+        t3: { id: "t3", kind: "terminal", location: "grid", agentState: "waiting" },
+      },
+    });
+    terminalClientMock.getSubmissions.mockResolvedValue({
+      t1: { status: "found", record: { token: "tok-1", phase: "pty_written", at: 1 } },
+      t2: { status: "absent" },
+      t3: { status: "unreadable" },
+    });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1", "t2", "t3"],
+      submissionToken: "tok-1",
+    });
+
+    // One batched call, and each row keyed to its own id rather than to
+    // whatever the first result happened to be.
+    expect(terminalClientMock.getSubmissions).toHaveBeenCalledTimes(1);
+    expect(result.terminals[0]?.submission).toEqual({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 1,
+    });
+    expect(result.terminals[1]?.submission).toEqual({ token: "tok-1", phase: "unknown" });
+    expect(result.terminals[2]?.submission).toBeUndefined();
+    expect(result.terminals[2]?.error).toBeDefined();
+  });
+
+  it("keeps a successful submission record when only the output fetch failed", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockResolvedValue({
+      t1: { status: "found", record: { token: "tok-1", phase: "pty_written", at: 1 } },
+    });
+    getSerializedStatesMock.mockRejectedValue(new Error("output fetch died"));
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+      includeOutput: { lines: 5 },
+    });
+
+    // The two fetches fail independently; losing one must not discard the
+    // other's answer.
+    expect(result.terminals[0]?.submission?.phase).toBe("pty_written");
+    expect(result.terminals[0]?.error).toContain("output fetch died");
+  });
+
+  it("reports an error rather than unknown when the lookup itself failed", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockRejectedValue(new Error("host is down"));
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+    });
+
+    // `unknown` asserts the terminal has no such submission. A failed lookup
+    // observed nothing at all and must not make that claim.
+    expect(result.terminals[0]?.submission).toBeUndefined();
+    expect(result.terminals[0]?.error).toContain("host is down");
+  });
+
+  it("reports both batch failures instead of letting the later one hide the earlier", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockRejectedValue(new Error("submission lookup died"));
+    getSerializedStatesMock.mockRejectedValue(new Error("output fetch died"));
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+      includeOutput: { lines: 5 },
+    });
+
+    // Two independent fetches, two things the caller lost. Assigning rather
+    // than appending would report only the output failure, and the missing
+    // `submission` would look like it was never asked for.
+    expect(result.terminals[0]?.error).toContain("submission lookup died");
+    expect(result.terminals[0]?.error).toContain("output fetch died");
+  });
+
+  it("leaves a not-found entry alone instead of inventing a record for it", async () => {
+    onePanel();
+    terminalClientMock.getSubmissions.mockResolvedValue({ t1: { status: "absent" } });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1", "ghost"],
+      submissionToken: "tok-1",
+    });
+
+    expect(terminalClientMock.getSubmissions).toHaveBeenCalledWith(["t1"], "tok-1");
+    expect(result.terminals[1]?.error).toBe("Terminal not found");
+    expect(result.terminals[1]?.submission).toBeUndefined();
   });
 });

@@ -128,11 +128,20 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(required).not.toContain("type");
   });
 
-  // Still the watchout from #10676: do not flip the flag on neighbours.
-  // sendCommand has no resultSchema at all and must stay schema-less. (The two
-  // wait tools deliberately opted in under #12339 — covered below.)
-  it("does not emit an outputSchema for terminal.sendCommand", () => {
-    expect(outputSchema(registerAll(), "terminal.sendCommand")).toBeUndefined();
+  // The watchout from #10676 still stands: do not flip the flag on a neighbour
+  // that has no resultSchema. sendCommand gained one deliberately in #12337:
+  // the token it returns is the whole contract of that issue, so it has to
+  // reach validated `structuredContent` rather than only the text body a
+  // client would otherwise have to scrape.
+  it("advertises terminal.sendCommand's submission token in an object-rooted schema", () => {
+    const service = registerAll();
+    const schema = outputSchema(service, "terminal.sendCommand");
+    expect(schema).toBeDefined();
+    // A non-object root is silently dropped by `buildToolOutputSchema`, which
+    // would advertise nothing while every flag still looked correct.
+    expect(schema?.type).toBe("object");
+    const required = (schema?.required as string[] | undefined) ?? [];
+    expect(required).toContain("submissionToken");
   });
 });
 

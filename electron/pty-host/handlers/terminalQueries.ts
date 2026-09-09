@@ -40,7 +40,12 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
       sendEvent({
         type: "terminal-info",
         requestId: msg.requestId,
-        terminal: terminal ? mapTerminalInfo(terminal, ctx) : null,
+        // `submissionToken` rides this query rather than getting a message
+        // family of its own (#12337): the viewless status read already issues
+        // one `get-terminal` per id, so correlating a submission costs it no
+        // extra round trip. Only this query passes it — the bulk families keep
+        // the unconditional projection.
+        terminal: terminal ? mapTerminalInfo(terminal, ctx, msg.submissionToken) : null,
       });
     },
 

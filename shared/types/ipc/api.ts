@@ -4,6 +4,7 @@ import type { GitStatus, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup, PanelTitleMode } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
+import type { TerminalSubmissionLookup } from "../terminalSubmission.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -281,7 +282,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;
     write(id: string, data: string): void;
-    submit(id: string, text: string): Promise<void>;
+    /**
+     * Submit text as one submission. `submissionToken` is the caller's own
+     * correlator (#12337): pass it here and read the outcome back through
+     * `getSubmissions` or `terminal.getStatus`. Untokened submits are not
+     * tracked and retain nothing.
+     */
+    submit(id: string, text: string, submissionToken?: string): Promise<void>;
+    /**
+     * Resolve one submission token across several terminals (#12337). Answers
+     * `found` / `absent` / `unreadable` per id — a terminal that could not be
+     * read is never reported as holding no record.
+     */
+    getSubmissions(
+      terminalIds: string[],
+      submissionToken: string
+    ): Promise<Record<string, TerminalSubmissionLookup>>;
     resize(id: string, cols: number, rows: number): void;
     kill(id: string): Promise<void>;
     gracefulKill(id: string): Promise<string | null>;

@@ -432,7 +432,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.duplicate` | Duplicate Panel | safe | `focusPolicy?`, `spawnedBy?`, `terminalId?` |
 | `terminal.forceResume` | Force Resume | safe | `terminalId?` |
 | `terminal.getOutput` | Get Terminal Output | safe | `terminalId`, `maxLines?`, `stripAnsi?` |
-| `terminal.getStatus` | Get Terminal Status | safe | `includeOutput?`, `location?`, `terminalIds?`, `worktreeId?` |
+| `terminal.getStatus` | Get Terminal Status | safe | `includeOutput?`, `location?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
 | `terminal.gridLayout.setStrategy` | Set Grid Layout Strategy | safe | `strategy` |
 | `terminal.gridLayout.setValue` | Set Grid Layout Value | safe | `value` |
 | `terminal.info.get` | Get Terminal Info | safe | `terminalId?` |
