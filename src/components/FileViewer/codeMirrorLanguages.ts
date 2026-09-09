@@ -11,6 +11,28 @@ function legacy<State>(parser: StreamParser<State>): LanguageSupport {
   return new LanguageSupport(StreamLanguage.define(parser));
 }
 
+/**
+ * The one Markdown configuration every CodeMirror surface shares — the
+ * read-only Source view and the Markdown editor plugin (#12323) — so the two
+ * cannot drift. `markdownLanguage` is the GFM dialect (tables, task lists,
+ * strikethrough, autolinks); the bare `markdown()` default is CommonMark.
+ * Fenced code highlights through the same registry that picks the viewer's
+ * own grammar for a file, so a ```ts fence and a `.ts` file paint alike, and
+ * the grammar still loads lazily. `completeHTMLTags` and `pasteURLAsLink` are
+ * off because both rewrite what the user typed — the editor's fidelity
+ * guarantee is that nothing but the keystrokes reaches the buffer.
+ */
+export function loadMarkdownSupport(): Promise<LanguageSupport> {
+  return import("@codemirror/lang-markdown").then((m) =>
+    m.markdown({
+      base: m.markdownLanguage,
+      codeLanguages: CODEMIRROR_LANGUAGES,
+      completeHTMLTags: false,
+      pasteURLAsLink: false,
+    })
+  );
+}
+
 export const CODEMIRROR_LANGUAGES: readonly LanguageDescription[] = [
   // New-style parsers (one `@codemirror/lang-*` chunk per package).
   /*@__PURE__*/ LanguageDescription.of({
@@ -113,7 +135,7 @@ export const CODEMIRROR_LANGUAGES: readonly LanguageDescription[] = [
     name: "Markdown",
     extensions: ["md", "markdown", "mkd"],
     load() {
-      return import("@codemirror/lang-markdown").then((m) => m.markdown());
+      return loadMarkdownSupport();
     },
   }),
   /*@__PURE__*/ LanguageDescription.of({
