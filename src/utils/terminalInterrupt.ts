@@ -71,6 +71,18 @@ export function assessTerminalInterrupt(
   if (panel.runtimeStatus === "exited" || panel.runtimeStatus === "error") {
     return refuse(`Terminal "${terminalId}" has already exited, so there is nothing to interrupt.`);
   }
+  // Restart locks the *managed* terminal without touching the persisted
+  // `isInputLocked`, and publishes `agentState: "working"` before the
+  // replacement process is even spawned (`panelRegistry/restart.ts`). So a
+  // restarting panel looks like a busy agent to every check below it, and the
+  // keystrokes would land in the shutdown/startup window the transient lock
+  // exists to protect.
+  if (panel.isRestarting === true) {
+    return refuse(
+      `Terminal "${terminalId}" is restarting, so there is no turn to stop yet. Wait for the agent ` +
+        `to come back up.`
+    );
+  }
   if (panel.isInputLocked === true) {
     return refuse(
       `Terminal "${terminalId}" has input locked, so keystrokes sent to it would be discarded. ` +
@@ -107,7 +119,19 @@ export function assessTerminalInterrupt(
     return refuse(
       `The agent in terminal "${terminalId}" was last observed ${agentState ?? "in no known state"}, ` +
         `not mid-turn, so no interrupt was sent. This reading comes from the agent's own output ` +
-        `and can lag; read the terminal to see where it actually is.`
+        `and can lag; read the terminal's output to see where it actually is.`
+    );
+  }
+  // `waiting` is two different situations wearing one name. A question or an
+  // approval selector is a turn still in flight and interruptible; `"prompt"`
+  // is documented as an empty input prompt, safe to auto-drive — which is to
+  // say idle. Letting that through would defeat the guard above at exactly the
+  // moment it matters, since a second Escape at an idle Claude prompt opens the
+  // session rewind menu rather than doing nothing.
+  if (agentState === "waiting" && panel.waitingReason === "prompt") {
+    return refuse(
+      `The agent in terminal "${terminalId}" is sitting at an empty prompt, not running a turn, so ` +
+        `no interrupt was sent. Submit the next instruction instead of stopping it.`
     );
   }
 

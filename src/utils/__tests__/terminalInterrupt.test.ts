@@ -29,10 +29,41 @@ describe("assessTerminalInterrupt (#12338)", () => {
     });
   });
 
-  it("accepts a waiting agent — a turn can be interrupted while it asks", () => {
-    const result = assessTerminalInterrupt(makeAgentPanel({ agentState: "waiting" }), "t1");
-    expect(result.eligible).toBe(true);
-    if (result.eligible) expect(result.agentState).toBe("waiting");
+  it.each(["question", "approval", "error"] as const)(
+    "accepts a waiting agent whose turn is still in flight (%s)",
+    (waitingReason) => {
+      const result = assessTerminalInterrupt(
+        makeAgentPanel({ agentState: "waiting", waitingReason }),
+        "t1"
+      );
+      expect(result.eligible).toBe(true);
+      if (result.eligible) expect(result.agentState).toBe("waiting");
+    }
+  );
+
+  // `waiting` is two situations wearing one name, and `"prompt"` is the idle
+  // one — documented as an empty input prompt, safe to auto-drive. Letting it
+  // through would defeat the idle guard at the exact moment it matters: a
+  // second Escape at an idle Claude prompt opens the session rewind menu.
+  it("refuses a waiting agent sitting at an empty prompt", () => {
+    const result = assessTerminalInterrupt(
+      makeAgentPanel({ agentState: "waiting", waitingReason: "prompt" }),
+      "t1"
+    );
+    expect(result.eligible).toBe(false);
+    if (!result.eligible) expect(result.reason).toContain("empty prompt");
+  });
+
+  // Restart locks the managed terminal without touching the persisted flag and
+  // publishes `agentState: "working"` before the replacement process is spawned,
+  // so a restarting panel otherwise reads as a busy agent.
+  it("refuses a restarting panel even though it reports itself working", () => {
+    const result = assessTerminalInterrupt(
+      makeAgentPanel({ isRestarting: true, agentState: "working" }),
+      "t1"
+    );
+    expect(result.eligible).toBe(false);
+    if (!result.eligible) expect(result.reason).toContain("restarting");
   });
 
   // The distinction the whole feature turns on: an agent nobody has measured
@@ -98,6 +129,13 @@ describe("assessTerminalInterrupt (#12338)", () => {
     const result = assessTerminalInterrupt(makeAgentPanel({ runtimeStatus }), "t1");
     expect(result.eligible).toBe(false);
     if (!result.eligible) expect(result.reason).toContain("already exited");
+  });
+
+  // Guards the `=== false` in the source: a `!panel.hasPty` mutation would
+  // refuse a valid panel that simply never set the optional field.
+  it("accepts a panel that leaves hasPty unset", () => {
+    const result = assessTerminalInterrupt(makeAgentPanel({ hasPty: undefined }), "t1");
+    expect(result.eligible).toBe(true);
   });
 
   it("refuses a panel with no process attached", () => {

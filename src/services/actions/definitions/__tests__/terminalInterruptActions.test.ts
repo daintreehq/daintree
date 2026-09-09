@@ -16,7 +16,8 @@ vi.mock("@/store/persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: vi.fn(),
     save: vi.fn(),
-    load: vi.fn().mockReturnValue([]),
+    saveTabGroups: vi.fn(),
+    flush: vi.fn(),
   },
 }));
 
@@ -79,6 +80,29 @@ async function run(id: string, args: unknown): Promise<unknown> {
   return definition(id).run(args as never, {} as never);
 }
 
+/** Dispatch through the real service, so `resultSchema` validation actually runs. */
+function service() {
+  const svc = new ActionService();
+  for (const [, factory] of buildRegistry()) svc.register(factory());
+  return svc;
+}
+
+function statusSchema() {
+  return (
+    definition("terminal.interrupt").resultSchema as unknown as {
+      shape: { status: { description?: string; options?: string[] } };
+    }
+  ).shape.status;
+}
+
+function describedStatus(): string {
+  return statusSchema().description ?? "";
+}
+
+function statusValues(): string[] {
+  return statusSchema().options ?? [];
+}
+
 describe("terminal.interrupt (#12338)", () => {
   beforeEach(() => {
     usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
@@ -90,13 +114,11 @@ describe("terminal.interrupt (#12338)", () => {
     const result = await run("terminal.interrupt", { terminalId: "b" });
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledTimes(1);
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["b"]);
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       terminalId: "b",
       agentId: "claude",
       agentStateAtDispatch: "working",
-      method: "double-escape",
       status: "requested",
-      support: "advertised",
     });
   });
 
@@ -110,17 +132,13 @@ describe("terminal.interrupt (#12338)", () => {
     expect(terminalClient.batchDoubleEscape).not.toHaveBeenCalled();
   });
 
-  it("reports an unverified agent as such, and still sends", async () => {
+  // The uncertainty rides on `status` itself, not a flag beside it a model can
+  // validate and never branch on.
+  it("reports an unverified agent in the status, and still sends", async () => {
     seedPanels([makeAgent("a", { detectedAgentId: "aider" })]);
-    const result = (await run("terminal.interrupt", { terminalId: "a" })) as {
-      support: string;
-      message: string;
-      status: string;
-    };
+    const result = (await run("terminal.interrupt", { terminalId: "a" })) as { status: string };
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["a"]);
-    expect(result.support).toBe("unverified");
-    expect(result.status).toBe("requested");
-    expect(result.message).toContain("unverified");
+    expect(result.status).toBe("requested-unverified");
   });
 
   it("refuses an agent that binds a different cancel key, writing nothing", async () => {
@@ -135,11 +153,26 @@ describe("terminal.interrupt (#12338)", () => {
     expect(terminalClient.batchDoubleEscape).not.toHaveBeenCalled();
   });
 
-  // `panelsById` is a plain object, so a prototype key resolves to a function
-  // rather than undefined and would sail past a truthiness check.
-  it("rejects a prototype-chain id instead of assessing Object.prototype", async () => {
-    seedPanels([makeAgent("a")]);
-    await expect(run("terminal.interrupt", { terminalId: "constructor" })).rejects.toThrow();
+  // `panelsById` is a plain object, so an inherited key resolves to a real value
+  // and would sail past a truthiness check. The fixture is an interruptible
+  // panel on the prototype: with `Object.hasOwn` removed this call succeeds and
+  // writes, which is precisely the regression to catch — a bare "constructor"
+  // would be refused later anyway and prove nothing.
+  it("rejects an inherited id instead of interrupting a prototype panel", async () => {
+    const inherited = Object.create({ "proto-panel": makeAgent("proto-panel") }) as Record<
+      string,
+      unknown
+    >;
+    inherited["a"] = makeAgent("a");
+    usePanelStore.setState({
+      panelsById: inherited as never,
+      panelIds: ["a"],
+      focusedId: null,
+    });
+
+    await expect(run("terminal.interrupt", { terminalId: "proto-panel" })).rejects.toThrow(
+      /proto-panel/
+    );
     expect(terminalClient.batchDoubleEscape).not.toHaveBeenCalled();
   });
 
@@ -156,7 +189,29 @@ describe("terminal.interrupt (#12338)", () => {
     >;
     expect(result).not.toHaveProperty("interrupted");
     expect(result).not.toHaveProperty("stopped");
-    expect(result.status).toBe("requested");
+    expect(Object.keys(result).sort()).toEqual([
+      "agentId",
+      "agentStateAtDispatch",
+      "status",
+      "terminalId",
+    ]);
+  });
+
+  // The contract lives in the value set, not the prose: every outcome this tool
+  // can report is something it *asked for*, never something it observed. A
+  // `status: "interrupted"` added later fails here. Asserted on the values
+  // rather than the wording because a description can deny a claim ("neither
+  // says the agent stopped") using the very words a regex would flag.
+  it("can only report outcomes it requested, never ones it observed", () => {
+    const values = statusValues();
+    expect(values.length).toBeGreaterThan(1);
+    for (const value of values) expect(value, value).toMatch(/^requested/);
+  });
+
+  // And the description has to hand the caller the follow-up, since the tool
+  // itself can never supply it.
+  it("points the caller at the terminal for the outcome it cannot report", () => {
+    expect(describedStatus()).toMatch(/read the terminal/i);
   });
 
   it("declines plugin dispatch, like the rest of the injection surface", () => {
@@ -166,6 +221,11 @@ describe("terminal.interrupt (#12338)", () => {
 });
 
 describe("terminal.interruptOwned (#12338)", () => {
+  beforeEach(() => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
+    vi.clearAllMocks();
+  });
+
   it("refuses renderer dispatch — ownership is checked in main", async () => {
     await expect(run("terminal.interruptOwned", { terminalId: "a" })).rejects.toThrow(
       /main-process path/
@@ -192,12 +252,47 @@ describe("terminal.interruptOwned (#12338)", () => {
     }
   });
 
-  it("validates the delegate's payload against the advertised schema", async () => {
-    usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
-    seedPanels([makeAgent("a")]);
-    const service = new ActionService();
-    for (const [, factory] of buildRegistry()) service.register(factory());
-    const result = await service.dispatch("terminal.interrupt", { terminalId: "a" });
-    expect(result.ok, JSON.stringify(result)).toBe(true);
+  // Every success path, not just the happy one: `resultSchema` is enforced by
+  // the service, so a payload shaped for one branch and not the other fails
+  // *after* the keystrokes have already gone out.
+  it.each([
+    ["claude", "working", undefined, "requested"],
+    ["claude", "waiting", "question", "requested"],
+    ["aider", "working", undefined, "requested-unverified"],
+    ["aider", "waiting", "approval", "requested-unverified"],
+  ] as const)(
+    "dispatches %s observed %s and validates against the advertised schema",
+    async (detectedAgentId, agentState, waitingReason, status) => {
+      seedPanels([makeAgent("a", { detectedAgentId, agentState, waitingReason })]);
+
+      const result = await service().dispatch("terminal.interrupt", { terminalId: "a" });
+
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      if (result.ok) {
+        expect(result.result).toEqual({
+          terminalId: "a",
+          agentId: detectedAgentId,
+          agentStateAtDispatch: agentState,
+          status,
+        });
+      }
+    }
+  );
+
+  // A refusal a retry cannot change must not come back as EXECUTION_ERROR:
+  // that code is in RETRIABLE_ERROR_CODES, and a model reading `retriable`
+  // on a permanent refusal loops on it.
+  it.each([
+    ["goose target", { detectedAgentId: "goose" }],
+    ["idle target", { agentState: "idle" as const }],
+    ["exited target", { runtimeStatus: "exited" as const }],
+  ])("reports a permanent refusal for a %s as non-retriable", async (_label, overrides) => {
+    seedPanels([makeAgent("a", overrides as Partial<PtyPanelData>)]);
+
+    const result = await service().dispatch("terminal.interrupt", { terminalId: "a" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("VALIDATION_ERROR");
+    expect(terminalClient.batchDoubleEscape).not.toHaveBeenCalled();
   });
 });

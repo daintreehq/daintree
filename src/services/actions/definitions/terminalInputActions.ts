@@ -12,6 +12,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -19,9 +20,14 @@ import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
  * Every field describes the moment before the write, because that is the last
  * moment anything knows: `batchDoubleEscape` is a one-way `ipcRenderer.send`
  * with no reply channel, and the pty-host silently skips a terminal that exits
- * between the two Escapes. So `status` is `requested` and nothing else — there
- * is deliberately no `interrupted`, no `stopped`, and no delivery timestamp,
- * since a caller reading one would be reading a guess.
+ * between the two Escapes. So there is deliberately no `interrupted`, no
+ * `stopped`, and no delivery timestamp — a caller reading one would be reading
+ * a guess.
+ *
+ * The uncertainty rides on `status` rather than a field beside it. A secondary
+ * flag is one a model can validate and still not branch on; making it the
+ * primary outcome means reading the result at all means reading which of the
+ * two happened.
  *
  * Top-level object, never `.nullable()`: `buildToolOutputSchema` forwards a
  * manifest schema only when its JSON Schema has `type === "object"`, and zod
@@ -29,7 +35,7 @@ import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
  * `mcpOutputSchema` and emits no `structuredContent` at all (#11547).
  */
 const TerminalInterruptResultSchema = z.object({
-  terminalId: z.string().describe("The panel the cancel keystrokes were written to."),
+  terminalId: z.string().describe("The panel the cancel keystrokes were addressed to."),
   agentId: z
     .string()
     .describe("The agent Daintree resolved for that panel, from its runtime identity."),
@@ -38,22 +44,11 @@ const TerminalInterruptResultSchema = z.object({
     .describe(
       "What the agent was last observed doing. Read off its own output and often wrong; it gated the request, it is not proof a turn was running."
     ),
-  method: z
-    .literal("double-escape")
-    .describe("The key sequence written: Escape, a 50ms gap, Escape again."),
   status: z
-    .literal("requested")
+    .enum(["requested", "requested-unverified"])
     .describe(
-      "Always `requested`: the transport takes the keystrokes and never answers, so this says they were handed over, not that they landed."
+      "`requested`: keystrokes handed over to an agent whose CLI names Escape as its interrupt. `requested-unverified`: same, but that CLI names no interrupt key, so the effect is unknown. Neither says the keystrokes arrived or the agent stopped — read the terminal's output to find out."
     ),
-  support: z
-    .enum(["advertised", "unverified"])
-    .describe(
-      "`advertised` if this agent's CLI names Escape as its interrupt; `unverified` if it names none, so the effect is unknown. A CLI naming another key is refused."
-    ),
-  message: z
-    .string()
-    .describe("The same in prose, including what to check by reading the terminal."),
 });
 
 export function registerTerminalInputActions(
@@ -202,7 +197,7 @@ export function registerTerminalInputActions(
       // false flag in it: a result that validates against the schema below is
       // read as "the keystrokes went out", and nothing here should be able to
       // say that when nothing was written (#10813).
-      if (!assessment.eligible) throw new Error(assessment.reason);
+      if (!assessment.eligible) throw new UnactionableTargetError(assessment.reason);
       // Snapshot before the write and return exactly what was true then — the
       // transport is one-way `ipcRenderer.send`, so there is no later moment
       // that knows more than this one does.
@@ -211,13 +206,10 @@ export function registerTerminalInputActions(
         terminalId,
         agentId: assessment.agentId,
         agentStateAtDispatch: assessment.agentState,
-        method: "double-escape" as const,
-        status: "requested" as const,
-        support: assessment.support,
-        message:
+        status:
           assessment.support === "advertised"
-            ? "Cancel keystrokes were handed to the terminal. This agent advertises Escape as its interrupt, but neither delivery nor the agent stopping was confirmed — read the terminal output before assuming the turn ended."
-            : "Cancel keystrokes were handed to the terminal. This agent does not advertise an interrupt key, so whether Escape cancels its turn is unverified — read the terminal output to see what actually happened before assuming the turn ended.",
+            ? ("requested" as const)
+            : ("requested-unverified" as const),
       };
     },
   }));

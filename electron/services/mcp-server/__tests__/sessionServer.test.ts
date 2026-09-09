@@ -6990,15 +6990,13 @@ describe("session-scoped resource ownership (#11909)", () => {
       terminalId: "terminal-1",
       agentId: "claude",
       agentStateAtDispatch: "working",
-      method: "double-escape",
       status: "requested",
-      support: "advertised",
-      message: "Cancel keystrokes were handed to the terminal.",
     };
 
     function interruptHarness(sessionId: string) {
       const h = harness(sessionId, {
         "terminal.interrupt": { result: { ok: true, result: INTERRUPT_RESULT } },
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
       });
       h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
       return h;
@@ -7064,7 +7062,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     // end, so the session keeps the authority to stop the panel again — and to
     // close it afterwards, which is the point of having a non-destructive stop.
     it("keeps ownership, so the panel can be interrupted again and then closed", async () => {
-      const { store, server } = interruptHarness("s-interrupt-twice");
+      const { store, server, dispatchAction } = interruptHarness("s-interrupt-twice");
       const args = { name: "terminal.interruptOwned", arguments: { terminalId: "terminal-1" } };
 
       const first = await callTool(server, args);
@@ -7072,9 +7070,47 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(first.isError).toBeUndefined();
       expect(second.isError).toBeUndefined();
+      // Counted, not inferred from two successes: a dedup entry would serve the
+      // second call from cache and leave the agent running with both calls green.
+      expect(
+        dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === "terminal.interrupt")
+      ).toHaveLength(2);
+
+      // The point of retaining the record: the stop did not spend the session's
+      // authority, so the close it was a step toward still works.
+      const closed = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(closed.isError).toBeUndefined();
       expect(store.resourceOwnership.owns("s-interrupt-twice", "terminal", "terminal-1")).toBe(
-        true
+        false
       );
+    });
+
+    // Guards `releasesOwnership: false` itself. Without it the entry would fall
+    // through to the release path, and the structural `closedIds` check is a
+    // separate guard that would mask the flag being wrong.
+    it("retains ownership even if the delegate claims the panel closed", async () => {
+      const { store, server } = harness("s-interrupt-claims-closed", {
+        "terminal.interrupt": {
+          result: { ok: true, result: { ...INTERRUPT_RESULT, closedIds: ["terminal-1"] } },
+        },
+      });
+      store.resourceOwnership.record("s-interrupt-claims-closed", [
+        { kind: "terminal", id: "terminal-1" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(
+        store.resourceOwnership.owns("s-interrupt-claims-closed", "terminal", "terminal-1")
+      ).toBe(true);
     });
 
     // A refusal is the delegate declining to write keystrokes, not the panel

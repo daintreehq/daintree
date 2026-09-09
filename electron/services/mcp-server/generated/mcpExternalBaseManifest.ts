@@ -1685,7 +1685,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       properties: {
         terminalId: {
           type: "string",
-          description: "The panel the cancel keystrokes were written to.",
+          description: "The panel the cancel keystrokes were addressed to.",
         },
         agentId: {
           type: "string",
@@ -1697,37 +1697,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "What the agent was last observed doing. Read off its own output and often wrong; it gated the request, it is not proof a turn was running.",
         },
-        method: {
-          type: "string",
-          const: "double-escape",
-          description: "The key sequence written: Escape, a 50ms gap, Escape again.",
-        },
         status: {
           type: "string",
-          const: "requested",
+          enum: ["requested", "requested-unverified"],
           description:
-            "Always `requested`: the transport takes the keystrokes and never answers, so this says they were handed over, not that they landed.",
-        },
-        support: {
-          type: "string",
-          enum: ["advertised", "unverified"],
-          description:
-            "`advertised` if this agent's CLI names Escape as its interrupt; `unverified` if it names none, so the effect is unknown. A CLI naming another key is refused.",
-        },
-        message: {
-          type: "string",
-          description: "The same in prose, including what to check by reading the terminal.",
+            "`requested`: keystrokes handed over to an agent whose CLI names Escape as its interrupt. `requested-unverified`: same, but that CLI names no interrupt key, so the effect is unknown. Neither says the keystrokes arrived or the agent stopped — read the terminal's output to find out.",
         },
       },
-      required: [
-        "terminalId",
-        "agentId",
-        "agentStateAtDispatch",
-        "method",
-        "status",
-        "support",
-        "message",
-      ],
+      required: ["terminalId", "agentId", "agentStateAtDispatch", "status"],
       additionalProperties: false,
     },
     requiresArgs: true,
