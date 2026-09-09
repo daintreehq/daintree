@@ -4,17 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { EditorView } from "@codemirror/view";
 
-const { announceMock, dispatchMock } = vi.hoisted(() => ({
-  announceMock: vi.fn(),
+const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(async () => ({ ok: true, result: undefined })),
-}));
-vi.mock("@/store/accessibilityAnnouncerStore", () => ({
-  useAnnouncerStore: { getState: () => ({ announce: announceMock }) },
 }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 vi.mock("@/hooks/useActiveAppScheme", () => ({ useActiveAppScheme: () => ({ type: "dark" }) }));
-vi.mock("@/config/terminalFont", () => ({ DEFAULT_TERMINAL_FONT_FAMILY: "monospace" }));
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: (props: { diff: string }) => (
     <div data-testid="diff-viewer-mock" data-diff={props.diff} />
@@ -35,8 +30,9 @@ import { MarkdownEditorView } from "../MarkdownEditorView";
 import { __resetDocumentControllersForTests } from "../documentController";
 import { useDocumentStateStore } from "../documentStateStore";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { CHANNELS } from "../../shared/protocol";
+import { CHANNELS, identityKey } from "../../shared/protocol";
 import { createFakeMain, type FakeMain } from "./testHost";
 
 const FILE = "/repo/docs/plan.md";
@@ -77,12 +73,15 @@ async function type(text: string) {
 
 let main: FakeMain;
 let uninstall: () => void;
+// The real store, spied: the dialogs render the app's announcer, which needs
+// the hook itself, not a getState() stub.
+let announceMock: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   main = createFakeMain();
   uninstall = main.install();
   main.files.set(FILE, "# Plan\n\nBody\n");
-  announceMock.mockClear();
+  announceMock = vi.spyOn(useAnnouncerStore.getState(), "announce").mockImplementation(() => {});
   dispatchMock.mockClear();
   panelStoreHolder.store!.setState({ panelsById: { "panel-1": { id: "panel-1" } } });
   useFileDocumentStore.setState({ byPanelId: {} });
@@ -93,6 +92,7 @@ afterEach(() => {
   cleanup();
   __resetDocumentControllersForTests();
   uninstall();
+  announceMock.mockRestore();
 });
 
 async function renderReady(props: Partial<Parameters<typeof MarkdownEditorView>[0]> = {}) {
@@ -171,7 +171,7 @@ describe("MarkdownEditorView (#12323)", () => {
 
   it("a missing file with a stored draft keeps the draft reachable", async () => {
     main.files.delete(FILE);
-    main.drafts.set("p1 /repo /repo/docs/plan.md", {
+    main.drafts.set(identityKey({ projectId: "p1", worktreePath: "/repo", filePath: FILE }), {
       generation: 1,
       record: {
         stateVersion: 1,
@@ -239,8 +239,16 @@ describe("MarkdownEditorView (#12323)", () => {
     const cm = editorView();
     vi.spyOn(cm, "posAtCoords").mockReturnValue(2);
     await act(async () => {
+      // Both modifiers: jsdom reports no platform, so Mod resolves to Ctrl
+      // there and to Meta on a Mac.
       cm.contentDOM.dispatchEvent(
-        new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, metaKey: true })
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          metaKey: true,
+          ctrlKey: true,
+        })
       );
     });
     expect(dispatchMock).toHaveBeenCalledWith(

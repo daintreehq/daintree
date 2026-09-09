@@ -6,8 +6,6 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { buildMarkdownEditorExtensions, linkTargetAt } from "../markdownEditorExtensions";
 
-vi.mock("@/config/terminalFont", () => ({ DEFAULT_TERMINAL_FONT_FAMILY: "monospace" }));
-
 const language = markdown({ base: markdownLanguage });
 
 function mount(doc: string) {
