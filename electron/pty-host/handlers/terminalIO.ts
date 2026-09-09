@@ -10,7 +10,7 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
     },
 
     submit: (msg) => {
-      ptyManager.submit(msg.id, msg.text);
+      ptyManager.submit(msg.id, msg.text, msg.submissionToken);
     },
 
     stage: (msg) => {

@@ -19,6 +19,7 @@ import type {
   TerminalResizeResult,
 } from "@shared/types/pty-host";
 import type { PanelTitleMode } from "@shared/types/panel";
+import type { TerminalSubmissionRecord } from "@shared/types/terminalSubmission";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -362,9 +363,25 @@ export const terminalClient = {
    * Submit text as a command to the terminal.
    * This handles bracketed paste wrapping and CR timing on the backend
    * for reliable command execution across all CLIs.
+   *
+   * Resolving means the submission was accepted onto the terminal's lane, not
+   * that it was written — that has always been true and is the gap #12337
+   * closes. Pass `submissionToken` to have the outcome tracked, then read it
+   * back with {@link getSubmissions} or `terminal.getStatus`.
    */
-  submit: (id: string, text: string): Promise<void> => {
-    return window.electron.terminal.submit(id, text);
+  submit: (id: string, text: string, submissionToken?: string): Promise<void> => {
+    return window.electron.terminal.submit(id, text, submissionToken);
+  },
+
+  /**
+   * Resolve one submission token across several terminals (#12337). A terminal
+   * that was read but holds no record for the token maps to `null`.
+   */
+  getSubmissions: (
+    terminalIds: string[],
+    submissionToken: string
+  ): Promise<Record<string, TerminalSubmissionRecord | null>> => {
+    return window.electron.terminal.getSubmissions(terminalIds, submissionToken);
   },
 
   /**

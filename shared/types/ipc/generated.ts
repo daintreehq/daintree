@@ -1778,6 +1778,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { visualBuffers: SharedArrayBuffer[]; signalBuffer: SharedArrayBuffer | null };
   };
+  "terminal:get-submissions": {
+    args: [terminalIds: string[], submissionToken: string];
+    result: Record<string, import("../terminalSubmission.js").TerminalSubmissionRecord | null>;
+  };
   "terminal:graceful-kill": {
     args: [id: string];
     result: string | null;
@@ -1872,7 +1876,7 @@ export interface GeneratedIpcInvokeMap {
     result: string;
   };
   "terminal:submit": {
-    args: [id: string, text: string];
+    args: [id: string, text: string, submissionToken?: string | undefined];
     result: void;
   };
   "terminal:trash": {

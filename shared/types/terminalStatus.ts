@@ -1,5 +1,6 @@
 import type { AgentState, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
+import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 
 /**
  * Which surface answered a `terminal.getStatus` call (#12316).
@@ -42,6 +43,11 @@ export interface TerminalStatusEntry {
   recentOutput?: string | null;
   armed?: boolean;
   hasPty?: boolean;
+  /**
+   * The record for the `submissionToken` the query named (#12337). Present only
+   * on entries the surface could read, and only when a token was asked for.
+   */
+  submission?: TerminalSubmissionRecord;
   error?: string;
 }
 

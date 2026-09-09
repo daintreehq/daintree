@@ -21,6 +21,10 @@ import { getProjectForWebContents } from "../../../window/webContentsRegistry.js
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import type { TerminalSubmissionRecord } from "../../../../shared/types/terminalSubmission.js";
+
+/** Mirrors `terminal.getStatus`'s own `terminalIds` bound. */
+const MAX_SUBMISSION_LOOKUP_IDS = 256;
 
 export function registerTerminalIOHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -97,10 +101,29 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite)
   );
 
-  const handleTerminalSubmit = async (id: string, text: string): Promise<void> => {
+  const handleTerminalSubmit = async (
+    id: string,
+    text: string,
+    submissionToken?: string
+  ): Promise<void> => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
+      }
+      // The token is the caller's own correlator (#12337) and is echoed into
+      // the pty-host untouched, so bound its shape here rather than trusting
+      // it: it becomes a Map key on the host side.
+      if (
+        submissionToken !== undefined &&
+        (typeof submissionToken !== "string" ||
+          submissionToken.length === 0 ||
+          submissionToken.length > 128)
+      ) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "submissionToken must be a non-empty string of at most 128 characters",
+          context: { terminalId: id },
+        });
       }
       // PtyClient.submit is fire-and-forget — the pty-host silently no-ops
       // a write to a terminal that's gone or has already exited (see
@@ -138,7 +161,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           context: { terminalId: id },
         });
       }
-      ptyClient.submit(id, text);
+      ptyClient.submit(id, text, submissionToken);
     } catch (error) {
       // Preserve AppError shape so the renderer sees the embedded errno
       // token in the message — wrapping would lose the prefix.
@@ -423,10 +446,63 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     releaseTerminalWorkerPort(wctx, ptyClient, id);
   };
 
+  /**
+   * Resolve one submission token against a set of terminals (#12337).
+   *
+   * Scoped to the sender's own project before any terminal-keyed RPC is issued,
+   * mirroring the viewless status reader: routing a foreign id would confirm it
+   * exists by its latency even when the payload says nothing. A terminal the
+   * sender does not own, or one that cannot be read, maps to `null` — the
+   * caller reports that as an unreadable entry rather than as a missing record,
+   * which is a different claim.
+   *
+   * `null` for a terminal that WAS read means it holds no record for this
+   * token; `terminal.getStatus` renders that as the `unknown` phase.
+   */
+  const handleTerminalGetSubmissions = async (
+    ctx: IpcContext,
+    terminalIds: string[],
+    submissionToken: string
+  ): Promise<Record<string, TerminalSubmissionRecord | null>> => {
+    // Declared types are the renderer-facing contract; the runtime checks stay
+    // because IPC arguments arrive unvalidated regardless of the signature.
+    if (typeof submissionToken !== "string" || submissionToken === "") {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "submissionToken must be a non-empty string",
+      });
+    }
+    if (!Array.isArray(terminalIds)) {
+      throw new AppError({ code: "VALIDATION", message: "terminalIds must be an array" });
+    }
+    const uniqueIds = [
+      ...new Set(terminalIds.filter((id): id is string => typeof id === "string" && id !== "")),
+    ].slice(0, MAX_SUBMISSION_LOOKUP_IDS);
+    // Null is an identity here, not a wildcard, matching the ingest-port gate
+    // above: an unbound window (the project picker) sits on a null project and
+    // its own terminals carry no owner either, so null must match null or those
+    // windows can never confirm a submission they made.
+    const owned = uniqueIds.filter((id) => ptyClient.getTerminalProjectId(id) === ctx.projectId);
+    const records = await Promise.all(
+      owned.map((id) => ptyClient.getTerminalAsync(id, submissionToken))
+    );
+    const out: Record<string, TerminalSubmissionRecord | null> = {};
+    owned.forEach((id, index) => {
+      // `getTerminalAsync` folds an RPC failure into `null`, which is why an
+      // unreadable terminal and an unowned one land in the same bucket: the
+      // caller only ever learns "no record available for this id".
+      out[id] = records[index]?.submission ?? null;
+    });
+    return out;
+  };
+
   const namespace = defineIpcNamespace({
     name: "terminalIo",
     ops: {
       submit: op(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit),
+      getSubmissions: op(CHANNELS.TERMINAL_GET_SUBMISSIONS, handleTerminalGetSubmissions, {
+        withContext: true,
+      }),
       forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume),
       requestWorkerIngestPort: op(
         CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT,

@@ -1432,7 +1432,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Snapshot agent and process state across many terminals, with optional output tails. This is the batched polling path: prefer it over listing terminals for agent state, or reading each terminal's output in turn. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the shared fetch failed. Use the blocking wait to proceed the moment an agent finishes.",
+      "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
     enabled: true,
     id: "terminal.getStatus",
     inputSchema: {
@@ -1458,6 +1458,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Filter by panel location (ignored when `terminalIds` is provided). Defaults to all locations except trash and background.",
           type: "string",
           enum: ["grid", "dock", "trash", "background"],
+        },
+        submissionToken: {
+          description:
+            "A token from the text-submission capability. Adds that submission's delivery record to each entry. Requires `terminalIds`.",
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
         },
         includeOutput: {
           description:
@@ -1593,14 +1600,31 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`.",
                 type: "boolean",
               },
-              hasPty: {
+              submission: {
                 description:
-                  "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`.",
-                type: "boolean",
+                  "Delivery record for the `submissionToken` this call named. Absent when no token was asked for, and on any entry with an `error` — there the terminal could not be read, which is not the same as holding no record.",
+                type: "object",
+                properties: {
+                  token: {
+                    type: "string",
+                  },
+                  phase: {
+                    type: "string",
+                    enum: ["queued", "writing", "pty_written", "failed", "cancelled", "unknown"],
+                    description:
+                      "How far this submission got. `pty_written`: the text and its Enter reached the pty without error — it does NOT mean the agent read them or acted on them. `queued`/`writing`: still in progress. `failed`/`cancelled`: it did not go out whole, and part may sit in the composer, so neither makes re-sending safe. `unknown`: the terminal was read and holds no record, including tokens aged past the last 32.",
+                  },
+                  at: {
+                    description: "Epoch ms the phase was entered. Absent for `unknown`.",
+                    type: "number",
+                  },
+                },
+                required: ["token", "phase"],
+                additionalProperties: false,
               },
               error: {
                 description:
-                  "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole.",
+                  "Set when the terminal was not found, and also stamped on every resolved entry when a batched fetch fails — the status fields are still populated and only that fetch's own field is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole.",
                 type: "string",
               },
             },
@@ -1618,7 +1642,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "array",
           items: {
             type: "string",
-            enum: ["armed", "lastCheckResult", "exitCode", "hasPty"],
+            enum: ["armed", "lastCheckResult", "exitCode"],
           },
           description:
             "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",
@@ -1937,7 +1961,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing off a partial message. This returns once the submission is queued, not once it has been delivered or run, so inspect the terminal afterwards to see what happened. It runs with the terminal's own privileges.",
+      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing a partial message. This returns once the submission is queued, not once it was delivered or run: pass the returned `submissionToken` to the status capability to find out. Runs with the terminal's privileges.",
     enabled: true,
     id: "terminal.sendCommand",
     inputSchema: {
@@ -1961,6 +1985,33 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     },
     kind: "command",
     name: "terminal.sendCommand",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        sent: {
+          type: "boolean",
+          description:
+            "Accepted onto the terminal's lane. Not evidence of delivery — use `submissionToken` for that.",
+        },
+        terminalId: {
+          type: "string",
+        },
+        command: {
+          type: "string",
+        },
+        submissionToken: {
+          type: "string",
+          description:
+            "Pass this and `terminalId` to the terminal-status capability to see how far the submission got. Retained for the last 32 per terminal; lost if the terminal restarts.",
+        },
+        message: {
+          type: "string",
+        },
+      },
+      required: ["sent", "terminalId", "command", "submissionToken", "message"],
+      additionalProperties: false,
+    },
     requiresArgs: true,
     title: "Submit text to terminal",
   },

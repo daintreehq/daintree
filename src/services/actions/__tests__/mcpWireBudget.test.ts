@@ -399,7 +399,29 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // Trimmed before raising, so the spend is the tool and not its prose: both
   // new property descriptions were brought under the 160 B one-clause target,
   // leaving MAX_PROPERTIES_OVER_TARGET untouched at 49.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_100;
+  //
+  // 54_100 → 54_200 for #12337's submission correlation, split across both
+  // tools it takes to answer one question:
+  //   - `terminal.sendCommand` gains an output schema it never had, so the
+  //     `submissionToken` it now returns lands in validated `structuredContent`
+  //     rather than only in the text body. A correlator a client has to scrape
+  //     back out of prose is not a contract, and correlation is the entire
+  //     point of the issue.
+  //   - `terminal.getStatus` gains the `submissionToken` input and the
+  //     `submission` record. Most of that record is the `phase` enum's
+  //     description, and the length is load-bearing: `pty_written` is the
+  //     strongest thing observable at this boundary, and a model that reads it
+  //     as "the agent got it" would draw exactly the false conclusion this
+  //     tracking exists to prevent.
+  // Deliberately NOT funded by trimming the neighbouring `exitCode`,
+  // `lastCheckResult` and `error` descriptions, which is where the ~1_500 B
+  // would have to come from. Those are honesty caveats guarded by
+  // `schemaDescriptions.test.ts`; spending them to buy room for a new caveat
+  // trades one safeguard for another and nets nothing.
+  // The baseline moved from 52_500 to 54_100 while this branch was open —
+  // #12346 landed `terminal.setClientMetadata` on develop — so the same
+  // ~1_600 B of correlation contract is now spent on top of that total.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_200;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -459,6 +481,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // #12342, #12343 and #12345 have all landed on develop since and spent that
   // window, so the cohort now carries the same additions as a raise rather
   // than absorbing them.
+  //
+  // 209_600 → 209_600 for #12337. Both tools are on the external tier, so this
+  // total moves by the same bytes as the external one above; it needs no
+  // separate justification beyond the entry above.
   const MAX_COHORT_PAYLOAD_BYTES = 209_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;

@@ -36,6 +36,11 @@ function deps(
     inventory?: string[];
     /** Main-side spawn ledger. Ids absent from it read as untracked (`null`). */
     owners?: Record<string, string>;
+    /** Per-terminal submission ledger, keyed by terminal id then token. */
+    submissions?: Record<
+      string,
+      Record<string, { token: string; phase: string; at?: number } | undefined>
+    >;
   } = {}
 ) {
   const byId = new Map(records.map((r) => [r["id"] as string, r]));
@@ -45,7 +50,18 @@ function deps(
       getTerminalsForProjectAsync: vi.fn(
         async () => opts.inventory ?? records.map((r) => r["id"] as string)
       ),
-      getTerminalAsync: vi.fn(async (id: string) => byId.get(id) ?? null),
+      getTerminalAsync: vi.fn(async (id: string, submissionToken?: string) => {
+        const found = byId.get(id);
+        if (found === undefined) return null;
+        // Mirrors `mapTerminalInfo`: the record only carries a `submission`
+        // when the query named a token, and only if the host had one.
+        const ledger = opts.submissions?.[id];
+        return {
+          ...found,
+          submission:
+            submissionToken === undefined ? undefined : (ledger?.[submissionToken] ?? undefined),
+        };
+      }),
       getSerializedStateAsync: vi.fn(async (id: string) => opts.serialized?.[id] ?? null),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
@@ -185,7 +201,9 @@ describe("buildViewlessTerminalStatus results", () => {
     });
 
     expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledTimes(1);
-    expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledWith("mine");
+    // The second argument is the optional submission token (#12337); this call
+    // named none, so the routing claim is unchanged.
+    expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledWith("mine", undefined);
     expect(result.terminals[1]?.error).toBe("Terminal not found or status unavailable");
   });
 
@@ -425,5 +443,77 @@ describe("buildViewlessTerminalStatus results", () => {
     });
 
     expect(d.ptyClient.getSerializedStateAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildViewlessTerminalStatus submission correlation (#12337)", () => {
+  const owners = { "t-1": WORKSPACE };
+
+  it("rejects a malformed submissionToken rather than answering without one", async () => {
+    for (const token of ["", 42, "x".repeat(129)]) {
+      await expect(
+        buildViewlessTerminalStatus(deps([record()], { owners }), WORKSPACE, {
+          terminalIds: ["t-1"],
+          submissionToken: token,
+        })
+      ).rejects.toBeInstanceOf(McpError);
+    }
+  });
+
+  it("carries the record for the token it was asked about", async () => {
+    const d = deps([record()], {
+      owners,
+      submissions: { "t-1": { "tok-1": { token: "tok-1", phase: "pty_written", at: 4242 } } },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["t-1"],
+      submissionToken: "tok-1",
+    });
+
+    expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledWith("t-1", "tok-1");
+    expect(result.terminals[0]?.submission).toEqual({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 4242,
+    });
+  });
+
+  it("reports unknown when the terminal was read and holds no such record", async () => {
+    const d = deps([record()], { owners, submissions: { "t-1": {} } });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["t-1"],
+      submissionToken: "tok-missing",
+    });
+
+    // The record WAS read, so absence is evidence. Omitting the field instead
+    // would be indistinguishable from never having asked.
+    expect(result.terminals[0]?.submission).toEqual({ token: "tok-missing", phase: "unknown" });
+  });
+
+  it("omits the record entirely on an entry the surface could not read", async () => {
+    const d = deps([record()], { owners, inventory: ["t-1"] });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["t-1", "t-missing"],
+      submissionToken: "tok-1",
+    });
+
+    // "This terminal holds no record" and "this terminal could not be read" are
+    // different claims; only the first is `unknown`.
+    expect(result.terminals[1]?.error).toBeDefined();
+    expect(result.terminals[1]?.submission).toBeUndefined();
+  });
+
+  it("adds nothing when no token was named", async () => {
+    const d = deps([record()], {
+      owners,
+      submissions: { "t-1": { "tok-1": { token: "tok-1", phase: "pty_written" } } },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["t-1"] });
+
+    expect(result.terminals[0]?.submission).toBeUndefined();
   });
 });

@@ -117,6 +117,7 @@ import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
+import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -163,6 +164,12 @@ interface TerminalInfoResponse {
   detectedProcessId?: string;
   /** Capability mode — sealed-at-spawn agent capability surface. Set when the terminal was cold-launched as a built-in agent. */
   capabilityAgentId?: BuiltInAgentId;
+  /**
+   * Correlation record for the `submissionToken` the query named (#12337).
+   * Present only when {@link PtyClient.getTerminalAsync} was called with one;
+   * absent means either "not asked" or "this terminal holds no record".
+   */
+  submission?: TerminalSubmissionRecord;
 }
 
 /**
@@ -1615,8 +1622,8 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "write", id, data, traceId });
   }
 
-  submit(id: string, text: string): void {
-    this.shardForTerminal(id).send({ type: "submit", id, text });
+  submit(id: string, text: string, submissionToken?: string): void {
+    this.shardForTerminal(id).send({ type: "submit", id, text, submissionToken });
   }
 
   /**
@@ -2194,13 +2201,24 @@ export class PtyClient extends EventEmitter {
     return promise.catch(() => []);
   }
 
-  /** Get terminal info by ID */
-  async getTerminalAsync(id: string): Promise<TerminalInfoResponse | null> {
+  /**
+   * Get terminal info by ID. Passing `submissionToken` additionally resolves
+   * that submission's correlation record onto the response (#12337) — the same
+   * round trip, so a status read correlating a send costs no extra RPC.
+   *
+   * The id suffix is a debug label only — `RequestResponseBroker.generateId`
+   * already makes every request id unique — but it names the token-bearing
+   * variant so a stalled correlation read is distinguishable in broker traces.
+   */
+  async getTerminalAsync(
+    id: string,
+    submissionToken?: string
+  ): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
     const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
       shard,
-      `terminal-${id}`,
-      (requestId) => ({ type: "get-terminal", id, requestId })
+      submissionToken === undefined ? `terminal-${id}` : `terminal-${id}-sub-${submissionToken}`,
+      (requestId) => ({ type: "get-terminal", id, requestId, submissionToken })
     );
     return promise.catch(() => null);
   }

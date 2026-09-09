@@ -83,7 +83,11 @@ interface ParsedArgs {
   lines: number;
   stripAnsi: boolean;
   includeOutput: boolean;
+  submissionToken?: string;
 }
+
+/** Mirrors the action schema's own bound; the args schema does not run here. */
+const MAX_SUBMISSION_TOKEN_LENGTH = 128;
 
 /**
  * Whether a call carries the explicit ids the viewless path needs.
@@ -133,9 +137,31 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
     return id;
   });
 
+  const submissionTokenRaw = args["submissionToken"];
+  let submissionToken: string | undefined;
+  if (submissionTokenRaw !== undefined && submissionTokenRaw !== null) {
+    if (
+      typeof submissionTokenRaw !== "string" ||
+      submissionTokenRaw === "" ||
+      submissionTokenRaw.length > MAX_SUBMISSION_TOKEN_LENGTH
+    ) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `terminal.getStatus \`submissionToken\` must be a non-empty string of at most ${MAX_SUBMISSION_TOKEN_LENGTH} characters.`
+      );
+    }
+    submissionToken = submissionTokenRaw;
+  }
+
   const includeOutputRaw = args["includeOutput"];
   if (includeOutputRaw === undefined || includeOutputRaw === null) {
-    return { terminalIds, lines: DEFAULT_OUTPUT_LINES, stripAnsi: true, includeOutput: false };
+    return {
+      terminalIds,
+      lines: DEFAULT_OUTPUT_LINES,
+      stripAnsi: true,
+      includeOutput: false,
+      submissionToken,
+    };
   }
   if (typeof includeOutputRaw !== "object" || Array.isArray(includeOutputRaw)) {
     throw new McpError(
@@ -165,7 +191,13 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
     );
   }
 
-  return { terminalIds, lines, stripAnsi: stripAnsiRaw ?? true, includeOutput: true };
+  return {
+    terminalIds,
+    lines,
+    stripAnsi: stripAnsiRaw ?? true,
+    includeOutput: true,
+    submissionToken,
+  };
 }
 
 /**
@@ -187,7 +219,7 @@ function isVisibleToBoundSession(record: TerminalRecord, workspaceId: string): b
   return true;
 }
 
-function buildEntry(record: TerminalRecord): TerminalStatusEntry {
+function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalStatusEntry {
   const agentState = record.agentState ?? null;
 
   const entry: TerminalStatusEntry = {
@@ -211,6 +243,13 @@ function buildEntry(record: TerminalRecord): TerminalStatusEntry {
 
   if (agentState === "waiting" && record.waitingReason !== undefined) {
     entry.waitingReason = record.waitingReason;
+  }
+
+  // The record was read, so an absent `submission` is evidence: this terminal
+  // holds nothing for that token. Reported as `unknown` rather than omitted,
+  // which a caller could not tell from "the field was never asked for".
+  if (submissionToken !== undefined) {
+    entry.submission = record.submission ?? { token: submissionToken, phase: "unknown" };
   }
 
   return entry;
@@ -246,7 +285,7 @@ export async function buildViewlessTerminalStatus(
   workspaceId: string,
   rawArgs: unknown
 ): Promise<TerminalStatusResult> {
-  const { terminalIds, lines, stripAnsi, includeOutput } = parseArgs(rawArgs);
+  const { terminalIds, lines, stripAnsi, includeOutput, submissionToken } = parseArgs(rawArgs);
   const uniqueIds = [...new Set(terminalIds)];
 
   const placed = new Set<string>();
@@ -268,7 +307,11 @@ export async function buildViewlessTerminalStatus(
   const lookupIds = uniqueIds.filter((id) => placed.has(id));
 
   const records = new Map<string, TerminalRecord>();
-  const fetched = await Promise.all(lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id)));
+  // The token rides the record fetch this path already issues, so correlating a
+  // submission costs no extra RPC here (#12337).
+  const fetched = await Promise.all(
+    lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id, submissionToken))
+  );
   lookupIds.forEach((id, index) => {
     const record = fetched[index];
     // `getTerminalAsync` folds an RPC failure into `null`, so this means "not
@@ -309,7 +352,7 @@ export async function buildViewlessTerminalStatus(
         error: "Terminal not found or status unavailable",
       };
     }
-    const entry = buildEntry(record);
+    const entry = buildEntry(record, submissionToken);
     if (includeOutput) entry.recentOutput = outputs.get(id) ?? null;
     return entry;
   });

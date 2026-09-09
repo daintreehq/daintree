@@ -446,12 +446,44 @@ describe("terminal action hardening", () => {
       {} as never
     );
 
-    expect(mocks.terminalClient.submit).toHaveBeenCalledWith("term-ok", "git status");
+    // The correlation token must be the SAME one the caller gets back (#12337):
+    // a returned token that names a different submission is worse than none,
+    // because it reads as a confirmation the caller can act on.
+    const { submissionToken } = result as { submissionToken: string };
+    expect(submissionToken).toEqual(expect.any(String));
+    expect(mocks.terminalClient.submit).toHaveBeenCalledWith(
+      "term-ok",
+      "git status",
+      submissionToken
+    );
     expect(result).toMatchObject({
       sent: true,
       terminalId: "term-ok",
       command: "git status",
     });
+  });
+
+  it("mints a distinct token per submission, so a repeat is not mistaken for the first", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const sendCommand = actions.get("terminal.sendCommand")!();
+
+    usePanelStore.setState({
+      panelsById: { "term-ok": createTerminal({ id: "term-ok" }) },
+      panelIds: ["term-ok"],
+    });
+
+    const first = (await sendCommand.run(
+      { terminalId: "term-ok", command: "git status" },
+      {} as never
+    )) as { submissionToken: string };
+    const second = (await sendCommand.run(
+      { terminalId: "term-ok", command: "git status" },
+      {} as never
+    )) as { submissionToken: string };
+
+    // The token identifies a dispatch, not a command. Two identical sends are
+    // two submissions and must stay separately answerable.
+    expect(second.submissionToken).not.toBe(first.submissionToken);
   });
 
   it("does not corrupt dock focus when asked to dock a missing terminal", async () => {

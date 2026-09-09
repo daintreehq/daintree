@@ -474,6 +474,23 @@ export const TerminalSummarySchema = z.object({
   clientMetadata: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
+/**
+ * One submission's delivery record (#12337).
+ *
+ * `z.enum` rather than a union of literals on purpose: a union renders as
+ * `anyOf`, which strict-mode MCP clients reject, while an enum renders as a
+ * plain `{ type: "string", enum: [...] }`.
+ */
+export const TerminalSubmissionRecordSchema = z.object({
+  token: z.string(),
+  phase: z
+    .enum(["queued", "writing", "pty_written", "failed", "cancelled", "unknown"])
+    .describe(
+      "How far this submission got. `pty_written`: the text and its Enter reached the pty without error — it does NOT mean the agent read them or acted on them. `queued`/`writing`: still in progress. `failed`/`cancelled`: it did not go out whole, and part may sit in the composer, so neither makes re-sending safe. `unknown`: the terminal was read and holds no record, including tokens aged past the last 32."
+    ),
+  at: z.number().optional().describe("Epoch ms the phase was entered. Absent for `unknown`."),
+});
+
 export const TerminalStatusEntrySchema = z.object({
   terminalId: z.string(),
   agentId: z.string().nullable(),
@@ -519,12 +536,31 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`."
     ),
+  submission: TerminalSubmissionRecordSchema.optional().describe(
+    "Delivery record for the `submissionToken` this call named. Absent when no token was asked for, and on any entry with an `error` — there the terminal could not be read, which is not the same as holding no record."
+  ),
   error: z
     .string()
     .optional()
     .describe(
-      "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
+      "Set when the terminal was not found, and also stamped on every resolved entry when a batched fetch fails — the status fields are still populated and only that fetch's own field is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
     ),
+});
+
+export const TerminalSendCommandResultSchema = z.object({
+  sent: z
+    .boolean()
+    .describe(
+      "Accepted onto the terminal's lane. Not evidence of delivery — use `submissionToken` for that."
+    ),
+  terminalId: z.string(),
+  command: z.string(),
+  submissionToken: z
+    .string()
+    .describe(
+      "Pass this and `terminalId` to the terminal-status capability to see how far the submission got. Retained for the last 32 per terminal; lost if the terminal restarts."
+    ),
+  message: z.string(),
 });
 
 export const TerminalStatusResultSchema = z.object({
