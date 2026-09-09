@@ -35,6 +35,7 @@ import type {
   PluginPanelLifecycleEvent,
   PluginSystemWakeEvent,
   PluginFsDirEntry,
+  PluginFsWriteResult,
   PluginFsStat,
   PluginGitStatus,
   PluginGitCommitResult,
@@ -822,8 +823,12 @@ export class PluginDevWorkerHostProxy {
           this.call<string>("fs.readFile", { path: filePath }, options?.signal),
         readFileBytes: (filePath, options) =>
           this.call<Uint8Array>("fs.readFileBytes", { path: filePath }, options?.signal),
-        writeFile: (filePath, contents) =>
-          this.call<void>("fs.writeFile", { path: filePath, contents }),
+        writeFile: (filePath, contents, options) =>
+          this.call<PluginFsWriteResult>("fs.writeFile", {
+            path: filePath,
+            contents,
+            ...(options !== undefined && { options }),
+          }),
         readdir: (dirPath, options) =>
           this.call<PluginFsDirEntry[]>(
             "fs.readdir",

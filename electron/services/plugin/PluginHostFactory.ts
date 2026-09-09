@@ -1,5 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
+import { createHash } from "node:crypto";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import { runExclusive } from "../../utils/keyedMutex.js";
 import { watchShared } from "../FileObservationService.js";
 import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
@@ -88,6 +91,7 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginFsApi,
   PluginFsDirEntry,
+  PluginFsWriteErrorCode,
   PluginFsStat,
   PluginGitApi,
   PluginClipboardApi,
@@ -1929,6 +1933,21 @@ async function resolveActiveAgentTerminalId(boundProjectId: string | null): Prom
   return candidates[0].id;
 }
 
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * A checked-write refusal (#12323). The code rides on the error object for
+ * in-process callers and prefixes the message for callers behind a boundary
+ * that keeps only the message.
+ */
+function fsWriteError(code: PluginFsWriteErrorCode, message: string): Error & { code: string } {
+  const error = new Error(`${code}: ${message}`) as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
 /**
  * Build the host-mediated `host.fs` surface for one plugin. Every path
  * argument is realpath-contained to the declared `scopes.fs.allowedPaths`
@@ -2015,11 +2034,26 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       // to a plugin would expose whatever else the pool holds.
       return new Uint8Array(buffer);
     },
-    writeFile: async (filePath, contents) => {
+    writeFile: async (filePath, contents, options) => {
       requireLoaded("writeFile");
       const writeCap = requireWriteCap("writeFile");
       if (typeof contents !== "string") {
         throw new Error(`Plugin "${pluginId}" fs.writeFile: contents must be a string`);
+      }
+      // The presence of an options object — even `{}` — selects the checked
+      // write (#12323); a malformed one is an authoring error, not a plain
+      // write in disguise.
+      const checked = options !== undefined;
+      if (checked) {
+        if (options === null || typeof options !== "object") {
+          throw new Error(`Plugin "${pluginId}" fs.writeFile: options must be an object`);
+        }
+        const expected = options.expectedRevision;
+        if (expected !== undefined && expected !== null && !/^[0-9a-f]{64}$/.test(expected)) {
+          throw new Error(
+            `Plugin "${pluginId}" fs.writeFile: expectedRevision must be a sha256 hex string or null`
+          );
+        }
       }
       // Lazily materialize the implicit per-plugin data dir before containment
       // when the target (lexically) lands inside it — resolveContainedPath
@@ -2055,7 +2089,83 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       // anyway never banks a grant (#10524). Re-check liveness after the await.
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded("writeFile");
-      await fs.writeFile(resolved, contents, "utf-8");
+      // One writer per resolved path at a time, plain and checked alike, so a
+      // checked write's hash-compare-and-replace cannot interleave with any
+      // other host-mediated writer to the same file. Distinct paths never wait
+      // on each other.
+      const revision = await runExclusive(resolved, async () => {
+        requireLoaded("writeFile");
+        if (!checked) {
+          await fs.writeFile(resolved, contents, "utf-8");
+          return sha256Hex(Buffer.from(contents, "utf-8"));
+        }
+        // Containment resolved before the consent prompt and the queue wait;
+        // both can take long enough for the path to change underneath, so the
+        // checked path proves it again inside the critical section.
+        const recheck = await containWithClass(filePath);
+        if (recheck.resolved !== resolved) {
+          throw fsWriteError(
+            "TARGET_UNAVAILABLE",
+            `Plugin "${pluginId}" fs.writeFile: the target moved while the write was waiting`
+          );
+        }
+        // Symlinks are refused on the checked path: containment realpaths the
+        // leaf, so `resolved` is already the link's destination and a bare
+        // lstat there sees a regular file. Inspect the requested leaf itself.
+        // Every ancestor was validated by containment; only the leaf can be a
+        // link the caller did not ask to write through.
+        const requestedLeaf = path.resolve(filePath);
+        const leafStat = await fs.lstat(requestedLeaf).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (leafStat?.isSymbolicLink()) {
+          throw fsWriteError(
+            "TARGET_IS_SYMLINK",
+            `Plugin "${pluginId}" fs.writeFile: refusing to write through a symlink`
+          );
+        }
+        const current = await fs.readFile(resolved).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        const expected = options.expectedRevision;
+        if (expected === null) {
+          if (current !== null) {
+            throw fsWriteError(
+              "TARGET_EXISTS",
+              `Plugin "${pluginId}" fs.writeFile: the target already exists`
+            );
+          }
+        } else if (expected !== undefined) {
+          if (current === null) {
+            throw fsWriteError(
+              "TARGET_UNAVAILABLE",
+              `Plugin "${pluginId}" fs.writeFile: the target no longer exists`
+            );
+          }
+          const currentRevision = sha256Hex(current);
+          if (currentRevision !== expected) {
+            const error = fsWriteError(
+              "REVISION_MISMATCH",
+              `Plugin "${pluginId}" fs.writeFile: the file changed since it was read`
+            ) as Error & { currentRevision: string };
+            error.currentRevision = currentRevision;
+            throw error;
+          }
+        }
+        const bytes = Buffer.from(contents, "utf-8");
+        // Preserve the file's mode across the replace so an executable script
+        // or a read-only note keeps its bits; a new file takes the umask.
+        const mode = leafStat && !leafStat.isSymbolicLink() ? leafStat.mode & 0o777 : undefined;
+        await resilientAtomicWriteFile(
+          resolved,
+          bytes,
+          "utf-8",
+          mode === undefined ? undefined : { mode }
+        );
+        return sha256Hex(bytes);
+      });
       // Audit every write so host-mediated filesystem mutation is observable.
       deps.safeAppendAudit({
         pluginId,
@@ -2067,6 +2177,7 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
         argsHash: deps.safeArgsHash([{ path: resolved, bytes: Buffer.byteLength(contents) }]),
         durationMs: 0,
       });
+      return { revision };
     },
     readdir: async (dirPath, options) => {
       options?.signal?.throwIfAborted();
