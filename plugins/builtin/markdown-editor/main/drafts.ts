@@ -15,6 +15,7 @@ import {
   type DraftSummary,
 } from "../shared/protocol.js";
 import { sha256Hex } from "./documentCodec.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
 /**
  * Draft recovery records (#12323): one JSON file per document identity under
@@ -106,7 +107,7 @@ export class DraftStore {
       try {
         await this.fs.writeFile(target, serialized, {});
       } catch (error) {
-        return { status: "error", message: error instanceof Error ? error.message : String(error) };
+        return { status: "error", message: formatErrorMessage(error, "Draft could not be stored") };
       }
       return { status: "stored" };
     });

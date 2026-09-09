@@ -2,6 +2,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   CHANNELS,
   identityKey,
@@ -329,7 +330,7 @@ export class DocumentController {
         eol: base.eol,
       });
     } catch (error) {
-      result = { status: "error", message: error instanceof Error ? error.message : String(error) };
+      result = { status: "error", message: formatErrorMessage(error, "Save failed") };
     }
     if (this.disposed) return false;
     switch (result.status) {
@@ -408,7 +409,7 @@ export class DocumentController {
         eol: record.base.eol,
       });
     } catch (error) {
-      return { status: "error", message: error instanceof Error ? error.message : String(error) };
+      return { status: "error", message: formatErrorMessage(error, "Save as failed") };
     }
   }
 
@@ -562,7 +563,7 @@ export class DocumentController {
         generation: this.nextGeneration(),
       });
     } catch (error) {
-      result = { status: "error", message: error instanceof Error ? error.message : String(error) };
+      result = { status: "error", message: formatErrorMessage(error, "Save failed") };
     }
     if (this.disposed) return;
     const warning =

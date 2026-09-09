@@ -38,6 +38,7 @@ import {
 import { assembleDocument, decodeDocument, sha256Hex, utf8ByteLength } from "./documentCodec.js";
 import { DraftStore } from "./drafts.js";
 import { z } from "zod";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
 /**
  * Main-side half of the Markdown editor (#12323). Owns every read, save,
@@ -250,7 +251,7 @@ export async function activate(
         return { status: "saved", revision, wrote: true };
       } catch (error) {
         const code = (error as { code?: unknown }).code;
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatErrorMessage(error, "Save failed");
         if (code === "REVISION_MISMATCH" || message.startsWith("REVISION_MISMATCH")) {
           return conflictFromDisk();
         }
@@ -281,7 +282,7 @@ export async function activate(
         return { status: "saved", path: targetPath, revision };
       } catch (error) {
         const code = (error as { code?: unknown }).code;
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatErrorMessage(error, "Save failed");
         if (code === "TARGET_EXISTS" || message.startsWith("TARGET_EXISTS"))
           return { status: "exists" };
         return { status: "error", message };
