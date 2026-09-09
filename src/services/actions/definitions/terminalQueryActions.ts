@@ -658,6 +658,15 @@ export function registerTerminalQueryActions(
       terminalId: z
         .string()
         .min(1)
+        // Bounded because it is echoed back in the result, and the result is
+        // schema-advertised: past the response budget the transport drops
+        // `structuredContent` and flags the call `isError`, which would lose
+        // the token for a submission that went out. `agent.launch` accepts an
+        // arbitrary `requestedId`, so an id long enough to do that is
+        // reachable. Panel ids are short; this rejects only pathological ones,
+        // and rejecting is clearer than a truncated success reported as a
+        // failure.
+        .max(512)
         .describe(
           "Identifies the terminal to submit to, using a panel id from the terminal-listing capability."
         ),

@@ -307,6 +307,37 @@ describe("WriteQueue submission ledger", () => {
     expect(wq.getSubmission("tok-1")?.phase).toBe("cancelled");
   });
 
+  it("answers a token reused while still in flight with the in-flight submission", async () => {
+    const h = makeHarness();
+    let markWritten: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    let first = true;
+    h.performSubmit.mockImplementation((_text, ctx) => {
+      if (!first) return Promise.reject(new Error("write EPIPE"));
+      first = false;
+      return new Promise<void>((resolve) => {
+        markWritten = () => ctx.markPtyWritten();
+        release = resolve;
+      });
+    });
+    const wq = new WriteQueue(h.options);
+
+    wq.submit("first", "tok-1");
+    await vi.advanceTimersByTimeAsync(0);
+    // Reuse while the first is still writing. Reuse is the caller's error —
+    // `sendCommand` mints a UUID per call — and the documented consequence is
+    // that the record keeps describing the submission already in flight.
+    wq.submit("second", "tok-1");
+    markWritten?.();
+    release?.();
+    await vi.runAllTimersAsync();
+
+    expect(wq.getSubmission("tok-1")?.phase).toBe("pty_written");
+    // Both texts still reached the lane; only the record is ambiguous, and it
+    // must not be a fabricated failure for a submission that was delivered.
+    expect(h.performSubmit).toHaveBeenCalledTimes(2);
+  });
+
   it("does not push an in-flight submission back to queued when its token is reused", async () => {
     const h = makeHarness();
     let release: (() => void) | undefined;

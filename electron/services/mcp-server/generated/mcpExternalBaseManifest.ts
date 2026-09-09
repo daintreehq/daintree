@@ -1971,6 +1971,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         terminalId: {
           type: "string",
           minLength: 1,
+          maxLength: 512,
           description:
             "Identifies the terminal to submit to, using a panel id from the terminal-listing capability.",
         },

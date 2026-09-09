@@ -143,8 +143,15 @@ export class WriteQueue {
     }
     // A token already in flight keeps its own record: overwriting would push a
     // live `writing` back to `queued` and answer the earlier submission with
-    // the later one's phase. Only `sendCommand`'s minted UUIDs reach here
-    // normally, so this guards a direct-IPC caller reusing a token.
+    // the later one's phase.
+    //
+    // A token names ONE submission. `sendCommand` mints a fresh UUID per call,
+    // so reuse only reaches here through a direct IPC caller, and it is that
+    // caller's error. The text is still submitted either way; only the record
+    // is ambiguous — reuse after the first finished replaces the record
+    // (`retainFinalized` keeps one per token), while reuse mid-flight leaves it
+    // describing the submission already writing. Refusing to queue the second
+    // would be worse: that silently drops text the caller asked to send.
     if (token !== undefined && !this.pendingSubmissions.has(token)) {
       this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
     }

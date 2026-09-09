@@ -42,7 +42,10 @@ function defaultSpawnContext(): SpawnContext {
 
 type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 
-function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProcess {
+function createTerminal(
+  options?: Partial<TerminalProcessOptions>,
+  onSubmitStatus?: (id: string, state: string) => void
+): TerminalProcess {
   const merged = {
     cwd: process.cwd(),
     cols: 80,
@@ -53,7 +56,7 @@ function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProc
   return new TerminalProcess(
     "t1",
     merged,
-    { emitData: () => {}, onExit: () => {} },
+    { emitData: () => {}, onExit: () => {}, onSubmitStatus },
     {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       agentStateService: { handleActivityState: () => {} } as any,
@@ -174,6 +177,25 @@ describe("TerminalProcess submission tracking (#12337)", () => {
 
     expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
     expect(terminal.getSubmission("tok-1")).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("surfaces an untracked submit's synchronous write error as a failed status", async () => {
+    vi.useFakeTimers();
+    const statuses: string[] = [];
+    const terminal = createTerminal(undefined, (_id, state) => statuses.push(state));
+    ptyWriteMock.mockImplementation((data) => {
+      if (data === "\r") throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    });
+
+    // No token: this is in-app typing / fleet broadcast. Before the strict
+    // write path, `write()` swallowed the throw into `logWriteError` and the
+    // submit lane never heard about it. Driven through the real
+    // TerminalInputController so restoring the swallow fails this test.
+    terminal.submit("test\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(statuses).toEqual(["failed"]);
     vi.useRealTimers();
   });
 
