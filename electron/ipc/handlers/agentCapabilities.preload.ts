@@ -1,6 +1,8 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
 export const AGENT_CAPABILITIES_METHOD_CHANNELS = {
+  search: "agent-capabilities:search",
+  get: "agent-capabilities:get",
   getRegistry: "agent-capabilities:get-registry",
   getAgentIds: "agent-capabilities:get-agent-ids",
   getAgentMetadata: "agent-capabilities:get-agent-metadata",

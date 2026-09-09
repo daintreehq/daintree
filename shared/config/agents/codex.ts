@@ -232,6 +232,34 @@ export const config: AgentConfig = {
       },
     },
     {
+      id: "plugin-skills",
+      trigger: "$",
+      sourcePrecedence: 15,
+      discovery: {
+        method: "registry",
+        parser: "codex-plugin-skills",
+        derive: {
+          labelPrefix: "$",
+          kind: "skill",
+          idNamespace: "skill",
+          fallbackDescription: "Plugin skill",
+        },
+        locations: [
+          {
+            id: "user:codex-plugin-skills",
+            scope: "user",
+            base: {
+              type: "env",
+              name: "CODEX_HOME",
+              fallback: { type: "homeRelative", segments: [".codex"] },
+            },
+            segments: [],
+            locationPrecedence: 0,
+          },
+        ],
+      },
+    },
+    {
       // Codex Skills, invoked as `$name`. Custom prompts (`~/.codex/prompts`,
       // `/prompts:`) and `.codex/commands` were retired — neither exists in
       // current Codex.
