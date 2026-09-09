@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { tags as t } from "@lezer/highlight";
+import { tags as t, type Tag } from "@lezer/highlight";
 import { daintreeThemeStyles } from "../editorTheme";
 
 describe("daintreeTheme — issue #5981 (caret-only accent)", () => {
@@ -24,7 +24,7 @@ describe("daintreeTheme — issue #5981 (caret-only accent)", () => {
   });
 
   describe("Markdown inline tags (#12323)", () => {
-    const find = (tag: unknown) =>
+    const find = (tag: Tag) =>
       daintreeThemeStyles.find(
         (s) => s.tag === tag || (Array.isArray(s.tag) && s.tag.includes(tag))
       );

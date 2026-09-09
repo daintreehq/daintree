@@ -23,6 +23,7 @@ function makeManifest(overrides: Partial<PluginManifest> = {}): PluginManifest {
       skills: [],
       forgeProviders: [],
       fileDecorationProviders: [],
+      fileEditors: [],
       agents: [],
       processTools: [],
       recipes: [],

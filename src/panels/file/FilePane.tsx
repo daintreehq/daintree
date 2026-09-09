@@ -69,6 +69,9 @@ import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
 import { useHeightHold } from "./useHeightHold";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
+import { useFileEditor } from "@/registry/fileEditorRegistry";
+import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
+import { useFileDocumentCloseGuard } from "./useFileDocumentCloseGuard";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -89,7 +92,23 @@ const MODE_LABELS: Record<FileViewMode, string> = {
   source: "Source",
   rendered: "Rendered",
   diff: "Diff",
+  edit: "Edit",
 };
+
+// Shared by the fetch wait and the editor's lazy-chunk wait, like the diff
+// skeleton below: the editor view is a lazy builtin slot (#12323), and the
+// first mount pays for its chunk.
+function EditorLoadingSkeleton() {
+  return (
+    <div className="p-4 space-y-3">
+      <Skeleton label="Loading editor">
+        <SkeletonBone className="h-5 w-1/3" />
+        <SkeletonText lines={12} />
+      </Skeleton>
+      <SkeletonHint />
+    </div>
+  );
+}
 
 // Shared by the fetch wait and the lazy-chunk wait so the two are
 // indistinguishable on screen. `Skeleton` carries the 400ms anti-flicker gate.
@@ -387,17 +406,67 @@ export function FilePane({
     )
   );
 
-  // Rendered and Diff are independent capabilities. One derived list drives
-  // both the toggle and the clamp, so a persisted mode whose capability is gone
-  // falls back to Source — never written back, since a poll that transiently
-  // drops the change must not erase what the user picked.
+  const projectPath = useProjectStore((state) => state.currentProject?.path ?? "");
+  const projectId = useProjectStore((state) => state.currentProject?.id ?? "");
+
+  // Containment root for files.read / daintree-file://: the worktree or
+  // project that contains the file, else its parent directory (same
+  // outside-root fallback as FileViewerModal).
+  const effectiveRootPath = useMemo(() => {
+    if (!filePath) return worktreePath || projectPath;
+    return (
+      [worktreePath, projectPath].find((root) => isUnderRoot(filePath, root)) ??
+      parentDirectory(filePath)
+    );
+  }, [filePath, worktreePath, projectPath]);
+  // Whether that root is a project or worktree, as opposed to the parent-
+  // directory fallback for a file no project owns. Edit is only offered inside
+  // a root the host actually governs (#12323).
+  const isInsideGovernedRoot =
+    filePath !== undefined &&
+    ((worktreePath !== "" && isUnderRoot(filePath, worktreePath)) ||
+      (projectPath !== "" && isUnderRoot(filePath, projectPath)));
+
+  const [content, setContent] = useState<string | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>("idle");
+
+  // The plugin-contributed editor for this file, resolved enable-aware: a
+  // disabled plugin drops Edit live, and the clamp below lands on Source.
+  const editor = useFileEditor(filePath);
+  const contentBytes = useMemo(
+    () => (content === null ? 0 : new TextEncoder().encode(content).byteLength),
+    [content]
+  );
+  // Edit joins the toggle only for a file the reader loaded as text (which
+  // already excludes binary, oversized and LFS-pointer files), inside a
+  // governed root, under the editor's own byte ceiling, and only in the panel:
+  // the file viewer dialog stays read-only in v1.
+  const isEditable =
+    editor !== null &&
+    location !== "dialog" &&
+    loadState === "loaded" &&
+    isInsideGovernedRoot &&
+    contentBytes <= editor.registration.maxBytes;
+
+  // The editor plugin's projection of this panel's document (#12323): the
+  // draft Rendered previews, the dirty flag the chrome shows in every mode,
+  // and the Save / Discard operations the close prompt calls back into.
+  const draftText = useFileDocumentDraftText(id);
+  const { dirty: isDirty, conflict: hasConflict } = useFileDocumentFlags(id);
+
+  // Rendered, Diff and Edit are independent capabilities. One derived list
+  // drives both the toggle and the clamp, so a persisted mode whose capability
+  // is gone falls back to Source — never written back, since a poll that
+  // transiently drops the change (or a plugin toggled off) must not erase what
+  // the user picked.
   const availableModes = useMemo<FileViewMode[]>(
     () => [
       "source",
       ...(isRenderable ? (["rendered"] as const) : []),
       ...(localChangeStatus !== undefined ? (["diff"] as const) : []),
+      ...(isEditable ? (["edit"] as const) : []),
     ],
-    [isRenderable, localChangeStatus]
+    [isRenderable, localChangeStatus, isEditable]
   );
   const requestedMode = panel?.fileViewMode ?? "source";
   const viewMode: FileViewMode = availableModes.includes(requestedMode) ? requestedMode : "source";
@@ -459,19 +528,6 @@ export function FilePane({
     if (viewMode === "diff" && diffContent !== undefined) heightHold.handleRendered();
   }, [viewMode, diffContent, heightHold]);
 
-  const projectPath = useProjectStore((state) => state.currentProject?.path ?? "");
-
-  // Containment root for files.read / daintree-file://: the worktree or
-  // project that contains the file, else its parent directory (same
-  // outside-root fallback as FileViewerModal).
-  const effectiveRootPath = useMemo(() => {
-    if (!filePath) return worktreePath || projectPath;
-    return (
-      [worktreePath, projectPath].find((root) => isUnderRoot(filePath, root)) ??
-      parentDirectory(filePath)
-    );
-  }, [filePath, worktreePath, projectPath]);
-
   // The live signal for a file no worktree contains: a scratch folder, a
   // worktree-less project, a path picked from anywhere else on disk. Polled
   // from main rather than watched, and only while this view is visible, so the
@@ -491,9 +547,7 @@ export function FilePane({
   // so the external signal only ever fills the gap where there is no worktree.
   const changeTick = worktreeChangeTick ?? externalChangeTick;
 
-  const [content, setContent] = useState<string | null>(null);
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
-  const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
   // Overrides the code-derived copy for failures that no `FileReadErrorCode`
   // describes (a readable file whose SVG content the sanitizer rejects).
@@ -1040,15 +1094,56 @@ export function FilePane({
       : filePath && toForwardSlashes(filePath);
   const reveal = revealCopy();
   const errorCopy = externalError ? externalTargetCopy(externalError.target, reveal) : null;
+
+  // Leaving Edit unmounts the editor, and with it whatever had keyboard focus;
+  // the mode toggle is the control the user is conceptually holding, so focus
+  // lands on its active segment rather than falling to <body> (#12323).
+  const modeToggleRef = useRef<HTMLDivElement>(null);
+  const wasEditModeRef = useRef(viewMode === "edit");
+  useEffect(() => {
+    if (wasEditModeRef.current && viewMode !== "edit") {
+      const active = modeToggleRef.current?.querySelector<HTMLButtonElement>(
+        'button[aria-pressed="true"]'
+      );
+      active?.focus({ preventScroll: true });
+    }
+    wasEditModeRef.current = viewMode === "edit";
+  }, [viewMode]);
+
+  // Closing a dirty panel asks Save / Discard / Cancel; the prompt lives here,
+  // not in the editor view, so it survives a switch to Rendered or Source and
+  // a temporary unmount of the editor itself (#12323).
+  const closeGuardDialog = useFileDocumentCloseGuard({
+    panelId: id,
+    dirty: isDirty,
+    fileName: fileName ?? title,
+  });
+
+  // The dirty mark in the panel chrome, shown in every mode while a draft
+  // exists. A conflict is the same dot with a different name: it says the
+  // draft is standing on a file that moved, which is the one fact the chrome
+  // should carry — the editor's banner carries the rest.
+  const dirtyIndicator = isDirty ? (
+    <span
+      role="img"
+      aria-label={hasConflict ? "Unsaved changes, file changed on disk" : "Unsaved changes"}
+      title={hasConflict ? "Unsaved changes — file changed on disk" : "Unsaved changes"}
+      data-testid="file-pane-dirty"
+      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-text-secondary"
+    />
+  ) : undefined;
+
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root label="File viewer controls">
         {availableModes.length > 1 && (
-          <SegmentedToggle<FileViewMode>
-            options={toggleOptions}
-            value={viewMode}
-            onChange={handleViewModeChange}
-          />
+          <div ref={modeToggleRef} className="contents">
+            <SegmentedToggle<FileViewMode>
+              options={toggleOptions}
+              value={viewMode}
+              onChange={handleViewModeChange}
+            />
+          </div>
         )}
         <FileViewerToolbar.Path path={displayPath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
@@ -1062,7 +1157,7 @@ export function FilePane({
               data-testid="file-pane-text-size"
             />
           )}
-          {isMarkdown && viewMode === "source" && (
+          {((isMarkdown && viewMode === "source") || viewMode === "edit") && (
             <FileViewerToolbar.IconButton
               label="Wrap long lines"
               pressed={markdownWrapLines}
@@ -1188,12 +1283,15 @@ export function FilePane({
       onRestore={onRestore}
       showRestoreControl={showRestoreControl}
       toolbar={toolbar}
+      headerContent={dirtyIndicator}
+      headerContentPlacement="trailing"
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
       onTabRename={onTabRename}
       onAddTab={onAddTab}
     >
+      {closeGuardDialog}
       <div
         ref={heightHold.bodyRef}
         className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
@@ -1368,14 +1466,34 @@ export function FilePane({
           />
         )}
 
+        {filePath && viewMode === "edit" && editor && loadState === "loaded" && (
+          <Suspense fallback={<EditorLoadingSkeleton />}>
+            <editor.Component
+              panelId={id}
+              filePath={filePath}
+              fileName={fileName ?? filePath}
+              rootPath={effectiveRootPath}
+              worktreePath={worktreePath || null}
+              projectId={projectId}
+              wrapLines={markdownWrapLines}
+              isFocused={isFocused}
+              changeTick={changeTick}
+              onOpenExternalEditor={() => void handleOpenExternal("editor")}
+            />
+          </Suspense>
+        )}
+
         {filePath &&
           viewMode !== "diff" &&
+          viewMode !== "edit" &&
           loadState === "loaded" &&
           content !== null &&
           (viewMode === "rendered" && isMarkdown ? (
             <MarkdownViewer
               ref={markdownViewerRef}
-              content={content}
+              // The draft is document state, so Rendered previews it while one
+              // exists and the disk text otherwise (#12323).
+              content={draftText ?? content}
               filePath={filePath}
               rootPath={effectiveRootPath}
               viewMode="rendered"

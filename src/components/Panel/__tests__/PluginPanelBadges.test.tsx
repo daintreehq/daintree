@@ -36,6 +36,7 @@ function listedProjectPlugin(): LoadedPluginInfo {
         contextMenus: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        fileEditors: [],
         agents: [],
         processTools: [],
         recipes: [],

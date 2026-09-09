@@ -1556,6 +1556,23 @@ export class PluginService {
     const pluginId = opts.instanceKey ?? manifest.name;
     const binding = opts.binding ?? UNBOUND_PLUGIN_HOST_BINDING;
 
+    // `contributes.fileEditors` is built-in only in v1 (#12323): the editor
+    // slot resolves through the builtin view registry compiled into the host
+    // bundle, which an installed plugin's renderer never reaches, so accepting
+    // the entry would advertise an Edit mode that mounts nothing. The schema
+    // cannot see the origin, so the refusal lives here where it is known.
+    if (!opts.isBuiltin && manifest.contributes.fileEditors.length > 0) {
+      const message =
+        "contributes.fileEditors is only available to built-in plugins — the editor slot resolves through the host-bundled builtin view registry, which an installed plugin's renderer cannot register into.";
+      console.error(`[PluginService] Invalid manifest in ${dirName}: ${message}`);
+      if (isUserInstalled) {
+        this.records.upsertInstalledRecord(manifest.name, {
+          loadError: { message, at: Date.now() },
+        });
+      }
+      return null;
+    }
+
     // Discovery validated one manifest; this is a second read of the same file.
     // A rewrite in between — a rebase, an agent edit, a hostile swap — could
     // hand a DIFFERENT plugin the identity the user already knows and trusts.

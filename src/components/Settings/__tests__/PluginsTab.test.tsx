@@ -42,6 +42,7 @@ function makePlugin(name: string): LoadedPluginInfo {
         contextMenus: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        fileEditors: [],
         agents: [],
         processTools: [],
         recipes: [],

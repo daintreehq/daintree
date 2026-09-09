@@ -36,6 +36,7 @@ function makePlugin(overrides: {
         contextMenus: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        fileEditors: [],
         agents: [],
         processTools: [],
         recipes: [],

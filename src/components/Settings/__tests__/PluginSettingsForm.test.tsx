@@ -52,6 +52,7 @@ function makePlugin(settings: SettingDefinition[]): LoadedPluginInfo {
         skills: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        fileEditors: [],
         agents: [],
         settings,
       },

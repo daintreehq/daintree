@@ -24,6 +24,7 @@ vi.mock("@/components/Panel/ContentPanel", () => ({
     // the toolbar (#11191 HTML preview branch).
     return (
       <>
+        {props.headerContent as ReactNode}
         {props.toolbar}
         {props.children}
       </>
@@ -170,9 +171,17 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // a byte-identical daintree-file:// src and never refetches. Picked off the real
 // prop type rather than hand-written, so renaming either prop fails here instead
 // of silently capturing undefined forever.
-type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust" | "fontSize">;
+type CapturedMarkdownProps = Pick<
+  MarkdownViewerProps,
+  "onRendered" | "cacheBust" | "fontSize" | "content"
+>;
 const markdownViewerProps = vi.hoisted(() => ({
-  current: null as { onRendered?: () => void; cacheBust?: string; fontSize?: string } | null,
+  current: null as {
+    onRendered?: () => void;
+    cacheBust?: string;
+    fontSize?: string;
+    content?: string;
+  } | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
   MarkdownViewer: (props: CapturedMarkdownProps) => {
@@ -239,7 +248,35 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
   ),
 }));
 
+// #12323: the plugin-contributed Edit mode. Resolution is mocked at the
+// registry seam — which plugin claims the file and whether it is enabled is the
+// registry's business — while the document projection store is the real one,
+// so the dirty chrome and the draft-aware preview are exercised end to end.
+const fileEditorState = vi.hoisted(() => ({
+  resolved: null as null | { maxBytes: number },
+  renderedProps: [] as Array<Record<string, unknown>>,
+}));
+vi.mock("@/registry/fileEditorRegistry", () => ({
+  useFileEditor: () =>
+    fileEditorState.resolved === null
+      ? null
+      : {
+          registration: {
+            id: "markdown",
+            pluginId: "daintree.markdown-editor",
+            slot: "markdown.editor",
+            extensions: ["md"],
+            maxBytes: fileEditorState.resolved.maxBytes,
+          },
+          Component: (props: Record<string, unknown>) => {
+            fileEditorState.renderedProps.push(props);
+            return <div data-testid="file-editor-mock" />;
+          },
+        },
+}));
+
 import { FilePane } from "../FilePane";
+import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
@@ -3389,5 +3426,172 @@ describe("FilePane copy file contents (#12136)", () => {
     // so take it from the same helper the component uses. FileBrowserViewer's
     // suite asserts the identical suffix — that parity is what #12136 asked for.
     expect(buttons.slice(-3)).toEqual(["Copy file contents", revealCopy().label, "Open in editor"]);
+  });
+});
+
+// #12323: a Markdown file inside a governed root gets a fourth "Edit" option
+// when a built-in editor plugin claims its extension and is enabled. Edit is
+// the only writable mode; the draft it produces is document state the panel
+// chrome and the Rendered preview both read.
+describe("FilePane edit mode (#12323)", () => {
+  const WORKTREE_ID = "wt-1";
+  const WORKTREE_PATH = "/repo";
+
+  function seedWorktree() {
+    worktreeState.worktrees.set(WORKTREE_ID, { id: WORKTREE_ID, path: WORKTREE_PATH });
+  }
+
+  function paneElement(location: "grid" | "dialog" = "grid") {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="spec.md"
+          isFocused={true}
+          location={location}
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  async function renderPane(options: {
+    filePath?: string;
+    worktreeId?: string | undefined;
+    fileViewMode?: string;
+    content?: string;
+    location?: "grid" | "dialog";
+  }) {
+    readMock.mockResolvedValue({ content: options.content ?? "# Plan\n" });
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: options.filePath ?? "/repo/docs/spec.md",
+      worktreeId: "worktreeId" in options ? options.worktreeId : WORKTREE_ID,
+      fileViewMode: options.fileViewMode,
+    };
+    const view = render(paneElement(options.location));
+    await act(async () => {});
+    return view;
+  }
+
+  function toggleLabels(): string[] {
+    return screen
+      .getAllByRole("button")
+      .map((b) => b.textContent ?? "")
+      .filter((label) => ["Source", "Rendered", "Diff", "Edit"].includes(label));
+  }
+
+  beforeEach(() => {
+    fileEditorState.resolved = { maxBytes: 2 * 1024 * 1024 };
+    fileEditorState.renderedProps = [];
+    useFileDocumentStore.setState({ byPanelId: {} });
+  });
+
+  afterEach(() => {
+    fileEditorState.resolved = null;
+    useFileDocumentStore.setState({ byPanelId: {} });
+  });
+
+  it("offers Edit last for a claimed Markdown file inside its worktree", async () => {
+    seedWorktree();
+    await renderPane({});
+    expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+  });
+
+  it("hides Edit when no enabled plugin claims the file, and clamps a persisted edit mode to Source without rewriting it", async () => {
+    seedWorktree();
+    fileEditorState.resolved = null;
+    await renderPane({ fileViewMode: "edit" });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+    expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+    // Markdown source is the MarkdownViewer in source mode.
+    expect(screen.getByTestId("markdown-viewer-mock")).toBeTruthy();
+    expect(setFileViewModeMock).not.toHaveBeenCalled();
+  });
+
+  it("hides Edit for a file outside every governed root", async () => {
+    // No worktree and no project: the read root falls back to the parent
+    // directory, which the host does not govern.
+    await renderPane({ filePath: "/elsewhere/notes.md", worktreeId: undefined });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+  });
+
+  it("hides Edit above the editor's byte ceiling", async () => {
+    seedWorktree();
+    fileEditorState.resolved = { maxBytes: 4 };
+    await renderPane({ content: "# a long enough file\n" });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+  });
+
+  it("keeps the dialog read-only", async () => {
+    seedWorktree();
+    await renderPane({ location: "dialog" });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+  });
+
+  it("mounts the editor slot with the panel's fixed identity in edit mode", async () => {
+    seedWorktree();
+    await renderPane({ fileViewMode: "edit" });
+    expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    const props = fileEditorState.renderedProps.at(-1);
+    expect(props).toMatchObject({
+      panelId: "file-1",
+      filePath: "/repo/docs/spec.md",
+      fileName: "spec.md",
+      rootPath: WORKTREE_PATH,
+      worktreePath: WORKTREE_PATH,
+      wrapLines: false,
+    });
+    // Source and Rendered stay out of the tree while Edit owns the body.
+    expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+    expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+
+  it("offers the wrap toggle in edit mode, shared with Source", async () => {
+    seedWorktree();
+    await renderPane({ fileViewMode: "edit" });
+    const wrap = screen.getByRole("button", { name: "Wrap long lines" });
+    await act(async () => {
+      wrap.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(true);
+  });
+
+  it("shows the dirty mark in every mode while a draft exists, and previews the draft in Rendered", async () => {
+    seedWorktree();
+    await renderPane({ fileViewMode: "rendered" });
+    expect(screen.queryByTestId("file-pane-dirty")).toBeNull();
+    expect(markdownViewerProps.current?.content).toBe("# Plan\n");
+
+    await act(async () => {
+      useFileDocumentStore.getState().setFileDocument("file-1", {
+        identityKey: "doc",
+        draftText: "# Plan (edited)\n",
+        dirty: true,
+        conflict: false,
+        save: async () => true,
+        discard: async () => {},
+      });
+    });
+    expect(screen.getByTestId("file-pane-dirty").getAttribute("aria-label")).toBe(
+      "Unsaved changes"
+    );
+    expect(markdownViewerProps.current?.content).toBe("# Plan (edited)\n");
+
+    await act(async () => {
+      useFileDocumentStore.getState().setFileDocument("file-1", {
+        identityKey: "doc",
+        draftText: "# Plan (edited)\n",
+        dirty: true,
+        conflict: true,
+        save: async () => true,
+        discard: async () => {},
+      });
+    });
+    expect(screen.getByTestId("file-pane-dirty").getAttribute("aria-label")).toBe(
+      "Unsaved changes, file changed on disk"
+    );
   });
 });

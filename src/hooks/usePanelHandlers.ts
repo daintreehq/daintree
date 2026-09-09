@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { logError } from "@/utils/logger";
 
 export interface UsePanelHandlersConfig {
@@ -62,6 +63,18 @@ export function usePanelHandlers({
       trashedRef.current = true;
 
       if (force) {
+        // Alt+Click skips the trash, not the unsaved-work prompt (#12323).
+        if (hasPanelCloseGuard(terminalId)) {
+          void consultPanelCloseGuards([terminalId]).then((proceed) => {
+            if (!proceed) {
+              trashedRef.current = false;
+              return;
+            }
+            removePanel(terminalId);
+            onAfterClose?.();
+          });
+          return;
+        }
         removePanel(terminalId);
         onAfterClose?.();
         return;

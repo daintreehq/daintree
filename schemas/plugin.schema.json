@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.schema.json",
   "title": "Daintree plugin manifest",
-  "description": "Manifest for a Daintree plugin installed into the user's own plugins directory. A plugin committed into a project's .daintree/plugins/ is held to different rules — use plugin.project.schema.json for those.\n\nGenerated from Daintree's own manifest schema — do not edit by hand.\n\nStructural rules only. These cross-field rules are enforced when the plugin loads and cannot be expressed here:\n- A view's id must equal the id of a declared panel, and a surface's viewId must name a declared view whose panel is not a PTY panel.\n- Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, processTools, mcpServers and forgeProviders are refused, and \"scope\": \"project\" is required.\n- The reserved daintree.* publisher namespace is accepted only for built-in plugins.\n- A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
+  "description": "Manifest for a Daintree plugin installed into the user's own plugins directory. A plugin committed into a project's .daintree/plugins/ is held to different rules — use plugin.project.schema.json for those.\n\nGenerated from Daintree's own manifest schema — do not edit by hand.\n\nStructural rules only. These cross-field rules are enforced when the plugin loads and cannot be expressed here:\n- A view's id must equal the id of a declared panel, and a surface's viewId must name a declared view whose panel is not a PTY panel.\n- Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers and forgeProviders are refused, and \"scope\": \"project\" is required.\n- The reserved daintree.* publisher namespace is accepted only for built-in plugins.\n- A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
   "type": "object",
   "properties": {
     "$schema": {
@@ -758,6 +758,50 @@
             "required": [
               "id",
               "scopes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "fileEditors": {
+          "default": [],
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "slot": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "extensions": {
+                "minItems": 1,
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 16,
+                  "pattern": "^[a-z0-9]+$"
+                }
+              },
+              "maxBytes": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 67108864
+              }
+            },
+            "required": [
+              "id",
+              "slot",
+              "extensions"
             ],
             "additionalProperties": false
           }
