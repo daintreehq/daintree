@@ -362,7 +362,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `agentStateAtDispatch` is the heuristic that gated the call rather than
   // evidence a turn was running. A caller that reads a bare success here retries
   // against an agent it never stopped, so each of those needs advertising.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 48_865;
+  // 48_865 → 49_150 for the `hasPty` field #12342 added to `terminal.getStatus`
+  // on develop; the tool is externally advertised, so this branch inherits the
+  // 285 B on rebase rather than spending them.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 49_150;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -406,7 +409,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `pr` and `reason` as independent optionals the advertised schema accepted
   // `{status:"found"}` with no PR and `{status:"not_found"}` carrying one —
   // contradictions a strict client would have validated as fine.
-  const MAX_COHORT_PAYLOAD_BYTES = 204_400;
+  // 204_400 → 204_685 for the same 285 B: `terminal.getStatus` sits on both
+  // tiers, so the cohort total moved by the identical amount.
+  const MAX_COHORT_PAYLOAD_BYTES = 204_685;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
