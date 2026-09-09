@@ -3,7 +3,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { AgentAvailabilityStore } from "../AgentAvailabilityStore.js";
+import {
+  AgentAvailabilityStore,
+  MAX_CLOSED_TERMINALS as CLOSED_TERMINAL_CAPACITY,
+} from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
 
 describe("AgentAvailabilityStore", () => {
@@ -621,28 +624,36 @@ describe("AgentAvailabilityStore", () => {
     it("killing one terminal leaves a live sibling of the same agent type mapped", () => {
       spawn("claude", "term-old");
       spawn("claude", "term-new");
+
+      // Model the real kill of term-old, which emits its idle transition first
+      // and only then the kill notice.
       events.emit("agent:state-changed", {
         agentId: "claude",
-        terminalId: "term-new",
-        state: "working",
-        previousState: "idle",
+        terminalId: "term-old",
+        state: "idle",
+        previousState: "working",
         timestamp: Date.now(),
-        trigger: "output",
+        trigger: "exit",
         confidence: 1,
       });
-
       events.emit("agent:killed", {
         agentId: "claude",
         terminalId: "term-old",
         timestamp: Date.now(),
       });
 
-      // The old terminal is released, the newer one keeps both directions of
-      // the mapping and the shared agent-level state is untouched.
+      // Only the killed terminal is released. The live sibling keeps BOTH
+      // directions of the mapping — deleting the reverse entry unconditionally
+      // would un-map term-new here, which is why this is not `unregisterAgent`.
       expect(store.getAgentIdForTerminal("term-old")).toBeUndefined();
       expect(store.getAgentIdForTerminal("term-new")).toBe("claude");
       expect(store.getTerminalIdForAgent("claude")).toBe("term-new");
-      expect(store.getState("claude")).toBe("working");
+      expect(store.isTerminalClosed("term-old")).toBe(true);
+      expect(store.isTerminalClosed("term-new")).toBe(false);
+      // Deliberately NOT asserted: `agentStates` is keyed by agent id, so
+      // term-old's idle overwrote the state term-new shares. That conflation
+      // predates #12339 and this change neither fixes nor worsens it — the
+      // per-terminal mappings above are what it makes correct.
     });
 
     it("clears the reverse mapping when the killed terminal still owns it", () => {
@@ -690,20 +701,44 @@ describe("AgentAvailabilityStore", () => {
       expect(store.isTerminalClosed("unmapped")).toBe(true);
     });
 
-    it("bounds the closed set, ageing out the oldest entries first", () => {
-      // 256 is the cap; 300 closes must not grow the set without bound, and the
-      // most recent id must survive.
-      for (let i = 0; i < 300; i += 1) {
-        events.emit("agent:killed", {
-          agentId: "claude",
-          terminalId: `term-${i}`,
-          timestamp: Date.now(),
-        });
-      }
+    const close = (terminalId: string) =>
+      events.emit("agent:killed", { agentId: "claude", terminalId, timestamp: Date.now() });
 
-      expect(store.isTerminalClosed("term-299")).toBe(true);
-      // Evicting only ever downgrades "closed" to "unknown", never to live.
+    it("remembers a full capacity of closed terminals", () => {
+      for (let i = 0; i < CLOSED_TERMINAL_CAPACITY; i += 1) close(`term-${i}`);
+
+      // Every one still answers "closed" — asserting the boundary rather than
+      // just "the newest survived", which would hold for a capacity of one.
+      const forgotten = Array.from(
+        { length: CLOSED_TERMINAL_CAPACITY },
+        (_, i) => `term-${i}`
+      ).filter((id) => !store.isTerminalClosed(id));
+      expect(forgotten).toEqual([]);
+    });
+
+    it("evicts exactly the oldest entry when one more closes", () => {
+      for (let i = 0; i < CLOSED_TERMINAL_CAPACITY; i += 1) close(`term-${i}`);
+
+      close("term-overflow");
+
+      // Only the single oldest is dropped, and eviction downgrades it to
+      // "not closed" (which the handler reports as `unknown`) — never back to
+      // tracked, since no mapping is recreated.
       expect(store.isTerminalClosed("term-0")).toBe(false);
+      expect(store.getAgentIdForTerminal("term-0")).toBeUndefined();
+      expect(store.isTerminalClosed("term-1")).toBe(true);
+      expect(store.isTerminalClosed("term-overflow")).toBe(true);
+    });
+
+    it("re-closing an entry refreshes its recency so the next-oldest ages out", () => {
+      for (let i = 0; i < CLOSED_TERMINAL_CAPACITY; i += 1) close(`term-${i}`);
+
+      close("term-0");
+      close("term-overflow");
+
+      // term-0 was refreshed, so term-1 is now the oldest and goes instead.
+      expect(store.isTerminalClosed("term-0")).toBe(true);
+      expect(store.isTerminalClosed("term-1")).toBe(false);
     });
 
     it("clear() forgets closed terminals", () => {

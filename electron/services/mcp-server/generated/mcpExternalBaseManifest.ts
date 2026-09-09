@@ -1997,7 +1997,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["tracked", "closed", "unknown"],
           description:
-            "Tells an agent that finished from a session that is gone, which both report idle: 'tracked' = a session is still held, 'closed' = its agent was killed, 'unknown' = no record, which also covers a plain shell or a poll that raced the spawn.",
+            "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).",
         },
         waitingReason: {
           type: "string",
@@ -2109,7 +2109,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "string",
                 enum: ["tracked", "closed", "unknown"],
                 description:
-                  "Tells an agent that finished from a session that is gone, which both report idle: 'tracked' = a session is still held, 'closed' = its agent was killed, 'unknown' = no record, which also covers a plain shell or a poll that raced the spawn.",
+                  "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).",
               },
               waitingReason: {
                 type: "string",

@@ -455,7 +455,7 @@ describe("trackingState discriminates a closed terminal from an idle agent", () 
   const snapshot = (terminalId: string) =>
     handleWaitUntilIdle({ terminalId, timeoutMs: 0 }, new AbortController().signal);
 
-  it("reports a live agent sitting at rest as 'live'", async () => {
+  it("reports a live agent sitting at rest as 'tracked'", async () => {
     const { terminalId, agentId } = nextIds();
     seedWorkingAgent(terminalId, agentId);
     emitIdle(terminalId, agentId, "idle");
@@ -494,7 +494,7 @@ describe("trackingState discriminates a closed terminal from an idle agent", () 
     expect(result.trackingState).toBe("unknown");
   });
 
-  it("reports 'live' while the agent is still working (timeout path)", async () => {
+  it("reports 'tracked' while the agent is still working (timeout path)", async () => {
     const { terminalId, agentId } = nextIds();
     seedWorkingAgent(terminalId, agentId);
 
@@ -506,7 +506,7 @@ describe("trackingState discriminates a closed terminal from an idle agent", () 
     expect(result.trackingState).toBe("tracked");
   });
 
-  it("reports 'live' for an agent that exited normally, panel still tracked", async () => {
+  it("reports 'tracked' for an agent that exited normally, panel still tracked", async () => {
     const { terminalId, agentId } = nextIds();
     seedWorkingAgent(terminalId, agentId);
     events.emit("agent:state-changed", {
@@ -529,7 +529,7 @@ describe("trackingState discriminates a closed terminal from an idle agent", () 
     expect(result.trackingState).toBe("tracked");
   });
 
-  it("a respawn under the same terminal id reports 'live' again", async () => {
+  it("a respawn under the same terminal id reports 'tracked' again", async () => {
     const { terminalId, agentId } = nextIds();
     seedWorkingAgent(terminalId, agentId);
     events.emit("agent:killed", { agentId, terminalId, timestamp: Date.now() });
@@ -570,5 +570,122 @@ describe("trackingState discriminates a closed terminal from an idle agent", () 
     expect(byId.get("batch-never-existed")!.settled).toBe(true);
     expect(res.timedOut).toBe(false);
     expect(res.settledTerminalIds).toHaveLength(3);
+  });
+});
+
+// A production kill arrives as TWO separate port messages — `agent:state-changed`
+// with state `idle`, then `agent:killed` — so a wait already in flight settles on
+// the first. These pin the resulting behaviour, including the one case that is
+// deliberately allowed to lag.
+describe("a kill landing mid-wait (#12339)", () => {
+  const nextTurn = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  const emitKillTransition = (terminalId: string, agentId: string) => {
+    // The FSM maps a kill to `idle`, so this is what a kill emits first.
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state: "idle",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: Date.now(),
+    });
+  };
+
+  // The documented lag, asserted rather than left to chance: the in-flight wait
+  // answers before the kill notice lands, and the NEXT read is authoritative.
+  // Pinned so that closing this window (by carrying the kill on the transition)
+  // is a visible, deliberate change to this expectation rather than a silent one.
+  it("answers tracked while the kill notice is still in transit, then closed", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+
+    const pending = handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 5_000,
+    });
+    await nextTurn();
+    emitKillTransition(terminalId, agentId);
+    const during = await pending;
+
+    // Lags — but never the other way: it does not claim "closed" without a kill.
+    expect(during.busyState).toBe("idle");
+    expect(during.trackingState).toBe("tracked");
+
+    events.emit("agent:killed", { agentId, terminalId, timestamp: Date.now() });
+    const after = await handleWaitUntilIdle(
+      { terminalId, timeoutMs: 0 },
+      new AbortController().signal
+    );
+
+    expect(after.trackingState).toBe("closed");
+    expect(after.idleReason).toBe("unknown");
+  });
+
+  it("batch 'all' reports a row killed while another was still working", async () => {
+    const done = nextIds();
+    const killed = nextIds();
+    seedWorkingAgent(done.terminalId, done.agentId);
+    seedWorkingAgent(killed.terminalId, killed.agentId);
+
+    const pending = handleWaitUntilIdleBatch(
+      { terminalIds: [done.terminalId, killed.terminalId], mode: "all" },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await nextTurn();
+    // The kill fully lands (both messages) while the batch still waits on `done`,
+    // so by the time the batch builds its answer the closure is observable.
+    emitKillTransition(killed.terminalId, killed.agentId);
+    events.emit("agent:killed", {
+      agentId: killed.agentId,
+      terminalId: killed.terminalId,
+      timestamp: Date.now(),
+    });
+    await nextTurn();
+    emitIdle(done.terminalId, done.agentId, "completed");
+
+    const res = await pending;
+    const byId = new Map(res.results.map((e) => [e.terminalId, e]));
+
+    expect(res.timedOut).toBe(false);
+    expect(byId.get(done.terminalId)!.trackingState).toBe("tracked");
+    expect(byId.get(killed.terminalId)!.trackingState).toBe("closed");
+    // Latched: the row stays settled even though it settled as a kill.
+    expect(byId.get(killed.terminalId)!.settled).toBe(true);
+  });
+
+  // Killing an agent that is already idle is an idle->idle no-op in the FSM, so
+  // it emits no state change at all. Before `agent:killed` was watched, this
+  // held the wait open to its full ceiling on a terminal that was already gone.
+  it("settles a wait on a kill that produces no state change", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    // Park it in `waiting` so the wait does not settle on entry, then kill it
+    // without any accompanying transition.
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 1,
+      timestamp: Date.now(),
+    });
+
+    const started = Date.now();
+    const pending = handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 30_000,
+    });
+    await nextTurn();
+    events.emit("agent:killed", { agentId, terminalId, timestamp: Date.now() });
+
+    const result = await pending;
+
+    // Returns promptly rather than riding the 30s ceiling out.
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(result.timedOut).toBe(false);
+    expect(result.busyState).toBe("idle");
+    expect(result.trackingState).toBe("closed");
   });
 });

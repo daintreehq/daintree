@@ -48,6 +48,15 @@ export const WAIT_UNTIL_IDLE_IDLE_REASONS: readonly WaitUntilIdleIdleReason[] = 
  * `"tracked"` means an agent-session mapping is still held. It is not a claim
  * that a panel is on screen, and a plain shell that never launched an agent is
  * `"unknown"` while being perfectly alive.
+ *
+ * Known lag, in the safe direction. A kill reaches the main process as two
+ * separate messages — the `idle` state change, then `agent:killed` — so a wait
+ * that was already in flight settles on the first and can answer `"tracked"`
+ * for a terminal whose kill notice is still in transit; the next call reports
+ * `"closed"`. It never errs the other way: nothing reports `"closed"` without
+ * an observed kill, so a reconciler cannot be told to reap a live session.
+ * Closing the window entirely means carrying the kill on the transition
+ * itself, which is a pty-host change.
  */
 export type WaitUntilIdleTrackingState = "tracked" | "closed" | "unknown";
 
@@ -61,7 +70,7 @@ export const WAIT_UNTIL_IDLE_TRACKING_STATES: readonly WaitUntilIdleTrackingStat
 // Carried on both wait tools, so every byte here is spent twice on the
 // advertised surface — keep it to the three arms and what separates them.
 const TRACKING_STATE_DESCRIPTION =
-  "Tells an agent that finished from a session that is gone, which both report idle: 'tracked' = a session is still held, 'closed' = its agent was killed, 'unknown' = no record, which also covers a plain shell or a poll that raced the spawn.";
+  "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).";
 
 export type WaitUntilIdleResult = {
   terminalId: string;

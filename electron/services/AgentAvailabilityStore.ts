@@ -30,7 +30,7 @@ function isAvailableState(state: AgentState): boolean {
  * record" — never to "live", so the bound cannot manufacture a false alive.
  * Sized to match the batched wait's own terminal cap.
  */
-const MAX_CLOSED_TERMINALS = 256;
+export const MAX_CLOSED_TERMINALS = 256;
 
 export class AgentAvailabilityStore {
   private agentStates: Map<string, AgentState> = new Map();

@@ -369,18 +369,21 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // so the spend below is measured from 49_150 rather than the 47_600 it was
   // written against.
   // 49_150 → 50_600 for #12339's two wait tools, which is almost entirely the
-  // output schemas they never advertised. Both carried a hand-written
-  // `rawOutputSchema` without `mcpOutputSchema`, so `computeSchemas` produced
-  // nothing and `tools/list` published no output contract at all — while the
-  // main-process short-circuit was already attaching `structuredContent` on
-  // every call, with no advertised schema for a client to validate it against.
-  // Turning the flag on is what closes that mismatch, and the bytes are the
-  // contract itself, not decoration: the whole point of the issue is that a
-  // reconciler cannot tell an agent that finished from a session that is gone,
-  // and `trackingState` is only actionable if a generated client can see it.
-  // Input prose was cut to pay for part of it — `terminal.waitUntilIdle`'s
-  // `terminalId` went back under the 160 B property target rather than raising
-  // MAX_PROPERTIES_OVER_TARGET, and both tool descriptions were shortened.
+  // output schemas they never advertised: 1_849 B for `terminal.waitUntilIdle`
+  // and 1_350 B for the batch, against a net wait-tool growth of 3_223 B.
+  // Both carried a hand-written `rawOutputSchema` without `mcpOutputSchema`, so
+  // `computeSchemas` produced nothing and `tools/list` published no output
+  // contract at all — while the main-process short-circuit was already
+  // attaching `structuredContent` on every call, with no advertised schema for
+  // a client to validate it against. Turning the flag on is what closes that
+  // mismatch, and the bytes are the contract itself, not decoration: the point
+  // of the issue is that a reconciler cannot tell an agent that finished from a
+  // session that is gone, and `trackingState` is only actionable if a generated
+  // client can see it.
+  // Not paid for by weakening the output schemas, whose structure is
+  // AJV-validated client-side; the descriptions were tightened instead.
+  // MAX_PROPERTIES_OVER_TARGET was deliberately NOT raised — `waitUntilIdle`'s
+  // `terminalId` description was kept under the 160 B target instead.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 50_600;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
@@ -428,9 +431,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 204_400 → 204_685 for the same 285 B: `terminal.getStatus` sits on both
   // tiers, so the cohort total moved by the identical amount.
   // 204_685 → 206_100 for the same two output schemas as the external ceiling
-  // above. Both wait tools are on the external tier, so this moves for exactly
-  // the same reason and by a smaller amount only because the description and
-  // property trims land in both totals.
+  // above. Both wait tools are on the external tier, so both totals take the
+  // identical spend; the two ceilings move by different amounts only because
+  // they had different headroom to begin with, not because anything was trimmed
+  // from one and not the other.
   const MAX_COHORT_PAYLOAD_BYTES = 206_100;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;

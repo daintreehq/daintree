@@ -100,19 +100,22 @@ export async function handleWaitUntilIdle(
   }
 
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeKilled: (() => void) | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   let settled = false;
 
   const cleanup = () => {
-    if (unsubscribe) {
+    for (const off of [unsubscribe, unsubscribeKilled]) {
+      if (!off) continue;
       try {
-        unsubscribe();
+        off();
       } catch (err) {
         console.error("[MCP] waitUntilIdle: unsubscribe failed:", err);
       }
-      unsubscribe = undefined;
     }
+    unsubscribe = undefined;
+    unsubscribeKilled = undefined;
     if (timeoutHandle !== undefined) {
       clearTimeout(timeoutHandle);
       timeoutHandle = undefined;
@@ -134,6 +137,7 @@ export async function handleWaitUntilIdle(
         exitSignal?: number;
       }
     | { kind: "already-idle"; state: AgentState; waitingReason?: WaitingReason }
+    | { kind: "killed" }
     | { kind: "timeout" }
     | { kind: "abort" };
 
@@ -156,7 +160,7 @@ export async function handleWaitUntilIdle(
 
   // Read at return time, not seeded above: a kill landing mid-wait settles the
   // wait via its `idle` state change and only then releases the mapping, so a
-  // value captured before the await would report the terminal as live.
+  // value captured before the await would report the terminal as tracked.
   const currentTrackingState = (): WaitUntilIdleTrackingState =>
     store.getAgentIdForTerminal(terminalId) !== undefined
       ? "tracked"
@@ -186,6 +190,15 @@ export async function handleWaitUntilIdle(
         });
       });
 
+      // A kill does not always produce a state change: `nextAgentState` maps a
+      // kill to `idle`, so killing an agent that was already idle is an
+      // idle->idle no-op that emits nothing. Without this the wait would hold
+      // until its (up to two hour) ceiling on a terminal that is already gone.
+      unsubscribeKilled = events.on("agent:killed", (payload) => {
+        if (payload.terminalId !== terminalId) return;
+        settle({ kind: "killed" });
+      });
+
       const currentState = agentSnapshotMatchesTerminal() ? store.getState(agentId) : "working";
       if (currentState !== "working") {
         settle({
@@ -208,6 +221,18 @@ export async function handleWaitUntilIdle(
 
     if (settlement.kind === "abort") {
       throw new McpError(ErrorCode.RequestTimeout, "Request was cancelled.");
+    }
+
+    if (settlement.kind === "killed") {
+      return {
+        terminalId,
+        agentId,
+        busyState: "idle",
+        idleReason: "unknown",
+        trackingState: currentTrackingState(),
+        previousBusyState: mapAgentStateToBusyState(previousState),
+        timedOut: false,
+      };
     }
 
     if (settlement.kind === "timeout") {
@@ -489,19 +514,22 @@ export async function handleWaitUntilIdleBatch(
   };
 
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeKilled: (() => void) | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   let settled = false;
 
   const cleanup = () => {
-    if (unsubscribe) {
+    for (const off of [unsubscribe, unsubscribeKilled]) {
+      if (!off) continue;
       try {
-        unsubscribe();
+        off();
       } catch (err) {
         console.error("[MCP] waitUntilIdleBatch: unsubscribe failed:", err);
       }
-      unsubscribe = undefined;
     }
+    unsubscribe = undefined;
+    unsubscribeKilled = undefined;
     if (timeoutHandle !== undefined) {
       clearTimeout(timeoutHandle);
       timeoutHandle = undefined;
@@ -537,6 +565,22 @@ export async function handleWaitUntilIdleBatch(
         track.previousBusyState = mapAgentStateToBusyState(payload.previousState);
         track.lastTransitionAt = payload.timestamp;
         Object.assign(track, batchExitFields(payload.state, payload.exitCode, payload.exitSignal));
+        if (predicateMet()) finish("settled");
+      });
+
+      // Same reason as the single handler: killing an already-idle agent is an
+      // idle->idle no-op that emits no state change, so `mode: "all"` would
+      // block on a terminal that is already gone. An already-settled row is
+      // left alone — its settlement is latched — and `buildBatchResult` reads
+      // the closure back out of the store when it builds the answer.
+      unsubscribeKilled = events.on("agent:killed", (payload) => {
+        if (!payload.terminalId) return;
+        const track = tracks.get(payload.terminalId);
+        if (!track || track.settled) return;
+        track.settled = true;
+        track.busyState = "idle";
+        track.idleReason = "unknown";
+        track.previousBusyState = "working";
         if (predicateMet()) finish("settled");
       });
 
