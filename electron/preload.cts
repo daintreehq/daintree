@@ -2868,6 +2868,9 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
       getIssueUrl: (payload: { cwd: string; issueNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
+      openRepo: (payload: { cwd: string }) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_REPO, payload),
+      getRepoUrl: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_URL, payload),
       assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
       unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>

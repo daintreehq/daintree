@@ -1588,6 +1588,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
     /**
+     * Open the repository's home page via the resolved forge provider. Rejects
+     * when the provider doesn't implement the optional `buildRepoUrl`.
+     */
+    openRepo(payload: { cwd: string }): Promise<void>;
+    /**
+     * Resolve the repository's home page URL via the resolved forge provider,
+     * or `null` when the provider doesn't implement the optional `buildRepoUrl`.
+     */
+    getRepoUrl(payload: { cwd: string }): Promise<string | null>;
+    /**
      * Assign an issue to a user via the resolved forge provider, returning the
      * issue's resulting assignee list. Forges may silently drop an assignee the
      * account can't take, so the returned list is what actually landed.

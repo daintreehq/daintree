@@ -3464,6 +3464,12 @@ describe("issue write mutations (close/reopen/edit/comment/labels)", () => {
   });
 });
 
+describe("buildRepoUrl", () => {
+  it("links to the repository root", () => {
+    expect(githubForgeProvider.buildRepoUrl?.(repo)).toBe("https://github.com/owner/repo");
+  });
+});
+
 function parseBuiltUrl(s: string) {
   const url = new URL(s);
   return { path: url.pathname, q: url.searchParams.get("q") };

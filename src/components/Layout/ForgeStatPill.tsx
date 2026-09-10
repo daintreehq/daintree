@@ -1,6 +1,7 @@
 import type React from "react";
 import { useId } from "react";
 import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,12 @@ export interface ForgeStatPillProps {
   ariaLabel: string;
   testId?: string;
   tooltipContent: React.ReactNode;
+  /**
+   * This pill's own right-click menu. Each segment owns one so it can lead
+   * with its own navigation — a single menu around the whole stats control
+   * can't tell which segment was clicked (#12354).
+   */
+  contextMenuContent: React.ReactNode;
 
   icon: React.ComponentType<{ className?: string }>;
   iconClassName?: string;
@@ -47,6 +54,7 @@ export function ForgeStatPill({
   ariaLabel,
   testId,
   tooltipContent,
+  contextMenuContent,
   icon: Icon,
   iconClassName,
   openRingClassName,
@@ -72,48 +80,55 @@ export function ForgeStatPill({
   return (
     <>
       <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            ref={buttonRef}
-            variant="ghost"
-            data-toolbar-item=""
-            onPointerEnter={onPointerEnter}
-            onPointerLeave={onPointerLeave}
-            onClick={onClick}
-            className={cn(
-              // `scale` is in the set so the base cva's `active:scale-[0.98]
-              // active:duration-[1ms]` press snap has a transitioned property to
-              // act on — a bare `transition-opacity` here replaces the cva's
-              // `transition` outright under tailwind-merge, which left both the
-              // hover tint and the press scale uninterpolated.
-              "toolbar-stat-pill h-full flex-1 justify-center gap-2 rounded-none px-2 text-text-primary transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-              activityChip != null && "relative",
-              className,
-              open &&
-                cn(
-                  "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary",
-                  openRingClassName
-                )
-            )}
-            id={triggerId}
-            aria-label={ariaLabel}
-            aria-expanded={open}
-            aria-controls={open ? dropdownId : undefined}
-            data-testid={testId}
-          >
-            <Icon className={cn("h-4 w-4", iconClassName)} />
-            <span
-              key={animKey}
-              className={cn(
-                "min-w-[2ch] text-center text-xs font-medium tabular-nums",
-                animKey > 0 && "animate-badge-bump"
-              )}
-            >
-              {displayCount ?? count ?? "—"}
-            </span>
-            {activityChip}
-          </Button>
-        </TooltipTrigger>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <TooltipTrigger asChild>
+              <Button
+                ref={buttonRef}
+                variant="ghost"
+                data-toolbar-item=""
+                onPointerEnter={onPointerEnter}
+                onPointerLeave={onPointerLeave}
+                onClick={onClick}
+                className={cn(
+                  // `scale` is in the set so the base cva's `active:scale-[0.98]
+                  // active:duration-[1ms]` press snap has a transitioned property to
+                  // act on — a bare `transition-opacity` here replaces the cva's
+                  // `transition` outright under tailwind-merge, which left both the
+                  // hover tint and the press scale uninterpolated.
+                  "toolbar-stat-pill h-full flex-1 justify-center gap-2 rounded-none px-2 text-text-primary transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                  activityChip != null && "relative",
+                  className,
+                  open &&
+                    cn(
+                      "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary",
+                      openRingClassName
+                    )
+                )}
+                id={triggerId}
+                aria-label={ariaLabel}
+                aria-expanded={open}
+                aria-controls={open ? dropdownId : undefined}
+                data-testid={testId}
+              >
+                <Icon className={cn("h-4 w-4", iconClassName)} />
+                <span
+                  key={animKey}
+                  className={cn(
+                    "min-w-[2ch] text-center text-xs font-medium tabular-nums",
+                    animKey > 0 && "animate-badge-bump"
+                  )}
+                >
+                  {displayCount ?? count ?? "—"}
+                </span>
+                {activityChip}
+              </Button>
+            </TooltipTrigger>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+            {contextMenuContent}
+          </ContextMenuContent>
+        </ContextMenu>
         <TooltipContent side="bottom">{tooltipContent}</TooltipContent>
       </Tooltip>
       <FixedDropdown

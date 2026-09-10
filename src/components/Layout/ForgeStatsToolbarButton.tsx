@@ -15,13 +15,14 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
-import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { ForgeStatsContextMenuItems } from "./ForgeStatsContextMenuItems";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
+import { useCanOpenForgeRepo } from "@/hooks/useCanOpenForgeRepo";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeStatusIndicator, type ForgeStatusIndicatorStatus } from "./ForgeStatusIndicator";
 import { forgeClient } from "@/clients/forgeClient";
@@ -134,6 +135,8 @@ export const ForgeStatsToolbarButton = memo(
     } = useResolvedForgeProvider(currentProject?.id ?? null);
     const forgeMode = providerEntry !== null && providerId !== null;
     const providerName = providerEntry?.contribution.name ?? "forge";
+    const menuProviderName = forgeMode ? providerName : null;
+    const canOpenRepo = useCanOpenForgeRepo(currentProject?.path, forgeMode ? providerId : null);
     const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(
       providerEntry?.contribution.slots?.statsDropdown ?? ""
     );
@@ -910,6 +913,14 @@ export const ForgeStatsToolbarButton = memo(
                       ? `Browse ${providerName} issues`
                       : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
+                contextMenuContent={
+                  <ForgeStatsContextMenuItems
+                    segment="issues"
+                    projectPath={currentProject.path}
+                    providerName={menuProviderName}
+                    canOpenRepo={canOpenRepo}
+                  />
+                }
                 icon={CircleDot}
                 iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
                 openRingClassName="ring-1 ring-pr-open/20"
@@ -1006,6 +1017,14 @@ export const ForgeStatsToolbarButton = memo(
                       ? `Browse ${providerName} pull requests`
                       : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
+                contextMenuContent={
+                  <ForgeStatsContextMenuItems
+                    segment="prs"
+                    projectPath={currentProject.path}
+                    providerName={menuProviderName}
+                    canOpenRepo={canOpenRepo}
+                  />
+                }
                 icon={GitPullRequest}
                 iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
                 openRingClassName="ring-1 ring-pr-merged/20"
@@ -1088,6 +1107,15 @@ export const ForgeStatsToolbarButton = memo(
                 commitFreshnessLevel === "fresh"
                   ? "Browse git commits"
                   : `${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
+              }
+              contextMenuContent={
+                <ForgeStatsContextMenuItems
+                  segment="commits"
+                  projectPath={currentProject.path}
+                  providerName={menuProviderName}
+                  branch={activeWorktree?.branch}
+                  canOpenRepo={canOpenRepo}
+                />
               }
               icon={GitCommit}
               openRingClassName="ring-1 ring-border-strong"
@@ -1172,7 +1200,11 @@ export const ForgeStatsToolbarButton = memo(
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-          <ToolbarContextMenuItems buttonId="forge-stats" side="right" />
+          <ForgeStatsContextMenuItems
+            projectPath={currentProject.path}
+            providerName={menuProviderName}
+            canOpenRepo={canOpenRepo}
+          />
         </ContextMenuContent>
       </ContextMenu>
     );

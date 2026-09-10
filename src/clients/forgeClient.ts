@@ -60,6 +60,14 @@ export const forgeClient = {
     return window.electron.forge.getIssueUrl({ cwd, issueNumber });
   },
 
+  openRepo: (cwd: string): Promise<void> => {
+    return window.electron.forge.openRepo({ cwd });
+  },
+
+  getRepoUrl: (cwd: string): Promise<string | null> => {
+    return window.electron.forge.getRepoUrl({ cwd });
+  },
+
   assignIssue: (cwd: string, issueNumber: number, username: string): Promise<ForgeUser[]> => {
     return window.electron.forge.assignIssue({ cwd, issueNumber, username });
   },

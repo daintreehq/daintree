@@ -504,6 +504,31 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     })
   );
 
+  actions.set("forge.openRepo", () =>
+    defineAction({
+      id: "forge.openRepo",
+      title: "Open repository",
+      description:
+        "Open this project's repository home page on the forge in the system browser, for a human to read. This hands off to another application rather than returning data. Fails when the project's forge provider doesn't link to a repository page.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: withProjectLocation({}).optional(),
+      run: async (args, ctx) => {
+        // An explicit selector is resolved (or rejected) by the resolver, so this
+        // fallback only applies when the caller named no project at all.
+        const path =
+          resolveProjectLocation(args, ctx).projectPath ??
+          useProjectStore.getState().currentProject?.path;
+        if (!path) {
+          throw new Error("No project path available to open the repository");
+        }
+        await forgeClient.openRepo(path);
+      },
+    })
+  );
+
   actions.set("forge.openIssue", () =>
     defineAction({
       id: "forge.openIssue",

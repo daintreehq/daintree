@@ -1,0 +1,219 @@
+// @vitest-environment jsdom
+/**
+ * ForgeStatsToolbarButton — per-segment context menus (#12354).
+ *
+ * Each stat pill owns its right-click menu so it can lead with its own
+ * navigation, while the stats container keeps a menu for the chrome around the
+ * pills. Real Radix primitives, because the nesting is what's under test: a
+ * pill's trigger has to claim the right-click before the container's does.
+ */
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { ForgeProviderEntry } from "@shared/types/forge";
+import type { Project } from "@shared/types";
+
+const dispatchMock = vi.hoisted(() => vi.fn());
+const getRepoUrlMock = vi.hoisted(() => vi.fn<(cwd: string) => Promise<string | null>>());
+const refreshStatsMock = vi.hoisted(() => vi.fn());
+const providerState = vi.hoisted((): { entry: ForgeProviderEntry | null } => ({ entry: null }));
+const worktrees = vi.hoisted(
+  () => new Map([["wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" }]])
+);
+
+vi.mock("@/clients/forgeClient", () => ({
+  forgeClient: {
+    listIssues: vi.fn(),
+    listPRs: vi.fn(),
+    getRateLimitDetails: vi.fn().mockResolvedValue(null),
+    getRepoUrl: (cwd: string) => getRepoUrlMock(cwd),
+  },
+}));
+
+vi.mock("@/hooks/useRepositoryStats", () => ({
+  useRepositoryStats: () => ({
+    stats: { issueCount: 3, prCount: 2, commitCount: 5 },
+    loading: false,
+    error: null,
+    isTokenError: false,
+    refresh: refreshStatsMock,
+    isStale: false,
+    lastUpdated: Date.now(),
+    rateLimitResetAt: null,
+    rateLimitKind: null,
+    freshnessLevel: "fresh" as const,
+  }),
+}));
+
+vi.mock("@/hooks/useResolvedForgeProvider", () => ({
+  useResolvedForgeProvider: () => ({
+    entry: providerState.entry,
+    providerId: providerState.entry ? "daintree.github.github" : null,
+    resolvedVia: providerState.entry ? "hostname" : null,
+    loading: false,
+    refresh: () => {},
+  }),
+}));
+
+vi.mock("@/registry/builtinRendererRegistry", () => ({
+  useBuiltinView: () => null,
+}));
+
+vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
+  useGlobalMinuteTicker: () => 0,
+}));
+
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: (sel: (s: { activeWorktreeId: string | null }) => unknown) =>
+    sel({ activeWorktreeId: "wt-1" }),
+}));
+
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (sel: (s: { worktrees: typeof worktrees }) => unknown) => sel({ worktrees }),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: dispatchMock },
+}));
+
+// The real Tooltip reads this module's visibility context, so only the dropdown
+// shell itself is stubbed.
+vi.mock("@/components/ui/fixed-dropdown", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/fixed-dropdown")>()),
+  FixedDropdown: () => null,
+}));
+
+vi.mock("../ForgeStatusIndicator", () => ({
+  ForgeStatusIndicator: () => <span data-testid="forge-status-indicator" />,
+}));
+
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { primeRadix } from "@/components/ui/radix-loader";
+import { TOOLBAR_CUSTOMIZE_LABEL, TOOLBAR_UNPIN_LABEL } from "../toolbarMenuStrings";
+import { ForgeStatsToolbarButton } from "../ForgeStatsToolbarButton";
+
+const PROJECT: Project = {
+  id: "test-proj",
+  path: "/test/proj",
+  name: "proj",
+  emoji: "🌲",
+  lastOpened: 0,
+};
+
+const GITHUB: ForgeProviderEntry = {
+  pluginId: "daintree.github",
+  contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+};
+
+beforeAll(async () => {
+  await primeRadix();
+});
+
+beforeEach(() => {
+  dispatchMock.mockReset();
+  getRepoUrlMock.mockReset();
+  getRepoUrlMock.mockResolvedValue("https://github.com/acme/proj");
+  providerState.entry = GITHUB;
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+async function renderStats() {
+  render(
+    <TooltipProvider>
+      <ForgeStatsToolbarButton currentProject={PROJECT} />
+    </TooltipProvider>
+  );
+  // Let the repository-link lookup land so every menu renders its final shape.
+  await act(async () => {});
+}
+
+async function openMenu(target: HTMLElement): Promise<HTMLElement> {
+  fireEvent.contextMenu(target);
+  return screen.findByRole("menu");
+}
+
+function itemLabels(menu: HTMLElement): string[] {
+  return within(menu)
+    .getAllByRole("menuitem")
+    .map((item) => item.textContent ?? "");
+}
+
+describe("ForgeStatsToolbarButton context menus", () => {
+  it("leads the issues pill's menu with its own list, then the repository, then chrome", async () => {
+    await renderStats();
+
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
+
+    expect(itemLabels(menu)).toEqual([
+      "View all issues on GitHub",
+      "View repository on GitHub",
+      TOOLBAR_CUSTOMIZE_LABEL,
+      TOOLBAR_UNPIN_LABEL,
+    ]);
+    // The pill claims the right-click; the container's menu must not open too.
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+  });
+
+  it.each([
+    { testId: "forge-stat-pill-prs", first: "View all pull requests on GitHub" },
+    { testId: "forge-stat-pill-commits", first: "View commits on GitHub" },
+  ])("scopes $testId's menu to its own segment", async ({ testId, first }) => {
+    await renderStats();
+
+    const menu = await openMenu(screen.getByTestId(testId));
+
+    expect(itemLabels(menu)[0]).toBe(first);
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+  });
+
+  it("opens the active worktree's branch history from the commits pill", async () => {
+    await renderStats();
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-commits"));
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "View commits on GitHub" }));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openCommits",
+      { projectPath: "/test/proj", branch: "feature/x" },
+      expect.objectContaining({ source: "context-menu" })
+    );
+  });
+
+  it("leaves the repository entry out when the provider can't link to one", async () => {
+    getRepoUrlMock.mockResolvedValue(null);
+    await renderStats();
+
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
+
+    expect(itemLabels(menu)).toEqual([
+      "View all issues on GitHub",
+      TOOLBAR_CUSTOMIZE_LABEL,
+      TOOLBAR_UNPIN_LABEL,
+    ]);
+  });
+
+  it("keeps a container menu for the chrome around the pills", async () => {
+    await renderStats();
+
+    const menu = await openMenu(screen.getByTestId("forge-status-indicator"));
+
+    expect(itemLabels(menu)).toEqual([
+      "View repository on GitHub",
+      TOOLBAR_CUSTOMIZE_LABEL,
+      TOOLBAR_UNPIN_LABEL,
+    ]);
+  });
+
+  it("offers only toolbar chrome on the commits pill when the project has no forge provider", async () => {
+    providerState.entry = null;
+    await renderStats();
+    expect(screen.queryByTestId("forge-stat-pill-issues")).toBeNull();
+
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-commits"));
+
+    expect(itemLabels(menu)).toEqual([TOOLBAR_CUSTOMIZE_LABEL, TOOLBAR_UNPIN_LABEL]);
+    expect(getRepoUrlMock).not.toHaveBeenCalled();
+  });
+});

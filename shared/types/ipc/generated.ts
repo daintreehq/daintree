@@ -579,6 +579,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
     result: import("./forge.js").ForgeRepositoryStats;
   };
+  "forge:get-repo-url": {
+    args: [payload: { cwd: string }];
+    result: string | null;
+  };
   "forge:get-token-health": {
     args: [payload: { providerId: string }];
     result: import("../forge.js").ForgeTokenHealthState | null;
@@ -611,6 +615,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:open-repo": {
+    args: [payload: { cwd: string }];
     result: void;
   };
   "forge:remove-issue-label": {

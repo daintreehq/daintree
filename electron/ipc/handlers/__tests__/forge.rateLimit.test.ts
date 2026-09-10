@@ -16,6 +16,7 @@ const fakeImpl = vi.hoisted(() => ({
   buildIssuesUrl: vi.fn(),
   buildPRsUrl: vi.fn(),
   buildCommitsUrl: vi.fn(),
+  buildRepoUrl: vi.fn(),
   buildIssueUrl: vi.fn(),
   buildPRUrl: vi.fn(),
   assignIssue: vi.fn(),
@@ -144,6 +145,7 @@ describe("forge handlers — rate limiting", () => {
     fakeImpl.buildIssuesUrl.mockReturnValue("https://fake.test/acme/widgets/issues");
     fakeImpl.buildPRsUrl.mockReturnValue("https://fake.test/acme/widgets/pulls");
     fakeImpl.buildCommitsUrl.mockReturnValue("https://fake.test/acme/widgets/commits");
+    fakeImpl.buildRepoUrl.mockReturnValue("https://fake.test/acme/widgets");
     fakeImpl.buildIssueUrl.mockReturnValue("https://fake.test/acme/widgets/issues/1");
     fakeImpl.buildPRUrl.mockReturnValue("https://fake.test/acme/widgets/pulls/1");
     fakeImpl.repoStats.getRepoStats.mockResolvedValue({
@@ -237,6 +239,51 @@ describe("forge handlers — rate limiting", () => {
         "Rate limit exceeded"
       );
       expect(openExternalUrlMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("repository link (forge:open-repo, forge:get-repo-url)", () => {
+    // Explicitly `undefined`, not absent: the capability check must be
+    // truthiness, because `"buildRepoUrl" in impl` would still hold here.
+    const withoutRepoUrl = () =>
+      resolveForCwdMock.mockResolvedValueOnce({
+        namespaceId: "fake-plugin.fake",
+        providerId: "fake",
+        repoRef,
+        impl: { ...fakeImpl, buildRepoUrl: undefined },
+      });
+
+    it("opens the provider's repository page", async () => {
+      await getInvokeHandler(CHANNELS.FORGE_OPEN_REPO)({}, { cwd: "/tmp/project" });
+
+      expect(fakeImpl.buildRepoUrl).toHaveBeenCalledWith(repoRef);
+      expect(openExternalUrlMock).toHaveBeenCalledWith("https://fake.test/acme/widgets");
+    });
+
+    it("rejects without opening anything when the provider has no repository page", async () => {
+      withoutRepoUrl();
+
+      await expect(
+        getInvokeHandler(CHANNELS.FORGE_OPEN_REPO)({}, { cwd: "/tmp/project" })
+      ).rejects.toThrow(/doesn't link to a repository page/);
+      expect(openExternalUrlMock).not.toHaveBeenCalled();
+    });
+
+    it("answers the repository URL, or null when the provider can't build one", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_GET_REPO_URL);
+
+      await expect(handler({}, { cwd: "/tmp/project" })).resolves.toBe(
+        "https://fake.test/acme/widgets"
+      );
+      withoutRepoUrl();
+      await expect(handler({}, { cwd: "/tmp/project" })).resolves.toBeNull();
+    });
+
+    it("rejects a missing working directory before resolving a provider", async () => {
+      await expect(
+        getInvokeHandler(CHANNELS.FORGE_GET_REPO_URL)({}, { cwd: "" })
+      ).rejects.toThrow("Invalid working directory");
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
     });
   });
 
@@ -504,6 +551,9 @@ describe("forge handlers — rate limiting", () => {
       { channel: CHANNELS.FORGE_OPEN_ISSUES, maxCalls: 20, invoke: (h) => h({}, cwd) },
       { channel: CHANNELS.FORGE_OPEN_PRS, maxCalls: 20, invoke: (h) => h({}, cwd) },
       { channel: CHANNELS.FORGE_OPEN_COMMITS, maxCalls: 20, invoke: (h) => h({}, cwd) },
+      { channel: CHANNELS.FORGE_OPEN_REPO, maxCalls: 20, invoke: (h) => h({}, { cwd }) },
+      // repo URL read: 20/10s like the open it gates — a local URL build, no forge round trip
+      { channel: CHANNELS.FORGE_GET_REPO_URL, maxCalls: 20, invoke: (h) => h({}, { cwd }) },
       {
         channel: CHANNELS.FORGE_OPEN_ISSUE,
         maxCalls: 20,
@@ -708,12 +758,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (47 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(47);
+    it("registers all forge channels (49 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(49);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(49);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(51);
     });
 
     it.each(specs)(
