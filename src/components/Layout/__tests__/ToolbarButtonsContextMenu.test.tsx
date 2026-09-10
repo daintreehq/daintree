@@ -44,7 +44,7 @@ function renderToolbar({
 }: HarnessOptions = {}) {
   const onToggle =
     vi.fn<(buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => void>();
-  render(
+  const { container } = render(
     <ToolbarButtonsContextMenu rows={rows} onToggle={onToggle}>
       <div
         ref={rootRef}
@@ -68,7 +68,7 @@ function renderToolbar({
       </div>
     </ToolbarButtonsContextMenu>
   );
-  return { onToggle };
+  return { onToggle, container };
 }
 
 // Negative assertions need the open path to have had its chance to commit, and
@@ -83,6 +83,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -106,6 +107,8 @@ describe("ToolbarButtonsContextMenu", () => {
         .getAllByRole("group")
         .map((group) => group.getAttribute("aria-label"))
     ).toEqual(["Left side", "Right side"]);
+    // One between the sides, one before Customize.
+    expect(within(menu).getAllByRole("separator")).toHaveLength(2);
     expect(within(menu).getByRole("menuitem", { name: TOOLBAR_CUSTOMIZE_LABEL })).toBeTruthy();
   });
 
@@ -119,14 +122,16 @@ describe("ToolbarButtonsContextMenu", () => {
     expect(onToggle).toHaveBeenCalledExactlyOnceWith("forge-stats", "right", true);
   });
 
-  it("hides a shown button", async () => {
+  it("hides a shown button and closes", async () => {
     const { onToggle } = renderToolbar();
 
     fireEvent.contextMenu(screen.getByRole("toolbar"));
     const menu = await screen.findByRole("menu");
     fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Terminal" }));
+    await flush();
 
     expect(onToggle).toHaveBeenCalledExactlyOnceWith("terminal", "left", false);
+    expect(document.querySelector("[role='menu']")).toBeNull();
   });
 
   it("opens the toolbar editor from the customize entry", async () => {
@@ -144,11 +149,14 @@ describe("ToolbarButtonsContextMenu", () => {
     );
   });
 
-  it("stays shut for a right-click on a button slot or on fixed chrome", async () => {
+  it("leaves a right-click on a button slot or on fixed chrome alone", async () => {
     renderToolbar();
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Terminal" }));
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Toggle sidebar" }));
+    // `fireEvent` returns false only when a handler cancelled the event.
+    expect(fireEvent.contextMenu(screen.getByRole("button", { name: "Terminal" }))).toBe(true);
+    expect(fireEvent.contextMenu(screen.getByRole("button", { name: "Toggle sidebar" }))).toBe(
+      true
+    );
     await flush();
 
     expect(document.querySelector("[role='menu']")).toBeNull();
@@ -179,17 +187,35 @@ describe("ToolbarButtonsContextMenu", () => {
       extra: createPortal(<button type="button">Portaled</button>, document.body),
     });
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Portaled" }));
+    expect(fireEvent.contextMenu(screen.getByRole("button", { name: "Portaled" }))).toBe(true);
     await flush();
 
     expect(document.querySelector("[role='menu']")).toBeNull();
   });
 
-  it("keeps the toolbar root's own ref and handlers once slotted into the trigger", () => {
+  it("never opens from a touch long-press on a button", async () => {
+    renderToolbar();
+
+    // A trigger arms a 700ms long-press timer on any touch pointerdown that
+    // reaches it; the root must not be one.
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Terminal" }), {
+      pointerType: "touch",
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    vi.useRealTimers();
+    await flush();
+
+    expect(document.querySelector("[role='menu']")).toBeNull();
+  });
+
+  it("adds no DOM around the toolbar root and keeps its own ref and handlers", () => {
     const rootRef = createRef<HTMLDivElement>();
     const onKeyDown = vi.fn();
     const onFocusCapture = vi.fn();
-    renderToolbar({ rootRef, onKeyDown, onFocusCapture });
+    const { container } = renderToolbar({ rootRef, onKeyDown, onFocusCapture });
 
     const toolbar = screen.getByRole("toolbar");
     fireEvent.keyDown(toolbar, { key: "ArrowRight" });
@@ -197,6 +223,7 @@ describe("ToolbarButtonsContextMenu", () => {
       screen.getByRole("button", { name: "Terminal" }).focus();
     });
 
+    expect(toolbar.parentElement).toBe(container);
     expect(rootRef.current).toBe(toolbar);
     expect(onKeyDown).toHaveBeenCalledTimes(1);
     expect(onFocusCapture).toHaveBeenCalled();

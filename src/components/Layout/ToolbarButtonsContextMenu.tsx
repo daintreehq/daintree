@@ -1,3 +1,4 @@
+import { cloneElement, useRef } from "react";
 import type React from "react";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import {
@@ -21,37 +22,53 @@ import {
 interface ToolbarButtonsContextMenuProps {
   rows: ToolbarVisibilityMenuRows;
   onToggle: (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => void;
-  /** The toolbar root. Slotted, so the menu adds no DOM of its own. */
-  children: React.ReactElement;
+  /**
+   * The toolbar root. Cloned with a composed `onContextMenu` — the one prop this
+   * menu needs — so its ref and every other handler stay its own.
+   */
+  children: React.ReactElement<{ onContextMenu?: React.MouseEventHandler<HTMLElement> }>;
 }
 
 /**
  * The toolbar's empty-space right-click menu (#12355): every button holding a
- * toolbar slot as a checkbox, so a hidden one comes back from the same surface
- * it was hidden on, then "Customize toolbar…" for the full editor.
+ * toolbar slot as a checkbox, so a hidden one comes back from the surface it
+ * was hidden on, then "Customize toolbar…" for the full editor.
  *
- * Opens on empty space only. A button with its own menu already wins, because
- * Radix composes each trigger's handler to skip an event an inner trigger has
- * prevented; the filter here covers controls with no menu of their own and
- * portaled content.
+ * Right-click only. Nothing on the toolbar takes focus without being a control,
+ * so there is no keyboard route here; every control's own menu carries
+ * "Customize toolbar…" instead.
  *
- * macOS and Linux deliver this right-click. On Windows the empty space is a
- * caption drag region, so the OS shows its native window menu there instead and
- * the page never sees the event.
+ * macOS and Linux deliver the right-click — Electron forwards secondary clicks
+ * out of a macOS drag region (electron#44761), and Linux windows are framed. On
+ * Windows the empty space is a caption drag region, so the OS shows its native
+ * window menu there and the page never sees the event.
  */
 export function ToolbarButtonsContextMenu({
   rows,
   onToggle,
   children,
 }: ToolbarButtonsContextMenuProps) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const childOnContextMenu = children.props.onContextMenu;
+
+  // Replayed onto a hidden trigger rather than making the root the trigger:
+  // Radix arms a 700ms touch/pen long-press timer on its trigger's pointerdown,
+  // and on the root that timer would fire from every button beneath it — past
+  // this filter, and on top of a button's own menu.
   const handleContextMenu = (event: React.MouseEvent<HTMLElement>) => {
+    childOnContextMenu?.(event);
+    // A control's own menu has already claimed it.
     if (event.defaultPrevented) return;
-    // Cancelling is how the open is refused — Radix's own handler skips a
-    // prevented event. No native menu goes missing: project views register no
-    // `context-menu` handler.
-    if (!isToolbarEmptySpaceTarget(event.target, event.currentTarget)) {
-      event.preventDefault();
-    }
+    if (!isToolbarEmptySpaceTarget(event.target, event.currentTarget)) return;
+    event.preventDefault();
+    triggerRef.current?.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      })
+    );
   };
 
   const renderRow = (row: ToolbarVisibilityMenuRow) => {
@@ -72,27 +89,34 @@ export function ToolbarButtonsContextMenu({
   const hasRight = rows.right.length > 0;
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild onContextMenu={handleContextMenu}>
-        {children}
-      </ContextMenuTrigger>
-      <ContextMenuContent aria-label="Toolbar buttons">
-        {/* Context reaches through the portal, so without the reset an agent's
-            brand mark would measure itself against the toolbar surface. */}
-        <BrandSurfaceReset>
-          {hasLeft && (
-            <ContextMenuGroup aria-label="Left side">{rows.left.map(renderRow)}</ContextMenuGroup>
-          )}
-          {hasLeft && hasRight && <ContextMenuSeparator />}
-          {hasRight && (
-            <ContextMenuGroup aria-label="Right side">{rows.right.map(renderRow)}</ContextMenuGroup>
-          )}
-          {(hasLeft || hasRight) && <ContextMenuSeparator />}
-        </BrandSurfaceReset>
-        <ContextMenuActionItem inset actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-          {TOOLBAR_CUSTOMIZE_LABEL}
-        </ContextMenuActionItem>
-      </ContextMenuContent>
-    </ContextMenu>
+    <>
+      {cloneElement(children, { onContextMenu: handleContextMenu })}
+      <ContextMenu>
+        {/* A sibling of the root, not a descendant, so the replayed event can't
+            bubble back into the handler that sent it. */}
+        <ContextMenuTrigger asChild>
+          <span ref={triggerRef} hidden />
+        </ContextMenuTrigger>
+        <ContextMenuContent aria-label="Toolbar buttons">
+          {/* Context reaches through the portal, so without the reset an agent's
+              brand mark would measure itself against the toolbar surface. */}
+          <BrandSurfaceReset>
+            {hasLeft && (
+              <ContextMenuGroup aria-label="Left side">{rows.left.map(renderRow)}</ContextMenuGroup>
+            )}
+            {hasLeft && hasRight && <ContextMenuSeparator />}
+            {hasRight && (
+              <ContextMenuGroup aria-label="Right side">
+                {rows.right.map(renderRow)}
+              </ContextMenuGroup>
+            )}
+            {(hasLeft || hasRight) && <ContextMenuSeparator />}
+          </BrandSurfaceReset>
+          <ContextMenuActionItem inset actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+            {TOOLBAR_CUSTOMIZE_LABEL}
+          </ContextMenuActionItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    </>
   );
 }

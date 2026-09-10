@@ -41,6 +41,7 @@ import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
 import {
   buildToolbarVisibilityMenuRows,
+  canListToolbarButton,
   resolveToolbarButtonMetadata,
   type ToolbarSide,
 } from "./toolbarVisibilityMenu";
@@ -1943,18 +1944,20 @@ export function Toolbar({
   );
 
   // Rows for the empty-space menu (#12355), built from the side lists before
-  // the visibility filter. An agent is gated on registry membership rather than
-  // `isAvailable`, which for an agent *is* its visibility and would drop exactly
-  // the hidden rows this menu exists to offer back.
+  // the visibility filter so a hidden button still has one.
   const toolbarMenuRows = useMemo(
     () =>
       buildToolbarVisibilityMenuRows(positionedLeftButtons, positionedRightButtons, {
         resolveMetadata: (id) =>
           resolveToolbarButtonMetadata(id, TOOLBAR_BUTTON_METADATA, dynamicOverflowMeta),
-        canRender: (id) =>
-          isBuiltInAgentId(id)
-            ? Object.hasOwn(buttonRegistry, id)
-            : Boolean(buttonRegistry[id]?.isAvailable) || PROJECT_SCOPED_TOOLBAR_IDS.has(id),
+        canList: (id) =>
+          canListToolbarButton(
+            id,
+            buttonRegistry,
+            PROJECT_SCOPED_TOOLBAR_IDS,
+            effectiveAgentSettings,
+            agentAvailability
+          ),
         isOnToolbar: (id) => isToolbarButtonOnToolbar(id, toolbarPlacementState),
       }),
     [
@@ -1962,6 +1965,8 @@ export function Toolbar({
       positionedRightButtons,
       dynamicOverflowMeta,
       buttonRegistry,
+      effectiveAgentSettings,
+      agentAvailability,
       toolbarPlacementState,
     ]
   );

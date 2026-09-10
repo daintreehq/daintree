@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from "vitest";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AgentSettings, CliAvailability } from "@shared/types";
 import type { ToolbarButtonMetadata } from "../toolbarButtonMetadata";
 import {
   buildToolbarVisibilityMenuRows,
+  canListToolbarButton,
   isToolbarEmptySpaceTarget,
   resolveToolbarButtonMetadata,
   type ToolbarVisibilityMenuRowSource,
@@ -26,7 +28,7 @@ const METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>> = {
 function source(overrides: Partial<ToolbarVisibilityMenuRowSource> = {}) {
   return {
     resolveMetadata: (id: AnyToolbarButtonId) => resolveToolbarButtonMetadata(id, METADATA, {}),
-    canRender: () => true,
+    canList: () => true,
     isOnToolbar: () => true,
     ...overrides,
   };
@@ -64,11 +66,11 @@ describe("buildToolbarVisibilityMenuRows", () => {
     ]);
   });
 
-  it("drops a button the view cannot draw and one with no name to show", () => {
+  it("drops a button the menu should not list and one with no name to show", () => {
     const rows = buildToolbarVisibilityMenuRows(
       ["terminal", "problems"],
       ["notification-center", "settings"],
-      source({ canRender: (id) => id !== "notification-center" })
+      source({ canList: (id) => id !== "notification-center" })
     );
 
     // `problems` has no metadata in this fixture; notifications are disabled.
@@ -84,13 +86,61 @@ describe("buildToolbarVisibilityMenuRows", () => {
   });
 
   it("returns empty sides when nothing qualifies", () => {
-    const rows = buildToolbarVisibilityMenuRows(
-      ["terminal"],
-      [],
-      source({ canRender: () => false })
-    );
+    const rows = buildToolbarVisibilityMenuRows(["terminal"], [], source({ canList: () => false }));
 
     expect(rows).toEqual({ left: [], right: [] });
+  });
+});
+
+describe("canListToolbarButton", () => {
+  // `isAvailable` here is what each view's button registry would report: for a
+  // built-in whether this view keeps the button, for an agent its visibility.
+  const REGISTRY: Record<string, { isAvailable: boolean }> = {
+    terminal: { isAvailable: true },
+    problems: { isAvailable: false },
+    "forge-stats": { isAvailable: false },
+    claude: { isAvailable: false },
+    gemini: { isAvailable: false },
+    codex: { isAvailable: false },
+  };
+  const PROJECT_SCOPED = new Set<AnyToolbarButtonId>(["forge-stats"]);
+
+  it("lists a built-in the view keeps, and a project-scoped button holding a placeholder", () => {
+    expect(canListToolbarButton("terminal", REGISTRY, PROJECT_SCOPED, null, null)).toBe(true);
+    expect(canListToolbarButton("forge-stats", REGISTRY, PROJECT_SCOPED, null, null)).toBe(true);
+  });
+
+  it("leaves out a built-in this view switched off, and an id with no renderer at all", () => {
+    expect(canListToolbarButton("problems", REGISTRY, PROJECT_SCOPED, null, null)).toBe(false);
+    expect(canListToolbarButton("acme.deploy", REGISTRY, PROJECT_SCOPED, null, null)).toBe(false);
+  });
+
+  it("omits an agent whose CLI is missing and that was never pinned", () => {
+    const availability: CliAvailability = { claude: "missing" };
+
+    expect(
+      canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, { agents: {} }, availability)
+    ).toBe(false);
+  });
+
+  it("lists an agent the user pinned or hid, whatever its CLI", () => {
+    const agentSettings: AgentSettings = {
+      agents: { claude: { pinned: true }, gemini: { pinned: false } },
+    };
+    const availability: CliAvailability = { claude: "missing", gemini: "missing" };
+
+    expect(
+      canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, agentSettings, availability)
+    ).toBe(true);
+    expect(
+      canListToolbarButton("gemini", REGISTRY, PROJECT_SCOPED, agentSettings, availability)
+    ).toBe(true);
+  });
+
+  it("lists an installed agent even though its registry entry reads as hidden", () => {
+    const availability: CliAvailability = { codex: "ready" };
+
+    expect(canListToolbarButton("codex", REGISTRY, PROJECT_SCOPED, null, availability)).toBe(true);
   });
 });
 

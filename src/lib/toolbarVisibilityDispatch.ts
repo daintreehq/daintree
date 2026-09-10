@@ -125,8 +125,9 @@ export interface ToolbarButtonPlacementActions {
  * side arrays that predicate's "absent means visible" default reports a fresh
  * profile's `browser` and an installed-but-unpositioned agent as on while
  * neither is anywhere on the toolbar (#11667, #11680). For a positioned id the
- * two agree, which is what lets a surface draw checkmarks from this and still
- * match the toolbar it describes.
+ * two agree — assistant-only agents aside, which no toolbar surface lists —
+ * and that is what lets a surface draw checkmarks from this and still match the
+ * toolbar it describes.
  */
 export function isToolbarButtonOnToolbar(
   buttonId: AnyToolbarButtonId,

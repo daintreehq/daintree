@@ -1,5 +1,8 @@
 import type { ComponentType } from "react";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import type { AgentSettings, CliAvailability } from "@shared/types";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import type { ToolbarButtonIconProps, ToolbarButtonMetadata } from "./toolbarButtonMetadata";
 
 export type ToolbarSide = "left" | "right";
@@ -19,23 +22,22 @@ export interface ToolbarVisibilityMenuRows {
 
 export interface ToolbarVisibilityMenuRowSource {
   resolveMetadata: (id: AnyToolbarButtonId) => ToolbarButtonMetadata | undefined;
-  /** Whether this view could draw the button at all if it were switched on. */
-  canRender: (id: AnyToolbarButtonId) => boolean;
+  /** Whether the button belongs in the menu at all — see `canListToolbarButton`. */
+  canList: (id: AnyToolbarButtonId) => boolean;
   isOnToolbar: (id: AnyToolbarButtonId) => boolean;
 }
 
 /**
- * Rows for the toolbar's empty-space menu (#12355), one per button that holds a
- * toolbar slot, in the order the toolbar draws them.
+ * Rows for the toolbar's empty-space menu (#12355), one per listable button
+ * holding a toolbar slot, in the order the toolbar draws them.
  *
- * Takes the side lists *before* the visibility filter. Hiding a button never
- * removes its position, so those lists are exactly the set a hidden button can
- * be brought back from — which is the whole job of this menu.
+ * Takes the side lists *before* the visibility filter. Hiding a built-in, a
+ * fixed panel button or an agent keeps its position, so those lists are what a
+ * hidden button is brought back from. Launcher items and tray-promoted plugin
+ * buttons are the exception: unchecking one hands it back to the launcher or
+ * the plugin tray that owns it, and it leaves the list along with its slot.
  *
- * A row is dropped when the view has nothing to draw for it (Problems without
- * developer tools, an empty plugin tray) or no name to show it by, because a
- * checkbox that changes nothing on screen is worse than no checkbox. An id
- * sitting on both sides keeps its first row only.
+ * An id sitting on both sides keeps its first row only.
  */
 export function buildToolbarVisibilityMenuRows(
   leftButtons: readonly AnyToolbarButtonId[],
@@ -48,7 +50,7 @@ export function buildToolbarVisibilityMenuRows(
     for (const id of ids) {
       if (seen.has(id)) continue;
       seen.add(id);
-      if (!source.canRender(id)) continue;
+      if (!source.canList(id)) continue;
       const metadata = source.resolveMetadata(id);
       if (!metadata) continue;
       rows.push({
@@ -62,6 +64,38 @@ export function buildToolbarVisibilityMenuRows(
     return rows;
   };
   return { left: toRows(leftButtons, "left"), right: toRows(rightButtons, "right") };
+}
+
+/**
+ * Whether a button holding a toolbar slot belongs in the empty-space menu.
+ *
+ * It needs a renderer this view keeps. A built-in whose registry entry is off
+ * here — Problems without developer tools, disabled notifications, an empty
+ * plugin tray — would be a checkbox that changes nothing, so it drops out. A
+ * project-scoped button stays even while its slot holds a placeholder, because
+ * the preference is real: hiding Repository stats in a scratch workspace still
+ * holds once a repository opens.
+ *
+ * Agents can't be gated on `isAvailable`, which for an agent *is* its
+ * visibility and would drop exactly the hidden rows this menu exists to offer
+ * back. One is listed once the user has pinned or hidden it, or its CLI is
+ * installed. A profile that predates #11680 carries every agent id in its side
+ * arrays, and offering to pin a CLI that isn't there is noise, not recovery.
+ */
+export function canListToolbarButton(
+  id: AnyToolbarButtonId,
+  registry: Readonly<Record<string, { isAvailable: boolean }>>,
+  projectScopedIds: ReadonlySet<AnyToolbarButtonId>,
+  agentSettings: AgentSettings | null | undefined,
+  agentAvailability: CliAvailability | null | undefined
+): boolean {
+  if (!Object.hasOwn(registry, id)) return false;
+  if (isBuiltInAgentId(id)) {
+    return (
+      agentSettings?.agents?.[id]?.pinned !== undefined || isAgentInstalled(agentAvailability?.[id])
+    );
+  }
+  return registry[id]?.isAvailable === true || projectScopedIds.has(id);
 }
 
 /**
