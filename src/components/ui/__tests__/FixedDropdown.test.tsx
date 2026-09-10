@@ -1010,12 +1010,16 @@ describe("FixedDropdown drag-region opt-out (issue #12347)", () => {
       </FixedDropdown>
     );
 
+    // `?.parentElement` yields undefined, not null, when the query misses —
+    // so assert the element itself rather than leaning on a nullish check that
+    // would wave a missing node through into a confusing downstream failure.
     const panel = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
-    expect(panel).not.toBeNull();
-    expect(panel?.className.split(/\s+/)).toContain("app-no-drag");
+    if (!(panel instanceof HTMLElement)) throw new Error("FixedDropdown panel not rendered");
+    expect(panel.className.split(/\s+/)).toContain("app-no-drag");
 
-    const viewportWrapper = panel?.parentElement;
-    expect(viewportWrapper?.className).toContain("inset-0");
-    expect(viewportWrapper?.className.split(/\s+/)).not.toContain("app-no-drag");
+    const viewportWrapper = panel.parentElement;
+    if (!(viewportWrapper instanceof HTMLElement)) throw new Error("portal wrapper not rendered");
+    expect(viewportWrapper.className).toContain("inset-0");
+    expect(viewportWrapper.className.split(/\s+/)).not.toContain("app-no-drag");
   });
 });

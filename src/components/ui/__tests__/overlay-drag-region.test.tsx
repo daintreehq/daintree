@@ -111,16 +111,16 @@ describe("portaled overlay content opts out of the OS drag region — issue #123
     }
   );
 
-  it.each([
-    ["ContextMenuContent", renderContextMenu],
-    ["DropdownMenuContent", renderDropdownMenu],
-    ["PopoverContent", renderPopover],
-  ])("%s keeps the opt-out when a caller supplies its own classes", (_name, mount) => {
-    // `cn()` runs tailwind-merge, which is free to drop a token it believes a
-    // later class supersedes. A consumer passing layout classes is the common
-    // case, and it must not be able to hand the toolbar back its dead zone.
-    mount("w-80 p-0 absolute");
-    expect(classTokens(probe(".probe-content"))).toContain(NO_DRAG);
+  it("composes the opt-out with a caller className rather than being replaced by it", () => {
+    // Deliberately not a tailwind-merge claim: `app-no-drag` belongs to no
+    // conflict group, so twMerge would never drop it and such a test could not
+    // fail. What this pins is the composition — a primitive rewritten to use
+    // the caller's `className` in place of its own base list, rather than
+    // merging the two, hands the toolbar back its dead zone.
+    renderPopover("w-80 p-0 absolute");
+    const tokens = classTokens(probe(".probe-content"));
+    expect(tokens).toContain(NO_DRAG);
+    expect(tokens).toContain("w-80");
   });
 });
 
@@ -131,32 +131,96 @@ describe("the opt-out stays wired to a real rule", () => {
     // descendant half is what carries the opt-out to the menu items, which
     // never carry the class themselves.
     const css = readFileSync(path.join(UI_DIR, "..", "..", "index.css"), "utf8");
-    const rule = /\.app-no-drag,\s*\n\s*\.app-no-drag \*\s*\{([^}]*)\}/.exec(css);
-    expect(rule, "`.app-no-drag, .app-no-drag *` rule missing from src/index.css").not.toBeNull();
+    // Built from NO_DRAG, not spelled again: renaming the class in the
+    // primitives and here, but not in the stylesheet, would otherwise ship a
+    // class with no rule behind it and leave this suite green.
+    const rule = new RegExp(`\\.${NO_DRAG},\\s*\\n\\s*\\.${NO_DRAG} \\*\\s*\\{([^}]*)\\}`).exec(
+      css
+    );
+    expect(rule, `\`.${NO_DRAG}, .${NO_DRAG} *\` rule missing from src/index.css`).not.toBeNull();
     const declarations = rule?.[1] ?? "";
     expect(declarations).toMatch(/-webkit-app-region:\s*no-drag/);
     expect(declarations).toMatch(/(?<!-)\bapp-region:\s*no-drag/);
   });
 });
 
-describe("no ui/ primitive portals over the toolbar without opting out", () => {
-  // Deliberately exempt. Tooltips are non-interactive, so they have no dead
-  // click zone to fix — and marking them no-drag would instead carve a dead
-  // *drag* zone out of the title bar for as long as one is showing.
-  const EXEMPT = new Set(["tooltip.tsx"]);
+describe("no ui/ surface portals over the toolbar without opting out", () => {
+  // Every exemption is a geometry claim, and each one is why this list is
+  // spelled out rather than inferred.
+  const EXEMPT: Record<string, string> = {
+    "tooltip.tsx":
+      "non-interactive, so there is no dead click zone to fix — and opting it out would carve a dead *drag* zone out of the title bar for as long as one shows",
+    "ShortcutHint.tsx": "pointer-events-none and aria-hidden — nothing in it is clickable",
+    "AppDialog.tsx":
+      "centred modal panel; it only reaches the drag band on a short window with a global banner up, and whether a window should drag at all behind an open modal is a separate call",
+    "AppPaletteDialog.tsx": "same as AppDialog.tsx — pt-[15vh] panel, modal",
+  };
 
-  it("every module rendering a Radix Portal stamps the opt-out", () => {
-    // The failure this exists for: a sixth anchored surface is added next to
-    // these five, portals to `document.body` like the rest, and reintroduces
-    // the bug on its own — invisibly, because no existing test renders it.
-    const offenders = readdirSync(UI_DIR)
-      .filter((file) => file.endsWith(".tsx") && !EXEMPT.has(file))
-      .filter((file) => {
-        const src = readFileSync(path.join(UI_DIR, file), "utf8");
-        return /radix\.\w+\.Portal\b/.test(src) && !src.includes(NO_DRAG);
-      });
-    expect(offenders, `add "${NO_DRAG}" to the portaled content, or exempt with a reason`).toEqual(
-      []
+  // Named per file, so adding a third portaled surface to one of these forces
+  // a deliberate edit here instead of riding along on a sibling's stamp.
+  const STAMPED: Record<string, string[]> = {
+    "context-menu.tsx": ["ContextMenuContent", "ContextMenuSubContent"],
+    "dropdown-menu.tsx": ["DropdownMenuContent", "DropdownMenuSubContent"],
+    "popover.tsx": ["PopoverContent"],
+    "select.tsx": ["SelectContent"],
+    "fixed-dropdown.tsx": ["FixedDropdown panel"],
+    "toaster.tsx": ["Toast", "OverflowPill"],
+    "ReEntrySummary.tsx": ["summary card"],
+  };
+
+  function readModule(file: string): string {
+    return readFileSync(path.join(UI_DIR, file), "utf8");
+  }
+
+  // Comments are stripped before counting. The stamp sites carry a `#12347`
+  // note that names the class, and a substring search over raw source is
+  // satisfied by that prose alone — the class could be deleted outright and
+  // the scan would stay green.
+  function stripComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  }
+
+  function stampCount(file: string): number {
+    const code = stripComments(readModule(file));
+    // Only inside a string literal, which is the only place a class can take
+    // effect — matched loosely enough to survive being folded into a longer
+    // class list.
+    return code.match(new RegExp(`"[^"\n]*\\b${NO_DRAG}\\b[^"\n]*"`, "g"))?.length ?? 0;
+  }
+
+  const portaling = readdirSync(UI_DIR)
+    .filter((file) => file.endsWith(".tsx"))
+    .filter((file) => {
+      const code = stripComments(readModule(file));
+      // Both idioms: the deferred Radix loader, and raw react-dom portals.
+      return /radix\.\w+\.Portal\b/.test(code) || /\bcreatePortal\(/.test(code);
+    });
+
+  it("scans a non-empty set of portaling modules", () => {
+    // Without this the guard below is one refactor away from silently
+    // scanning nothing and passing forever.
+    expect(portaling.length).toBeGreaterThan(0);
+    const unaccounted = portaling.filter((file) => !(file in EXEMPT) && !(file in STAMPED));
+    expect(unaccounted, "new portaling module: stamp it, or exempt it with a reason").toEqual([]);
+    const vanished = [...Object.keys(STAMPED), ...Object.keys(EXEMPT)].filter(
+      (file) => !portaling.includes(file)
+    );
+    expect(vanished, "listed here but no longer portals — drop the entry").toEqual([]);
+  });
+
+  it("stamps every portaled surface that is not exempt", () => {
+    const offenders = portaling.filter((file) => !(file in EXEMPT) && stampCount(file) === 0);
+    expect(
+      offenders,
+      `add "${NO_DRAG}" to the portaled content, or exempt it with a reason`
+    ).toEqual([]);
+  });
+
+  it.each(Object.entries(STAMPED))("%s stamps each of its portaled surfaces", (file, surfaces) => {
+    // A file-level "does it appear anywhere" check passes while a second or
+    // third portaled surface in the same module goes unstamped.
+    expect(stampCount(file), `expected one stamp per surface: ${surfaces.join(", ")}`).toBe(
+      surfaces.length
     );
   });
 });
