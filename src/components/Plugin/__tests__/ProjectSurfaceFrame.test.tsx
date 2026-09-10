@@ -32,6 +32,7 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
   ),
 }));
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectSurfaceFrame } from "../ProjectSurfaceFrame";
 import {
   ProjectSurfaceView,
@@ -173,8 +174,15 @@ describe("ProjectSurfaceFrame", () => {
     });
   });
 
+  // The strip's palette entry is icon-only and carries a tooltip, so it needs
+  // the provider App.tsx mounts at the root. Same wrapper the file-viewer tests
+  // use for the same reason.
   const renderFrame = (children: React.ReactNode = <div data-testid="surface" />) =>
-    render(<ProjectSurfaceFrame>{children}</ProjectSurfaceFrame>);
+    render(
+      <TooltipProvider>
+        <ProjectSurfaceFrame>{children}</ProjectSurfaceFrame>
+      </TooltipProvider>
+    );
 
   const strip = () => screen.getByRole("group", { name: "Empty canvas" });
   const stripButton = (name: string) => within(strip()).getByRole("button", { name });
@@ -220,9 +228,53 @@ describe("ProjectSurfaceFrame", () => {
 
     renderFrame();
 
-    expect(strip().textContent).toContain("No panels open");
     expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
     expect(stripButton("Launcher").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("puts nothing in the strip that is not a control", () => {
+    registerSurfaceKind();
+    setClaim(answer("surface"));
+
+    renderFrame();
+
+    // 32px of host chrome framing a full-bleed view someone else drew. Every
+    // glance it costs is a glance taken from that view, so the strip earns its
+    // place by carrying only things the user can act on. A status label here
+    // reads as a third, disabled segment — which is what "No panels open" did.
+    //
+    // The rule, not the label: any text in the strip belongs to a control.
+    let stray = strip().textContent ?? "";
+    for (const button of within(strip()).getAllByRole("button")) {
+      stray = stray.replace(button.textContent ?? "", "");
+    }
+    expect(stray.trim()).toBe("");
+  });
+
+  it("keeps both notices on one row, never on a card", async () => {
+    registerSurfaceKind();
+    setClaim();
+
+    renderFrame();
+
+    // This surface stacks its notices directly on a 32px chrome strip, and the
+    // known way to get that wrong is scale mismatch — a multi-line card on a
+    // thin bar inverts the hierarchy and makes host onboarding the loudest
+    // thing on a canvas the plugin owns. It shipped that way once: a title, a
+    // description and a separate action row, 112px of it.
+    //
+    // The rule, not the pixel height: `InlineStatusBanner` draws a single row
+    // when it has no `description` and a stacked card when it has one, so the
+    // invariant is simply that this surface never passes one. Give either
+    // notice a description and this fails.
+    expect(notice().className).not.toMatch(/\bflex-col\b/);
+    expect(notice().className).toMatch(/\bitems-center\b/);
+
+    failNextSave = true;
+    await press(stripButton("Launcher"));
+    const failed = screen.getByRole("alert");
+    expect(failed.className).not.toMatch(/\bflex-col\b/);
+    expect(failed.className).toMatch(/\bitems-center\b/);
   });
 
   it("lays the strip out above the plugin's contained box, never over it", async () => {
@@ -282,7 +334,7 @@ describe("ProjectSurfaceFrame", () => {
     expect(notice()).toBeTruthy();
   });
 
-  it("keeps the palette entry and the empty-canvas label only while the surface stands in", async () => {
+  it("keeps the palette entry only while the surface stands in", async () => {
     registerSurfaceKind();
     setClaim(answer("surface"));
     renderFrame();
@@ -293,7 +345,6 @@ describe("ProjectSurfaceFrame", () => {
     // The stock launcher is its own empty state, anchor included.
     await press(stripButton("Launcher"));
     expect(within(strip()).queryByRole("button", { name: PALETTE_ENTRY })).toBeNull();
-    expect(strip().textContent).not.toContain("No panels open");
   });
 
   it("caps a long panel name so the way back stays in reach", () => {
@@ -335,7 +386,10 @@ describe("ProjectSurfaceFrame", () => {
     setClaim();
     renderFrame();
 
-    expect(notice().textContent).toContain("Acme Dashboard replaced the launcher");
+    // The plugin's DISPLAY name, not its manifest id and not the panel's name:
+    // the question is "do you want this plugin drawing your canvas", and the
+    // only name that answers it is the one the user sees in settings.
+    expect(notice().textContent).toContain("Acme Dashboard");
     // Unanswered is the manifest's own intent: the surface is already showing.
     expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
 
@@ -361,6 +415,36 @@ describe("ProjectSurfaceFrame", () => {
 
     expect(screen.queryByRole("status")).toBeNull();
     expect(document.activeElement).toBe(stripButton("Launcher"));
+  });
+
+  it("keeps the ring for a keyboard answer and drops it for a pointer one", async () => {
+    registerSurfaceKind();
+    setClaim();
+    renderFrame();
+
+    // A banner action's onClick carries no event, so the usual tell — a
+    // keyboard press arriving as a click with `detail === 0` — is not available
+    // and the frame tracks the modality itself. The direction is the whole
+    // point and it is easy to get backwards: a keyboard user who loses the ring
+    // is stranded with no idea where focus went, while a stray ring costs a
+    // mouse user nothing.
+    const keyboardTarget = stripButton("Launcher");
+    const keyboardSpy = vi.spyOn(keyboardTarget, "focus");
+    await press(within(notice()).getByRole("button", { name: "Use the launcher" }));
+    expect(keyboardSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: true });
+
+    // Same answer, reached by pointer this time.
+    setClaim();
+    await flush();
+    const pointerTarget = stripButton("Launcher");
+    const pointerSpy = vi.spyOn(pointerTarget, "focus");
+    const answerButton = within(notice()).getByRole("button", { name: "Use the launcher" });
+    await act(async () => {
+      fireEvent.pointerDown(answerButton);
+      answerButton.click();
+      await settle();
+    });
+    expect(pointerSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
   });
 
   it("remembers using the launcher across a reload", async () => {
@@ -424,6 +508,25 @@ describe("ProjectSurfaceFrame", () => {
 
     expect(canvasChoice()).toBe("stock");
     expect(screen.queryByText(SAVE_FAILED)).toBeNull();
+    // A retry that lands destroys the row holding the button that was pressed.
+    // Every control in a notice row does — an answer, a retry, a dismissal — so
+    // each one owes the same handoff: focus lands on the segment now showing,
+    // never on the body.
+    expect(document.activeElement).toBe(stripButton("Launcher"));
+  });
+
+  it("hands focus back to the strip when a failed save is dismissed", async () => {
+    registerSurfaceKind();
+    setClaim();
+    renderFrame();
+
+    failNextSave = true;
+    await press(stripButton("Launcher"));
+    await press(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(screen.queryByText(SAVE_FAILED)).toBeNull();
+    // Dismissing recorded no answer, so the surface is still what is showing.
+    expect(document.activeElement).toBe(stripButton("Mission Control"));
   });
 
   it("asks the new owner instead of offering a retry once the slot changes hands", async () => {
