@@ -273,7 +273,7 @@ export const interimWidgetField = StateField.define<string>({
     }
     return value;
   },
-  provide: (f) =>
+  provide: (f) => [
     EditorView.decorations.from(f, (text) => (view) => {
       // Suppress the ghost during IME composition so it can't displace the
       // composition overlay (mirrors the xterm guard added for #4379).
@@ -283,6 +283,17 @@ export const interimWidgetField = StateField.define<string>({
         Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 }).range(pos),
       ]);
     }),
+    // The doc stays empty while dictation is interim, so CodeMirror's own
+    // placeholder is still mounted and the ghost renders right after it
+    // ("Ask Claude" followed by the transcript). Flag the content element so
+    // the placeholder can be hidden for as long as ghost text is showing.
+    EditorView.contentAttributes.from(f, (text): Record<string, string> =>
+      text ? { class: "cm-voice-interim-active" } : {}
+    ),
+    EditorView.baseTheme({
+      ".cm-voice-interim-active .cm-placeholder": { display: "none" },
+    }),
+  ],
 });
 
 const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });
