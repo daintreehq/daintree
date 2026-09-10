@@ -1,5 +1,4 @@
 import { store } from "../../store.js";
-import { createLogger } from "../../utils/logger.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
   isProjectSurfaceChoice,
@@ -26,8 +25,6 @@ import { getProjectSurfaces } from "./PluginSurfaceRegistry.js";
  * in step with the file.
  */
 const STORE_KEY = "projectSurfaceChoices";
-
-const logger = createLogger("main:projectSurfaceChoices");
 
 function parseRecord(value: unknown): ProjectSurfaceChoiceRecord | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -57,18 +54,16 @@ function readAll(): Record<string, unknown> {
 }
 
 /**
- * Every stored answer for one project. An unreadable store reads as no answers,
- * which shows the plugin's surface — what the project's own manifest asked for —
- * and at worst asks the user again.
+ * Every stored answer for one project.
+ *
+ * Throws when the store cannot be read. An unreadable answer is not the same as
+ * no answer: read as empty, it would put a canvas the user switched off back on
+ * screen and ask them again, where a rejected read keeps the renderer on the
+ * stock canvas until a later read works.
  */
 export function getProjectSurfaceChoices(projectId: string): ProjectSurfaceChoices {
-  try {
-    const all = readAll();
-    return Object.hasOwn(all, projectId) ? parseChoices(all[projectId]) : {};
-  } catch (err) {
-    logger.warn("Failed to read project surface choices", { projectId, error: err });
-    return {};
-  }
+  const all = readAll();
+  return Object.hasOwn(all, projectId) ? parseChoices(all[projectId]) : {};
 }
 
 /**
@@ -113,19 +108,25 @@ export function setProjectSurfaceChoice(
   // the whole key, so writing from a map we could not read would delete every
   // other project's answers.
   const all = { ...readAll() };
-  const next = Object.hasOwn(all, projectId) ? parseChoices(all[projectId]) : {};
+  const stored = Object.hasOwn(all, projectId) ? all[projectId] : undefined;
+  // Merged into the raw entry, not a parsed copy, so an answer about a slot this
+  // build does not know — written by a newer one — survives a downgrade.
+  const entry: Record<string, unknown> =
+    stored && typeof stored === "object" && !Array.isArray(stored)
+      ? { ...(stored as Record<string, unknown>) }
+      : {};
   if (record === undefined) {
-    delete next[slot];
+    delete entry[slot];
   } else {
-    next[slot] = record;
+    entry[slot] = record;
   }
-  if (Object.keys(next).length === 0) {
+  if (Object.keys(entry).length === 0) {
     delete all[projectId];
   } else {
-    all[projectId] = next;
+    all[projectId] = entry;
   }
   // Whole-key rewrite: electron-store dot-notation would nest on a key
   // containing dots, and a project id is opaque.
   store.set(STORE_KEY, all);
-  return next;
+  return parseChoices(entry);
 }

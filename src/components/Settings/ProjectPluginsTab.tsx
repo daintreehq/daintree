@@ -10,6 +10,7 @@ import {
   ProjectPluginSelectorDropdown,
   type ProjectPluginOption,
 } from "@/components/Settings/ProjectPluginSelectorDropdown";
+import { useRenderableSurfaceClaim } from "@/hooks/useRenderableSurfaceClaim";
 import {
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
@@ -73,22 +74,26 @@ const EMPTY_CANVAS_STATUS = {
  *
  * The answer persists, so it has to be findable: without this, a project whose
  * owner once chose the launcher would keep hiding a canvas its plugin still
- * claims, with nothing anywhere saying why. Rendered only while a claim exists
- * — an answer about a plugin that isn't running changes nothing on screen.
+ * claims, with nothing anywhere saying why. Rendered only while the claim can
+ * render and its answer is known — the canvas's own test — so this never
+ * describes a surface the canvas would not draw.
  */
 function EmptyCanvasSection() {
   const init = usePluginProjectSurfacesStore((s) => s.init);
-  const claim = usePluginProjectSurfacesStore((s) => s.surfaces.emptyCanvas);
+  const renderable = useRenderableSurfaceClaim("emptyCanvas");
+  const choicesLoaded = usePluginProjectSurfacesStore((s) => s.choicesLoaded);
   const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, "emptyCanvas"));
   const setSurfaceChoice = usePluginProjectSurfacesStore((s) => s.setSurfaceChoice);
+  const saveFailed = usePluginProjectSurfacesStore((s) => s.failedSave?.slot === "emptyCanvas");
   const plugins = useProjectPluginStore((s) => s.plugins);
 
   useEffect(() => {
     init();
   }, [init]);
 
-  if (claim === undefined) return null;
+  if (renderable === null || !choicesLoaded) return null;
 
+  const { claim } = renderable;
   const pluginName =
     plugins.find((p) => p.instanceId === claim.pluginId)?.displayName ??
     pluginManifestIdFromInstanceKey(claim.pluginId);
@@ -103,12 +108,17 @@ function EmptyCanvasSection() {
         {pluginName} draws what this project shows when no panels are open, in place of the
         launcher. {EMPTY_CANVAS_STATUS[choice ?? "none"]}
       </p>
+      {saveFailed && (
+        <p role="alert" className="text-xs text-status-error">
+          Couldn&apos;t save the canvas choice. Try again.
+        </p>
+      )}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-2xs text-text-secondary">Show on the empty canvas</span>
         <SettingsSwitch
           checked={choice !== "stock"}
           onCheckedChange={(next) => void setSurfaceChoice("emptyCanvas", next ? "surface" : "stock")}
-          aria-label={`Show ${pluginName} on the empty canvas`}
+          aria-label="Show on the empty canvas"
           data-testid="project-empty-canvas-switch"
         />
         <Button

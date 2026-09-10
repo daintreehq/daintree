@@ -3,6 +3,7 @@ import {
   pluginManifestIdFromInstanceKey,
   type ProjectSurfaceChoice,
   type ProjectSurfaceChoices,
+  type ProjectSurfaceChoicesSnapshot,
   type ProjectSurfaceSlot,
   type ProjectSurfaceSnapshot,
 } from "@shared/types/plugin";
@@ -27,6 +28,11 @@ import { logWarn } from "@/utils/logger";
  * without a second event to keep in step with the first. Answers are different:
  * only the user changes them, so main pushes the full set to every view of the
  * project when one does.
+ *
+ * Claims and answers are pulled together and applied in one update. Apart, a
+ * claim could land a render before the answer behind it and mount the plugin's
+ * view — or ask the first-show question — in a project that chose the launcher
+ * long ago.
  */
 interface PluginProjectSurfacesState {
   surfaces: ProjectSurfaceSnapshot;
@@ -41,23 +47,31 @@ interface PluginProjectSurfacesState {
    */
   choices: ProjectSurfaceChoices;
   /**
-   * True once main's answers have been read. Until then "no answer" is unknown
-   * rather than known, and the first-show notice must not flash up in a project
-   * that answered long ago.
+   * True once main has answered for this view's project. Until then "no answer"
+   * is unknown rather than known, and the first-show question must not appear
+   * in a project that answered long ago. A sender main has not bound to its
+   * project yet stays unknown too: a relaunch restores the last project before
+   * its view is registered, and the pull that follows the claim reads it again.
    */
   choicesLoaded: boolean;
+  /** The project main named for `choices`; a push naming any other is refused. */
+  choicesProjectId: string | null;
+  /** The last answer main could not record, so the canvas can say so and retry it. */
+  failedSave: { slot: ProjectSurfaceSlot; choice: ProjectSurfaceChoice | null } | null;
   /** Answer for whichever plugin owns `slot` now, or forget the answer with `null`. */
   setSurfaceChoice: (slot: ProjectSurfaceSlot, choice: ProjectSurfaceChoice | null) => Promise<void>;
+  dismissFailedSave: () => void;
   /** Idempotent: pulls claims and answers once, then follows their change signals. */
   init: () => void;
 }
 
 let initialized = false;
 let unsubscribers: Array<() => void> = [];
-// Monotonic pull sequences, so a slow pull can never overwrite a newer answer.
-// Separate counters: an answer the user just gave must beat a choices pull that
-// was already in flight without discarding an unrelated surfaces pull.
-let surfacesSeq = 0;
+// Monotonic pull sequence, so a slow pull can never overwrite a newer one
+// started by a panel-kinds push that arrived while it was in flight.
+let pullSeq = 0;
+// Bumped whenever answers are adopted outside a pull (a save or a push), so a
+// pull that was already in flight cannot roll them back to what it read.
 let choicesSeq = 0;
 
 /**
@@ -66,7 +80,7 @@ let choicesSeq = 0;
  *
  * A slot that has passed to a different plugin is undecided again: agreeing to
  * one plugin's canvas is not agreeing to whatever claims it next, which is also
- * why a new owner gets its own first-show notice.
+ * why a new owner gets its own first-show question.
  */
 export function selectSurfaceChoice(
   state: Pick<PluginProjectSurfacesState, "surfaces" | "choices">,
@@ -81,83 +95,76 @@ export function selectSurfaceChoice(
 }
 
 export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>((set, get) => {
-  const pullSurfaces = () => {
-    const plugin = window.electron?.plugin;
-    if (typeof plugin?.getProjectSurfaces !== "function") return;
-    const seq = ++surfacesSeq;
-    void plugin
-      .getProjectSurfaces()
-      .then((surfaces) => {
-        if (seq !== surfacesSeq) return;
-        set({ surfaces });
-      })
-      .catch((err: unknown) => {
-        // Clear rather than keep the last answer. A retained claim outlives the
-        // plugin that made it: if the same runtime kind id is later
-        // re-registered without a claim behind it, a stale snapshot would
-        // resurrect a surface main no longer owns. Falling back to the host's
-        // own canvas is always safe; showing a plugin's is not.
-        if (seq !== surfacesSeq) return;
-        set({ surfaces: {} });
-        logWarn("[pluginProjectSurfacesStore] Failed to fetch project surfaces", { error: err });
-      });
+  const adoptChoices = (snapshot: ProjectSurfaceChoicesSnapshot) => {
+    ++choicesSeq;
+    set({
+      choices: snapshot.choices,
+      choicesProjectId: snapshot.projectId,
+      choicesLoaded: true,
+    });
   };
 
-  const pullChoices = () => {
+  const pull = () => {
     const plugin = window.electron?.plugin;
-    if (typeof plugin?.getProjectSurfaceChoices !== "function") return;
-    const seq = ++choicesSeq;
-    void plugin
-      .getProjectSurfaceChoices()
-      .then((choices) => {
-        if (seq !== choicesSeq) return;
-        set({ choices, choicesLoaded: true });
-      })
-      .catch((err: unknown) => {
-        // Stay unloaded rather than read the failure as "never answered": the
-        // claimed surface still shows, as its manifest asked, and nobody is
-        // asked a question this view could not tell they already answered.
-        if (seq !== choicesSeq) return;
-        logWarn("[pluginProjectSurfacesStore] Failed to fetch project surface choices", {
-          error: err,
-        });
-      });
+    if (typeof plugin?.getProjectSurfaces !== "function") return;
+    const seq = ++pullSeq;
+    const choicesAtStart = choicesSeq;
+    const answers =
+      typeof plugin.getProjectSurfaceChoices === "function"
+        ? plugin.getProjectSurfaceChoices()
+        : Promise.resolve(null);
+    void Promise.allSettled([plugin.getProjectSurfaces(), answers]).then(
+      ([surfaces, snapshot]) => {
+        if (seq !== pullSeq) return;
+        const next: Partial<PluginProjectSurfacesState> = {};
+        if (surfaces.status === "fulfilled") {
+          next.surfaces = surfaces.value;
+        } else {
+          // Clear rather than keep the last answer. A retained claim outlives
+          // the plugin that made it: if the same runtime kind id is later
+          // re-registered without a claim behind it, a stale snapshot would
+          // resurrect a surface main no longer owns. Falling back to the host's
+          // own canvas is always safe; showing a plugin's is not.
+          next.surfaces = {};
+          logWarn("[pluginProjectSurfacesStore] Failed to fetch project surfaces", {
+            error: surfaces.reason,
+          });
+        }
+        if (snapshot.status === "rejected") {
+          // Stay as loaded as we were rather than read the failure as "never
+          // answered": the claimed surface still shows, as its manifest asked,
+          // and nobody is asked a question they may already have answered.
+          logWarn("[pluginProjectSurfacesStore] Failed to fetch project surface choices", {
+            error: snapshot.reason,
+          });
+        } else if (snapshot.value !== null && choicesSeq === choicesAtStart) {
+          next.choices = snapshot.value.choices;
+          next.choicesProjectId = snapshot.value.projectId;
+          next.choicesLoaded = true;
+        }
+        set(next);
+      }
+    );
   };
 
   return {
     surfaces: {},
     choices: {},
     choicesLoaded: false,
+    choicesProjectId: null,
+    failedSave: null,
     setSurfaceChoice: async (slot, choice) => {
-      const { surfaces, choices } = get();
-      const next = { ...choices };
-      if (choice === null) {
-        delete next[slot];
-      } else {
-        const claim = surfaces[slot];
-        // Nothing owns the slot, so there is nothing to answer about — main
-        // would refuse the write for the same reason.
-        if (claim === undefined) return;
-        next[slot] = {
-          pluginId: pluginManifestIdFromInstanceKey(claim.pluginId),
-          choice,
-          decidedAt: Date.now(),
-        };
-      }
-      // Applied before the round trip: the switch has to move on the click, not
-      // when the store write lands.
-      const seq = ++choicesSeq;
-      set({ choices: next });
-
       const plugin = window.electron?.plugin;
       if (typeof plugin?.setProjectSurfaceChoice !== "function") return;
+      set({ failedSave: null });
       try {
-        const persisted = await plugin.setProjectSurfaceChoice(slot, choice);
-        if (seq !== choicesSeq) return;
-        set({ choices: persisted, choicesLoaded: true });
+        // Not applied ahead of the round trip. Main records answers in the
+        // order they arrive and pushes each one before replying, so adopting
+        // only what main returns keeps every view in step with disk with
+        // nothing to reconcile — and the round trip is one store write.
+        adoptChoices(await plugin.setProjectSurfaceChoice(slot, choice));
       } catch (err) {
-        // Kept for this session rather than rolled back — the user asked for
-        // this canvas and gets it — but it will not survive a relaunch.
+        set({ failedSave: { slot, choice } });
         logWarn("[pluginProjectSurfacesStore] Failed to save a project surface choice", {
           slot,
           choice,
@@ -165,6 +172,7 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
         });
       }
     },
+    dismissFailedSave: () => set({ failedSave: null }),
     init: () => {
       if (initialized) return;
 
@@ -181,23 +189,25 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
         return;
       }
 
-      pullSurfaces();
-      pullChoices();
-      const subscriptions = [plugin.onPanelKindsChanged(() => pullSurfaces())];
+      pull();
+      const subscriptions = [plugin.onPanelKindsChanged(() => pull())];
       const events = window.electron?.events;
       if (typeof events?.on === "function") {
         subscriptions.push(
           events.on("plugin:project-surface-choices-changed", (payload) => {
-            // Main sends this only to the views of the project it names, and it
-            // is the full set, so it supersedes anything in flight.
-            ++choicesSeq;
-            set({ choices: payload.choices, choicesLoaded: true });
+            // Main addresses this to one project's views. Refuse a set for a
+            // project this view has already been told it is not — the guard
+            // `projectPluginStore` applies — and accept it before the first
+            // answer names one, since main sent it here on purpose.
+            const owner = get().choicesProjectId;
+            if (owner !== null && owner !== payload.projectId) return;
+            adoptChoices(payload);
           })
         );
       }
       unsubscribers = subscriptions;
 
-      // Latch only after the pulls and the listeners are in place, so a throw
+      // Latch only after the pull and the listeners are in place, so a throw
       // from any of them leaves the store retryable rather than subscribed to
       // nothing.
       initialized = true;
@@ -210,7 +220,13 @@ export function _resetPluginProjectSurfacesStoreForTest(): void {
   for (const unsubscribe of unsubscribers) unsubscribe();
   unsubscribers = [];
   initialized = false;
-  surfacesSeq = 0;
+  pullSeq = 0;
   choicesSeq = 0;
-  usePluginProjectSurfacesStore.setState({ surfaces: {}, choices: {}, choicesLoaded: false });
+  usePluginProjectSurfacesStore.setState({
+    surfaces: {},
+    choices: {},
+    choicesLoaded: false,
+    choicesProjectId: null,
+    failedSave: null,
+  });
 }

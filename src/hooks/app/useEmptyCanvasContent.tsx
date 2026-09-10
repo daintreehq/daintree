@@ -39,8 +39,8 @@ export function useEmptyCanvasContent(gettingStarted: GettingStartedChecklistSta
   const currentScratch = useScratchStore((state) => state.currentScratch);
   // Unconditional: hooks cannot be called behind the canvas-kind branches
   // below, and the resolver already returns null for every case that should
-  // not use a surface (no claim, an unresolvable one, or the stock canvas
-  // pinned).
+  // not use a surface (no claim, an unresolvable one, answers not known yet,
+  // or the launcher chosen).
   const surface = useProjectSurface("emptyCanvas");
 
   const canvas = resolveEmptyCanvas(currentProject, currentScratch);

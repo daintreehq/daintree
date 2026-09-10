@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ProjectSurfaceChoice,
   ProjectSurfaceChoices,
-  ProjectSurfaceChoicesChangedEvent,
+  ProjectSurfaceChoicesSnapshot,
   ProjectSurfaceSnapshot,
 } from "@shared/types/plugin";
 import {
@@ -11,20 +12,30 @@ import {
   usePluginProjectSurfacesStore,
 } from "../pluginProjectSurfacesStore";
 
+const PROJECT = "p1";
 const claim = { pluginId: "project__p1__acme.dash", panelKindId: "project:p1/acme.dash/overview" };
 
-const record = (pluginId: string, choice: "surface" | "stock", decidedAt = 1) => ({
+const record = (pluginId: string, choice: ProjectSurfaceChoice, decidedAt = 1) => ({
   pluginId,
   choice,
   decidedAt,
 });
 
+const snapshot = (
+  choices: ProjectSurfaceChoices = {},
+  projectId = PROJECT
+): ProjectSurfaceChoicesSnapshot => ({ projectId, choices });
+
 type KindsCallback = () => void;
-type ChoicesCallback = (payload: ProjectSurfaceChoicesChangedEvent) => void;
+type ChoicesCallback = (payload: ProjectSurfaceChoicesSnapshot) => void;
+type Answers = ProjectSurfaceChoicesSnapshot | null;
 
 interface BridgeOptions {
-  choices?: ProjectSurfaceChoices | (() => Promise<ProjectSurfaceChoices>);
-  setChoice?: (...args: unknown[]) => Promise<ProjectSurfaceChoices>;
+  choices?: Answers | (() => Promise<Answers>);
+  setChoice?: (
+    slot: string,
+    choice: ProjectSurfaceChoice | null
+  ) => Promise<ProjectSurfaceChoicesSnapshot>;
 }
 
 function installBridge(
@@ -43,12 +54,16 @@ function installBridge(
       if (i >= 0) listeners.splice(i, 1);
     };
   });
-  const { choices = {} } = options;
+  const { choices = snapshot() } = options;
   const getProjectSurfaceChoices = vi.fn(
     typeof choices === "function" ? choices : () => Promise.resolve(choices)
   );
+  // Main records an answer against the slot's current owner; the renderer only
+  // ever says which canvas it wants.
   const setProjectSurfaceChoice = vi.fn(
-    options.setChoice ?? (() => Promise.resolve(usePluginProjectSurfacesStore.getState().choices))
+    options.setChoice ??
+      ((_slot: string, choice: ProjectSurfaceChoice | null) =>
+        Promise.resolve(snapshot(choice === null ? {} : { emptyCanvas: record("acme.dash", choice) })))
   );
   const on = vi.fn((name: string, cb: ChoicesCallback) => {
     if (name === "plugin:project-surface-choices-changed") choiceListeners.push(cb);
@@ -85,15 +100,15 @@ function installBridge(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((res, rej) => {
+  const promise = new Promise<T>((res) => {
     resolve = res;
-    reject = rej;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+const state = () => usePluginProjectSurfacesStore.getState();
+const canvasChoice = () => selectSurfaceChoice(state(), "emptyCanvas");
 
 beforeEach(() => {
   _resetPluginProjectSurfacesStoreForTest();
@@ -108,10 +123,10 @@ describe("pluginProjectSurfacesStore", () => {
   it("pulls the sender project's surfaces on init", async () => {
     const bridge = installBridge({ emptyCanvas: claim });
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({ emptyCanvas: claim });
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
     // The pull carries no project id — main resolves it from the sender, which
     // is what makes reading another project's surfaces impossible from here.
     expect(bridge.getProjectSurfaces).toHaveBeenCalledWith();
@@ -120,8 +135,8 @@ describe("pluginProjectSurfacesStore", () => {
   it("is idempotent", async () => {
     const bridge = installBridge({ emptyCanvas: claim });
 
-    usePluginProjectSurfacesStore.getState().init();
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
+    state().init();
     await flush();
 
     expect(bridge.getProjectSurfaces).toHaveBeenCalledTimes(1);
@@ -132,9 +147,9 @@ describe("pluginProjectSurfacesStore", () => {
     let current: ProjectSurfaceSnapshot = {};
     const bridge = installBridge(() => Promise.resolve(current));
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     await flush();
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({});
+    expect(state().surfaces).toEqual({});
 
     // A claim can only appear alongside the panel kind it names, so the
     // kinds broadcast is the signal that a surface may have changed too.
@@ -142,7 +157,7 @@ describe("pluginProjectSurfacesStore", () => {
     bridge.listeners[0]?.();
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({ emptyCanvas: claim });
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
   });
 
   it("drops a stale pull that resolves after a newer one", async () => {
@@ -151,7 +166,7 @@ describe("pluginProjectSurfacesStore", () => {
       () => new Promise<ProjectSurfaceSnapshot>((resolve) => resolvers.push(resolve))
     );
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     bridge.listeners[0]?.();
 
     // Resolve the NEWER pull first, then the stale one. The stale answer must
@@ -161,27 +176,27 @@ describe("pluginProjectSurfacesStore", () => {
     resolvers[0]?.({});
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({ emptyCanvas: claim });
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
   });
 
   it("stays retryable and empty with no bridge", () => {
-    usePluginProjectSurfacesStore.getState().init();
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({});
+    state().init();
+    expect(state().surfaces).toEqual({});
 
     // Not latched: a component test that renders before the bridge exists must
     // not wedge the store for the rest of the session.
     const bridge = installBridge({ emptyCanvas: claim });
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     expect(bridge.getProjectSurfaces).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the stock surface in place when the pull fails", async () => {
     installBridge(() => Promise.reject(new Error("nope")));
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({});
+    expect(state().surfaces).toEqual({});
   });
 
   it("clears a stale claim when a later pull fails", async () => {
@@ -193,15 +208,15 @@ describe("pluginProjectSurfacesStore", () => {
       fail ? Promise.reject(new Error("nope")) : Promise.resolve({ emptyCanvas: claim })
     );
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     await flush();
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({ emptyCanvas: claim });
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
 
     fail = true;
     bridge.listeners[0]?.();
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({});
+    expect(state().surfaces).toEqual({});
   });
 
   it("does not let a stale failure clear a newer successful pull", async () => {
@@ -213,7 +228,7 @@ describe("pluginProjectSurfacesStore", () => {
         })
     );
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     bridge.listeners[0]?.();
 
     settlers[1]?.resolve({ emptyCanvas: claim } as never);
@@ -221,33 +236,79 @@ describe("pluginProjectSurfacesStore", () => {
     settlers[0]?.reject(new Error("stale"));
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().surfaces).toEqual({ emptyCanvas: claim });
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
   });
 
-  it("pulls the project's remembered answers on init and marks them loaded", async () => {
+  it("pulls the answers with the claims and records whose they are", async () => {
     const choices = { emptyCanvas: record("acme.dash", "stock") };
-    const bridge = installBridge({ emptyCanvas: claim }, { choices });
+    const bridge = installBridge({ emptyCanvas: claim }, { choices: snapshot(choices) });
 
-    expect(usePluginProjectSurfacesStore.getState().choicesLoaded).toBe(false);
-    usePluginProjectSurfacesStore.getState().init();
+    expect(state().choicesLoaded).toBe(false);
+    state().init();
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().choices).toEqual(choices);
-    expect(usePluginProjectSurfacesStore.getState().choicesLoaded).toBe(true);
-    // Like the surfaces pull, the project comes from the sender.
+    expect(state().choices).toEqual(choices);
+    expect(state().choicesLoaded).toBe(true);
+    expect(state().choicesProjectId).toBe(PROJECT);
     expect(bridge.getProjectSurfaceChoices).toHaveBeenCalledWith();
   });
 
-  it("stays unloaded when the answers cannot be read", async () => {
-    // "Unread" must not become "never answered", or a project that answered
-    // long ago would be asked again on a transient failure.
-    installBridge({ emptyCanvas: claim }, { choices: () => Promise.reject(new Error("nope")) });
+  it("applies a claim and its answer in one update", async () => {
+    const answers = deferred<Answers>();
+    installBridge({ emptyCanvas: claim }, { choices: () => answers.promise });
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
+    await flush();
+    // The claim is back but its answer is not. Applying the claim alone would
+    // draw the plugin's view in a project that chose the launcher.
+    expect(state().surfaces).toEqual({});
+
+    answers.resolve(snapshot({ emptyCanvas: record("acme.dash", "stock") }));
     await flush();
 
-    expect(usePluginProjectSurfacesStore.getState().choicesLoaded).toBe(false);
-    expect(usePluginProjectSurfacesStore.getState().choices).toEqual({});
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
+    expect(canvasChoice()).toBe("stock");
+  });
+
+  it("reads the answers again once a sender main had not bound yet gets its claim", async () => {
+    // A relaunch restores the last project before its view is registered, so
+    // the first pull comes from a sender main cannot name a project for.
+    let bound = false;
+    const bridge = installBridge(() => Promise.resolve(bound ? { emptyCanvas: claim } : {}), {
+      choices: () =>
+        Promise.resolve(bound ? snapshot({ emptyCanvas: record("acme.dash", "stock") }) : null),
+    });
+
+    state().init();
+    await flush();
+    // Unknown, not "never answered".
+    expect(state().choicesLoaded).toBe(false);
+
+    bound = true;
+    bridge.listeners[0]?.();
+    await flush();
+
+    expect(state().choicesLoaded).toBe(true);
+    expect(canvasChoice()).toBe("stock");
+  });
+
+  it("stays unloaded when the answers cannot be read, and retries with the next pull", async () => {
+    let fail = true;
+    const bridge = installBridge(
+      { emptyCanvas: claim },
+      { choices: () => (fail ? Promise.reject(new Error("EACCES")) : Promise.resolve(snapshot())) }
+    );
+
+    state().init();
+    await flush();
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
+    expect(state().choicesLoaded).toBe(false);
+
+    fail = false;
+    bridge.listeners[0]?.();
+    await flush();
+
+    expect(state().choicesLoaded).toBe(true);
   });
 
   it("honours an answer only for the plugin that owns the slot now", () => {
@@ -255,122 +316,126 @@ describe("pluginProjectSurfacesStore", () => {
       surfaces: { emptyCanvas: claim },
       choices: { emptyCanvas: record("acme.dash", "stock") },
     });
-    expect(selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas")).toBe(
-      "stock"
-    );
+    expect(canvasChoice()).toBe("stock");
 
     // The slot passed to a different plugin: the old answer was not about it.
     usePluginProjectSurfacesStore.setState({
       surfaces: { emptyCanvas: { ...claim, pluginId: "project__p1__acme.other" } },
     });
-    expect(selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas")).toBeNull();
+    expect(canvasChoice()).toBeNull();
 
     // Released: nothing to answer about, whatever is on record.
     usePluginProjectSurfacesStore.setState({ surfaces: {} });
-    expect(selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas")).toBeNull();
+    expect(canvasChoice()).toBeNull();
   });
 
-  it("applies an answer on the click, then adopts main's record", async () => {
-    const save = deferred<ProjectSurfaceChoices>();
+  it("adopts an answer only once main has recorded it", async () => {
+    const save = deferred<ProjectSurfaceChoicesSnapshot>();
     const bridge = installBridge({}, { setChoice: () => save.promise });
-    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim } });
+    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim }, choicesLoaded: true });
 
-    const pending = usePluginProjectSurfacesStore.getState().setSurfaceChoice("emptyCanvas", "stock");
+    const pending = state().setSurfaceChoice("emptyCanvas", "stock");
 
-    expect(selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas")).toBe(
-      "stock"
-    );
     expect(bridge.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "stock");
+    expect(canvasChoice()).toBeNull();
 
-    save.resolve({ emptyCanvas: record("acme.dash", "stock", 42) });
+    save.resolve(snapshot({ emptyCanvas: record("acme.dash", "stock", 42) }));
     await pending;
 
-    expect(usePluginProjectSurfacesStore.getState().choices.emptyCanvas?.decidedAt).toBe(42);
+    expect(canvasChoice()).toBe("stock");
+    expect(state().choices.emptyCanvas?.decidedAt).toBe(42);
   });
 
-  it("keeps the answer for the session when saving it fails", async () => {
-    installBridge({}, { setChoice: () => Promise.reject(new Error("ENOSPC")) });
-    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim } });
-
-    await usePluginProjectSurfacesStore.getState().setSurfaceChoice("emptyCanvas", "stock");
-
-    expect(selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas")).toBe(
-      "stock"
+  it("reports a failed save, leaves the canvas as it was, and clears the report on retry", async () => {
+    let fail = true;
+    installBridge(
+      {},
+      {
+        setChoice: (_slot, choice) =>
+          fail
+            ? Promise.reject(new Error("ENOSPC"))
+            : Promise.resolve(snapshot({ emptyCanvas: record("acme.dash", choice ?? "surface") })),
+      }
     );
-  });
+    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim }, choicesLoaded: true });
 
-  it("does not answer for a slot nothing claims", async () => {
-    const bridge = installBridge({});
+    await state().setSurfaceChoice("emptyCanvas", "stock");
 
-    await usePluginProjectSurfacesStore.getState().setSurfaceChoice("emptyCanvas", "stock");
+    expect(state().failedSave).toEqual({ slot: "emptyCanvas", choice: "stock" });
+    expect(canvasChoice()).toBeNull();
 
-    expect(bridge.setProjectSurfaceChoice).not.toHaveBeenCalled();
-    expect(usePluginProjectSurfacesStore.getState().choices).toEqual({});
+    fail = false;
+    await state().setSurfaceChoice("emptyCanvas", "stock");
+
+    expect(state().failedSave).toBeNull();
+    expect(canvasChoice()).toBe("stock");
   });
 
   it("forgets an answer with null", async () => {
-    const bridge = installBridge({}, { setChoice: () => Promise.resolve({}) });
+    const bridge = installBridge({});
     usePluginProjectSurfacesStore.setState({
       surfaces: { emptyCanvas: claim },
       choices: { emptyCanvas: record("acme.dash", "stock") },
+      choicesLoaded: true,
     });
 
-    await usePluginProjectSurfacesStore.getState().setSurfaceChoice("emptyCanvas", null);
+    await state().setSurfaceChoice("emptyCanvas", null);
 
     expect(bridge.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", null);
-    expect(usePluginProjectSurfacesStore.getState().choices).toEqual({});
+    expect(state().choices).toEqual({});
   });
 
-  it("lets an answer just given beat a choices pull already in flight", async () => {
-    const pull = deferred<ProjectSurfaceChoices>();
-    installBridge(
-      { emptyCanvas: claim },
-      {
-        choices: () => pull.promise,
-        setChoice: () => Promise.resolve({ emptyCanvas: record("acme.dash", "stock") }),
-      }
-    );
+  it("lets an answer that lands mid-pull beat what the pull read", async () => {
+    const answers = deferred<Answers>();
+    installBridge({ emptyCanvas: claim }, { choices: () => answers.promise });
 
-    usePluginProjectSurfacesStore.getState().init();
-    await flush();
-    await usePluginProjectSurfacesStore.getState().setSurfaceChoice("emptyCanvas", "stock");
+    state().init();
+    await state().setSurfaceChoice("emptyCanvas", "stock");
 
-    // The pull started before the click and answers with what disk held then.
-    pull.resolve({});
+    // The pull started before the save and read what disk held then.
+    answers.resolve(snapshot());
     await flush();
 
-    expect(selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas")).toBe(
-      "stock"
-    );
+    expect(canvasChoice()).toBe("stock");
   });
 
-  it("adopts answers pushed from another view of the project", async () => {
+  it("adopts answers pushed from another view of the same project", async () => {
     const bridge = installBridge({ emptyCanvas: claim });
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     await flush();
 
-    const choices = { emptyCanvas: record("acme.dash", "stock") };
-    bridge.choiceListeners[0]?.({ projectId: "p1", choices });
+    bridge.choiceListeners[0]?.(snapshot({ emptyCanvas: record("acme.dash", "stock") }));
 
-    expect(usePluginProjectSurfacesStore.getState().choices).toEqual(choices);
-    expect(usePluginProjectSurfacesStore.getState().choicesLoaded).toBe(true);
+    expect(canvasChoice()).toBe("stock");
+  });
+
+  it("refuses a push naming a different project", async () => {
+    const bridge = installBridge({ emptyCanvas: claim });
+    state().init();
+    await flush();
+    expect(state().choicesProjectId).toBe(PROJECT);
+
+    bridge.choiceListeners[0]?.(snapshot({ emptyCanvas: record("acme.dash", "stock") }, "p2"));
+
+    expect(state().choices).toEqual({});
   });
 
   it("starts a fresh session with nothing loaded until main answers", async () => {
     const choices = { emptyCanvas: record("acme.dash", "stock") };
-    installBridge({ emptyCanvas: claim }, { choices });
-    usePluginProjectSurfacesStore.getState().init();
+    const bridge = installBridge({ emptyCanvas: claim }, { choices: snapshot(choices) });
+    state().init();
     await flush();
-    expect(usePluginProjectSurfacesStore.getState().choicesLoaded).toBe(true);
+    expect(state().choicesLoaded).toBe(true);
 
     // The answer lives in main, not in this view: a reset view knows nothing
     // until it reads it back, and then it has it again.
     _resetPluginProjectSurfacesStoreForTest();
-    expect(usePluginProjectSurfacesStore.getState().choicesLoaded).toBe(false);
-    expect(usePluginProjectSurfacesStore.getState().choices).toEqual({});
+    expect(state().choicesLoaded).toBe(false);
+    expect(state().choices).toEqual({});
+    expect(bridge.choiceListeners).toHaveLength(0);
 
-    usePluginProjectSurfacesStore.getState().init();
+    state().init();
     await flush();
-    expect(usePluginProjectSurfacesStore.getState().choices).toEqual(choices);
+    expect(state().choices).toEqual(choices);
   });
 });

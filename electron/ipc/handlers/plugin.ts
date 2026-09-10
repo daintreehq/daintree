@@ -91,7 +91,7 @@ import type {
   PluginPanelLifecycleEvent,
   PluginRuntimeStatus,
   ProjectSurfaceChoice,
-  ProjectSurfaceChoices,
+  ProjectSurfaceChoicesSnapshot,
   ProjectSurfaceSlot,
   ProjectSurfaceSnapshot,
 } from "../../../shared/types/plugin.js";
@@ -755,13 +755,22 @@ async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurface
 }
 
 /**
- * The SENDER project's remembered answers about its surface claims. A sender
- * with no project binding has none, which shows whatever is claimed.
+ * The SENDER project's remembered answers about its surface claims.
+ *
+ * `null`, not an empty set, for a sender with no project binding: a relaunch
+ * restores the last project before its view is registered, and "no answers" in
+ * that window would read as "never answered" and ask the user again. The
+ * renderer re-reads once the claim arrives.
  */
-async function handleProjectSurfaceChoicesGet(ctx: IpcContext): Promise<ProjectSurfaceChoices> {
-  if (!ctx.projectId) return {};
+async function handleProjectSurfaceChoicesGet(
+  ctx: IpcContext
+): Promise<ProjectSurfaceChoicesSnapshot | null> {
+  if (!ctx.projectId) return null;
   const svc = await getPluginService();
-  return svc.getProjectSurfaceChoices(ctx.projectId);
+  // Same await depth as the setter, so a read sent after a write is answered
+  // after it.
+  await svc.waitForInit();
+  return { projectId: ctx.projectId, choices: svc.getProjectSurfaceChoices(ctx.projectId) };
 }
 
 /**
@@ -774,7 +783,7 @@ async function handleProjectSurfaceChoiceSet(
   ctx: IpcContext,
   slot: ProjectSurfaceSlot,
   choice: ProjectSurfaceChoice | null
-): Promise<ProjectSurfaceChoices> {
+): Promise<ProjectSurfaceChoicesSnapshot> {
   if (!ctx.projectId) throw new Error("project surfaces: sender has no project");
   if (!isProjectSurfaceSlot(slot)) throw new Error("project surfaces: unknown surface slot");
   if (choice !== null && !isProjectSurfaceChoice(choice)) {

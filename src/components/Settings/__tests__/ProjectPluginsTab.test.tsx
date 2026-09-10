@@ -10,7 +10,13 @@ import {
   _resetPluginProjectSurfacesStoreForTest,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
-import type { LoadedPluginInfo, PluginManifest, ProjectPluginInfo } from "@shared/types/plugin";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import type {
+  LoadedPluginInfo,
+  PluginManifest,
+  ProjectPluginInfo,
+  ProjectSurfaceChoice,
+} from "@shared/types/plugin";
 
 const PROJECT_ID = "a".repeat(64);
 
@@ -93,7 +99,14 @@ const pluginApi = {
   setProjectPluginVisibility: vi.fn().mockResolvedValue(undefined),
   setPluginVisibilityDefault: vi.fn().mockResolvedValue(undefined),
   setProjectPluginTrust: vi.fn().mockResolvedValue(undefined),
-  setProjectSurfaceChoice: vi.fn().mockResolvedValue({}),
+  // Main records the answer against the slot's owner and returns the new set.
+  setProjectSurfaceChoice: vi.fn((_slot: string, choice: ProjectSurfaceChoice | null) =>
+    Promise.resolve({
+      projectId: PROJECT_ID,
+      choices:
+        choice === null ? {} : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } },
+    })
+  ),
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
   reloadProjectPlugins: vi.fn().mockResolvedValue(undefined),
   getSettingValues: vi.fn().mockResolvedValue({
@@ -143,17 +156,29 @@ afterEach(() => {
   cleanup();
   __resetProjectPluginStoreForTesting();
   _resetPluginProjectSurfacesStoreForTest();
+  unregisterPanelKind(CANVAS_KIND_ID);
 });
 
-/** A running project plugin that claims the empty canvas. */
-function claimEmptyCanvas(choice?: "surface" | "stock") {
+const CANVAS_KIND_ID = `project:${PROJECT_ID}/acme.dashboard/overview`;
+const CANVAS_OWNER = `project__${PROJECT_ID}__acme.dashboard`;
+
+/** A running project plugin whose empty-canvas claim can render, answered or not. */
+function claimEmptyCanvas(choice?: ProjectSurfaceChoice) {
+  registerPanelKind({
+    id: CANVAS_KIND_ID,
+    name: "Overview",
+    iconId: "gauge",
+    color: "#ffffff",
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    extensionId: CANVAS_OWNER,
+    componentPath: "plugin://acme.dashboard/1/panel.js",
+  });
   act(() => {
     usePluginProjectSurfacesStore.setState({
       surfaces: {
-        emptyCanvas: {
-          pluginId: `project__${PROJECT_ID}__acme.dashboard`,
-          panelKindId: `project:${PROJECT_ID}/acme.dashboard/overview`,
-        },
+        emptyCanvas: { pluginId: CANVAS_OWNER, panelKindId: CANVAS_KIND_ID },
       },
       choices: choice ? { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 1 } } : {},
       choicesLoaded: true,
@@ -200,6 +225,12 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() =>
       expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", null)
     );
+    await waitFor(() =>
+      expect(section.textContent).toContain("You haven't chosen yet, so it shows.")
+    );
+    expect(
+      within(section).getByRole("button", { name: "Reset choice" }).hasAttribute("disabled")
+    ).toBe(true);
   });
 
   it("switches the empty canvas to the launcher from settings", async () => {
@@ -220,6 +251,26 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() =>
       expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "stock")
     );
+    await waitFor(() =>
+      expect(section.textContent).toContain("You chose the launcher, so it's hidden.")
+    );
+  });
+
+  it("says so when the canvas choice couldn't be saved", async () => {
+    seed([projectPlugin()]);
+    claimEmptyCanvas();
+    pluginApi.setProjectSurfaceChoice.mockRejectedValueOnce(new Error("ENOSPC"));
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("project-empty-canvas-switch"));
+
+    const section = screen.getByTestId("project-plugins-empty-canvas");
+    expect((await within(section).findByRole("alert")).textContent).toContain(
+      "Couldn't save the canvas choice"
+    );
+    // Nothing was recorded, so the section still describes what is on disk.
+    expect(section.textContent).toContain("You haven't chosen yet, so it shows.");
   });
 
   it("says nothing about the empty canvas when no plugin claims it", async () => {

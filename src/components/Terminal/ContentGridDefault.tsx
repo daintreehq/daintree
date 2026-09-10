@@ -149,7 +149,7 @@ export function ContentGridDefault({
                     {/*
                       Passthrough unless a project plugin claims this surface
                       (§7.8), in which case it adds a host-owned strip above the
-                      region that names the plugin and swaps between its canvas
+                      region that names the plugin's panel and swaps between it
                       and the host's launcher — so a claimed surface reads as the
                       empty canvas and can never strand the user.
                     */}

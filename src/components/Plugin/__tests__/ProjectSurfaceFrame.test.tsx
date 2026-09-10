@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, renderHook, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
 import {
   registerPanelKind,
   unregisterPanelKind,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
-import type { ProjectSurfaceChoiceRecord, ProjectSurfaceChoices } from "@shared/types/plugin";
+import type {
+  ProjectSurfaceChoice,
+  ProjectSurfaceChoices,
+  ProjectSurfaceSnapshot,
+} from "@shared/types/plugin";
 
 const h = vi.hoisted(() => ({ dispatch: vi.fn() }));
 
@@ -14,8 +18,26 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => h.dispatch(...args) },
 }));
 
+vi.mock("@/components/Plugin/PluginViewContent", () => ({
+  // The real loader imports a `plugin://` module over IPC. What matters here is
+  // a view that fills its box and pins a toolbar into the top-right corner —
+  // the shape that used to paint over the old overlay.
+  makePluginViewContent: () => () => (
+    <div data-testid="plugin-view" className="absolute inset-0">
+      <div className="fixed right-0 top-0 flex">
+        <button type="button">Launcher</button>
+        <button type="button">Pin active</button>
+      </div>
+    </div>
+  ),
+}));
+
 import { ProjectSurfaceFrame } from "../ProjectSurfaceFrame";
-import { useProjectSurface } from "../ProjectSurfaceView";
+import {
+  ProjectSurfaceView,
+  _resetProjectSurfaceRuntimesForTest,
+  useProjectSurface,
+} from "../ProjectSurfaceView";
 import {
   _resetPluginProjectSurfacesStoreForTest,
   selectSurfaceChoice,
@@ -29,14 +51,14 @@ import {
 const KIND_ID = "project:p1/acme.dash/overview";
 const claim = { pluginId: "project__p1__acme.dash", panelKindId: KIND_ID };
 const PALETTE_ENTRY = "Search agents & panels…";
+const SAVE_FAILED = "Couldn't save the canvas choice";
 
-const answer = (
-  choice: ProjectSurfaceChoiceRecord["choice"],
-  pluginId = "acme.dash"
-): ProjectSurfaceChoices => ({ emptyCanvas: { pluginId, choice, decidedAt: 1 } });
+const answer = (choice: ProjectSurfaceChoice, pluginId = "acme.dash"): ProjectSurfaceChoices => ({
+  emptyCanvas: { pluginId, choice, decidedAt: 1 },
+});
 
-function registerSurfaceKind(overrides: Partial<PanelKindConfig> = {}) {
-  registerPanelKind({
+function surfaceKind(overrides: Partial<PanelKindConfig> = {}): PanelKindConfig {
+  return {
     id: KIND_ID,
     name: "Mission Control",
     iconId: "puzzle",
@@ -47,10 +69,13 @@ function registerSurfaceKind(overrides: Partial<PanelKindConfig> = {}) {
     extensionId: claim.pluginId,
     componentPath: "plugin://acme.dash/1/overview.js",
     ...overrides,
-  });
+  };
 }
 
-/** Seed the store the way the surfaces and answers pulls would. */
+const registerSurfaceKind = (overrides: Partial<PanelKindConfig> = {}) =>
+  registerPanelKind(surfaceKind(overrides));
+
+/** Seed the store the way the combined claims-and-answers pull would. */
 const setClaim = (choices: ProjectSurfaceChoices = {}, choicesLoaded = true) =>
   act(() => {
     usePluginProjectSurfacesStore.setState({
@@ -63,16 +88,19 @@ const setClaim = (choices: ProjectSurfaceChoices = {}, choicesLoaded = true) =>
 const canvasChoice = () =>
   selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas");
 
-const press = async (element: HTMLElement) => {
-  await act(async () => {
-    element.click();
-  });
-};
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const flush = () =>
   act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
   });
+
+const press = async (element: HTMLElement) => {
+  await act(async () => {
+    element.click();
+    await settle();
+  });
+};
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -98,23 +126,34 @@ beforeEach(() => {
 afterEach(() => {
   unregisterPanelKind(KIND_ID);
   _resetPluginProjectSurfacesStoreForTest();
+  _resetProjectSurfaceRuntimesForTest();
   __resetProjectPluginStoreForTesting();
   Reflect.deleteProperty(window, "electron");
 });
 
 describe("ProjectSurfaceFrame", () => {
-  /** What main has on disk, written by the fake `setProjectSurfaceChoice`. */
+  /** What main holds: the claim it would report and the answers on disk. */
+  let surfacesOnMain: ProjectSurfaceSnapshot;
   let disk: ProjectSurfaceChoices;
-  const setProjectSurfaceChoice = vi.fn();
+  let failNextSave: boolean;
+  const kindsListeners: Array<() => void> = [];
+
+  const setProjectSurfaceChoice = vi.fn((_slot: string, choice: ProjectSurfaceChoice | null) => {
+    if (failNextSave) {
+      failNextSave = false;
+      return Promise.reject(new Error("ENOSPC"));
+    }
+    // Main records the answer against the slot's owner, from its own registry.
+    disk = choice === null ? {} : answer(choice);
+    return Promise.resolve({ projectId: "p1", choices: disk });
+  });
 
   beforeEach(() => {
+    surfacesOnMain = { emptyCanvas: claim };
     disk = {};
-    // Main records exactly what the store sent, so echo the store's own
-    // optimistic answer back as the persisted set.
-    setProjectSurfaceChoice.mockReset().mockImplementation(() => {
-      disk = usePluginProjectSurfacesStore.getState().choices;
-      return Promise.resolve(disk);
-    });
+    failNextSave = false;
+    kindsListeners.length = 0;
+    setProjectSurfaceChoice.mockClear();
     // `defineProperty` rather than an assignment + cast: a partial stub of the
     // full `ElectronAPI` would otherwise need a type assertion.
     Object.defineProperty(window, "electron", {
@@ -122,9 +161,12 @@ describe("ProjectSurfaceFrame", () => {
       writable: true,
       value: {
         plugin: {
-          getProjectSurfaces: vi.fn(() => Promise.resolve({ emptyCanvas: claim })),
-          onPanelKindsChanged: vi.fn(() => () => {}),
-          getProjectSurfaceChoices: vi.fn(() => Promise.resolve(disk)),
+          getProjectSurfaces: () => Promise.resolve(surfacesOnMain),
+          onPanelKindsChanged: (cb: () => void) => {
+            kindsListeners.push(cb);
+            return () => {};
+          },
+          getProjectSurfaceChoices: () => Promise.resolve({ projectId: "p1", choices: disk }),
           setProjectSurfaceChoice,
         },
       },
@@ -136,6 +178,7 @@ describe("ProjectSurfaceFrame", () => {
 
   const strip = () => screen.getByRole("group", { name: "Empty canvas" });
   const stripButton = (name: string) => within(strip()).getByRole("button", { name });
+  const notice = () => screen.getByRole("status");
 
   it("adds nothing when no surface is claimed", () => {
     renderFrame(<div data-testid="stock" />);
@@ -157,6 +200,20 @@ describe("ProjectSurfaceFrame", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("adds nothing until the claim's answer is known", () => {
+    registerSurfaceKind();
+    setClaim({}, false);
+
+    renderFrame(<div data-testid="stock" />);
+
+    // The canvas stays stock until then, so a strip would show the surface
+    // pressed over the launcher — and a project that answered long ago must not
+    // flash the question while the read is in flight.
+    expect(screen.getByTestId("stock")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Empty canvas" })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("names the plugin's panel and marks the region as the empty canvas", () => {
     registerSurfaceKind();
     setClaim(answer("surface"));
@@ -168,38 +225,33 @@ describe("ProjectSurfaceFrame", () => {
     expect(stripButton("Launcher").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("lays the strip out above a surface that fills its region, never over it", async () => {
+  it("lays the strip out above the plugin's contained box, never over it", async () => {
     registerSurfaceKind();
     setClaim(answer("surface"));
-    const pluginToolbar = vi.fn();
 
-    // The #12349 shape: a surface that fills its box and draws its own toolbar
-    // in the top-right corner, including a button with the same label.
-    renderFrame(
-      <div data-testid="surface" className="absolute inset-0">
-        <div className="absolute right-2 top-2 flex">
-          <button onClick={pluginToolbar}>Launcher</button>
-          <button onClick={pluginToolbar}>Pin active</button>
-        </div>
-      </div>
-    );
+    renderFrame(<ProjectSurfaceView config={surfaceKind()} />);
 
+    const frame = screen.getByTestId("project-surface-frame");
     const region = screen.getByTestId("project-surface-region");
-    const surface = screen.getByTestId("surface");
-    expect(region.contains(surface)).toBe(true);
-    expect(region.contains(strip())).toBe(false);
-    expect(strip().contains(surface)).toBe(false);
+    const view = screen.getByTestId("plugin-view");
+
+    // The strip and the region are siblings, strip first: the host's controls
+    // are laid out before the plugin's box rather than floated into it, which
+    // is where the old overlay met plugin toolbars.
+    expect(strip().parentElement).toBe(frame);
+    expect(region.parentElement).toBe(frame);
     expect(strip().compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // In flow all the way up: nothing positions the strip into the surface's
-    // corner, which is where the old overlay collided with plugin toolbars.
     for (let el: HTMLElement | null = strip(); el && el !== document.body; el = el.parentElement) {
       expect(el.className).not.toMatch(/\b(absolute|fixed)\b/);
     }
+    // Everything the plugin draws — its own "Launcher" button included — lives
+    // in the region and nowhere in the strip.
+    expect(region.contains(view)).toBe(true);
+    expect(strip().contains(view)).toBe(false);
 
+    // Two buttons read "Launcher" on screen; the strip's is the host's.
     await press(stripButton("Launcher"));
-
     expect(canvasChoice()).toBe("stock");
-    expect(pluginToolbar).not.toHaveBeenCalled();
   });
 
   it("switches between the surface and the launcher in both directions, remembering each", async () => {
@@ -208,16 +260,29 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame();
 
     await press(stripButton("Launcher"));
-    expect(canvasChoice()).toBe("stock");
     expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "stock");
+    expect(disk).toEqual(answer("stock"));
     expect(stripButton("Launcher").getAttribute("aria-pressed")).toBe("true");
 
     await press(stripButton("Mission Control"));
-    expect(canvasChoice()).toBe("surface");
     expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "surface");
+    expect(disk).toEqual(answer("surface"));
   });
 
-  it("keeps the launcher's palette entry while the surface stands in for it", async () => {
+  it("answers nothing when the segment already showing is pressed", async () => {
+    registerSurfaceKind();
+    setClaim();
+    renderFrame();
+
+    // Unanswered, the surface segment is already pressed: pressing it must not
+    // quietly answer the question the notice is asking.
+    await press(stripButton("Mission Control"));
+
+    expect(setProjectSurfaceChoice).not.toHaveBeenCalled();
+    expect(notice()).toBeTruthy();
+  });
+
+  it("keeps the palette entry and the empty-canvas label only while the surface stands in", async () => {
     registerSurfaceKind();
     setClaim(answer("surface"));
     renderFrame();
@@ -225,9 +290,26 @@ describe("ProjectSurfaceFrame", () => {
     await press(stripButton(PALETTE_ENTRY));
     expect(h.dispatch).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
 
-    // The stock launcher carries the same entry as its own anchor.
+    // The stock launcher is its own empty state, anchor included.
     await press(stripButton("Launcher"));
     expect(within(strip()).queryByRole("button", { name: PALETTE_ENTRY })).toBeNull();
+    expect(strip().textContent).not.toContain("No panels open");
+  });
+
+  it("caps a long panel name so the way back stays in reach", () => {
+    const longName = "Video manager for the whole production pipeline";
+    registerSurfaceKind({ name: longName });
+    setClaim(answer("surface"));
+
+    renderFrame();
+
+    const [panelSegment] = within(strip()).getAllByRole("button");
+    const shown = panelSegment?.textContent ?? "";
+    expect(shown.length).toBeLessThan(longName.length);
+    expect(longName.startsWith(shown.slice(0, -1))).toBe(true);
+    // The full name stays the accessible one.
+    expect(panelSegment?.getAttribute("aria-label")).toBe(longName);
+    expect(stripButton("Launcher")).toBeTruthy();
   });
 
   it("asks once, naming the plugin, the first time the surface would show", async () => {
@@ -253,16 +335,32 @@ describe("ProjectSurfaceFrame", () => {
     setClaim();
     renderFrame();
 
-    const notice = screen.getByRole("status");
-    expect(notice.textContent).toContain("Acme Dashboard replaced the launcher");
+    expect(notice().textContent).toContain("Acme Dashboard replaced the launcher");
     // Unanswered is the manifest's own intent: the surface is already showing.
     expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
 
-    await press(within(notice).getByRole("button", { name: "Keep it" }));
+    await press(within(notice()).getByRole("button", { name: "Keep it" }));
 
     expect(setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "surface");
     expect(screen.queryByRole("status")).toBeNull();
     expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("puts focus in the strip after the notice is answered from the keyboard", async () => {
+    registerSurfaceKind();
+    setClaim();
+    renderFrame();
+
+    const useLauncher = within(notice()).getByRole("button", { name: "Use the launcher" });
+    useLauncher.focus();
+    await act(async () => {
+      // Keyboard activation arrives as a click with no detail.
+      fireEvent.click(useLauncher, { detail: 0 });
+      await settle();
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.activeElement).toBe(stripButton("Launcher"));
   });
 
   it("remembers using the launcher across a reload", async () => {
@@ -270,8 +368,8 @@ describe("ProjectSurfaceFrame", () => {
     setClaim();
     const first = renderFrame();
 
-    await press(within(screen.getByRole("status")).getByRole("button", { name: "Use the launcher" }));
-    expect(canvasChoice()).toBe("stock");
+    await press(within(notice()).getByRole("button", { name: "Use the launcher" }));
+    expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "stock");
     first.unmount();
 
     // A fresh view: nothing in memory, and the claim and the answer both come
@@ -286,16 +384,46 @@ describe("ProjectSurfaceFrame", () => {
     expect(stripButton("Launcher").getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("does not ask before the answers have loaded", () => {
+  it("still releases the slot when the plugin unloads after a reload", async () => {
     registerSurfaceKind();
-    setClaim({}, false);
+    disk = answer("surface");
+    const surface = renderHook(() => useProjectSurface("emptyCanvas"));
+    await flush();
+    renderFrame(<div data-testid="content" />);
+    expect(surface.result.current).not.toBeNull();
+    expect(strip()).toBeTruthy();
 
+    // The plugin unloads: main drops the claim and says so with the panel-kinds
+    // broadcast. A remembered "keep it" must not hold the slot for it.
+    surfacesOnMain = {};
+    await act(async () => {
+      for (const listener of kindsListeners) listener();
+      await settle();
+    });
+
+    expect(surface.result.current).toBeNull();
+    expect(screen.queryByRole("group", { name: "Empty canvas" })).toBeNull();
+    expect(screen.getByTestId("content")).toBeTruthy();
+  });
+
+  it("reports a failed save with a retry in place of the question", async () => {
+    registerSurfaceKind();
+    setClaim();
     renderFrame();
 
-    // A project that answered long ago must not flash the question while the
-    // read is in flight.
-    expect(screen.queryByRole("status")).toBeNull();
-    expect(strip()).toBeTruthy();
+    failNextSave = true;
+    await press(stripButton("Launcher"));
+
+    expect(screen.getByText(SAVE_FAILED)).toBeTruthy();
+    expect(screen.queryByText(/replaced the launcher/)).toBeNull();
+    // Nothing was recorded, so nothing changed.
+    expect(canvasChoice()).toBeNull();
+    expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
+
+    await press(screen.getByRole("button", { name: "Retry" }));
+
+    expect(canvasChoice()).toBe("stock");
+    expect(screen.queryByText(SAVE_FAILED)).toBeNull();
   });
 
   it("asks again when the slot has passed to a different plugin", () => {
@@ -304,7 +432,7 @@ describe("ProjectSurfaceFrame", () => {
 
     renderFrame();
 
-    expect(screen.getByRole("status")).toBeTruthy();
+    expect(notice()).toBeTruthy();
     expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -333,6 +461,18 @@ describe("useProjectSurface", () => {
 
     expect(result.current?.config.id).toBe(KIND_ID);
     expect(result.current?.claim).toEqual(claim);
+  });
+
+  it("waits for the answers before resolving", () => {
+    registerSurfaceKind();
+    setClaim({}, false);
+    const { result, rerender } = renderHook(() => useProjectSurface("emptyCanvas"));
+    expect(result.current).toBeNull();
+
+    act(() => usePluginProjectSurfacesStore.setState({ choicesLoaded: true }));
+    rerender();
+
+    expect(result.current).not.toBeNull();
   });
 
   it("stands down while the launcher is chosen", () => {
@@ -365,25 +505,5 @@ describe("useProjectSurface", () => {
     const { result } = renderHook(() => useProjectSurface("emptyCanvas"));
 
     expect(result.current).toBeNull();
-  });
-
-  it("releases the slot on unload whatever answer is on record", () => {
-    registerSurfaceKind();
-    setClaim(answer("surface"));
-    const { result, rerender } = renderHook(() => useProjectSurface("emptyCanvas"));
-    expect(result.current).not.toBeNull();
-
-    // The plugin unloaded: main dropped the claim. A remembered "keep it" must
-    // not hold the slot for a plugin that is gone.
-    act(() => usePluginProjectSurfacesStore.setState({ surfaces: {} }));
-    rerender();
-
-    expect(result.current).toBeNull();
-    render(
-      <ProjectSurfaceFrame>
-        <div data-testid="stock" />
-      </ProjectSurfaceFrame>
-    );
-    expect(screen.queryByRole("group", { name: "Empty canvas" })).toBeNull();
   });
 });

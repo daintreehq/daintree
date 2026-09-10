@@ -1,47 +1,29 @@
-import { useEffect, useSyncExternalStore, type ComponentType } from "react";
+import { useEffect, type ComponentType } from "react";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
-import type { ProjectSurfaceClaim, ProjectSurfaceSlot } from "@shared/types/plugin";
+import type { ProjectSurfaceSlot } from "@shared/types/plugin";
 import {
   makePluginViewContent,
   type PluginViewContentProps,
 } from "@/components/Plugin/PluginViewContent";
+import {
+  useRenderableSurfaceClaim,
+  type RenderableSurfaceClaim,
+} from "@/hooks/useRenderableSurfaceClaim";
 import {
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
 
 /**
- * The panel-kind metadata behind a surface claim, or `undefined` while the
- * kind has not registered in this renderer yet.
- *
- * Read through `useSyncExternalStore` rather than a bare `getPanelKindConfig`
- * because the two facts arrive on independent round trips: the surfaces pull
- * and `usePluginPanelKinds`' own pull/push. Whichever lands second must
- * re-render, or a project whose kinds arrived last would sit on stock content
- * with a claim it never applied.
- */
-function usePanelKindConfig(kindId: string | undefined): PanelKindConfig | undefined {
-  const registry = useSyncExternalStore(
-    subscribeToPanelKindRegistry,
-    getPanelKindRegistrySnapshot,
-    getPanelKindRegistrySnapshot
-  );
-  return kindId === undefined ? undefined : registry[kindId];
-}
-
-/**
  * A resolved surface claim: the slot's owner plus the panel-kind metadata its
  * view renders from. `null` while the claim is absent, suppressed, or not yet
  * resolvable — every one of which means "draw the stock surface".
  */
-export interface ResolvedProjectSurface {
-  claim: ProjectSurfaceClaim;
-  config: PanelKindConfig;
-}
+export type ResolvedProjectSurface = RenderableSurfaceClaim;
 
 /**
  * Resolve one surface slot for this project view.
@@ -52,9 +34,10 @@ export interface ResolvedProjectSurface {
  * forgotten. It is read live, at resolution, so an unloaded plugin's slot is
  * released whatever answer is on record.
  *
- * A claim whose kind carries no `componentPath` (a PTY panel, or a view the
- * panels loop skipped) resolves to `null` too — a surface renders a module, and
- * there is nothing to render without one.
+ * Also `null` until the answers are known. They arrive in the same pull as the
+ * claim, so this costs nothing when the read works — and when it fails, the
+ * host's own canvas is the safe side to wait on, where mounting a plugin's view
+ * in a project that chose the launcher is not.
  */
 export function useProjectSurface(slot: ProjectSurfaceSlot): ResolvedProjectSurface | null {
   const init = usePluginProjectSurfacesStore((s) => s.init);
@@ -63,12 +46,11 @@ export function useProjectSurface(slot: ProjectSurfaceSlot): ResolvedProjectSurf
   useEffect(() => {
     init();
   }, [init]);
-  const claim = usePluginProjectSurfacesStore((s) => s.surfaces[slot]);
+  const renderable = useRenderableSurfaceClaim(slot);
+  const choicesLoaded = usePluginProjectSurfacesStore((s) => s.choicesLoaded);
   const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, slot));
-  const config = usePanelKindConfig(claim?.panelKindId);
-  if (claim === undefined || choice === "stock") return null;
-  if (config === undefined || config.componentPath === undefined) return null;
-  return { claim, config };
+  if (renderable === null || !choicesLoaded || choice === "stock") return null;
+  return renderable;
 }
 
 /**

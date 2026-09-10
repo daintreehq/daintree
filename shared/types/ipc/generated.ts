@@ -1244,11 +1244,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:project-surface-choice-set": {
     args: [slot: "emptyCanvas", choice: import("../plugin.js").ProjectSurfaceChoice | null];
-    result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceChoiceRecord>>;
+    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot;
   };
   "plugin:project-surface-choices-get": {
     args: [];
-    result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceChoiceRecord>>;
+    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot | null;
   };
   "plugin:project-surfaces-get": {
     args: [];

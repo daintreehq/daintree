@@ -179,7 +179,9 @@ export interface ViewContribution {
  * `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
  * `projectHome` and `defaultLayout` are not here yet.
  */
-export type ProjectSurfaceSlot = "emptyCanvas";
+export const PROJECT_SURFACE_SLOTS = ["emptyCanvas"] as const;
+
+export type ProjectSurfaceSlot = (typeof PROJECT_SURFACE_SLOTS)[number];
 
 /** A surface slot claim naming one of the plugin's own `contributes.views`. */
 export interface SurfaceViewSlot {
@@ -210,7 +212,7 @@ export interface ProjectSurfaceClaim {
 export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
 
 export function isProjectSurfaceSlot(value: unknown): value is ProjectSurfaceSlot {
-  return value === "emptyCanvas";
+  return PROJECT_SURFACE_SLOTS.some((slot) => slot === value);
 }
 
 /**
@@ -236,18 +238,25 @@ export interface ProjectSurfaceChoiceRecord {
    */
   pluginId: string;
   choice: ProjectSurfaceChoice;
-  /** Epoch ms, for the settings disclosure. */
+  /** Epoch ms of the answer. */
   decidedAt: number;
 }
 
 /** Every remembered surface answer in one project, keyed by slot. */
 export type ProjectSurfaceChoices = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord>>;
 
-/** `plugin:project-surface-choices-changed` — the full set, for every view of the project. */
-export interface ProjectSurfaceChoicesChangedEvent {
+/**
+ * One project's remembered surface answers, named by the project main resolved
+ * them for. Every read, write and push carries the name, so a view can refuse a
+ * set that is not its own.
+ */
+export interface ProjectSurfaceChoicesSnapshot {
   projectId: string;
   choices: ProjectSurfaceChoices;
 }
+
+/** `plugin:project-surface-choices-changed` — the full set, for every view of the project. */
+export type ProjectSurfaceChoicesChangedEvent = ProjectSurfaceChoicesSnapshot;
 
 /**
  * The attribute the host stamps on the element a plugin view renders into, and

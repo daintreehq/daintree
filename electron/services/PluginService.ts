@@ -86,6 +86,7 @@ import type {
   ProjectPluginVisibility,
   ProjectSurfaceChoice,
   ProjectSurfaceChoices,
+  ProjectSurfaceChoicesSnapshot,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
@@ -114,6 +115,7 @@ import { getPluginCapabilityConsentService } from "./plugin-capability/instances
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
 import { store } from "../store.js";
+import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
@@ -4694,13 +4696,13 @@ export class PluginService {
     projectId: string,
     slot: ProjectSurfaceSlot,
     choice: ProjectSurfaceChoice | null
-  ): ProjectSurfaceChoices {
-    const choices = writeProjectSurfaceChoice(projectId, slot, choice);
+  ): ProjectSurfaceChoicesSnapshot {
+    const snapshot = { projectId, choices: writeProjectSurfaceChoice(projectId, slot, choice) };
     broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
       name: "plugin:project-surface-choices-changed",
-      payload: { projectId, choices },
-    });
-    return choices;
+      payload: snapshot,
+    } satisfies EventBusEnvelope);
+    return snapshot;
   }
 
   /** The per-project visibility overlay for INSTALLED plugins. */

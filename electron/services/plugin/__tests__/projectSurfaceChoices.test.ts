@@ -12,9 +12,6 @@ const storeMock = vi.hoisted(() => {
 });
 
 vi.mock("../../../store.js", () => ({ store: storeMock }));
-vi.mock("../../../utils/logger.js", () => ({
-  createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
-}));
 
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
 import {
@@ -137,12 +134,33 @@ describe("projectSurfaceChoices", () => {
     });
   });
 
-  it("reads as no answers when the store cannot be read", () => {
+  it("surfaces a read failure rather than reading it as no answers", () => {
+    // Read as empty, an unreadable store would put a canvas the user switched
+    // off back on screen and ask them again.
     storeMock.get.mockImplementation(() => {
       throw new Error("EACCES");
     });
 
-    expect(getProjectSurfaceChoices(PROJECT_A)).toEqual({});
+    expect(() => getProjectSurfaceChoices(PROJECT_A)).toThrow(/EACCES/);
+  });
+
+  it("keeps an answer about a slot this build does not know when writing another", () => {
+    // Written by a newer build; a downgrade must not erase it on its first save.
+    const future = { pluginId: "acme.dash", choice: "stock", decidedAt: 1 };
+    storeMock.data.set("projectSurfaceChoices", { [PROJECT_A]: { projectHome: future } });
+    claimCanvas();
+
+    const returned = setProjectSurfaceChoice(PROJECT_A, "emptyCanvas", "surface", 7);
+
+    expect(returned).toEqual({
+      emptyCanvas: { pluginId: "acme.dash", choice: "surface", decidedAt: 7 },
+    });
+    expect(storeMock.data.get("projectSurfaceChoices")).toEqual({
+      [PROJECT_A]: {
+        projectHome: future,
+        emptyCanvas: { pluginId: "acme.dash", choice: "surface", decidedAt: 7 },
+      },
+    });
   });
 
   it("refuses to rewrite a key it could not read", () => {
