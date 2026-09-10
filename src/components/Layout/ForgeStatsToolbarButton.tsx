@@ -888,317 +888,314 @@ export const ForgeStatsToolbarButton = memo(
     // and render only in forgeMode.
     if (!currentProject || providerLoading) return null;
 
+    // Every right-click target in the control owns its menu, the indicators
+    // beside the pills included. One menu wrapping the whole control would also
+    // catch events bubbling out of the pills' portaled menus, and a long-press
+    // would arm both.
+    const chromeMenuContent = (
+      <ForgeStatsContextMenuItems
+        projectPath={currentProject.path}
+        providerName={menuProviderName}
+        canOpenRepo={canOpenRepo}
+      />
+    );
+
     return (
-      <ContextMenu onOpenChange={handleStatsMenuOpenChange}>
-        <ContextMenuTrigger
-          asChild
-          // A touch or pen long-press arms Radix's open timer on pointerdown, and
-          // pointerdown bubbles: left alone, this container's timer runs beside
-          // the pill's and opens a second menu over it. Right-click needs no such
-          // guard — the pill's trigger claims the contextmenu event first.
-          onPointerDown={(event) => {
-            if (
-              event.pointerType !== "mouse" &&
-              event.target instanceof Element &&
-              event.target.closest(".toolbar-stat-pill")
-            ) {
-              event.preventDefault();
+      <div
+        className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] transition-[width] duration-150 ease-out"
+        style={{
+          width: statsContainerWidth,
+          ["--toolbar-stats-divider" as string]:
+            "var(--toolbar-stats-divider,var(--theme-border-subtle))",
+        }}
+      >
+        {forgeMode ? (
+          <ForgeStatPill
+            buttonRef={issuesButtonRef}
+            open={issuesOpen}
+            count={issueCount}
+            displayCount={issueDisplayCount}
+            animKey={issueAnimKey}
+            testId="forge-stat-pill-issues"
+            ariaLabel={
+              isTokenError
+                ? `Configure ${providerName} token to see issues`
+                : `${issueDisplayCount ?? "—"} open issues${
+                    showIssuesChip ? " (new since last view)" : ""
+                  }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
             }
-          }}
-        >
-          <div
-            className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] transition-[width] duration-150 ease-out"
-            style={{
-              width: statsContainerWidth,
-              ["--toolbar-stats-divider" as string]:
-                "var(--toolbar-stats-divider,var(--theme-border-subtle))",
-            }}
-          >
-            {forgeMode ? (
-              <ForgeStatPill
-                buttonRef={issuesButtonRef}
-                open={issuesOpen}
-                count={issueCount}
-                displayCount={issueDisplayCount}
-                animKey={issueAnimKey}
-                testId="forge-stat-pill-issues"
-                ariaLabel={
-                  isTokenError
-                    ? `Configure ${providerName} token to see issues`
-                    : `${issueDisplayCount ?? "—"} open issues${
-                        showIssuesChip ? " (new since last view)" : ""
-                      }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-                }
-                tooltipContent={
-                  isTokenError
-                    ? `Configure ${providerName} token to see issues`
-                    : freshnessLevel === "fresh"
-                      ? `Browse ${providerName} issues`
-                      : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-                }
-                onContextMenuOpenChange={handleStatsMenuOpenChange}
-                contextMenuContent={
-                  <ForgeStatsContextMenuItems
-                    segment="issues"
-                    projectPath={currentProject.path}
-                    providerName={menuProviderName}
-                    canOpenRepo={canOpenRepo}
-                  />
-                }
-                icon={CircleDot}
-                iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
-                openRingClassName="ring-1 ring-pr-open/20"
-                className={cn(
-                  isTokenError && "opacity-40",
-                  !isTokenError && stats?.issueCount === 0 && "opacity-50"
-                )}
-                dropdownContent={
-                  DropdownView && providerId ? (
-                    <DropdownView
-                      kind="issues"
-                      projectPath={currentProject.path}
-                      providerId={providerId}
-                      open={issuesOpen}
-                      initialCount={stats?.issueCount}
-                      onClose={() => {
-                        setIssuesOpen(false);
-                        issuesButtonRef.current?.focus();
-                      }}
-                      onFreshFetch={handleListFreshFetch}
-                      onCountUpdate={handleIssueListCountUpdate}
-                    />
-                  ) : null
-                }
-                persistThroughChildOverlays
-                keepMounted
-                onClick={() => {
-                  setPrsOpen(false);
-                  setCommitsOpen(false);
-                  if (isTokenError) {
-                    setIssuesOpen(false);
-                    openSettingsForToken();
-                    return;
-                  }
-                  // Provider contributes no dropdown view — route the click to
-                  // the forge's own issues page instead of toggling an empty
-                  // popover shell.
-                  if (!DropdownView) {
-                    setIssuesOpen(false);
-                    void actionService.dispatch(
-                      "forge.openIssues",
-                      { projectPath: currentProject.path },
-                      { source: "user" }
-                    );
-                    return;
-                  }
-                  const willOpen = !issuesOpen;
-                  setIssuesOpen(willOpen);
-                  if (willOpen) setIssuesPulseAt(null);
-                  if (
-                    willOpen &&
-                    (issueCountRefreshedAt == null ||
-                      Date.now() - issueCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
-                  ) {
-                    refreshStats();
-                  }
-                }}
-                onOpenChange={(open) => {
-                  setIssuesOpen(open);
-                  if (!open) {
-                    issuesButtonRef.current?.focus();
-                  }
-                }}
-                onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
-                activityChip={
-                  <span
-                    aria-hidden="true"
-                    data-visible={showIssuesChip}
-                    className="toolbar-badge-chip bg-pr-open pointer-events-none absolute right-0 top-0 h-2 w-2"
-                    style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
-                  />
-                }
+            tooltipContent={
+              isTokenError
+                ? `Configure ${providerName} token to see issues`
+                : freshnessLevel === "fresh"
+                  ? `Browse ${providerName} issues`
+                  : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+            }
+            onContextMenuOpenChange={handleStatsMenuOpenChange}
+            contextMenuContent={
+              <ForgeStatsContextMenuItems
+                segment="issues"
+                projectPath={currentProject.path}
+                providerName={menuProviderName}
+                canOpenRepo={canOpenRepo}
               />
-            ) : null}
-            {forgeMode ? (
-              <ForgeStatPill
-                buttonRef={prsButtonRef}
-                open={prsOpen}
-                count={prCount}
-                displayCount={prDisplayCount}
-                animKey={prAnimKey}
-                testId="forge-stat-pill-prs"
-                ariaLabel={
-                  isTokenError
-                    ? `Configure ${providerName} token to see pull requests`
-                    : `${prDisplayCount ?? "—"} open pull requests${
-                        showPrsChip ? " (new since last view)" : ""
-                      }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-                }
-                tooltipContent={
-                  isTokenError
-                    ? `Configure ${providerName} token to see pull requests`
-                    : freshnessLevel === "fresh"
-                      ? `Browse ${providerName} pull requests`
-                      : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-                }
-                onContextMenuOpenChange={handleStatsMenuOpenChange}
-                contextMenuContent={
-                  <ForgeStatsContextMenuItems
-                    segment="prs"
-                    projectPath={currentProject.path}
-                    providerName={menuProviderName}
-                    canOpenRepo={canOpenRepo}
-                  />
-                }
-                icon={GitPullRequest}
-                iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
-                openRingClassName="ring-1 ring-pr-merged/20"
-                className={cn(
-                  isTokenError && "opacity-40",
-                  !isTokenError && stats?.prCount === 0 && "opacity-50"
-                )}
-                dropdownContent={
-                  DropdownView && providerId ? (
-                    <DropdownView
-                      kind="prs"
-                      projectPath={currentProject.path}
-                      providerId={providerId}
-                      open={prsOpen}
-                      initialCount={stats?.prCount}
-                      onClose={() => {
-                        setPrsOpen(false);
-                        prsButtonRef.current?.focus();
-                      }}
-                      onFreshFetch={handleListFreshFetch}
-                      onCountUpdate={handlePrListCountUpdate}
-                    />
-                  ) : null
-                }
-                keepMounted
-                onClick={() => {
-                  setIssuesOpen(false);
-                  setCommitsOpen(false);
-                  if (isTokenError) {
-                    setPrsOpen(false);
-                    openSettingsForToken();
-                    return;
-                  }
-                  // Same no-dropdown routing as the issues pill.
-                  if (!DropdownView) {
-                    setPrsOpen(false);
-                    void actionService.dispatch(
-                      "forge.openPRs",
-                      { projectPath: currentProject.path },
-                      { source: "user" }
-                    );
-                    return;
-                  }
-                  const willOpen = !prsOpen;
-                  setPrsOpen(willOpen);
-                  if (willOpen) setPrsPulseAt(null);
-                  if (
-                    willOpen &&
-                    (prCountRefreshedAt == null ||
-                      Date.now() - prCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
-                  ) {
-                    refreshStats();
-                  }
-                }}
-                onOpenChange={(open) => {
-                  setPrsOpen(open);
-                  if (!open) {
-                    prsButtonRef.current?.focus();
-                  }
-                }}
-                onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
-                activityChip={
-                  <span
-                    aria-hidden="true"
-                    data-visible={showPrsChip}
-                    className="toolbar-badge-chip bg-pr-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
-                    style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
-                  />
-                }
-              />
-            ) : null}
-            <ForgeStatPill
-              buttonRef={commitsButtonRef}
-              open={commitsOpen}
-              count={commitCount}
-              animKey={commitAnimKey}
-              testId="forge-stat-pill-commits"
-              ariaLabel={`${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
-              tooltipContent={
-                commitFreshnessLevel === "fresh"
-                  ? "Browse git commits"
-                  : `${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
-              }
-              onContextMenuOpenChange={handleStatsMenuOpenChange}
-              contextMenuContent={
-                <ForgeStatsContextMenuItems
-                  segment="commits"
+            }
+            icon={CircleDot}
+            iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
+            openRingClassName="ring-1 ring-pr-open/20"
+            className={cn(
+              isTokenError && "opacity-40",
+              !isTokenError && stats?.issueCount === 0 && "opacity-50"
+            )}
+            dropdownContent={
+              DropdownView && providerId ? (
+                <DropdownView
+                  kind="issues"
                   projectPath={currentProject.path}
-                  providerName={menuProviderName}
-                  // A worktree that detaches keeps its old branch name on the snapshot.
-                  branch={activeWorktree?.isDetached ? undefined : activeWorktree?.branch}
-                  canOpenRepo={canOpenRepo}
+                  providerId={providerId}
+                  open={issuesOpen}
+                  initialCount={stats?.issueCount}
+                  onClose={() => {
+                    setIssuesOpen(false);
+                    issuesButtonRef.current?.focus();
+                  }}
+                  onFreshFetch={handleListFreshFetch}
+                  onCountUpdate={handleIssueListCountUpdate}
                 />
-              }
-              icon={GitCommit}
-              openRingClassName="ring-1 ring-border-strong"
-              className={cn(stats?.commitCount === 0 && "opacity-50")}
-              dropdownContent={
-                DropdownView && providerId ? (
-                  <DropdownView
-                    kind="commits"
-                    projectPath={currentProject.path}
-                    providerId={providerId}
-                    open={commitsOpen}
-                    worktreePath={activeWorktree?.path}
-                    branch={activeWorktree?.branch}
-                    initialCount={stats?.commitCount}
-                    onClose={() => {
-                      setCommitsOpen(false);
-                      commitsButtonRef.current?.focus();
-                    }}
-                  />
-                ) : (
-                  // Commit history is local git data, so commits-only mode
-                  // (no forge provider) still gets a browsable dropdown
-                  // (issue #10414).
-                  <LocalCommitsDropdown
-                    cwd={activeWorktree?.path ?? currentProject.path}
-                    branch={activeWorktree?.branch}
-                    open={commitsOpen}
-                    initialCount={stats?.commitCount}
-                    onClose={() => {
-                      setCommitsOpen(false);
-                      commitsButtonRef.current?.focus();
-                    }}
-                  />
-                )
-              }
-              onClick={() => {
+              ) : null
+            }
+            persistThroughChildOverlays
+            keepMounted
+            onClick={() => {
+              setPrsOpen(false);
+              setCommitsOpen(false);
+              if (isTokenError) {
                 setIssuesOpen(false);
+                openSettingsForToken();
+                return;
+              }
+              // Provider contributes no dropdown view — route the click to
+              // the forge's own issues page instead of toggling an empty
+              // popover shell.
+              if (!DropdownView) {
+                setIssuesOpen(false);
+                void actionService.dispatch(
+                  "forge.openIssues",
+                  { projectPath: currentProject.path },
+                  { source: "user" }
+                );
+                return;
+              }
+              const willOpen = !issuesOpen;
+              setIssuesOpen(willOpen);
+              if (willOpen) setIssuesPulseAt(null);
+              if (
+                willOpen &&
+                (issueCountRefreshedAt == null ||
+                  Date.now() - issueCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
+              ) {
+                refreshStats();
+              }
+            }}
+            onOpenChange={(open) => {
+              setIssuesOpen(open);
+              if (!open) {
+                issuesButtonRef.current?.focus();
+              }
+            }}
+            onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
+            activityChip={
+              <span
+                aria-hidden="true"
+                data-visible={showIssuesChip}
+                className="toolbar-badge-chip bg-pr-open pointer-events-none absolute right-0 top-0 h-2 w-2"
+                style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+              />
+            }
+          />
+        ) : null}
+        {forgeMode ? (
+          <ForgeStatPill
+            buttonRef={prsButtonRef}
+            open={prsOpen}
+            count={prCount}
+            displayCount={prDisplayCount}
+            animKey={prAnimKey}
+            testId="forge-stat-pill-prs"
+            ariaLabel={
+              isTokenError
+                ? `Configure ${providerName} token to see pull requests`
+                : `${prDisplayCount ?? "—"} open pull requests${
+                    showPrsChip ? " (new since last view)" : ""
+                  }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+            }
+            tooltipContent={
+              isTokenError
+                ? `Configure ${providerName} token to see pull requests`
+                : freshnessLevel === "fresh"
+                  ? `Browse ${providerName} pull requests`
+                  : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+            }
+            onContextMenuOpenChange={handleStatsMenuOpenChange}
+            contextMenuContent={
+              <ForgeStatsContextMenuItems
+                segment="prs"
+                projectPath={currentProject.path}
+                providerName={menuProviderName}
+                canOpenRepo={canOpenRepo}
+              />
+            }
+            icon={GitPullRequest}
+            iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
+            openRingClassName="ring-1 ring-pr-merged/20"
+            className={cn(
+              isTokenError && "opacity-40",
+              !isTokenError && stats?.prCount === 0 && "opacity-50"
+            )}
+            dropdownContent={
+              DropdownView && providerId ? (
+                <DropdownView
+                  kind="prs"
+                  projectPath={currentProject.path}
+                  providerId={providerId}
+                  open={prsOpen}
+                  initialCount={stats?.prCount}
+                  onClose={() => {
+                    setPrsOpen(false);
+                    prsButtonRef.current?.focus();
+                  }}
+                  onFreshFetch={handleListFreshFetch}
+                  onCountUpdate={handlePrListCountUpdate}
+                />
+              ) : null
+            }
+            keepMounted
+            onClick={() => {
+              setIssuesOpen(false);
+              setCommitsOpen(false);
+              if (isTokenError) {
                 setPrsOpen(false);
-                setCommitsOpen((p) => !p);
-              }}
-              onOpenChange={(open) => {
-                setCommitsOpen(open);
-                if (!open) commitsButtonRef.current?.focus();
-              }}
+                openSettingsForToken();
+                return;
+              }
+              // Same no-dropdown routing as the issues pill.
+              if (!DropdownView) {
+                setPrsOpen(false);
+                void actionService.dispatch(
+                  "forge.openPRs",
+                  { projectPath: currentProject.path },
+                  { source: "user" }
+                );
+                return;
+              }
+              const willOpen = !prsOpen;
+              setPrsOpen(willOpen);
+              if (willOpen) setPrsPulseAt(null);
+              if (
+                willOpen &&
+                (prCountRefreshedAt == null ||
+                  Date.now() - prCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
+              ) {
+                refreshStats();
+              }
+            }}
+            onOpenChange={(open) => {
+              setPrsOpen(open);
+              if (!open) {
+                prsButtonRef.current?.focus();
+              }
+            }}
+            onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
+            activityChip={
+              <span
+                aria-hidden="true"
+                data-visible={showPrsChip}
+                className="toolbar-badge-chip bg-pr-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
+                style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+              />
+            }
+          />
+        ) : null}
+        <ForgeStatPill
+          buttonRef={commitsButtonRef}
+          open={commitsOpen}
+          count={commitCount}
+          animKey={commitAnimKey}
+          testId="forge-stat-pill-commits"
+          ariaLabel={`${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
+          tooltipContent={
+            commitFreshnessLevel === "fresh"
+              ? "Browse git commits"
+              : `${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
+          }
+          onContextMenuOpenChange={handleStatsMenuOpenChange}
+          contextMenuContent={
+            <ForgeStatsContextMenuItems
+              segment="commits"
+              projectPath={currentProject.path}
+              providerName={menuProviderName}
+              // A worktree that detaches keeps its old branch name on the snapshot.
+              branch={activeWorktree?.isDetached ? undefined : activeWorktree?.branch}
+              canOpenRepo={canOpenRepo}
             />
-            <ForgeStatusIndicator
-              status={getForgeIndicatorStatus()}
-              error={statsError ?? undefined}
-              onTransitionEnd={handleForgeStatusTransitionEnd}
-            />
-            {rateLimitActive ? (
-              <Tooltip
-                open={rateLimitTooltipOpen}
-                onOpenChange={setRateLimitTooltipOpen}
-                autoDismiss={false}
-              >
+          }
+          icon={GitCommit}
+          openRingClassName="ring-1 ring-border-strong"
+          className={cn(stats?.commitCount === 0 && "opacity-50")}
+          dropdownContent={
+            DropdownView && providerId ? (
+              <DropdownView
+                kind="commits"
+                projectPath={currentProject.path}
+                providerId={providerId}
+                open={commitsOpen}
+                worktreePath={activeWorktree?.path}
+                branch={activeWorktree?.branch}
+                initialCount={stats?.commitCount}
+                onClose={() => {
+                  setCommitsOpen(false);
+                  commitsButtonRef.current?.focus();
+                }}
+              />
+            ) : (
+              // Commit history is local git data, so commits-only mode
+              // (no forge provider) still gets a browsable dropdown
+              // (issue #10414).
+              <LocalCommitsDropdown
+                cwd={activeWorktree?.path ?? currentProject.path}
+                branch={activeWorktree?.branch}
+                open={commitsOpen}
+                initialCount={stats?.commitCount}
+                onClose={() => {
+                  setCommitsOpen(false);
+                  commitsButtonRef.current?.focus();
+                }}
+              />
+            )
+          }
+          onClick={() => {
+            setIssuesOpen(false);
+            setPrsOpen(false);
+            setCommitsOpen((p) => !p);
+          }}
+          onOpenChange={(open) => {
+            setCommitsOpen(open);
+            if (!open) commitsButtonRef.current?.focus();
+          }}
+        />
+        <ForgeStatusIndicator
+          status={getForgeIndicatorStatus()}
+          error={statsError ?? undefined}
+          onTransitionEnd={handleForgeStatusTransitionEnd}
+        />
+        {rateLimitActive ? (
+          <Tooltip
+            open={rateLimitTooltipOpen}
+            onOpenChange={setRateLimitTooltipOpen}
+            autoDismiss={false}
+          >
+            <ContextMenu onOpenChange={handleStatsMenuOpenChange}>
+              <ContextMenuTrigger asChild>
                 <TooltipTrigger asChild>
                   <div
                     role="status"
@@ -1213,27 +1210,26 @@ export const ForgeStatsToolbarButton = memo(
                     <Clock className="h-3.5 w-3.5 text-text-muted" aria-hidden />
                   </div>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="px-0 py-0">
-                  <RateLimitDetailsPanel
-                    kind={rateLimitKind}
-                    details={rateLimitDetails}
-                    now={rateLimitNow}
-                    fallbackResetAt={rateLimitResetAt}
-                  />
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-            <PRDetectionPausedIndicator />
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-          <ForgeStatsContextMenuItems
-            projectPath={currentProject.path}
-            providerName={menuProviderName}
-            canOpenRepo={canOpenRepo}
-          />
-        </ContextMenuContent>
-      </ContextMenu>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                {chromeMenuContent}
+              </ContextMenuContent>
+            </ContextMenu>
+            <TooltipContent side="bottom" className="px-0 py-0">
+              <RateLimitDetailsPanel
+                kind={rateLimitKind}
+                details={rateLimitDetails}
+                now={rateLimitNow}
+                fallbackResetAt={rateLimitResetAt}
+              />
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+        <PRDetectionPausedIndicator
+          contextMenuContent={chromeMenuContent}
+          onContextMenuOpenChange={handleStatsMenuOpenChange}
+        />
+      </div>
     );
   })
 );

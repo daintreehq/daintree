@@ -153,7 +153,7 @@ describe("ForgeStatsContextMenuItems", () => {
     ]);
   });
 
-  it("gives the container around the pills the repository and chrome, with no segment entry", () => {
+  it("gives the indicators beside the pills the repository and chrome, with no segment entry", () => {
     const { container } = render(
       <ForgeStatsContextMenuItems projectPath="/repo" providerName="GitHub" canOpenRepo />
     );

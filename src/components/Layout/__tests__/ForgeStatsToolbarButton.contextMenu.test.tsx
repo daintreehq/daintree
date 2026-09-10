@@ -2,25 +2,33 @@
 /**
  * ForgeStatsToolbarButton — per-segment context menus (#12354).
  *
- * Each stat pill owns its right-click menu so it can lead with its own
- * navigation, while the stats container keeps a menu for the chrome around the
- * pills. Real Radix primitives, because the nesting is what's under test: a
- * pill's trigger has to claim the right-click (and a long-press) before the
- * container's does.
+ * Every right-click target in the stats control owns its own menu: each pill
+ * leads with its own navigation, and the indicators beside the pills get the
+ * repository and toolbar chrome. Real Radix primitives, because the point is
+ * that no menu's trigger wraps another's — so a right-click or long-press, even
+ * one bubbling out of an open menu's portal, only ever opens one menu.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ForgeProviderEntry } from "@shared/types/forge";
 import type { Project } from "@shared/types";
 
+interface WorktreeFixture {
+  id: string;
+  path: string;
+  branch?: string;
+  isDetached?: boolean;
+}
+
 const dispatchMock = vi.hoisted(() => vi.fn());
 const getRepoUrlMock = vi.hoisted(() => vi.fn<(cwd: string) => Promise<string | null>>());
 const refreshStatsMock = vi.hoisted(() => vi.fn());
 const providerState = vi.hoisted((): { entry: ForgeProviderEntry | null } => ({ entry: null }));
-const statsState = vi.hoisted(() => ({ isTokenError: false }));
-const worktrees = vi.hoisted(
-  () => new Map([["wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" }]])
-);
+const statsState = vi.hoisted((): { isTokenError: boolean; rateLimitResetAt: number | null } => ({
+  isTokenError: false,
+  rateLimitResetAt: null,
+}));
+const worktrees = vi.hoisted(() => new Map<string, WorktreeFixture>());
 
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
@@ -40,7 +48,7 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
     refresh: refreshStatsMock,
     isStale: false,
     lastUpdated: Date.now(),
-    rateLimitResetAt: null,
+    rateLimitResetAt: statsState.rateLimitResetAt,
     rateLimitKind: null,
     freshnessLevel: "fresh" as const,
   }),
@@ -70,7 +78,8 @@ vi.mock("@/store/worktreeStore", () => ({
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
-  useWorktreeStore: (sel: (s: { worktrees: typeof worktrees }) => unknown) => sel({ worktrees }),
+  useWorktreeStore: (sel: (s: { worktrees: Map<string, WorktreeFixture> }) => unknown) =>
+    sel({ worktrees }),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -85,11 +94,12 @@ vi.mock("@/components/ui/fixed-dropdown", async (importOriginal) => ({
 }));
 
 vi.mock("../ForgeStatusIndicator", () => ({
-  ForgeStatusIndicator: () => <span data-testid="forge-status-indicator" />,
+  ForgeStatusIndicator: () => null,
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
+import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { TOOLBAR_CUSTOMIZE_LABEL, TOOLBAR_UNPIN_LABEL } from "../toolbarMenuStrings";
 import { ForgeStatsToolbarButton } from "../ForgeStatsToolbarButton";
 
@@ -106,6 +116,8 @@ const GITHUB: ForgeProviderEntry = {
   contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
 };
 
+const CHROME_MENU = ["View repository on GitHub", TOOLBAR_CUSTOMIZE_LABEL, TOOLBAR_UNPIN_LABEL];
+
 beforeAll(async () => {
   await primeRadix();
 });
@@ -116,10 +128,13 @@ beforeEach(() => {
   getRepoUrlMock.mockResolvedValue("https://github.com/acme/proj");
   providerState.entry = GITHUB;
   statsState.isTokenError = false;
+  statsState.rateLimitResetAt = null;
+  worktrees.set("wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" });
 });
 
 afterEach(() => {
   cleanup();
+  usePRCircuitBreakerStore.getState().setTripped(false);
 });
 
 async function renderStats() {
@@ -155,13 +170,7 @@ describe("ForgeStatsToolbarButton context menus", () => {
 
     const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
 
-    expect(itemLabels(menu)).toEqual([
-      "View all issues on GitHub",
-      "View repository on GitHub",
-      TOOLBAR_CUSTOMIZE_LABEL,
-      TOOLBAR_UNPIN_LABEL,
-    ]);
-    // The pill claims the right-click; the container's menu must not open too.
+    expect(itemLabels(menu)).toEqual(["View all issues on GitHub", ...CHROME_MENU]);
     expect(openMenuCount()).toBe(1);
   });
 
@@ -186,6 +195,25 @@ describe("ForgeStatsToolbarButton context menus", () => {
     expect(dispatchMock).toHaveBeenCalledWith(
       "forge.openCommits",
       { projectPath: "/test/proj", branch: "feature/x" },
+      expect.objectContaining({ source: "context-menu" })
+    );
+  });
+
+  it("leaves a detached worktree's stale branch out of the commits link", async () => {
+    worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/test/proj/wt",
+      branch: "feature/x",
+      isDetached: true,
+    });
+    await renderStats();
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-commits"));
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "View commits on GitHub" }));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openCommits",
+      { projectPath: "/test/proj" },
       expect.objectContaining({ source: "context-menu" })
     );
   });
@@ -222,24 +250,37 @@ describe("ForgeStatsToolbarButton context menus", () => {
 
     const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
 
-    expect(itemLabels(menu)).toEqual([
-      "View all issues on GitHub",
-      "View repository on GitHub",
-      TOOLBAR_CUSTOMIZE_LABEL,
-      TOOLBAR_UNPIN_LABEL,
-    ]);
+    expect(itemLabels(menu)).toEqual(["View all issues on GitHub", ...CHROME_MENU]);
   });
 
-  it("keeps a container menu for the chrome around the pills", async () => {
+  it("opens no second menu from a right-click inside an open pill menu", async () => {
+    await renderStats();
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
+
+    fireEvent.contextMenu(
+      within(menu).getByRole("menuitem", { name: "View repository on GitHub" })
+    );
+    await act(async () => {});
+
+    expect(openMenuCount()).toBe(1);
+  });
+
+  it("gives the PR-detection-paused indicator the repository and chrome", async () => {
+    usePRCircuitBreakerStore.getState().setTripped(true);
     await renderStats();
 
-    const menu = await openMenu(screen.getByTestId("forge-status-indicator"));
+    const menu = await openMenu(screen.getByLabelText("PR detection paused — retrying"));
 
-    expect(itemLabels(menu)).toEqual([
-      "View repository on GitHub",
-      TOOLBAR_CUSTOMIZE_LABEL,
-      TOOLBAR_UNPIN_LABEL,
-    ]);
+    expect(itemLabels(menu)).toEqual(CHROME_MENU);
+  });
+
+  it("gives the rate-limit clock the repository and chrome", async () => {
+    statsState.rateLimitResetAt = Date.now() + 10 * 60_000;
+    await renderStats();
+
+    const menu = await openMenu(screen.getByLabelText(/GitHub rate limit — resets in/));
+
+    expect(itemLabels(menu)).toEqual(CHROME_MENU);
   });
 
   it("opens only the pill's menu on a long-press", async () => {

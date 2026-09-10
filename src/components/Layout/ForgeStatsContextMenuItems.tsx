@@ -14,7 +14,7 @@ interface ForgeStatsContextMenuItemsProps {
   projectPath: string;
   /** Resolved forge provider's display name, or `null` when the project has none. */
   providerName: string | null;
-  /** The pill that was right-clicked; omitted for the stats container around the pills. */
+  /** The pill that was right-clicked; omitted for the indicators beside the pills. */
   segment?: ForgeStatsMenuSegment;
   /** Branch the commits pill lists, so the forge opens the same history. */
   branch?: string;
