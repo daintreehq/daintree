@@ -245,6 +245,8 @@ export function FixedDropdown({
     <div
       ref={contentRef}
       className={cn(
+        // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+        "app-no-drag",
         "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
         // Tailwind v4 translate-*/scale-* emit the individual `translate` and
         // `scale` properties, which `transform` in a transition list does NOT

@@ -310,6 +310,8 @@ const PopoverContent = React.forwardRef<
             collisionBoundary={collisionBoundary ?? boundary ?? undefined}
             style={{ transformOrigin: "var(--radix-popover-content-transform-origin)", ...style }}
             className={cn(
+              // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+              "app-no-drag",
               "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
               OVERLAY_MOTION_CLASS,
               className

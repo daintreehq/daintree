@@ -982,3 +982,40 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
     expect(rafSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("FixedDropdown drag-region opt-out (issue #12347)", () => {
+  let anchorRef: React.RefObject<HTMLElement | null>;
+
+  beforeEach(() => {
+    _resetForTests();
+    setOverlayStackLength(0);
+    anchorRef = createAnchor();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  it("opts the panel out of the drag region without disarming the whole window", () => {
+    // The panel portals to `document.body`, outside the toolbar's
+    // `app-drag-region` subtree, so Chromium never subtracts its rect and
+    // clicks landing over the toolbar are swallowed as window drags. The
+    // opt-out belongs on the panel and nowhere else: the wrapper is
+    // `fixed inset-0`, so marking it would make the entire window
+    // undraggable for as long as any dropdown is open.
+    render(
+      <FixedDropdown open={true} onOpenChange={vi.fn()} anchorRef={anchorRef}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    const panel = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
+    expect(panel).not.toBeNull();
+    expect(panel?.className.split(/\s+/)).toContain("app-no-drag");
+
+    const viewportWrapper = panel?.parentElement;
+    expect(viewportWrapper?.className).toContain("inset-0");
+    expect(viewportWrapper?.className.split(/\s+/)).not.toContain("app-no-drag");
+  });
+});
