@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.36.0] - 2026-09-10
+
+GitLab joins GitHub as a first-party forge — issues, merge requests, pipeline status and releases, against gitlab.com or a self-hosted instance. Alongside that, the MCP surface gained the primitives an external orchestrator actually needs — workspace discovery and residency, reconnect-durable panel ownership, interrupt and dispatch confirmation — and a relaunch now restores every project that was open rather than one per window.
+
+### Features
+
+**GitLab**
+
+- GitLab ships as a built-in forge provider alongside GitHub: issues and merge requests with the full mutation set, branch-to-MR badges on worktree cards, CI status from the head pipeline, releases, repo stats, viewer identity and token health (#5167)
+- Auth is a personal access token with scope and expiry introspection, and self-hosted instances are configured with an instance URL — the token is scoped strictly to the instance it was proven against and is never attached to a request for another host (#5167)
+
+**MCP**
+
+- `workspace.list` discovers workspace ids, so a client can resolve a `Daintree-Workspace-Id` binding instead of guessing (#12307)
+- Panel ownership survives a client reconnect, and `terminal.list` takes an owned filter — `closeOwned` is usable again after a reconnect (#12308)
+- A bound session can read its own binding, pin its workspace resident against eviction, and learn that it was evicted (#12313)
+- A bound workspace is reachable even when it holds no live view, so an orchestrator is no longer limited to whatever the view cache happens to hold (#12316)
+- A session can bring the user to a panel it owns, rather than creating an agent it can never surface (#12315)
+- `terminal.getStatus` reports real PTY lifecycle, so a client can answer "is this process alive?" (#12336)
+- A session-scoped interrupt works on owned agent panels — previously the only options were waiting for the agent or destroying its panel (#12338)
+- A client can confirm that a send it dispatched was actually delivered, so a nudge can no longer be lost silently (#12337)
+- A client can store its own metadata on a terminal, instead of every orchestrator keeping a sidecar that desynchronises (#12340)
+
+**Sessions**
+
+- A relaunch restores every project that was live, not one per window (#12320)
+
+**Editors**
+
+- Antigravity IDE joins the external editor picker (#12328)
+
+**Plugins**
+
+- Document packages are retained across a plugin reload (#12314)
+
+### Bug Fixes
+
+**Editors**
+
+- External editor launches ignored the configured preference and reported success whether or not the editor started (#12327)
+- A worktree's Open in editor used the OS handler instead of the configured editor (#12329)
+
+**Forge**
+
+- The token-expired banner survived saving a valid token — provider health is now re-probed when a credential is saved or cleared (#12325)
+- Fork and un-fetched GitLab merge requests could not be checked out; the PR-head refspec was hardcoded to GitHub's `pull/<n>/head` shape and is now supplied by the provider (#12324)
+
+**Settings**
+
+- Closing the settings dialog reverted project settings that had been saved outside the form (#12326)
+
+**Terminals**
+
+- Grok's idle redraws held the agent in a busy state (#12321)
+
+**Diffs**
+
+- The diff viewer treated submodule gitlinks as readable files (#12309)
+
+**MCP**
+
+- An untracked terminal id resolved as idle on the wait tools, making "finished" and "gone" indistinguishable (#12339)
+
+**Plugins**
+
+- Plugin discovery recovers when native filesystem notifications are missed
+
 ## [0.35.0] - 2026-09-07
 
 Projects can ship their own plugins. A plugin dropped in `.daintree/plugins/` loads only while that project is open, behind a per-project trust prompt, and plugin views get Tailwind and the app's own theme tokens as their styling contract. Alongside that: Markdown diffs can be read as rendered prose with word-level change marks, the worktree card grew a full Git menu, and switching back to an open project got roughly eight times faster.
