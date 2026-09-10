@@ -2414,6 +2414,17 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: ButtonText;
   }
 
+  /* A segmented toggle marks its selection with one filled thumb, and a fill is
+     exactly what forced-colors strips — leaving two identically-outlined
+     segments and no way to see which view you are actually on. Same problem and
+     same remedy as [data-highlighted] below: repaint the selection as a border,
+     which the UA leaves alone. ButtonText rather than Highlight, because
+     Highlight is spoken for by :focus-visible two rules up and a selected
+     segment that is not focused must not claim the focus cue. */
+  [data-slot="segmented-thumb"] {
+    border: 2px solid ButtonText;
+  }
+
   /* Radix highlighted items rely on background-color which is stripped here.
      Fall back to a system outline so the active menu/select row stays visible. */
   [data-highlighted] {
@@ -2824,6 +2835,18 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      forced-colors rule on purpose — author colours survive here, so the fill
      still does its job and only the outline is missing. */
   [data-notification-filter="true"][aria-pressed="true"] {
+    outline: 1px solid var(--color-border-strong);
+    outline-offset: -1px;
+  }
+
+  /* Segmented toggles have the same shape of problem as those filter chips, and
+     take the same remedy. The selected thumb is a fill roughly 1.3:1 against the
+     surface behind it — deliberate quiet chrome at normal contrast, but in a
+     mode whose whole request is "more contrast" a 1.3:1 step is not an answer.
+     Outline the thumb rather than brighten it: a hairline reads at a glance
+     without turning quiet host chrome into the loudest thing on the surface it
+     frames. Inset so it sits inside the thumb rather than growing it. */
+  [data-slot="segmented-thumb"] {
     outline: 1px solid var(--color-border-strong);
     outline-offset: -1px;
   }
