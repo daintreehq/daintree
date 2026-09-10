@@ -2504,6 +2504,9 @@ describe("CliAvailabilityService", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       await refreshPromise;
 
+      // A fresh re-check would rebuild the same blocked detail, so pin that
+      // goose really was carried rather than re-probed.
+      expect(timedOutAgentIds()).toEqual([["goose"]]);
       expect(service.getDetails()!.goose).toEqual(blockedGoose);
     });
 
