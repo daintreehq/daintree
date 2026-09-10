@@ -426,6 +426,28 @@ describe("ProjectSurfaceFrame", () => {
     expect(screen.queryByText(SAVE_FAILED)).toBeNull();
   });
 
+  it("asks the new owner instead of offering a retry once the slot changes hands", async () => {
+    registerSurfaceKind();
+    setClaim();
+    renderFrame();
+
+    failNextSave = true;
+    await press(stripButton("Launcher"));
+    expect(screen.getByText(SAVE_FAILED)).toBeTruthy();
+
+    // A reload hands the slot to a different plugin: the failed answer was
+    // about the last one, so retrying it would answer for this one unasked.
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        surfaces: { emptyCanvas: { ...claim, pluginId: "project__p1__acme.other" } },
+      });
+    });
+
+    expect(screen.queryByText(SAVE_FAILED)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(notice()).toBeTruthy();
+  });
+
   it("asks again when the slot has passed to a different plugin", () => {
     registerSurfaceKind();
     setClaim(answer("stock", "acme.other"));

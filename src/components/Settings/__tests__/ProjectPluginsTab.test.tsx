@@ -104,7 +104,9 @@ const pluginApi = {
     Promise.resolve({
       projectId: PROJECT_ID,
       choices:
-        choice === null ? {} : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } },
+        choice === null
+          ? {}
+          : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } },
     })
   ),
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
@@ -271,6 +273,13 @@ describe("ProjectPluginsTab", () => {
     );
     // Nothing was recorded, so the section still describes what is on disk.
     expect(section.textContent).toContain("You haven't chosen yet, so it shows.");
+
+    fireEvent.click(within(section).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(section.textContent).toContain("You chose the launcher, so it's hidden.")
+    );
+    expect(within(section).queryByRole("alert")).toBeNull();
   });
 
   it("says nothing about the empty canvas when no plugin claims it", async () => {
@@ -278,6 +287,30 @@ describe("ProjectPluginsTab", () => {
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
+    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+  });
+
+  it("describes the empty canvas only once its answer is known and the claim can render", async () => {
+    seed([projectPlugin()]);
+    claimEmptyCanvas();
+    act(() => {
+      usePluginProjectSurfacesStore.setState({ choicesLoaded: false });
+    });
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    // Before the answer is read, "you haven't chosen yet" could be false.
+    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+
+    act(() => {
+      usePluginProjectSurfacesStore.setState({ choicesLoaded: true });
+    });
+    expect(screen.getByTestId("project-plugins-empty-canvas")).toBeTruthy();
+
+    // A claim whose view cannot render leaves the canvas stock: nothing to describe.
+    act(() => {
+      unregisterPanelKind(CANVAS_KIND_ID);
+    });
     expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
   });
 

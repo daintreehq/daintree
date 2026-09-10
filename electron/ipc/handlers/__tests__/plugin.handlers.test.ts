@@ -1919,6 +1919,40 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(await inFlight).toEqual({ projectId: project, choices: {} });
   });
 
+  it("answers a surface-choices read sent after a write with that write", async () => {
+    // Renderers adopt only what main returns, so a read queued behind a write
+    // must not overtake it on the way through init.
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    waitForInit.mockReturnValueOnce(gate).mockReturnValueOnce(gate);
+    const project = "a".repeat(64);
+    let disk = {};
+    const written = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
+    mockSetProjectSurfaceChoice.mockImplementation(() => {
+      disk = written;
+      return { projectId: project, choices: disk };
+    });
+    mockGetProjectSurfaceChoices.mockImplementation(() => disk);
+    mockGetProjectForWebContents.mockReturnValue(project);
+
+    const write = getHandler("plugin:project-surface-choice-set")(
+      { sender: { id: 1 } },
+      "emptyCanvas",
+      "stock"
+    ) as Promise<unknown>;
+    const read = getHandler("plugin:project-surface-choices-get")({
+      sender: { id: 1 },
+    }) as Promise<unknown>;
+    releaseGate();
+
+    await write;
+    expect(await read).toEqual({ projectId: project, choices: written });
+  });
+
   it("PLUGIN_TOOLBAR_BUTTONS reads the registry only after waitForInit() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
     const waitForInit = vi.mocked(pluginService.waitForInit);
@@ -2791,7 +2825,9 @@ describe("project-local plugin handlers", () => {
     // An empty set would read as "never answered" and re-ask a user who did.
     mockGetProjectForWebContents.mockReturnValue(null);
 
-    expect(await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })).toBeNull();
+    expect(
+      await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })
+    ).toBeNull();
     expect(mockGetProjectSurfaceChoices).not.toHaveBeenCalled();
   });
 

@@ -56,10 +56,20 @@ interface PluginProjectSurfacesState {
   choicesLoaded: boolean;
   /** The project main named for `choices`; a push naming any other is refused. */
   choicesProjectId: string | null;
-  /** The last answer main could not record, so the canvas can say so and retry it. */
-  failedSave: { slot: ProjectSurfaceSlot; choice: ProjectSurfaceChoice | null } | null;
+  /**
+   * The last answer main could not record and the plugin it was about, so the
+   * canvas can say so and retry it. Read it through {@link selectFailedSave}.
+   */
+  failedSave: {
+    slot: ProjectSurfaceSlot;
+    choice: ProjectSurfaceChoice | null;
+    pluginId: string | null;
+  } | null;
   /** Answer for whichever plugin owns `slot` now, or forget the answer with `null`. */
-  setSurfaceChoice: (slot: ProjectSurfaceSlot, choice: ProjectSurfaceChoice | null) => Promise<void>;
+  setSurfaceChoice: (
+    slot: ProjectSurfaceSlot,
+    choice: ProjectSurfaceChoice | null
+  ) => Promise<void>;
   dismissFailedSave: () => void;
   /** Idempotent: pulls claims and answers once, then follows their change signals. */
   init: () => void;
@@ -89,9 +99,22 @@ export function selectSurfaceChoice(
   const claim = state.surfaces[slot];
   const record = state.choices[slot];
   if (claim === undefined || record === undefined) return null;
-  return record.pluginId === pluginManifestIdFromInstanceKey(claim.pluginId)
-    ? record.choice
-    : null;
+  return record.pluginId === pluginManifestIdFromInstanceKey(claim.pluginId) ? record.choice : null;
+}
+
+/**
+ * The failed save for `slot`, while retrying it still means what it meant: only
+ * for the plugin it was about. A slot that has since passed to another plugin
+ * gets that plugin's own question, not a retry of an answer about the last one.
+ */
+export function selectFailedSave(
+  state: Pick<PluginProjectSurfacesState, "surfaces" | "failedSave">,
+  slot: ProjectSurfaceSlot
+): PluginProjectSurfacesState["failedSave"] {
+  const failed = state.failedSave;
+  const claim = state.surfaces[slot];
+  if (failed === null || failed.slot !== slot || claim === undefined) return null;
+  return failed.pluginId === pluginManifestIdFromInstanceKey(claim.pluginId) ? failed : null;
 }
 
 export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>((set, get) => {
@@ -101,6 +124,10 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
       choices: snapshot.choices,
       choicesProjectId: snapshot.projectId,
       choicesLoaded: true,
+      // A recorded answer — this view's or another's — is newer than any
+      // attempt that failed before it, and retrying that attempt would
+      // overwrite it.
+      failedSave: null,
     });
   };
 
@@ -113,38 +140,37 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
       typeof plugin.getProjectSurfaceChoices === "function"
         ? plugin.getProjectSurfaceChoices()
         : Promise.resolve(null);
-    void Promise.allSettled([plugin.getProjectSurfaces(), answers]).then(
-      ([surfaces, snapshot]) => {
-        if (seq !== pullSeq) return;
-        const next: Partial<PluginProjectSurfacesState> = {};
-        if (surfaces.status === "fulfilled") {
-          next.surfaces = surfaces.value;
-        } else {
-          // Clear rather than keep the last answer. A retained claim outlives
-          // the plugin that made it: if the same runtime kind id is later
-          // re-registered without a claim behind it, a stale snapshot would
-          // resurrect a surface main no longer owns. Falling back to the host's
-          // own canvas is always safe; showing a plugin's is not.
-          next.surfaces = {};
-          logWarn("[pluginProjectSurfacesStore] Failed to fetch project surfaces", {
-            error: surfaces.reason,
-          });
-        }
-        if (snapshot.status === "rejected") {
-          // Stay as loaded as we were rather than read the failure as "never
-          // answered": the claimed surface still shows, as its manifest asked,
-          // and nobody is asked a question they may already have answered.
-          logWarn("[pluginProjectSurfacesStore] Failed to fetch project surface choices", {
-            error: snapshot.reason,
-          });
-        } else if (snapshot.value !== null && choicesSeq === choicesAtStart) {
-          next.choices = snapshot.value.choices;
-          next.choicesProjectId = snapshot.value.projectId;
-          next.choicesLoaded = true;
-        }
-        set(next);
+    void Promise.allSettled([plugin.getProjectSurfaces(), answers]).then(([surfaces, snapshot]) => {
+      if (seq !== pullSeq) return;
+      const next: Partial<PluginProjectSurfacesState> = {};
+      if (surfaces.status === "fulfilled") {
+        next.surfaces = surfaces.value;
+      } else {
+        // Clear rather than keep the last answer. A retained claim outlives
+        // the plugin that made it: if the same runtime kind id is later
+        // re-registered without a claim behind it, a stale snapshot would
+        // resurrect a surface main no longer owns. Falling back to the host's
+        // own canvas is always safe; showing a plugin's is not.
+        next.surfaces = {};
+        logWarn("[pluginProjectSurfacesStore] Failed to fetch project surfaces", {
+          error: surfaces.reason,
+        });
       }
-    );
+      if (snapshot.status === "rejected") {
+        // Stay as loaded as we were rather than read the failure as "never
+        // answered": nobody is asked a question they may already have
+        // answered. Until an answer is known the canvas stays stock, the safe
+        // side, and the next panel-kinds push reads again.
+        logWarn("[pluginProjectSurfacesStore] Failed to fetch project surface choices", {
+          error: snapshot.reason,
+        });
+      } else if (snapshot.value !== null && choicesSeq === choicesAtStart) {
+        next.choices = snapshot.value.choices;
+        next.choicesProjectId = snapshot.value.projectId;
+        next.choicesLoaded = true;
+      }
+      set(next);
+    });
   };
 
   return {
@@ -164,7 +190,14 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
         // nothing to reconcile — and the round trip is one store write.
         adoptChoices(await plugin.setProjectSurfaceChoice(slot, choice));
       } catch (err) {
-        set({ failedSave: { slot, choice } });
+        const claim = get().surfaces[slot];
+        set({
+          failedSave: {
+            slot,
+            choice,
+            pluginId: claim === undefined ? null : pluginManifestIdFromInstanceKey(claim.pluginId),
+          },
+        });
         logWarn("[pluginProjectSurfacesStore] Failed to save a project surface choice", {
           slot,
           choice,

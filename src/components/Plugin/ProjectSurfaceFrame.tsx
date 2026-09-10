@@ -8,6 +8,7 @@ import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { useRenderableSurfaceClaim } from "@/hooks/useRenderableSurfaceClaim";
 import { actionService } from "@/services/ActionService";
 import {
+  selectFailedSave,
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
@@ -23,7 +24,10 @@ const PANEL_LABEL_MAX_CHARS = 32;
 function capLabel(name: string): string {
   const chars = Array.from(name);
   return chars.length > PANEL_LABEL_MAX_CHARS
-    ? `${chars.slice(0, PANEL_LABEL_MAX_CHARS - 1).join("").trimEnd()}…`
+    ? `${chars
+        .slice(0, PANEL_LABEL_MAX_CHARS - 1)
+        .join("")
+        .trimEnd()}…`
     : name;
 }
 
@@ -57,9 +61,7 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
   const renderable = useRenderableSurfaceClaim("emptyCanvas");
   const choicesLoaded = usePluginProjectSurfacesStore((s) => s.choicesLoaded);
   const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, "emptyCanvas"));
-  const failedSave = usePluginProjectSurfacesStore((s) =>
-    s.failedSave?.slot === "emptyCanvas" ? s.failedSave : null
-  );
+  const failedSave = usePluginProjectSurfacesStore((s) => selectFailedSave(s, "emptyCanvas"));
   const setSurfaceChoice = usePluginProjectSurfacesStore((s) => s.setSurfaceChoice);
   const dismissFailedSave = usePluginProjectSurfacesStore((s) => s.dismissFailedSave);
   const claimPluginId = renderable?.claim.pluginId;
@@ -100,7 +102,10 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
   const panelLabel = capLabel(config.name);
 
   return (
-    <div className="flex h-full w-full min-h-0 min-w-0 flex-col" data-testid="project-surface-frame">
+    <div
+      className="flex h-full w-full min-h-0 min-w-0 flex-col"
+      data-testid="project-surface-frame"
+    >
       <SurfaceHeader
         ref={stripRef}
         density="compact"
@@ -147,7 +152,7 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
           <InlineStatusBanner
             icon={AlertCircle}
             title="Couldn't save the canvas choice"
-            description="It couldn't be written to Daintree's settings, so the canvas hasn't changed."
+            description="Daintree couldn't record it, so the canvas hasn't changed."
             severity="error"
             action={{
               id: "retry",
@@ -175,7 +180,11 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
                   >
                     Keep it
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={(event) => void answer("stock", event)}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={(event) => void answer("stock", event)}
+                  >
                     Use the launcher
                   </Button>
                 </div>

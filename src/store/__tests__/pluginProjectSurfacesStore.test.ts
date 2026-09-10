@@ -8,6 +8,7 @@ import type {
 } from "@shared/types/plugin";
 import {
   _resetPluginProjectSurfacesStoreForTest,
+  selectFailedSave,
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
 } from "../pluginProjectSurfacesStore";
@@ -63,7 +64,9 @@ function installBridge(
   const setProjectSurfaceChoice = vi.fn(
     options.setChoice ??
       ((_slot: string, choice: ProjectSurfaceChoice | null) =>
-        Promise.resolve(snapshot(choice === null ? {} : { emptyCanvas: record("acme.dash", choice) })))
+        Promise.resolve(
+          snapshot(choice === null ? {} : { emptyCanvas: record("acme.dash", choice) })
+        ))
   );
   const on = vi.fn((name: string, cb: ChoicesCallback) => {
     if (name === "plugin:project-surface-choices-changed") choiceListeners.push(cb);
@@ -332,7 +335,10 @@ describe("pluginProjectSurfacesStore", () => {
   it("adopts an answer only once main has recorded it", async () => {
     const save = deferred<ProjectSurfaceChoicesSnapshot>();
     const bridge = installBridge({}, { setChoice: () => save.promise });
-    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim }, choicesLoaded: true });
+    usePluginProjectSurfacesStore.setState({
+      surfaces: { emptyCanvas: claim },
+      choicesLoaded: true,
+    });
 
     const pending = state().setSurfaceChoice("emptyCanvas", "stock");
 
@@ -357,11 +363,18 @@ describe("pluginProjectSurfacesStore", () => {
             : Promise.resolve(snapshot({ emptyCanvas: record("acme.dash", choice ?? "surface") })),
       }
     );
-    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim }, choicesLoaded: true });
+    usePluginProjectSurfacesStore.setState({
+      surfaces: { emptyCanvas: claim },
+      choicesLoaded: true,
+    });
 
     await state().setSurfaceChoice("emptyCanvas", "stock");
 
-    expect(state().failedSave).toEqual({ slot: "emptyCanvas", choice: "stock" });
+    expect(state().failedSave).toEqual({
+      slot: "emptyCanvas",
+      choice: "stock",
+      pluginId: "acme.dash",
+    });
     expect(canvasChoice()).toBeNull();
 
     fail = false;
@@ -369,6 +382,40 @@ describe("pluginProjectSurfacesStore", () => {
 
     expect(state().failedSave).toBeNull();
     expect(canvasChoice()).toBe("stock");
+  });
+
+  it("drops a failed save once another view's answer arrives", async () => {
+    const bridge = installBridge(
+      { emptyCanvas: claim },
+      { setChoice: () => Promise.reject(new Error("ENOSPC")) }
+    );
+    state().init();
+    await flush();
+
+    await state().setSurfaceChoice("emptyCanvas", "stock");
+    expect(selectFailedSave(state(), "emptyCanvas")).not.toBeNull();
+
+    // Retrying now would overwrite an answer newer than the one that failed.
+    bridge.choiceListeners[0]?.(snapshot({ emptyCanvas: record("acme.dash", "surface") }));
+
+    expect(selectFailedSave(state(), "emptyCanvas")).toBeNull();
+    expect(canvasChoice()).toBe("surface");
+  });
+
+  it("offers a failed save for retry only while the same plugin owns the slot", async () => {
+    installBridge({}, { setChoice: () => Promise.reject(new Error("ENOSPC")) });
+    usePluginProjectSurfacesStore.setState({
+      surfaces: { emptyCanvas: claim },
+      choicesLoaded: true,
+    });
+
+    await state().setSurfaceChoice("emptyCanvas", "stock");
+    expect(selectFailedSave(state(), "emptyCanvas")?.choice).toBe("stock");
+
+    usePluginProjectSurfacesStore.setState({
+      surfaces: { emptyCanvas: { ...claim, pluginId: "project__p1__acme.other" } },
+    });
+    expect(selectFailedSave(state(), "emptyCanvas")).toBeNull();
   });
 
   it("forgets an answer with null", async () => {

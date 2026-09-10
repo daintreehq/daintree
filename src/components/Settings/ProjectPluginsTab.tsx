@@ -12,6 +12,7 @@ import {
 } from "@/components/Settings/ProjectPluginSelectorDropdown";
 import { useRenderableSurfaceClaim } from "@/hooks/useRenderableSurfaceClaim";
 import {
+  selectFailedSave,
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
@@ -84,7 +85,7 @@ function EmptyCanvasSection() {
   const choicesLoaded = usePluginProjectSurfacesStore((s) => s.choicesLoaded);
   const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, "emptyCanvas"));
   const setSurfaceChoice = usePluginProjectSurfacesStore((s) => s.setSurfaceChoice);
-  const saveFailed = usePluginProjectSurfacesStore((s) => s.failedSave?.slot === "emptyCanvas");
+  const failedSave = usePluginProjectSurfacesStore((s) => selectFailedSave(s, "emptyCanvas"));
   const plugins = useProjectPluginStore((s) => s.plugins);
 
   useEffect(() => {
@@ -108,16 +109,27 @@ function EmptyCanvasSection() {
         {pluginName} draws what this project shows when no panels are open, in place of the
         launcher. {EMPTY_CANVAS_STATUS[choice ?? "none"]}
       </p>
-      {saveFailed && (
-        <p role="alert" className="text-xs text-status-error">
-          Couldn&apos;t save the canvas choice. Try again.
-        </p>
+      {failedSave !== null && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <p role="alert" className="text-xs text-status-error">
+            Couldn&apos;t save the canvas choice.
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void setSurfaceChoice("emptyCanvas", failedSave.choice)}
+          >
+            Retry
+          </Button>
+        </div>
       )}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-2xs text-text-secondary">Show on the empty canvas</span>
         <SettingsSwitch
           checked={choice !== "stock"}
-          onCheckedChange={(next) => void setSurfaceChoice("emptyCanvas", next ? "surface" : "stock")}
+          onCheckedChange={(next) =>
+            void setSurfaceChoice("emptyCanvas", next ? "surface" : "stock")
+          }
           aria-label="Show on the empty canvas"
           data-testid="project-empty-canvas-switch"
         />
