@@ -365,6 +365,11 @@ function Toast({
     <div
       ref={toastRef}
       className={cn(
+        // A global banner pushes the toolbar's drag band below this
+        // column's top-14 origin, so toast controls land inside it — stamp the
+        // toast, not the pointer-events-none column, which would hold a rect
+        // over the title bar even with nothing showing (#12347).
+        "app-no-drag",
         "pointer-events-auto relative w-full min-w-[240px] max-w-[360px]",
         "transition-[transform,opacity]",
         "motion-reduce:transition-none motion-reduce:duration-0",
@@ -696,6 +701,7 @@ function OverflowPill({ count }: { count: number }) {
       aria-label={label}
       data-testid="toast-overflow-pill"
       className={cn(
+        "app-no-drag",
         "pointer-events-auto self-end",
         "inline-flex items-center gap-1 rounded-full",
         "bg-surface-panel/85 backdrop-blur-xl",

@@ -227,6 +227,8 @@ const ContextMenuSubContent = React.forwardRef<
         collisionPadding={collisionPadding}
         style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
         className={cn(
+          // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+          "app-no-drag",
           "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
           OVERLAY_MOTION_CLASS,
           className
@@ -317,6 +319,8 @@ const ContextMenuContent = React.forwardRef<
             ...style,
           }}
           className={cn(
+            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+            "app-no-drag",
             "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
             OVERLAY_MOTION_CLASS,
             className

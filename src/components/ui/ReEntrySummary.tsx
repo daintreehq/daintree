@@ -105,6 +105,10 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
     >
       <div
         className={cn(
+          // Anchored at top-3, so the card overlaps the toolbar's drag band
+          // and its Pin/Dismiss controls are swallowed as window drags. The
+          // opt-out goes here, not on the pointer-events-none wrapper (#12347).
+          "app-no-drag",
           "relative flex flex-col w-full max-w-[360px]",
           "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
           "bg-surface-panel/85 backdrop-blur-xl",

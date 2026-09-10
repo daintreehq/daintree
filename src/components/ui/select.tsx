@@ -241,6 +241,8 @@ const SelectContent = React.forwardRef<
           }}
           style={{ transformOrigin: "var(--radix-select-content-transform-origin)", ...style }}
           className={cn(
+            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+            "app-no-drag",
             "relative z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
             OVERLAY_MOTION_CLASS,
             position === "popper" &&

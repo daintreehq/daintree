@@ -2186,7 +2186,15 @@ body[data-performance-mode="true"] .forge-status-error {
 /* Non-draggable interactive elements (Buttons, Inputs).
    Descendants opt out too — nested wrappers inside an interactive control
    would otherwise inherit `drag` from the toolbar parent and re-introduce
-   dead-click zones over the children. */
+   dead-click zones over the children.
+
+   Overlay content portaled to `document.body` (menus, popovers, selects,
+   dropdowns) needs this class as well. Chromium derives the OS drag region
+   geometrically, as drag rects minus no-drag rects, so a portaled surface
+   that never claims a no-drag rect has the toolbar's `drag` showing through
+   wherever the two overlap — and every item painted over the toolbar is
+   swallowed as a window drag instead of being clickable (#12347). The
+   descendant selector then carries the opt-out to the items inside. */
 .app-no-drag,
 .app-no-drag * {
   -webkit-app-region: no-drag;
