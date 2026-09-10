@@ -761,13 +761,16 @@ export interface AgentConfig {
    * Absolute filesystem paths to probe when PATH-based lookup (`which`/`where`)
    * fails. Used to detect agents installed by native installers into locations
    * the Electron process may not inherit in PATH — notably `~/.local/bin/claude`
-   * for Anthropic's native installer on macOS/Linux, and
-   * `%LOCALAPPDATA%\claude-code\bin\claude.exe` on Windows.
+   * for Anthropic's native installer, and WinGet's
+   * `%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe` on Windows.
    *
    * Tilde (`~`) is expanded to `os.homedir()` and Windows `%VAR%` tokens are
    * expanded against `process.env` by CliAvailabilityService before probing
-   * (see `expandWindowsEnvVars()` in electron/setup/environment.ts). Paths are
-   * tried in listed order; first accessible file wins.
+   * (see `expandWindowsEnvVars()` in electron/setup/environment.ts). On Windows
+   * an entry without a launchable extension is probed with `.cmd`, `.exe`,
+   * `.bat` and `.com` appended instead of as written, so a POSIX-style entry
+   * also covers a Windows install that shares its layout. Paths are tried in
+   * listed order; first accessible file wins.
    */
   nativePaths?: string[];
   /**

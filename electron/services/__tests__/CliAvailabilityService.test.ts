@@ -11,6 +11,8 @@ import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { logBuffer } from "../LogBuffer.js";
+import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.js";
 
 // Mock child_process. The service's probes (shell which/where, npm-global,
 // WSL) all run through async `execFile` — mock it or the probes will call
@@ -120,7 +122,6 @@ describe("CliAvailabilityService", () => {
   let service: CliAvailabilityService;
   const mockedExecFileSync = vi.mocked(execFileSync);
   const mockedExecFile = vi.mocked(execFile);
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   const savedEnv: Record<string, string | undefined> = {};
   // Default platform to darwin so Unix-style path/probe expectations don't
   // diverge on Windows CI. Individual tests that exercise Windows-specific
@@ -169,10 +170,6 @@ describe("CliAvailabilityService", () => {
     // Default async execFile (npm-global / WSL probes) to "not found" —
     // clearAllMocks wipes mock impls, so we reapply the factory default after each clear.
     mockedExecFile.mockImplementation(defaultExecFileImpl as never);
-    // Silence the diagnostic fallback log emitted by checkAuth() so
-    // the test runner output stays clean. Individual tests re-access
-    // the spy via `consoleLogSpy` to assert on log calls.
-    consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -965,6 +962,29 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("diagnostic logging for auth discovery", () => {
+    let savedLogOverrides: Record<string, string>;
+
+    beforeEach(() => {
+      savedLogOverrides = getLogLevelOverrides();
+      // Vitest floors the logger at "debug"; pin production's "info" floor so
+      // a miss logged below it fails here instead of silently never reaching
+      // daintree.log on a user's machine.
+      setLogLevelOverrides({ "*": "info" });
+      logBuffer.clear();
+    });
+
+    afterEach(() => {
+      setLogLevelOverrides(savedLogOverrides);
+      logBuffer.clear();
+    });
+
+    const authMissPaths = (agentId: string): string[][] =>
+      logBuffer
+        .getFiltered({ sources: ["main:CliAvailabilityService"] })
+        .map((entry) => entry.context as { agentId?: unknown; checkedPaths?: unknown } | undefined)
+        .filter((context) => context?.agentId === agentId && Array.isArray(context.checkedPaths))
+        .map((context) => context!.checkedPaths as string[]);
+
     it("logs exactly once when auth discovery finds no credential", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (cmdOf(args) === "copilot") return Buffer.from("");
@@ -976,17 +996,11 @@ describe("CliAvailabilityService", () => {
       expect(result.copilot).toBe("unauthenticated");
       expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
-      const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
-        String(call[0]).includes(
-          "GitHub Copilot: binary found, auth discovery: no credential found"
-        )
-      );
+      const copilotLogs = authMissPaths("copilot");
       // Must fire exactly once — guards against the Promise.race leak where
       // a slow fs.access would log after the timeout branch already resolved.
       expect(copilotLogs).toHaveLength(1);
-      const message = String(copilotLogs[0][0]);
-      expect(message).toContain("[CliAvailabilityService]");
-      expect(message).toContain(join(".copilot", "config.json"));
+      expect(copilotLogs[0].some((p) => p.includes(join(".copilot", "config.json")))).toBe(true);
     });
 
     it("logs Kiro auth discovery miss listing the AWS SSO token path that was checked", async () => {
@@ -1001,12 +1015,11 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      const kiroLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
-        String(call[0]).includes("Kiro")
-      );
-      expect(kiroLog).toBeDefined();
-      expect(String(kiroLog![0])).toContain(join(".aws", "sso", "cache", "kiro-auth-token.json"));
-      expect(String(kiroLog![0])).toContain("no credential found");
+      const kiroLogs = authMissPaths("kiro");
+      expect(kiroLogs).toHaveLength(1);
+      expect(
+        kiroLogs[0].some((p) => p.includes(join(".aws", "sso", "cache", "kiro-auth-token.json")))
+      ).toBe(true);
     });
 
     it("does NOT log when auth check is short-circuited by envVar (OPENAI_API_KEY)", async () => {
@@ -1020,10 +1033,7 @@ describe("CliAvailabilityService", () => {
       expect(result.codex).toBe("ready");
       expect(service.getDetails()!.codex?.authConfirmed).toBe(true);
 
-      const codexLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
-        String(call[0]).includes("Codex")
-      );
-      expect(codexLog).toBeUndefined();
+      expect(authMissPaths("codex")).toHaveLength(0);
     });
 
     it("does NOT emit a discovery-miss log when the auth check timed out", async () => {
@@ -1058,13 +1068,8 @@ describe("CliAvailabilityService", () => {
         expect(result.copilot).toBe("unauthenticated");
         expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
-        const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
-          String(call[0]).includes(
-            "GitHub Copilot: binary found, auth discovery: no credential found"
-          )
-        );
         // No discovery-miss log should fire — the timeout decided the state.
-        expect(copilotLogs).toHaveLength(0);
+        expect(authMissPaths("copilot")).toHaveLength(0);
       } finally {
         vi.useRealTimers();
       }
@@ -1082,10 +1087,7 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      const copilotLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
-        String(call[0]).includes("GitHub Copilot: binary found, auth discovery")
-      );
-      expect(copilotLog).toBeUndefined();
+      expect(authMissPaths("copilot")).toHaveLength(0);
     });
   });
 
@@ -1233,7 +1235,7 @@ describe("CliAvailabilityService", () => {
       const nativeProbes = mockedAccess.mock.calls.filter(
         (call) =>
           String(call[0]).includes(".local/bin/claude") ||
-          String(call[0]).includes("claude-code\\bin\\claude.exe")
+          String(call[0]).includes("WinGet\\Links\\claude.exe")
       );
       expect(nativeProbes).toHaveLength(0);
     });
@@ -2267,6 +2269,193 @@ describe("CliAvailabilityService", () => {
       } finally {
         clearPluginAgentRegistryForTests();
       }
+    });
+  });
+
+  describe("Windows native path probing (#12352)", () => {
+    const savedWindowsEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      for (const name of ["USERPROFILE", "LOCALAPPDATA"]) {
+        savedWindowsEnv[name] = process.env[name];
+        delete process.env[name];
+      }
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+    });
+
+    afterEach(() => {
+      for (const [name, value] of Object.entries(savedWindowsEnv)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+
+    const onlyExisting = async (existingPath: string) => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === existingPath) return undefined;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      return mockedAccess;
+    };
+
+    const checkPluginCommand = async (command: string) => {
+      const { registerPluginAgents, clearPluginAgentRegistryForTests } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      registerPluginAgents("acme.plugin", [
+        { id: "acme-agent", name: "Acme Agent", command, color: "#3366ff", iconId: "terminal" },
+      ]);
+      try {
+        await service.checkAvailability();
+        return service.getDetails()?.["acme-agent"];
+      } finally {
+        clearPluginAgentRegistryForTests();
+      }
+    };
+
+    it("finds an extensionless native entry through its .exe sibling", async () => {
+      const claudeExe = `${join(homedir(), ".local/bin/claude")}.exe`;
+      await onlyExisting(claudeExe);
+
+      const result = await service.checkAvailability();
+
+      expect(result.claude).toBe("unauthenticated");
+      expect(service.getDetails()!.claude?.via).toBe("native");
+      expect(service.getDetails()!.claude?.resolvedPath).toBe(claudeExe);
+    });
+
+    it("does not accept an extensionless file as a Windows install", async () => {
+      await onlyExisting(join(homedir(), ".local/bin/claude"));
+
+      const result = await service.checkAvailability();
+
+      expect(result.claude).toBe("missing");
+    });
+
+    it("probes an entry that already carries .exe as written", async () => {
+      process.env.USERPROFILE = "C:\\Users\\test";
+      const gooseExe = "C:\\Users\\test\\.local\\bin\\goose.exe";
+      const mockedAccess = await onlyExisting(gooseExe);
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.goose?.via).toBe("native");
+      expect(service.getDetails()!.goose?.resolvedPath).toBe(gooseExe);
+      expect(mockedAccess.mock.calls.some(([p]) => String(p).startsWith(`${gooseExe}.`))).toBe(
+        false
+      );
+    });
+
+    it.each(["agent.EXE", "agent.ps1"])(
+      "probes a plugin command already named %s as written",
+      async (fileName) => {
+        const command = `/tmp/daintree-plugins/acme/bin/${fileName}`;
+        await onlyExisting(command);
+
+        const detail = await checkPluginCommand(command);
+
+        expect(detail?.state).toBe("ready");
+        expect(detail?.resolvedPath).toBe(command);
+      }
+    );
+
+    it("resolves an extensionless plugin command to its launchable sibling", async () => {
+      const command = "/tmp/daintree-plugins/acme/bin/agent";
+      await onlyExisting(`${command}.cmd`);
+
+      const detail = await checkPluginCommand(command);
+
+      expect(detail?.state).toBe("ready");
+      expect(detail?.resolvedPath).toBe(`${command}.cmd`);
+    });
+  });
+
+  describe("check timeout (#12352)", () => {
+    let savedLogOverrides: Record<string, string>;
+
+    beforeEach(() => {
+      savedLogOverrides = getLogLevelOverrides();
+      setLogLevelOverrides({ "*": "info" });
+      logBuffer.clear();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      setLogLevelOverrides(savedLogOverrides);
+      logBuffer.clear();
+    });
+
+    // The hung agent's `which` never calls back, so its check outlives the
+    // batch budget while every other agent settles through microtasks.
+    const hangWhichFor = (hungCommand: string) => {
+      mockedExecFile.mockImplementation(((...args: unknown[]) =>
+        args[0] === "which" && cmdOf(args[1]) === hungCommand
+          ? ({} as never)
+          : defaultExecFileImpl(...args)) as never);
+    };
+
+    const timedOutAgentIds = () =>
+      logBuffer
+        .getFiltered({ sources: ["main:CliAvailabilityService"] })
+        .filter((entry) => entry.level === "warn")
+        .map(
+          (entry) => (entry.context as { pendingAgentIds?: unknown } | undefined)?.pendingAgentIds
+        )
+        .filter((ids) => ids !== undefined);
+
+    it("keeps agents that finished and logs the ones that did not", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude") return Buffer.from("/usr/local/bin/claude\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      hangWhichFor("goose");
+
+      vi.useFakeTimers();
+      const checkPromise = service.checkAvailability();
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await checkPromise;
+
+      const details = service.getDetails()!;
+      expect(result.claude).toBe("unauthenticated");
+      expect(details.claude?.resolvedPath).toBe("/usr/local/bin/claude");
+      expect(result.goose).toBe("missing");
+      expect(details.goose?.message).toBeDefined();
+      // A real miss carries no timeout message, so the two stay distinguishable.
+      expect(details.gemini?.state).toBe("missing");
+      expect(details.gemini?.message).toBeUndefined();
+      expect(timedOutAgentIds()).toEqual([["goose"]]);
+    });
+
+    it("carries an agent's previous result forward when its re-check times out", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const cmd = cmdOf(args);
+        if (cmd === "claude") return Buffer.from("/usr/local/bin/claude\n");
+        if (cmd === "goose") return Buffer.from("/usr/local/bin/goose\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      await service.checkAvailability();
+      const previousGoose = service.getDetails()!.goose;
+      expect(previousGoose?.resolvedPath).toBe("/usr/local/bin/goose");
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude") return Buffer.from("/opt/homebrew/bin/claude\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      hangWhichFor("goose");
+
+      vi.useFakeTimers();
+      const refreshPromise = service.refresh();
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await refreshPromise;
+
+      expect(service.getDetails()!.goose).toEqual(previousGoose);
+      expect(result.goose).toBe(previousGoose?.state);
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      expect(timedOutAgentIds()).toEqual([["goose"]]);
     });
   });
 });
