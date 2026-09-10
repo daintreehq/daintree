@@ -966,10 +966,9 @@ describe("CliAvailabilityService", () => {
 
     beforeEach(() => {
       savedLogOverrides = getLogLevelOverrides();
-      // Vitest floors the logger at "debug"; pin production's "info" floor so
-      // a miss logged below it fails here instead of silently never reaching
-      // daintree.log on a user's machine.
-      setLogLevelOverrides({ "*": "info" });
+      // The miss logs at debug on purpose (see checkAuth); pin that floor so
+      // these assertions don't lean on the ambient default.
+      setLogLevelOverrides({ "*": "debug" });
       logBuffer.clear();
     });
 
@@ -997,8 +996,7 @@ describe("CliAvailabilityService", () => {
       expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
       const copilotLogs = authMissPaths("copilot");
-      // Must fire exactly once — guards against the Promise.race leak where
-      // a slow fs.access would log after the timeout branch already resolved.
+      // One check, one miss — no duplicate log per agent.
       expect(copilotLogs).toHaveLength(1);
       expect(copilotLogs[0].some((p) => p.includes(join(".copilot", "config.json")))).toBe(true);
     });
@@ -1046,22 +1044,22 @@ describe("CliAvailabilityService", () => {
           if (cmdOf(args) === "copilot") return Buffer.from("");
           throw new Error("not found");
         });
-        // Make fs.access hang forever ONLY for copilot's auth config path so
-        // the Copilot auth check race is decided by the timeout branch. Other
-        // agents' fs.access probes (e.g. Claude's native-path probe) must
-        // resolve quickly with ENOENT; otherwise they'd hang forever too and
-        // the outer check timeout would never be reached under fake timers.
+        // Copilot's auth config probe misses only after the auth budget has
+        // decided the race, so the miss path still runs to completion — late,
+        // which is exactly when an unguarded log would fire. Other agents'
+        // fs.access probes must reject straight away or they'd stall the
+        // batch under fake timers.
         const copilotConfig = join(homedir(), ".copilot/config.json");
         mockedAccess.mockImplementation(async (p) => {
           if (String(p) === copilotConfig) {
-            return new Promise(() => {});
+            await new Promise((resolve) => setTimeout(resolve, 5_000));
           }
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         });
 
         const checkPromise = service.checkAvailability();
-        // Advance past AUTH_CHECK_TIMEOUT_MS (3s) to resolve the timeout branch.
-        await vi.advanceTimersByTimeAsync(4_000);
+        // Past both the 3s auth budget and the late 5s miss.
+        await vi.advanceTimersByTimeAsync(6_000);
         const result = await checkPromise;
 
         // Binary found, auth inconclusive due to timeout → unauthenticated.
@@ -2295,12 +2293,10 @@ describe("CliAvailabilityService", () => {
 
     const onlyExisting = async (existingPath: string) => {
       const { access } = await import("fs/promises");
-      const mockedAccess = vi.mocked(access);
-      mockedAccess.mockImplementation(async (p) => {
+      vi.mocked(access).mockImplementation(async (p) => {
         if (String(p) === existingPath) return undefined;
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       });
-      return mockedAccess;
     };
 
     const checkPluginCommand = async (command: string) => {
@@ -2339,15 +2335,21 @@ describe("CliAvailabilityService", () => {
     it("probes an entry that already carries .exe as written", async () => {
       process.env.USERPROFILE = "C:\\Users\\test";
       const gooseExe = "C:\\Users\\test\\.local\\bin\\goose.exe";
-      const mockedAccess = await onlyExisting(gooseExe);
+      await onlyExisting(gooseExe);
 
       await service.checkAvailability();
 
       expect(service.getDetails()!.goose?.via).toBe("native");
       expect(service.getDetails()!.goose?.resolvedPath).toBe(gooseExe);
-      expect(mockedAccess.mock.calls.some(([p]) => String(p).startsWith(`${gooseExe}.`))).toBe(
-        false
-      );
+    });
+
+    it("never appends a second extension to an entry that already carries one", async () => {
+      process.env.USERPROFILE = "C:\\Users\\test";
+      await onlyExisting("C:\\Users\\test\\.local\\bin\\goose.exe.cmd");
+
+      const result = await service.checkAvailability();
+
+      expect(result.goose).toBe("missing");
     });
 
     it.each(["agent.EXE", "agent.ps1"])(
@@ -2363,14 +2365,34 @@ describe("CliAvailabilityService", () => {
       }
     );
 
-    it("resolves an extensionless plugin command to its launchable sibling", async () => {
-      const command = "/tmp/daintree-plugins/acme/bin/agent";
-      await onlyExisting(`${command}.cmd`);
+    it.each(["agent", "agent-2.1"])(
+      "resolves a plugin command named %s to its launchable sibling",
+      async (fileName) => {
+        const command = `/tmp/daintree-plugins/acme/bin/${fileName}`;
+        await onlyExisting(`${command}.cmd`);
 
-      const detail = await checkPluginCommand(command);
+        const detail = await checkPluginCommand(command);
 
-      expect(detail?.state).toBe("ready");
-      expect(detail?.resolvedPath).toBe(`${command}.cmd`);
+        expect(detail?.state).toBe("ready");
+        expect(detail?.resolvedPath).toBe(`${command}.cmd`);
+      }
+    );
+
+    it("reports the launch candidate that was denied, not the extensionless entry", async () => {
+      const { access } = await import("fs/promises");
+      const claudeExe = `${join(homedir(), ".local/bin/claude")}.exe`;
+      vi.mocked(access).mockImplementation(async (p) => {
+        const code = String(p) === claudeExe ? "EACCES" : "ENOENT";
+        throw Object.assign(new Error(code), { code });
+      });
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.claude).toMatchObject({
+        state: "blocked",
+        via: "native",
+        resolvedPath: claudeExe,
+      });
     });
   });
 
@@ -2416,6 +2438,7 @@ describe("CliAvailabilityService", () => {
 
       vi.useFakeTimers();
       const checkPromise = service.checkAvailability();
+      // Comfortably past the batch budget without pinning its exact value.
       await vi.advanceTimersByTimeAsync(60_000);
       const result = await checkPromise;
 
@@ -2440,6 +2463,7 @@ describe("CliAvailabilityService", () => {
       await service.checkAvailability();
       const previousGoose = service.getDetails()!.goose;
       expect(previousGoose?.resolvedPath).toBe("/usr/local/bin/goose");
+      expect(previousGoose?.message).toBeUndefined();
 
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (cmdOf(args) === "claude") return Buffer.from("/opt/homebrew/bin/claude\n");
@@ -2452,10 +2476,56 @@ describe("CliAvailabilityService", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       const result = await refreshPromise;
 
-      expect(service.getDetails()!.goose).toEqual(previousGoose);
+      // Same observation as last time, flagged as not re-confirmed.
+      expect(service.getDetails()!.goose).toEqual({
+        ...previousGoose,
+        message: expect.any(String),
+      });
       expect(result.goose).toBe(previousGoose?.state);
       expect(service.getDetails()!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
       expect(timedOutAgentIds()).toEqual([["goose"]]);
+    });
+
+    it("keeps a carried agent's own diagnostic instead of the timeout note", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "goose") {
+          throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      await service.checkAvailability();
+      const blockedGoose = service.getDetails()!.goose;
+      expect(blockedGoose?.state).toBe("blocked");
+      expect(blockedGoose?.message).toBeDefined();
+
+      hangWhichFor("goose");
+      vi.useFakeTimers();
+      const refreshPromise = service.refresh();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshPromise;
+
+      expect(service.getDetails()!.goose).toEqual(blockedGoose);
+    });
+
+    it("isolates an agent whose check throws from the rest of the batch", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude") return Buffer.from("/usr/local/bin/claude\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      mockedExecFile.mockImplementation(((...args: unknown[]) => {
+        if (args[0] === "which" && cmdOf(args[1]) === "goose") throw new Error("spawn EBADF");
+        return defaultExecFileImpl(...args);
+      }) as never);
+
+      const result = await service.checkAvailability();
+
+      expect(result.goose).toBe("missing");
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/usr/local/bin/claude");
+      const failedAgentIds = logBuffer
+        .getFiltered({ sources: ["main:CliAvailabilityService"] })
+        .filter((entry) => entry.level === "error")
+        .map((entry) => (entry.context as { agentId?: unknown } | undefined)?.agentId);
+      expect(failedAgentIds).toEqual(["goose"]);
     });
   });
 });

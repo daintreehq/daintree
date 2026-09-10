@@ -60,6 +60,8 @@ interface AgentCheckOutcome {
 
 const SECURITY_ERROR_CODES = new Set(["EACCES", "EPERM"]);
 
+const CHECK_TIMED_OUT_MESSAGE = "The most recent check didn't finish in time.";
+
 const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
   [".cmd", 0],
   [".exe", 1],
@@ -221,9 +223,19 @@ export class CliAvailabilityService {
           if (outcome) return [id, outcome];
           pendingAgentIds.push(id);
           // Running out of time says nothing about whether the binary is still
-          // there, so keep the last result this agent actually produced.
+          // there, so reuse what the last published check reported and flag
+          // that it wasn't re-confirmed — unless that detail already carries
+          // its own diagnostic, which stays the more useful thing to show.
           const previous = this.details?.[id];
-          if (previous) return [id, { state: previous.state, detail: previous }];
+          if (previous) {
+            return [
+              id,
+              {
+                state: previous.state,
+                detail: { ...previous, message: previous.message ?? CHECK_TIMED_OUT_MESSAGE },
+              },
+            ];
+          }
           return [
             id,
             {
@@ -232,18 +244,11 @@ export class CliAvailabilityService {
                 state: "missing",
                 resolvedPath: null,
                 via: null,
-                message: "Detection timed out before this agent could be checked.",
+                message: CHECK_TIMED_OUT_MESSAGE,
               },
             },
           ];
         });
-
-        if (pendingAgentIds.length > 0) {
-          logger.warn("CLI availability check timed out", {
-            timeoutMs: CliAvailabilityService.CHECK_TIMEOUT_MS,
-            pendingAgentIds,
-          });
-        }
 
         const availability: CliAvailability = Object.fromEntries(
           outcomeEntries.map(([id, outcome]) => [id, outcome.state])
@@ -255,6 +260,14 @@ export class CliAvailabilityService {
         if (this.checkId === currentCheckId) {
           this.availability = availability;
           this.details = details;
+          // Only a published check warns: a superseded one (the setup wizard
+          // re-checks every 3s) would otherwise report results nobody sees.
+          if (pendingAgentIds.length > 0) {
+            logger.warn("CLI availability check timed out", {
+              timeoutMs: CliAvailabilityService.CHECK_TIMEOUT_MS,
+              pendingAgentIds,
+            });
+          }
           this.notifyDuplicateInstalls(outcomeEntries, entries);
         }
 
@@ -420,7 +433,9 @@ export class CliAvailabilityService {
       }
 
       if (!timedOut) {
-        logger.info("Auth discovery found no credential", { agentId, checkedPaths });
+        // Debug, not info: the setup wizard re-checks every 3s, and at info
+        // this repeats into daintree.log's crash-context tail.
+        logger.debug("Auth discovery found no credential", { agentId, checkedPaths });
       }
       return false;
     })();
@@ -467,7 +482,8 @@ export class CliAvailabilityService {
     // Plugin-contributed agents (#10560) resolve a `./`-relative manifest command
     // to an absolute path at registration. Such a command has path separators and
     // would be rejected by VALID_COMMAND_RE below, so probe the file directly
-    // instead — `probeNativePaths` checks existence + executability (X_OK).
+    // instead — `probeNativePaths` checks existence + executability (X_OK),
+    // trying launchable extensions on Windows.
     if (isAbsolute(command)) {
       return this.probeNativePaths([command]);
     }
