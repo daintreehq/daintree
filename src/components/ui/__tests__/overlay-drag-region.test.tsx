@@ -156,8 +156,8 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
     "AppPaletteDialog.tsx": "same as AppDialog.tsx — pt-[15vh] panel, modal",
   };
 
-  // Named per file, so adding a third portaled surface to one of these forces
-  // a deliberate edit here instead of riding along on a sibling's stamp.
+  // Named, not counted, so extending one of these files is a deliberate edit
+  // here rather than a number that silently still matches.
   const STAMPED: Record<string, string[]> = {
     "context-menu.tsx": ["ContextMenuContent", "ContextMenuSubContent"],
     "dropdown-menu.tsx": ["DropdownMenuContent", "DropdownMenuSubContent"],
@@ -185,7 +185,12 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
     // Only inside a string literal, which is the only place a class can take
     // effect — matched loosely enough to survive being folded into a longer
     // class list.
-    return code.match(new RegExp(`"[^"\n]*\\b${NO_DRAG}\\b[^"\n]*"`, "g"))?.length ?? 0;
+    // Delimited by quote or space, so `data-testid="app-no-drag-probe"` does
+    // not read as a stamp, and never an attribute value (`="…"`), which is the
+    // only false-green direction — the misses all under-count and fail loudly.
+    return (
+      code.match(new RegExp(`(?<![=\\w])"(?:[^"\n]* )?${NO_DRAG}(?: [^"\n]*)?"`, "g"))?.length ?? 0
+    );
   }
 
   const portaling = readdirSync(UI_DIR)
@@ -217,8 +222,10 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
   });
 
   it.each(Object.entries(STAMPED))("%s stamps each of its portaled surfaces", (file, surfaces) => {
-    // A file-level "does it appear anywhere" check passes while a second or
-    // third portaled surface in the same module goes unstamped.
+    // A deletion ratchet, and only that: it fails if one of the named surfaces
+    // loses its stamp. A newly *added* portaled surface in an already-listed
+    // file still needs the author to extend the table above — which is why the
+    // surfaces are named rather than counted.
     expect(stampCount(file), `expected one stamp per surface: ${surfaces.join(", ")}`).toBe(
       surfaces.length
     );
