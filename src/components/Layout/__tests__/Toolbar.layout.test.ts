@@ -126,6 +126,28 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
+  describe("Empty-space context menu — issue #12355", () => {
+    // The menu's behaviour is covered for real in ToolbarButtonsContextMenu and
+    // toolbarVisibilityMenu tests; these only pin Toolbar.tsx's wiring to it.
+    it("wraps the toolbar root itself, so the trigger slots onto it", () => {
+      expect(source).toMatch(
+        /<ToolbarButtonsContextMenu[^>]*>\s*<div\s+ref=\{toolbarRef\}\s+role="toolbar"/
+      );
+    });
+
+    it("builds the rows from the side lists before the visibility filter", () => {
+      // Built from `effective*Buttons` instead, a hidden button would drop out of
+      // the one menu that exists to bring it back.
+      expect(source).toMatch(
+        /buildToolbarVisibilityMenuRows\(\s*positionedLeftButtons,\s*positionedRightButtons/
+      );
+    });
+
+    it("routes a menu toggle through the helper Settings → Toolbar uses", () => {
+      expect(source).toMatch(/setToolbarButtonOnToolbar\(\s*buttonId,\s*side,\s*onToolbar,/);
+    });
+  });
+
   describe("Window resize strip — issue #3273 Linux native title bar", () => {
     it("imports isLinux from platform", () => {
       expect(source).toContain("isLinux");

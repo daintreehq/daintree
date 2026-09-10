@@ -42,8 +42,10 @@ describe("ARIA page landmarks — issue #5416", () => {
       // while sitting between the two tags in source.
       expect(source).toMatch(/<div\s+ref=\{toolbarRef\}\s+role="toolbar"/);
       expect(source).not.toMatch(/<header[^>]*(?:role=|ref=)/);
-      // The banner still has to CONTAIN the toolbar — only a provider, which
-      // renders no DOM, is allowed between the two tags.
+      // The banner still has to CONTAIN the toolbar — only wrappers that render
+      // no DOM of their own (the brand-surface provider, and the empty-space
+      // context menu, whose trigger slots onto the root) are allowed between
+      // the two tags.
       expect(source).toMatch(/<header>[\s\S]{0,400}?<div\s+ref=\{toolbarRef\}\s+role="toolbar"/);
     });
   });
