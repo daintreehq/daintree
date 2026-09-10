@@ -12,6 +12,14 @@ import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/l
 
 export const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
 export const SHELL_IDENTITY_FALLBACK_POLL_MS = 200;
+// How often a prompt-less output chunk may read the foreground-pgid probe.
+// Longer than the probe's 1.5 s hard-max age on purpose, so each window costs
+// one spawn: the rationed read past that age starts a refresh, and the
+// follow-up below consumes it inside the 500 ms soft-stale window (no second
+// spawn). A quiet agent that never sends a follow-up chunk sits exactly where
+// it did before the ration — on a stale cache — and is no worse off.
+export const FOREGROUND_PROBE_KEEPWARM_MS = 5_000;
+export const FOREGROUND_PROBE_FOLLOW_UP_MS = 400;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
@@ -165,6 +173,9 @@ export class IdentityWatcher {
   // Persists across stop()/re-arm — the probe's availability is a property of
   // the terminal, not of a single command. #10911
   private sawForegroundSnapshot = false;
+  private lastForegroundProbeReadAt = 0;
+  private foregroundProbeFollowUpAt = 0;
+  private recheckTimer: ReturnType<typeof setTimeout> | null = null;
   private suppressNext = false;
   private inputBuffer = "";
   // ESC parser state, persisted across captureInput calls so a VT sequence
@@ -418,7 +429,43 @@ export class IdentityWatcher {
       this.sawReturnedShellPromptOutput = true;
     }
 
+    // Everything below decides whether a returned shell prompt demotes the
+    // agent. The probe behind readForegroundShellIdleForAgentDemotion is a
+    // `ps` spawn, refreshed whenever its 500 ms cache goes stale — and for an
+    // agent panel this is its only caller, so reading it on every chunk turned
+    // a TUI that repaints continuously (Codex's composer sparkles) into two
+    // `ps` spawns a second per terminal, forever, with no prompt in sight.
+    // Without a prompt the read is only worth its side effects — keeping the
+    // cache warm and latching `sawForegroundSnapshot` so a later null read is
+    // treated as transient rather than unsupported — so it is rationed to one
+    // per keep-warm window; a prompt always reads.
+    // A read past the cache's hard-max age only *starts* a refresh and comes
+    // back empty, so a single rationed read would never latch. The follow-up
+    // read, inside the soft-stale window, consumes the reading that refresh
+    // produced — one probe spawn per window, two reads. A prompt whose read
+    // came back empty gets the same follow-up by re-observing the chunk, so a
+    // returned prompt is judged on a real snapshot, as it was when every
+    // chunk kept the cache warm.
+    const now = Date.now();
+    const followUpDue =
+      this.foregroundProbeFollowUpAt !== 0 && now >= this.foregroundProbeFollowUpAt;
+    if (
+      !hasReturnedShellPromptOutput &&
+      !followUpDue &&
+      now - this.lastForegroundProbeReadAt < FOREGROUND_PROBE_KEEPWARM_MS
+    ) {
+      return;
+    }
+    this.lastForegroundProbeReadAt = now;
+    this.foregroundProbeFollowUpAt = 0;
+
     const foregroundShellIdle = this.readForegroundShellIdleForAgentDemotion();
+    if (foregroundShellIdle.empty) {
+      this.foregroundProbeFollowUpAt = now + FOREGROUND_PROBE_FOLLOW_UP_MS;
+      if (hasReturnedShellPromptOutput) {
+        this.scheduleOutputRecheck(data);
+      }
+    }
     if (foregroundShellIdle.supported && !foregroundShellIdle.shellIdle) {
       return;
     }
@@ -436,6 +483,11 @@ export class IdentityWatcher {
 
   stop(): void {
     this.timer.clear();
+    if (this.recheckTimer !== null) {
+      clearTimeout(this.recheckTimer);
+      this.recheckTimer = null;
+    }
+    this.foregroundProbeFollowUpAt = 0;
     this.submittedAt = null;
     this.commandText = undefined;
     this.identity = null;
@@ -540,9 +592,34 @@ export class IdentityWatcher {
     this.stop();
   }
 
+  // Re-observe a chunk once the probe refresh it triggered has had time to
+  // land. One pending recheck at a time; the latest chunk wins.
+  private scheduleOutputRecheck(data: string): void {
+    if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
+    this.recheckTimer = setTimeout(() => {
+      this.recheckTimer = null;
+      if (this.stopped) return;
+      // The chunk is stale by now. Replay it only if the prompt it carried is
+      // still on screen — a TUI that repainted over it in the meantime has
+      // withdrawn the evidence, and demoting on the memory of it would be a
+      // false demotion of a live agent.
+      const agentCommitted =
+        Boolean(this.identity?.agentType) || Boolean(this.delegate.detectedAgentId);
+      if (!this.hasUnambiguousShellPromptVisible(agentCommitted)) return;
+      try {
+        this.observeOutput(data);
+      } catch (err) {
+        console.error(`[IdentityWatcher] recheck failed for ${this.delegate.terminalId}:`, err);
+      }
+    }, FOREGROUND_PROBE_FOLLOW_UP_MS);
+  }
+
   private readForegroundShellIdleForAgentDemotion(): {
     readonly shellIdle: boolean;
     readonly supported: boolean;
+    // True when the read produced no real reading (warm-up sentinel or a
+    // stale/failed probe) — the caller may want to look again shortly.
+    readonly empty: boolean;
   } {
     const snapshot = this.delegate.readForegroundProcessGroupSnapshot();
     if (snapshot && snapshot.shellPgid > 0 && snapshot.foregroundPgid > 0) {
@@ -553,12 +630,14 @@ export class IdentityWatcher {
       // would fail closed forever on a box where `ps` never resolves, so it is
       // excluded here (identity compare: the probe returns the frozen singleton
       // by reference). #10911
-      if (snapshot !== INITIAL_FOREGROUND_SENTINEL) {
+      const isSentinel = snapshot === INITIAL_FOREGROUND_SENTINEL;
+      if (!isSentinel) {
         this.sawForegroundSnapshot = true;
       }
       return {
         shellIdle: snapshot.shellPgid === snapshot.foregroundPgid,
         supported: true,
+        empty: isSentinel,
       };
     }
 
@@ -575,9 +654,9 @@ export class IdentityWatcher {
     const agentCommitted =
       Boolean(this.identity?.agentType) || Boolean(this.delegate.detectedAgentId);
     if (this.sawForegroundSnapshot && agentCommitted) {
-      return { shellIdle: false, supported: true };
+      return { shellIdle: false, supported: true, empty: true };
     }
-    return { shellIdle: true, supported: false };
+    return { shellIdle: true, supported: false, empty: true };
   }
 
   private poll(): void {

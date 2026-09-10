@@ -7,6 +7,10 @@ const reconcileBypassFlagsMock = vi.hoisted(() => vi.fn());
 const resolveEffectiveBypassMock = vi.hoisted(() => vi.fn());
 const reconcileInlineModeFlagMock = vi.hoisted(() => vi.fn());
 const resolveEffectiveInlineModeMock = vi.hoisted(() => vi.fn());
+// Outermost reconcile in the chain; a pass-through keeps every assertion on
+// the inline-mode mock's return value intact.
+const reconcileDecorationFlagsMock = vi.hoisted(() => vi.fn((flags: string[]) => flags));
+const resolveKeepDecorationsMock = vi.hoisted(() => vi.fn(() => false));
 const getEffectiveAgentConfigMock = vi.hoisted(() => vi.fn());
 const agentSettingsStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 // `resumeSessionIntoPanel` reads the panel store directly, the same way the
@@ -29,6 +33,8 @@ vi.mock("@shared/types/agentSettings", () => ({
   resolveEffectiveBypass: resolveEffectiveBypassMock,
   reconcileInlineModeFlag: reconcileInlineModeFlagMock,
   resolveEffectiveInlineMode: resolveEffectiveInlineModeMock,
+  reconcileDecorationFlags: reconcileDecorationFlagsMock,
+  resolveKeepDecorations: resolveKeepDecorationsMock,
 }));
 vi.mock("@shared/config/agentRegistry", () => ({
   getEffectiveAgentConfig: getEffectiveAgentConfigMock,

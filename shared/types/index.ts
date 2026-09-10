@@ -365,6 +365,8 @@ export {
   combineInlineModes,
   resolveEffectiveInlineMode,
   reconcileInlineModeFlag,
+  resolveKeepDecorations,
+  reconcileDecorationFlags,
 } from "./agentSettings.js";
 
 // User agent registry types - user-defined agent configuration

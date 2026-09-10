@@ -653,6 +653,16 @@ export interface AgentConfig {
      * exposing the inline flag as an opt-in.
      */
     defaultInlineMode?: boolean;
+    /**
+     * Purely decorative TUI effects the CLI draws regardless of work progress,
+     * and the launch arguments that switch them off. Injected on every spawn,
+     * restart and resume unless the user's per-agent `decorativeEffects`
+     * setting keeps them (default off — see `generateAgentFlags`). Codex's
+     * composer sparkles are the motivating case: ~13 KB/s of repaint from an
+     * idle agent, paid by every pane in the view. `label`/`description` are
+     * the Settings copy for the toggle.
+     */
+    decorations?: { offArgs: string[]; label: string; description: string };
     /** Whether the agent CLI supports bracketed paste input (default: true) */
     supportsBracketedPaste?: boolean;
     /** Escape sequence sent for Shift+Enter / soft newline (default: "\x1b\r") */

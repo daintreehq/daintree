@@ -209,7 +209,13 @@ describe("restoreClosedTerminals", () => {
         agentSessionId: "sess-9",
       },
     ]);
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("codex", "sess-9", undefined);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith(
+      "codex",
+      "sess-9",
+      // Reconciled from an empty snapshot: codex gains its screen-mode and
+      // decorations tokens rather than replaying `undefined` verbatim.
+      expect.arrayContaining(["-c", "tui.whimsy=false"])
+    );
     expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
   });
 

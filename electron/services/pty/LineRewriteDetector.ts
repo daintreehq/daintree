@@ -1,4 +1,5 @@
 import { stripAnsi } from "./AgentPatternDetector.js";
+import { stripCosmeticParticles } from "./CosmeticParticleFilter.js";
 
 const STATUS_LINE_PATTERNS: RegExp[] = [
   /\b\d+\s*tokens?\b/i,
@@ -49,7 +50,12 @@ export function isStatusLineRewrite(data: string): boolean {
     return false;
   }
 
-  const stripped = stripAnsi(data);
+  // Ambient particle animations satisfy the braille pattern below on every
+  // frame, which would latch an idle agent as "spinner active" forever AND
+  // suppress pattern detection on the data path (a status-line rewrite is not
+  // scanned for working/completion patterns). Drop them first; a frame that
+  // also carries a genuine status line still matches on its own text.
+  const stripped = stripAnsi(stripCosmeticParticles(data));
   return STATUS_LINE_PATTERNS.some((pattern) => pattern.test(stripped));
 }
 

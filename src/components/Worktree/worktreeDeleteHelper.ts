@@ -1,6 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { buildResumeCommand, stripAssignedSessionIdArgs } from "@shared/types";
+import { reconcileResumeLaunchFlags } from "@/services/agentResume";
 import { logWarn } from "@/utils/logger";
 
 const WORKTREE_DELETE_TERMINAL_CLOSE_TIMEOUT_MS = 10_000;
@@ -183,9 +184,19 @@ export async function restoreClosedTerminals(
     // Resume the last known session for resume-capable agents; otherwise fall
     // back to the stored launch command (fresh session). The dead PTY can't be
     // resurrected, so a relaunch is the most recovery possible.
+    // Reconciled against live settings, not replayed verbatim: the snapshot's
+    // flags were captured at launch and can carry a stale bypass, screen-mode
+    // or decorations token by now.
     const resumeCommand =
       snap.launchAgentId && snap.agentSessionId
-        ? buildResumeCommand(snap.launchAgentId, snap.agentSessionId, snap.agentLaunchFlags)
+        ? buildResumeCommand(
+            snap.launchAgentId,
+            snap.agentSessionId,
+            reconcileResumeLaunchFlags({
+              agentId: snap.launchAgentId,
+              agentLaunchFlags: snap.agentLaunchFlags,
+            })
+          )
         : undefined;
 
     try {

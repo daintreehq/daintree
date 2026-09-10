@@ -17,7 +17,13 @@ import { usePanelStore } from "@/store";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ActionContext } from "@shared/types/actions";
-import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
+import {
+  buildResumeCommand,
+  buildResumeLatestCommand,
+  reconcileDecorationFlags,
+  resolveKeepDecorations,
+} from "@shared/types/agentSettings";
+import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import {
   type HelpSessionRef,
@@ -300,6 +306,15 @@ export async function loadCustomLaunchFlags(): Promise<string[]> {
     logError("Failed to load helpAssistant launch flags", err);
     return [];
   }
+}
+
+// Help sessions keep their own bypass and model settings, but a CLI's
+// decorative effects are the same pane-repaint cost whoever launched it, so
+// the per-agent "keep decorations" choice applies here too (fresh launch and
+// resume alike). Assistant-only backends declare no decorations → no-op.
+function withDecorationChoice(flags: string[], agentId: string): string[] {
+  const entry = getAgentSettingsEntrySnapshot(agentId) ?? {};
+  return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry));
 }
 
 const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
@@ -1146,7 +1161,7 @@ export class HelpSessionController {
     folderPath: string,
     launchProject: HelpProjectRef
   ): Promise<ResumeSpawnResult | null> {
-    const customLaunchFlags = await loadCustomLaunchFlags();
+    const customLaunchFlags = withDecorationChoice(await loadCustomLaunchFlags(), launchAgentId);
     const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
     const hasSpecificSessionId = hibernated.sessionId.length > 0;
     // "Resume the latest session in this cwd" is only meaningful when this lane
@@ -1498,6 +1513,10 @@ export class HelpSessionController {
         return;
       }
 
+      // Fresh launches dispatch through the agent launcher, whose flag
+      // generation already applies the decorations choice — adding it here
+      // too would double the pair. Only the resume path (which builds its own
+      // command) needs `withDecorationChoice`.
       const customLaunchFlags = await loadCustomLaunchFlags();
       if (gen !== this._launchGen) {
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
