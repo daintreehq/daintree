@@ -10,6 +10,10 @@ import {
   ProjectPluginSelectorDropdown,
   type ProjectPluginOption,
 } from "@/components/Settings/ProjectPluginSelectorDropdown";
+import {
+  selectSurfaceChoice,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useProjectStore } from "@/store/projectStore";
 import { systemClient } from "@/clients";
@@ -17,6 +21,7 @@ import { logError } from "@/utils/logger";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   PROJECT_PLUGIN_INSTANCE_PREFIX,
+  pluginManifestIdFromInstanceKey,
   type LoadedPluginInfo,
   type ProjectPluginInfo,
   type ProjectPluginState,
@@ -54,6 +59,72 @@ const INSTALLED_OPTION_PREFIX = "installed:";
 function projectPluginStatus(plugin: ProjectPluginInfo): string {
   if (plugin.muted && plugin.state !== "invalid") return "Off";
   return STATE_LABEL[plugin.state];
+}
+
+const EMPTY_CANVAS_STATUS = {
+  none: "You haven't chosen yet, so it shows.",
+  surface: "You chose to keep it.",
+  stock: "You chose the launcher, so it's hidden.",
+} as const;
+
+/**
+ * Which plugin draws this project's empty canvas, and the user's remembered
+ * answer about it.
+ *
+ * The answer persists, so it has to be findable: without this, a project whose
+ * owner once chose the launcher would keep hiding a canvas its plugin still
+ * claims, with nothing anywhere saying why. Rendered only while a claim exists
+ * — an answer about a plugin that isn't running changes nothing on screen.
+ */
+function EmptyCanvasSection() {
+  const init = usePluginProjectSurfacesStore((s) => s.init);
+  const claim = usePluginProjectSurfacesStore((s) => s.surfaces.emptyCanvas);
+  const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, "emptyCanvas"));
+  const setSurfaceChoice = usePluginProjectSurfacesStore((s) => s.setSurfaceChoice);
+  const plugins = useProjectPluginStore((s) => s.plugins);
+
+  useEffect(() => {
+    init();
+  }, [init]);
+
+  if (claim === undefined) return null;
+
+  const pluginName =
+    plugins.find((p) => p.instanceId === claim.pluginId)?.displayName ??
+    pluginManifestIdFromInstanceKey(claim.pluginId);
+
+  return (
+    <div
+      className="space-y-2 pt-1 border-t border-border-default"
+      data-testid="project-plugins-empty-canvas"
+    >
+      <h5 className={SECTION_HEADING_CLASS}>Empty canvas</h5>
+      <p className="text-xs text-text-secondary leading-relaxed">
+        {pluginName} draws what this project shows when no panels are open, in place of the
+        launcher. {EMPTY_CANVAS_STATUS[choice ?? "none"]}
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-2xs text-text-secondary">Show on the empty canvas</span>
+        <SettingsSwitch
+          checked={choice !== "stock"}
+          onCheckedChange={(next) => void setSurfaceChoice("emptyCanvas", next ? "surface" : "stock")}
+          aria-label={`Show ${pluginName} on the empty canvas`}
+          data-testid="project-empty-canvas-switch"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={choice === null}
+          onClick={() => void setSurfaceChoice("emptyCanvas", null)}
+        >
+          Reset choice
+        </Button>
+      </div>
+      <p className="text-2xs text-text-secondary leading-relaxed">
+        Resetting shows the plugin&apos;s canvas again and asks the next time it appears.
+      </p>
+    </div>
+  );
 }
 
 /** Everything the project pane needs about the folder as a whole. */
@@ -134,6 +205,8 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
           </>
         )}
       </div>
+
+      <EmptyCanvasSection />
 
       <div className="space-y-2 pt-1 border-t border-border-default">
         <h5 className={SECTION_HEADING_CLASS}>Reload</h5>

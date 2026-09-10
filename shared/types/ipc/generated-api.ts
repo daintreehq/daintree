@@ -538,6 +538,9 @@ export interface GeneratedElectronAPI {
     getProjectPluginVisibility(
       ...args: IpcInvokeMap["plugin:project-visibility-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-visibility-get"]["result"]>;
+    getProjectSurfaceChoices(
+      ...args: IpcInvokeMap["plugin:project-surface-choices-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-surface-choices-get"]["result"]>;
     getProjectSurfaces(
       ...args: IpcInvokeMap["plugin:project-surfaces-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-surfaces-get"]["result"]>;
@@ -619,6 +622,9 @@ export interface GeneratedElectronAPI {
     setProjectPluginVisibility(
       ...args: IpcInvokeMap["plugin:project-visibility-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-visibility-set"]["result"]>;
+    setProjectSurfaceChoice(
+      ...args: IpcInvokeMap["plugin:project-surface-choice-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-surface-choice-set"]["result"]>;
     setSettingValue(
       ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;

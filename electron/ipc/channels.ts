@@ -1007,6 +1007,10 @@ export const CHANNELS = {
    * surfaces is the leak project scope exists to prevent.
    */
   PLUGIN_PROJECT_SURFACES_GET: "plugin:project-surfaces-get",
+  /** The SENDER project's remembered answers about its surface claims (plugin surface or stock). */
+  PLUGIN_PROJECT_SURFACE_CHOICES_GET: "plugin:project-surface-choices-get",
+  /** Remember one surface answer for the SENDER's project, about the slot's current owner. */
+  PLUGIN_PROJECT_SURFACE_CHOICE_SET: "plugin:project-surface-choice-set",
   /** Project-local plugins: the sender project's rows, valid and invalid alike. */
   PLUGIN_PROJECT_LIST: "plugin:project-list",
   /** Project-local plugins: record the trust decision for the SENDER's project. */

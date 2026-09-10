@@ -26,7 +26,10 @@ import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import type { PluginCapabilityConsentRecord } from "../shared/types/pluginCapabilityConsent.js";
-import type { ProjectPluginTrustRecord } from "../shared/types/plugin.js";
+import type {
+  ProjectPluginTrustRecord,
+  ProjectSurfaceChoices,
+} from "../shared/types/plugin.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
@@ -588,6 +591,19 @@ export interface StoreSchema {
   };
 
   /**
+   * Per-project answers about project plugin surface claims (§7.8): whether a
+   * claimed slot shows the plugin's surface or the host's stock content, and
+   * which plugin the answer was about. Keyed `projectId → slot → record`.
+   *
+   * Beside the trust decision rather than inside `ProjectPluginTrustRecord`:
+   * the controller rewrites that record from its own memory, and a session-only
+   * trust grant has no record at all to hold one. Kept out of the repository
+   * for the same reason as `projectPluginVisibility`. Same additive-key
+   * convention as `projectPluginTrust` above.
+   */
+  projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
+
+  /**
    * Workspaces the user asked to keep resident in the project-view cache
    * (#12313), keyed by workspace id — a project's 64-hex id or a scratch
    * workspace's UUID, the same vocabulary `ProjectViewManager.views` and an MCP
@@ -811,6 +827,7 @@ const storeOptions = {
     },
     pluginCapabilityConsent: {},
     projectPluginTrust: {},
+    projectSurfaceChoices: {},
     workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,

@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ProjectPluginsTab } from "../ProjectPluginsTab";
 import {
   __resetProjectPluginStoreForTesting,
   useProjectPluginStore,
 } from "@/store/projectPluginStore";
+import {
+  _resetPluginProjectSurfacesStoreForTest,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
 import type { LoadedPluginInfo, PluginManifest, ProjectPluginInfo } from "@shared/types/plugin";
 
 const PROJECT_ID = "a".repeat(64);
@@ -89,6 +93,7 @@ const pluginApi = {
   setProjectPluginVisibility: vi.fn().mockResolvedValue(undefined),
   setPluginVisibilityDefault: vi.fn().mockResolvedValue(undefined),
   setProjectPluginTrust: vi.fn().mockResolvedValue(undefined),
+  setProjectSurfaceChoice: vi.fn().mockResolvedValue({}),
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
   reloadProjectPlugins: vi.fn().mockResolvedValue(undefined),
   getSettingValues: vi.fn().mockResolvedValue({
@@ -137,7 +142,24 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetProjectPluginStoreForTesting();
+  _resetPluginProjectSurfacesStoreForTest();
 });
+
+/** A running project plugin that claims the empty canvas. */
+function claimEmptyCanvas(choice?: "surface" | "stock") {
+  act(() => {
+    usePluginProjectSurfacesStore.setState({
+      surfaces: {
+        emptyCanvas: {
+          pluginId: `project__${PROJECT_ID}__acme.dashboard`,
+          panelKindId: `project:${PROJECT_ID}/acme.dashboard/overview`,
+        },
+      },
+      choices: choice ? { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 1 } } : {},
+      choicesLoaded: true,
+    });
+  });
+}
 
 describe("ProjectPluginsTab", () => {
   it("opens on the project overview and offers the folder trust control", async () => {
@@ -159,6 +181,53 @@ describe("ProjectPluginsTab", () => {
     const labels = screen.getAllByRole("button").map((b) => b.textContent);
     expect(labels).toContain("Enable for this project");
     expect(labels).toContain("Enable for this session");
+  });
+
+  it("discloses which plugin owns the empty canvas and resets the answer", async () => {
+    seed([projectPlugin()]);
+    claimEmptyCanvas("stock");
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    // A remembered "use the launcher" is never silent: the plugin is named, the
+    // answer is stated, and it can be undone from here.
+    const section = screen.getByTestId("project-plugins-empty-canvas");
+    expect(section.textContent).toContain("Acme Dashboard draws what this project shows");
+    expect(section.textContent).toContain("You chose the launcher, so it's hidden.");
+
+    fireEvent.click(within(section).getByRole("button", { name: "Reset choice" }));
+
+    await waitFor(() =>
+      expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", null)
+    );
+  });
+
+  it("switches the empty canvas to the launcher from settings", async () => {
+    seed([projectPlugin()]);
+    claimEmptyCanvas();
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const section = screen.getByTestId("project-plugins-empty-canvas");
+    expect(section.textContent).toContain("You haven't chosen yet, so it shows.");
+    // Nothing to reset until something has been chosen.
+    expect(
+      within(section).getByRole("button", { name: "Reset choice" }).hasAttribute("disabled")
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("project-empty-canvas-switch"));
+
+    await waitFor(() =>
+      expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "stock")
+    );
+  });
+
+  it("says nothing about the empty canvas when no plugin claims it", async () => {
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
   });
 
   it("mutes a project plugin through its own switch, not the folder trust control", async () => {

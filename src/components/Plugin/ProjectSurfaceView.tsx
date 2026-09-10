@@ -9,7 +9,10 @@ import {
   makePluginViewContent,
   type PluginViewContentProps,
 } from "@/components/Plugin/PluginViewContent";
-import { usePluginProjectSurfacesStore } from "@/store/pluginProjectSurfacesStore";
+import {
+  selectSurfaceChoice,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
 
 /**
  * The panel-kind metadata behind a surface claim, or `undefined` while the
@@ -43,9 +46,11 @@ export interface ResolvedProjectSurface {
 /**
  * Resolve one surface slot for this project view.
  *
- * Returns `null` when the user has pinned the stock canvas: the pin is what
- * guarantees a plugin can never take the host's own launcher away, so it is
- * checked here rather than at each call site, where it could be forgotten.
+ * Returns `null` when the user chose the stock content for this slot: that
+ * answer is what guarantees a plugin can never take the host's own launcher
+ * away, so it is checked here rather than at each call site, where it could be
+ * forgotten. It is read live, at resolution, so an unloaded plugin's slot is
+ * released whatever answer is on record.
  *
  * A claim whose kind carries no `componentPath` (a PTY panel, or a view the
  * panels loop skipped) resolves to `null` too — a surface renders a module, and
@@ -59,9 +64,9 @@ export function useProjectSurface(slot: ProjectSurfaceSlot): ResolvedProjectSurf
     init();
   }, [init]);
   const claim = usePluginProjectSurfacesStore((s) => s.surfaces[slot]);
-  const pinned = usePluginProjectSurfacesStore((s) => s.stockCanvasPinned);
+  const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, slot));
   const config = usePanelKindConfig(claim?.panelKindId);
-  if (claim === undefined || pinned) return null;
+  if (claim === undefined || choice === "stock") return null;
   if (config === undefined || config.componentPath === undefined) return null;
   return { claim, config };
 }
@@ -156,12 +161,12 @@ export function _resetProjectSurfaceRuntimesForTest(): void {
  * see {@link pruneSurfaceRuntimes}.
  *
  * No `onRequestClose`: a surface has no panel to trash. The way out of a broken
- * surface is `ProjectSurfaceFrame`'s switch back to the stock canvas, which is
- * why this wrapper isolates and contains the plugin's layout: `isolation`
- * caps the plugin's z-indexes inside its own stacking context, and
+ * surface is the switch in `ProjectSurfaceFrame`'s strip, laid out above this
+ * box, which is why this wrapper isolates and contains the plugin's layout:
+ * `isolation` caps the plugin's z-indexes inside its own stacking context, and
  * `contain: layout paint` (with `overflow-hidden`) keeps a `position: fixed`
  * descendant inside this box. A surface can then style its own region freely
- * and still never paint over the control that leads out of it.
+ * and still never paint over the strip that leads out of it.
  */
 export function ProjectSurfaceView({ config }: { config: PanelKindConfig }) {
   const { content: Content, removal } = getSurfaceRuntime(config);

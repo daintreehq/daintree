@@ -90,8 +90,12 @@ import type {
   PluginActivationResult,
   PluginPanelLifecycleEvent,
   PluginRuntimeStatus,
+  ProjectSurfaceChoice,
+  ProjectSurfaceChoices,
+  ProjectSurfaceSlot,
   ProjectSurfaceSnapshot,
 } from "../../../shared/types/plugin.js";
+import { isProjectSurfaceChoice, isProjectSurfaceSlot } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import {
   isSafePluginInstanceId,
@@ -748,6 +752,38 @@ async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurface
   // its stock canvas until the next panel-kinds push.
   await (await getPluginService()).waitForInit();
   return getProjectSurfaces(ctx.projectId);
+}
+
+/**
+ * The SENDER project's remembered answers about its surface claims. A sender
+ * with no project binding has none, which shows whatever is claimed.
+ */
+async function handleProjectSurfaceChoicesGet(ctx: IpcContext): Promise<ProjectSurfaceChoices> {
+  if (!ctx.projectId) return {};
+  const svc = await getPluginService();
+  return svc.getProjectSurfaceChoices(ctx.projectId);
+}
+
+/**
+ * Remember whether a claimed slot in the SENDER's project shows the plugin's
+ * surface or the stock content (`null` forgets the answer). Takes no plugin id:
+ * main records the answer against the slot's current owner, so a renderer
+ * cannot pre-answer for a plugin that has not claimed the slot.
+ */
+async function handleProjectSurfaceChoiceSet(
+  ctx: IpcContext,
+  slot: ProjectSurfaceSlot,
+  choice: ProjectSurfaceChoice | null
+): Promise<ProjectSurfaceChoices> {
+  if (!ctx.projectId) throw new Error("project surfaces: sender has no project");
+  if (!isProjectSurfaceSlot(slot)) throw new Error("project surfaces: unknown surface slot");
+  if (choice !== null && !isProjectSurfaceChoice(choice)) {
+    throw new Error('project surfaces: choice must be "surface", "stock" or null');
+  }
+  const svc = await getPluginService();
+  // The owner comes from the claim registry, which startup activation fills.
+  await svc.waitForInit();
+  return svc.setProjectSurfaceChoice(ctx.projectId, slot, choice);
 }
 
 /**
@@ -1742,6 +1778,16 @@ export const pluginNamespace = defineIpcNamespace({
     getProjectSurfaces: op(PLUGIN_METHOD_CHANNELS.getProjectSurfaces, handleProjectSurfacesGet, {
       withContext: true,
     }),
+    getProjectSurfaceChoices: op(
+      PLUGIN_METHOD_CHANNELS.getProjectSurfaceChoices,
+      handleProjectSurfaceChoicesGet,
+      { withContext: true }
+    ),
+    setProjectSurfaceChoice: op(
+      PLUGIN_METHOD_CHANNELS.setProjectSurfaceChoice,
+      handleProjectSurfaceChoiceSet,
+      { withContext: true }
+    ),
     getProjectPlugins: op(PLUGIN_METHOD_CHANNELS.getProjectPlugins, handleProjectPluginsList, {
       withContext: true,
     }),

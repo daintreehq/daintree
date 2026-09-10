@@ -209,6 +209,46 @@ export interface ProjectSurfaceClaim {
 /** Every surface claimed in one project, keyed by slot. */
 export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
 
+export function isProjectSurfaceSlot(value: unknown): value is ProjectSurfaceSlot {
+  return value === "emptyCanvas";
+}
+
+/**
+ * What the user wants a claimed slot to show: the plugin's surface, or the
+ * host's own stock content in its place.
+ */
+export type ProjectSurfaceChoice = "surface" | "stock";
+
+export function isProjectSurfaceChoice(value: unknown): value is ProjectSurfaceChoice {
+  return value === "surface" || value === "stock";
+}
+
+/**
+ * One project's remembered answer about one surface slot. Machine-local, in
+ * Daintree's own store: which canvas one person prefers is not a fact about the
+ * repository.
+ */
+export interface ProjectSurfaceChoiceRecord {
+  /**
+   * The MANIFEST id of the plugin the answer was about. A slot that has since
+   * passed to a different plugin is undecided again — agreeing to one plugin's
+   * canvas is not agreeing to whatever claims the slot next.
+   */
+  pluginId: string;
+  choice: ProjectSurfaceChoice;
+  /** Epoch ms, for the settings disclosure. */
+  decidedAt: number;
+}
+
+/** Every remembered surface answer in one project, keyed by slot. */
+export type ProjectSurfaceChoices = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord>>;
+
+/** `plugin:project-surface-choices-changed` — the full set, for every view of the project. */
+export interface ProjectSurfaceChoicesChangedEvent {
+  projectId: string;
+  choices: ProjectSurfaceChoices;
+}
+
 /**
  * The attribute the host stamps on the element a plugin view renders into, and
  * the only DOM attribute this styling contract adds.

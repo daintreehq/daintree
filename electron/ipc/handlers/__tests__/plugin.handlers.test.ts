@@ -27,6 +27,8 @@ const mockGetWindowForWebContents = vi.fn<(wc: { id: number }) => { id: number }
 const mockIsCachedViewWebContents = vi.fn<(webContentsId: number) => boolean>();
 const mockListProjectPlugins = vi.fn();
 const mockSetProjectPluginTrust = vi.fn();
+const mockGetProjectSurfaceChoices = vi.fn();
+const mockSetProjectSurfaceChoice = vi.fn();
 const mockActivateStagedProjectPlugin = vi.fn();
 const mockSetProjectPluginMuted = vi.fn();
 const mockGetProjectPluginVisibility = vi.fn();
@@ -88,6 +90,8 @@ vi.mock("../../../services/PluginService.js", () => ({
       mockUpdatePluginRecipeMetadata(recipeId, updates),
     listProjectPlugins: (...args: unknown[]) => mockListProjectPlugins(...args),
     setProjectPluginTrust: (...args: unknown[]) => mockSetProjectPluginTrust(...args),
+    getProjectSurfaceChoices: (...args: unknown[]) => mockGetProjectSurfaceChoices(...args),
+    setProjectSurfaceChoice: (...args: unknown[]) => mockSetProjectSurfaceChoice(...args),
     activateStagedProjectPlugin: (...args: unknown[]) => mockActivateStagedProjectPlugin(...args),
     setProjectPluginMuted: (...args: unknown[]) => mockSetProjectPluginMuted(...args),
     getProjectPluginVisibility: (...args: unknown[]) => mockGetProjectPluginVisibility(...args),
@@ -2723,6 +2727,55 @@ describe("project-local plugin handlers", () => {
     await expect(
       getHandler("plugin:project-set-trust")({ sender: { id: 1 } }, "enabled")
     ).rejects.toThrow(/no project/);
+  });
+
+  it("reads surface choices for the sender's project, and none without one", async () => {
+    const choices = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
+    mockGetProjectSurfaceChoices.mockReturnValue(choices);
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+
+    expect(await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })).toEqual(
+      choices
+    );
+    expect(mockGetProjectSurfaceChoices).toHaveBeenCalledWith(PROJECT);
+
+    mockGetProjectSurfaceChoices.mockClear();
+    mockGetProjectForWebContents.mockReturnValue(null);
+    expect(await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })).toEqual(
+      {}
+    );
+    expect(mockGetProjectSurfaceChoices).not.toHaveBeenCalled();
+  });
+
+  it("records a surface choice against the sender's project without naming a plugin", async () => {
+    const choices = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
+    mockSetProjectSurfaceChoice.mockReturnValue(choices);
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const set = getHandler("plugin:project-surface-choice-set");
+
+    // Main answers about the slot's current owner; the renderer only says which
+    // canvas it wants.
+    expect(await set({ sender: { id: 1 } }, "emptyCanvas", "stock")).toEqual(choices);
+    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(PROJECT, "emptyCanvas", "stock");
+
+    await set({ sender: { id: 1 } }, "emptyCanvas", null);
+    expect(mockSetProjectSurfaceChoice).toHaveBeenLastCalledWith(PROJECT, "emptyCanvas", null);
+  });
+
+  it("rejects an unknown surface slot or choice, and a sender with no project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const set = getHandler("plugin:project-surface-choice-set");
+
+    await expect(set({ sender: { id: 1 } }, "projectHome", "stock")).rejects.toThrow(
+      /unknown surface slot/
+    );
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas", "hidden")).rejects.toThrow(
+      /choice must be/
+    );
+
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas", "stock")).rejects.toThrow(/no project/);
+    expect(mockSetProjectSurfaceChoice).not.toHaveBeenCalled();
   });
 
   it("activates a staged plugin by manifest id and rejects a malformed one", async () => {
