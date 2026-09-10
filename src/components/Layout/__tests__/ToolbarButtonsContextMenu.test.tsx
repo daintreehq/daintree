@@ -193,6 +193,21 @@ describe("ToolbarButtonsContextMenu", () => {
     expect(document.querySelector("[role='menu']")).toBeNull();
   });
 
+  it("replays the pointer position, which is what the menu is anchored to", async () => {
+    const { container } = renderToolbar();
+    const trigger = container.querySelector("span[hidden]");
+    if (!trigger) throw new Error("missing the hidden trigger");
+    const replayed: Array<[number, number]> = [];
+    trigger.addEventListener("contextmenu", (event) => {
+      if (event instanceof MouseEvent) replayed.push([event.clientX, event.clientY]);
+    });
+
+    fireEvent.contextMenu(screen.getByTestId("group"), { clientX: 120, clientY: 30 });
+    await screen.findByRole("menu");
+
+    expect(replayed).toEqual([[120, 30]]);
+  });
+
   it("never opens from a touch long-press on a button", async () => {
     renderToolbar();
 

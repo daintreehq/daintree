@@ -1,4 +1,4 @@
-import { cloneElement, useRef } from "react";
+import { cloneElement, useState } from "react";
 import type React from "react";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import {
@@ -48,7 +48,10 @@ export function ToolbarButtonsContextMenu({
   onToggle,
   children,
 }: ToolbarButtonsContextMenuProps) {
-  const triggerRef = useRef<HTMLSpanElement>(null);
+  // State, not a ref: the handler below goes through `cloneElement`, and the
+  // React Compiler reads a ref access inside a function handed to a plain call
+  // as a read during render — an error that fails the dev transform outright.
+  const [trigger, setTrigger] = useState<HTMLSpanElement | null>(null);
   const childOnContextMenu = children.props.onContextMenu;
 
   // Replayed onto a hidden trigger rather than making the root the trigger:
@@ -61,7 +64,8 @@ export function ToolbarButtonsContextMenu({
     if (event.defaultPrevented) return;
     if (!isToolbarEmptySpaceTarget(event.target, event.currentTarget)) return;
     event.preventDefault();
-    triggerRef.current?.dispatchEvent(
+    // Radix anchors the menu to these coordinates, not to the trigger's box.
+    trigger?.dispatchEvent(
       new MouseEvent("contextmenu", {
         bubbles: true,
         cancelable: true,
@@ -95,7 +99,7 @@ export function ToolbarButtonsContextMenu({
         {/* A sibling of the root, not a descendant, so the replayed event can't
             bubble back into the handler that sent it. */}
         <ContextMenuTrigger asChild>
-          <span ref={triggerRef} hidden />
+          <span ref={setTrigger} hidden />
         </ContextMenuTrigger>
         <ContextMenuContent aria-label="Toolbar buttons">
           {/* Context reaches through the portal, so without the reset an agent's

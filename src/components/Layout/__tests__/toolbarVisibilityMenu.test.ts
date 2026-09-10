@@ -142,6 +142,12 @@ describe("canListToolbarButton", () => {
 
     expect(canListToolbarButton("codex", REGISTRY, PROJECT_SCOPED, null, availability)).toBe(true);
   });
+
+  it("holds back an unpinned agent while CLI availability is still loading", () => {
+    expect(canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, { agents: {} }, null)).toBe(
+      false
+    );
+  });
 });
 
 describe("resolveToolbarButtonMetadata", () => {

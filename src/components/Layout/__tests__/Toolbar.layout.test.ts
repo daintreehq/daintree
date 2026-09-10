@@ -129,7 +129,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
   describe("Empty-space context menu — issue #12355", () => {
     // The menu's behaviour is covered for real in ToolbarButtonsContextMenu and
     // toolbarVisibilityMenu tests; these only pin Toolbar.tsx's wiring to it.
-    it("wraps the toolbar root itself, so the trigger slots onto it", () => {
+    it("hands the menu the toolbar root itself, which it clones rather than wraps", () => {
       expect(source).toMatch(
         /<ToolbarButtonsContextMenu[^>]*>\s*<div\s+ref=\{toolbarRef\}\s+role="toolbar"/
       );
