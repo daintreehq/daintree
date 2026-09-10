@@ -84,6 +84,9 @@ import type {
   ProjectPluginTrustRecord,
   ProjectPluginTrustState,
   ProjectPluginVisibility,
+  ProjectSurfaceChoice,
+  ProjectSurfaceChoices,
+  ProjectSurfaceChoicesSnapshot,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
@@ -98,6 +101,10 @@ import {
 } from "./plugin/PluginContributionBroadcaster.js";
 import { claimProjectSurface, releasePluginSurfaces } from "./plugin/PluginSurfaceRegistry.js";
 import {
+  getProjectSurfaceChoices as readProjectSurfaceChoices,
+  setProjectSurfaceChoice as writeProjectSurfaceChoice,
+} from "./plugin/projectSurfaceChoices.js";
+import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
@@ -108,6 +115,7 @@ import { getPluginCapabilityConsentService } from "./plugin-capability/instances
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
 import { store } from "../store.js";
+import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
@@ -4672,6 +4680,29 @@ export class PluginService {
     await this.projectPlugins.setMuted(projectId, pluginId, muted);
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId);
+  }
+
+  /** This project's remembered answers about its plugin surface claims. */
+  getProjectSurfaceChoices(projectId: string): ProjectSurfaceChoices {
+    return readProjectSurfaceChoices(projectId);
+  }
+
+  /**
+   * Remember whether a claimed slot shows the plugin's surface or the stock
+   * content, and tell every view of the project: the canvas and the settings
+   * pane that discloses the answer can be open in different windows.
+   */
+  setProjectSurfaceChoice(
+    projectId: string,
+    slot: ProjectSurfaceSlot,
+    choice: ProjectSurfaceChoice | null
+  ): ProjectSurfaceChoicesSnapshot {
+    const snapshot = { projectId, choices: writeProjectSurfaceChoice(projectId, slot, choice) };
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:project-surface-choices-changed",
+      payload: snapshot,
+    } satisfies EventBusEnvelope);
+    return snapshot;
   }
 
   /** The per-project visibility overlay for INSTALLED plugins. */

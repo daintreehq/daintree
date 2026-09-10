@@ -1242,6 +1242,14 @@ export interface GeneratedIpcInvokeMap {
     args: [decision: import("../plugin.js").ProjectPluginTrustDecision];
     result: void;
   };
+  "plugin:project-surface-choice-set": {
+    args: [slot: "emptyCanvas", choice: import("../plugin.js").ProjectSurfaceChoice | null];
+    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot;
+  };
+  "plugin:project-surface-choices-get": {
+    args: [];
+    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot | null;
+  };
   "plugin:project-surfaces-get": {
     args: [];
     result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceClaim>>;
