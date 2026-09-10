@@ -1583,14 +1583,29 @@ describe("DEFAULT_AGENT_SETTINGS inline seeding (#10876)", () => {
 describe("decorative effects (registry capabilities.decorations)", () => {
   const OFF = ["-c", "tui.whimsy=false"];
 
-  it("switches codex's composer sparkles off by default on every launch path", () => {
-    expect(buildAgentLaunchFlags({}, "codex")).toEqual(expect.arrayContaining(OFF));
-    // The value is a non-dash token, so the command builders shell-quote it.
-    expect(generateAgentCommand("codex", {}, "codex")).toMatch(/-c '?tui\.whimsy=false'?/);
-    // A `-c` override is a global option, so it must precede the subcommand.
-    expect(buildResumeCommand("codex", "abc-123", buildAgentLaunchFlags({}, "codex"))).toMatch(
-      /^codex .*-c '?tui\.whimsy=false'? resume abc-123$/
-    );
+  describe.each([
+    ["linux", "'tui.whimsy=false'"],
+    ["win32", '"tui.whimsy=false"'],
+  ])("launch commands on %s", (platform, quotedOverride) => {
+    const originalPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    });
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    });
+
+    it("switches codex's composer sparkles off by default on every launch path", () => {
+      expect(buildAgentLaunchFlags({}, "codex")).toEqual(expect.arrayContaining(OFF));
+      // The override must be quoted for the platform's shell on both paths.
+      const launch = generateAgentCommand("codex", {}, "codex");
+      expect(launch).toBe(`codex --no-alt-screen -c ${quotedOverride}`);
+      // A `-c` override is a global option, so it must precede the subcommand.
+      expect(buildResumeCommand("codex", "abc-123", buildAgentLaunchFlags({}, "codex"))).toBe(
+        `codex --no-alt-screen -c ${quotedOverride} resume abc-123`
+      );
+    });
   });
 
   it("keeps the effects when the user opts in", () => {
