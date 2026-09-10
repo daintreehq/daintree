@@ -210,11 +210,11 @@
  * utilities (ForgeStatPill.tsx) — scale is what gives the base Button cva's
  * `active:scale-[0.98]` press snap a property to interpolate.
  *
- * Each pill is a Radix tooltip trigger, so it always carries a data-state, and
- * the global reduced-motion control rule in index.css only excludes
- * [data-state="open"] and [data-state="closed"]. Radix emits "closed" at rest
- * (and "delayed-open"/"instant-open" while the tooltip shows), so at rest the
- * pill falls through that rule's exclusion and would keep easing its scale.
+ * Each pill is a Radix context-menu trigger layered over its tooltip trigger, so
+ * it always carries the menu's data-state — "closed" at rest, "open" while its
+ * menu is — and the global reduced-motion control rule in index.css excludes
+ * exactly [data-state="open"] and [data-state="closed"]. So the pill always
+ * falls through that rule's exclusion and would keep easing its scale.
  * Drop the scale interpolation here to cover it. The tint fades are not spatial
  * motion, so they stay — matching the reduce-motion block further down. The
  * scale still applies on :active; it just snaps instead of easing back.

@@ -401,7 +401,14 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // of the same description the external ceiling above pays for: the tool sits
   // on the action tier as well, so the in-app cohort is advertised the identical
   // prose rather than a second wording of it.
-  const MAX_COHORT_TOTAL_BYTES = 53_887;
+  // 53_887 → 54_036 for #12354's `forge.openRepo`. Every forge action has to be
+  // reachable by the in-app assistant (`tierAuth.test.ts`), so the action behind
+  // the toolbar's "View repository" entry lands on the system tier rather than
+  // staying UI-only. The surface had 19 B spare, so its 168 B description could
+  // not have fit at any wording above the 120 B floor; this is the measured
+  // total. What the prose has to carry is that the call opens a browser and
+  // returns nothing, and that a provider with no repository page refuses it.
+  const MAX_COHORT_TOTAL_BYTES = 54_036;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

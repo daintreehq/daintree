@@ -286,6 +286,7 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
+  "forge.openRepo",
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",

@@ -27,6 +27,7 @@ export interface ForgeStatPillProps {
    * can't tell which segment was clicked (#12354).
    */
   contextMenuContent: React.ReactNode;
+  onContextMenuOpenChange?: (open: boolean) => void;
 
   icon: React.ComponentType<{ className?: string }>;
   iconClassName?: string;
@@ -55,6 +56,7 @@ export function ForgeStatPill({
   testId,
   tooltipContent,
   contextMenuContent,
+  onContextMenuOpenChange,
   icon: Icon,
   iconClassName,
   openRingClassName,
@@ -80,7 +82,7 @@ export function ForgeStatPill({
   return (
     <>
       <Tooltip>
-        <ContextMenu>
+        <ContextMenu onOpenChange={onContextMenuOpenChange}>
           <ContextMenuTrigger asChild>
             <TooltipTrigger asChild>
               <Button

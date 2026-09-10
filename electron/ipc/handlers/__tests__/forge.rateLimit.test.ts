@@ -91,6 +91,7 @@ vi.mock("../../../utils/git.js", () => ({
 }));
 
 vi.mock("../../../utils/openExternal.js", () => ({
+  canOpenExternalUrl: (url: string) => /^https?:\/\//.test(url),
   openExternalUrl: openExternalUrlMock,
 }));
 
@@ -279,12 +280,45 @@ describe("forge handlers — rate limiting", () => {
       await expect(handler({}, { cwd: "/tmp/project" })).resolves.toBeNull();
     });
 
-    it("rejects a missing working directory before resolving a provider", async () => {
+    it("treats a URL the host won't open as no repository page", async () => {
+      const unopenable = {
+        namespaceId: "fake-plugin.fake",
+        providerId: "fake",
+        repoRef,
+        impl: { ...fakeImpl, buildRepoUrl: () => "file:///tmp/widgets" },
+      };
+      resolveForCwdMock.mockResolvedValueOnce(unopenable).mockResolvedValueOnce(unopenable);
+
       await expect(
-        getInvokeHandler(CHANNELS.FORGE_GET_REPO_URL)({}, { cwd: "" })
-      ).rejects.toThrow("Invalid working directory");
-      expect(resolveForCwdMock).not.toHaveBeenCalled();
+        getInvokeHandler(CHANNELS.FORGE_GET_REPO_URL)({}, { cwd: "/tmp/project" })
+      ).resolves.toBeNull();
+      await expect(
+        getInvokeHandler(CHANNELS.FORGE_OPEN_REPO)({}, { cwd: "/tmp/project" })
+      ).rejects.toThrow(/doesn't link to a repository page/);
+      expect(openExternalUrlMock).not.toHaveBeenCalled();
     });
+
+    it.each([
+      {
+        channel: CHANNELS.FORGE_OPEN_REPO,
+        payload: { cwd: "" },
+        error: "Invalid working directory",
+      },
+      {
+        channel: CHANNELS.FORGE_GET_REPO_URL,
+        payload: { cwd: "" },
+        error: "Invalid working directory",
+      },
+      { channel: CHANNELS.FORGE_OPEN_REPO, payload: null, error: "Invalid payload" },
+      { channel: CHANNELS.FORGE_GET_REPO_URL, payload: null, error: "Invalid payload" },
+    ])(
+      "$channel rejects $payload before resolving a provider",
+      async ({ channel, payload, error }) => {
+        await expect(getInvokeHandler(channel)({}, payload)).rejects.toThrow(error);
+        expect(resolveForCwdMock).not.toHaveBeenCalled();
+        expect(openExternalUrlMock).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe("mutation family (forge:assign-issue)", () => {

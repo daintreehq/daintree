@@ -5,7 +5,8 @@
  * Each stat pill owns its right-click menu so it can lead with its own
  * navigation, while the stats container keeps a menu for the chrome around the
  * pills. Real Radix primitives, because the nesting is what's under test: a
- * pill's trigger has to claim the right-click before the container's does.
+ * pill's trigger has to claim the right-click (and a long-press) before the
+ * container's does.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -16,6 +17,7 @@ const dispatchMock = vi.hoisted(() => vi.fn());
 const getRepoUrlMock = vi.hoisted(() => vi.fn<(cwd: string) => Promise<string | null>>());
 const refreshStatsMock = vi.hoisted(() => vi.fn());
 const providerState = vi.hoisted((): { entry: ForgeProviderEntry | null } => ({ entry: null }));
+const statsState = vi.hoisted(() => ({ isTokenError: false }));
 const worktrees = vi.hoisted(
   () => new Map([["wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" }]])
 );
@@ -34,7 +36,7 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
     stats: { issueCount: 3, prCount: 2, commitCount: 5 },
     loading: false,
     error: null,
-    isTokenError: false,
+    isTokenError: statsState.isTokenError,
     refresh: refreshStatsMock,
     isStale: false,
     lastUpdated: Date.now(),
@@ -113,6 +115,7 @@ beforeEach(() => {
   getRepoUrlMock.mockReset();
   getRepoUrlMock.mockResolvedValue("https://github.com/acme/proj");
   providerState.entry = GITHUB;
+  statsState.isTokenError = false;
 });
 
 afterEach(() => {
@@ -140,6 +143,12 @@ function itemLabels(menu: HTMLElement): string[] {
     .map((item) => item.textContent ?? "");
 }
 
+// Counts menus aria-hidden by another open menu too: two modal menus hide each
+// other, so a visible-only count would miss exactly the co-open it guards.
+function openMenuCount(): number {
+  return screen.queryAllByRole("menu", { hidden: true }).length;
+}
+
 describe("ForgeStatsToolbarButton context menus", () => {
   it("leads the issues pill's menu with its own list, then the repository, then chrome", async () => {
     await renderStats();
@@ -153,7 +162,7 @@ describe("ForgeStatsToolbarButton context menus", () => {
       TOOLBAR_UNPIN_LABEL,
     ]);
     // The pill claims the right-click; the container's menu must not open too.
-    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(openMenuCount()).toBe(1);
   });
 
   it.each([
@@ -165,7 +174,7 @@ describe("ForgeStatsToolbarButton context menus", () => {
     const menu = await openMenu(screen.getByTestId(testId));
 
     expect(itemLabels(menu)[0]).toBe(first);
-    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(openMenuCount()).toBe(1);
   });
 
   it("opens the active worktree's branch history from the commits pill", async () => {
@@ -184,11 +193,38 @@ describe("ForgeStatsToolbarButton context menus", () => {
   it("leaves the repository entry out when the provider can't link to one", async () => {
     getRepoUrlMock.mockResolvedValue(null);
     await renderStats();
+    expect(getRepoUrlMock).toHaveBeenCalledWith("/test/proj");
 
     const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
 
     expect(itemLabels(menu)).toEqual([
       "View all issues on GitHub",
+      TOOLBAR_CUSTOMIZE_LABEL,
+      TOOLBAR_UNPIN_LABEL,
+    ]);
+  });
+
+  it("asks again when a menu opens, so a lookup that failed at mount still recovers", async () => {
+    getRepoUrlMock.mockRejectedValueOnce(new Error("No remote URL found for this repository"));
+    await renderStats();
+
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
+
+    expect(
+      await within(menu).findByRole("menuitem", { name: "View repository on GitHub" })
+    ).toBeTruthy();
+    expect(getRepoUrlMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the forge's own pages on offer while the token needs configuring", async () => {
+    statsState.isTokenError = true;
+    await renderStats();
+
+    const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
+
+    expect(itemLabels(menu)).toEqual([
+      "View all issues on GitHub",
+      "View repository on GitHub",
       TOOLBAR_CUSTOMIZE_LABEL,
       TOOLBAR_UNPIN_LABEL,
     ]);
@@ -204,6 +240,19 @@ describe("ForgeStatsToolbarButton context menus", () => {
       TOOLBAR_CUSTOMIZE_LABEL,
       TOOLBAR_UNPIN_LABEL,
     ]);
+  });
+
+  it("opens only the pill's menu on a long-press", async () => {
+    await renderStats();
+
+    fireEvent.pointerDown(screen.getByTestId("forge-stat-pill-issues"), { pointerType: "touch" });
+    // Radix opens a context menu 700 ms into a touch or pen press.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    });
+
+    expect(openMenuCount()).toBe(1);
+    expect(itemLabels(screen.getByRole("menu"))[0]).toBe("View all issues on GitHub");
   });
 
   it("offers only toolbar chrome on the commits pill when the project has no forge provider", async () => {

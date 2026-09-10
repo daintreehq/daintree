@@ -36,11 +36,11 @@ describe("useCanOpenForgeRepo", () => {
     getRepoUrlMock.mockReturnValue(lookup.promise);
 
     const { result } = renderHook(() => useCanOpenForgeRepo("/repo", "acme.forge"));
-    expect(result.current).toBe(false);
+    expect(result.current.canOpenRepo).toBe(false);
 
     await act(async () => lookup.resolve("https://forge.test/acme/widgets"));
 
-    expect(result.current).toBe(true);
+    expect(result.current.canOpenRepo).toBe(true);
     expect(getRepoUrlMock).toHaveBeenCalledWith("/repo");
   });
 
@@ -51,7 +51,7 @@ describe("useCanOpenForgeRepo", () => {
     const { result } = renderHook(() => useCanOpenForgeRepo("/repo", "acme.forge"));
     await act(async () => lookup.resolve(null));
 
-    expect(result.current).toBe(false);
+    expect(result.current.canOpenRepo).toBe(false);
   });
 
   it("stays false when the lookup fails, without letting the rejection escape", async () => {
@@ -61,13 +61,13 @@ describe("useCanOpenForgeRepo", () => {
     const { result } = renderHook(() => useCanOpenForgeRepo("/repo", "acme.forge"));
     await act(async () => lookup.reject(new Error("No remote URL found for this repository")));
 
-    expect(result.current).toBe(false);
+    expect(result.current.canOpenRepo).toBe(false);
   });
 
   it("asks nothing while the project has no resolved provider", () => {
     const { result } = renderHook(() => useCanOpenForgeRepo("/repo", null));
 
-    expect(result.current).toBe(false);
+    expect(result.current.canOpenRepo).toBe(false);
     expect(getRepoUrlMock).not.toHaveBeenCalled();
   });
 
@@ -81,13 +81,13 @@ describe("useCanOpenForgeRepo", () => {
       { initialProps: { providerId: "acme.github" } }
     );
     await act(async () => first.resolve("https://github.com/acme/widgets"));
-    expect(result.current).toBe(true);
+    expect(result.current.canOpenRepo).toBe(true);
 
     rerender({ providerId: "acme.bare" });
-    expect(result.current).toBe(false);
+    expect(result.current.canOpenRepo).toBe(false);
 
     await act(async () => second.resolve(null));
-    expect(result.current).toBe(false);
+    expect(result.current.canOpenRepo).toBe(false);
   });
 
   it("ignores an answer that lands after the project changed", async () => {
@@ -102,10 +102,54 @@ describe("useCanOpenForgeRepo", () => {
     rerender({ projectPath: "/new" });
 
     await act(async () => stale.resolve("https://forge.test/acme/old"));
-    expect(result.current).toBe(false);
+    expect(result.current.canOpenRepo).toBe(false);
 
     await act(async () => current.resolve("https://forge.test/acme/new"));
-    expect(result.current).toBe(true);
+    expect(result.current.canOpenRepo).toBe(true);
     expect(getRepoUrlMock).toHaveBeenLastCalledWith("/new");
+  });
+
+  it("picks up a changed answer on recheck, with neither key changing", async () => {
+    const before = deferred<string | null>();
+    const after = deferred<string | null>();
+    getRepoUrlMock.mockReturnValueOnce(before.promise).mockReturnValueOnce(after.promise);
+
+    const { result } = renderHook(() => useCanOpenForgeRepo("/repo", "acme.forge"));
+    await act(async () => before.resolve(null));
+    expect(result.current.canOpenRepo).toBe(false);
+
+    act(() => result.current.recheck());
+    await act(async () => after.resolve("https://forge.test/acme/widgets"));
+
+    expect(result.current.canOpenRepo).toBe(true);
+    expect(getRepoUrlMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the last answer when a recheck fails", async () => {
+    const first = deferred<string | null>();
+    const retry = deferred<string | null>();
+    getRepoUrlMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+
+    const { result } = renderHook(() => useCanOpenForgeRepo("/repo", "acme.forge"));
+    await act(async () => first.resolve("https://forge.test/acme/widgets"));
+
+    act(() => result.current.recheck());
+    await act(async () => retry.reject(new Error("Rate limit exceeded")));
+
+    expect(result.current.canOpenRepo).toBe(true);
+  });
+
+  it("lets only the newest lookup answer when a recheck overtakes one in flight", async () => {
+    const overtaken = deferred<string | null>();
+    const newest = deferred<string | null>();
+    getRepoUrlMock.mockReturnValueOnce(overtaken.promise).mockReturnValueOnce(newest.promise);
+
+    const { result } = renderHook(() => useCanOpenForgeRepo("/repo", "acme.forge"));
+    act(() => result.current.recheck());
+
+    await act(async () => newest.resolve("https://forge.test/acme/widgets"));
+    await act(async () => overtaken.resolve(null));
+
+    expect(result.current.canOpenRepo).toBe(true);
   });
 });

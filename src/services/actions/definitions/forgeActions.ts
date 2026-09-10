@@ -509,7 +509,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.openRepo",
       title: "Open repository",
       description:
-        "Open this project's repository home page on the forge in the system browser, for a human to read. This hands off to another application rather than returning data. Fails when the project's forge provider doesn't link to a repository page.",
+        "Open this project's repository home page on the forge in the system browser, for a human to read; it returns no data. Fails when the forge provider doesn't link to one.",
       category: "forge",
       kind: "command",
       danger: "safe",

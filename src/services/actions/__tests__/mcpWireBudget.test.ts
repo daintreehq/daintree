@@ -52,8 +52,14 @@ const MAX_PROPERTY_DESCRIPTION_BYTES = 320;
  * in a commit message with a reason. This is what makes the target load-bearing
  * without pretending every field can reach it — a new over-target description
  * fails the suite unless an existing one is brought under.
+ *
+ * 49 → 50 for #12354's `forge.openRepo`. Its one over-target property is the
+ * shared `projectId` selector (204 B) that every project-scoped forge open action
+ * already carries, reused verbatim rather than worded afresh. Bringing that under
+ * would mean cutting its unknown-id caveat from every tool that shares it — the
+ * protected content the target is not allowed to buy back.
  */
-const MAX_PROPERTIES_OVER_TARGET = 49;
+const MAX_PROPERTIES_OVER_TARGET = 50;
 
 /**
  * Total bytes spent above {@link PROPERTY_DESCRIPTION_TARGET_BYTES}, summed over
@@ -487,7 +493,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // external tier, so this total moves by the same 1_811 B as the external one
   // above and was re-measured over #12346's landing; it needs no separate
   // justification beyond the entry above.
-  const MAX_COHORT_PAYLOAD_BYTES = 211_400;
+  //
+  // 211_400 → 212_000 for #12354's `forge.openRepo`, measured at 211_981 B. In-app
+  // only — no forge tool is on the external tier — so the external ceiling above
+  // does not move. The spend is its 168 B description plus the
+  // `withProjectLocation` schema every project-scoped forge open action already
+  // carries, and the tool is on this surface at all because every forge action has
+  // to be reachable by the in-app assistant (`tierAuth.test.ts`).
+  const MAX_COHORT_PAYLOAD_BYTES = 212_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

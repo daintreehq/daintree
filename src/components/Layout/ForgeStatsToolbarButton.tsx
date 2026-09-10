@@ -136,7 +136,15 @@ export const ForgeStatsToolbarButton = memo(
     const forgeMode = providerEntry !== null && providerId !== null;
     const providerName = providerEntry?.contribution.name ?? "forge";
     const menuProviderName = forgeMode ? providerName : null;
-    const canOpenRepo = useCanOpenForgeRepo(currentProject?.path, forgeMode ? providerId : null);
+    const { canOpenRepo, recheck: recheckRepoLink } = useCanOpenForgeRepo(
+      currentProject?.path,
+      forgeMode ? providerId : null
+    );
+    // Asked again on every open, so a fix that changes neither the project nor
+    // the provider — a repaired remote — still brings "View repository" back.
+    const handleStatsMenuOpenChange = (open: boolean) => {
+      if (open) recheckRepoLink();
+    };
     const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(
       providerEntry?.contribution.slots?.statsDropdown ?? ""
     );
@@ -881,8 +889,23 @@ export const ForgeStatsToolbarButton = memo(
     if (!currentProject || providerLoading) return null;
 
     return (
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
+      <ContextMenu onOpenChange={handleStatsMenuOpenChange}>
+        <ContextMenuTrigger
+          asChild
+          // A touch or pen long-press arms Radix's open timer on pointerdown, and
+          // pointerdown bubbles: left alone, this container's timer runs beside
+          // the pill's and opens a second menu over it. Right-click needs no such
+          // guard — the pill's trigger claims the contextmenu event first.
+          onPointerDown={(event) => {
+            if (
+              event.pointerType !== "mouse" &&
+              event.target instanceof Element &&
+              event.target.closest(".toolbar-stat-pill")
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
           <div
             className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] transition-[width] duration-150 ease-out"
             style={{
@@ -913,6 +936,7 @@ export const ForgeStatsToolbarButton = memo(
                       ? `Browse ${providerName} issues`
                       : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
+                onContextMenuOpenChange={handleStatsMenuOpenChange}
                 contextMenuContent={
                   <ForgeStatsContextMenuItems
                     segment="issues"
@@ -1017,6 +1041,7 @@ export const ForgeStatsToolbarButton = memo(
                       ? `Browse ${providerName} pull requests`
                       : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
+                onContextMenuOpenChange={handleStatsMenuOpenChange}
                 contextMenuContent={
                   <ForgeStatsContextMenuItems
                     segment="prs"
@@ -1108,12 +1133,14 @@ export const ForgeStatsToolbarButton = memo(
                   ? "Browse git commits"
                   : `${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
               }
+              onContextMenuOpenChange={handleStatsMenuOpenChange}
               contextMenuContent={
                 <ForgeStatsContextMenuItems
                   segment="commits"
                   projectPath={currentProject.path}
                   providerName={menuProviderName}
-                  branch={activeWorktree?.branch}
+                  // A worktree that detaches keeps its old branch name on the snapshot.
+                  branch={activeWorktree?.isDetached ? undefined : activeWorktree?.branch}
                   canOpenRepo={canOpenRepo}
                 />
               }
