@@ -767,6 +767,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["sentry:get-consent-state"]["args"]
     ): Promise<IpcInvokeMap["sentry:get-consent-state"]["result"]>;
   };
+  sessionRestore: {
+    getConfig(
+      ...args: IpcInvokeMap["session-restore:get-config"]["args"]
+    ): Promise<IpcInvokeMap["session-restore:get-config"]["result"]>;
+    notifyViewHydrated(
+      ...args: IpcInvokeMap["session-restore:view-hydrated"]["args"]
+    ): Promise<IpcInvokeMap["session-restore:view-hydrated"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["session-restore:update-config"]["args"]
+    ): Promise<IpcInvokeMap["session-restore:update-config"]["result"]>;
+  };
   shortcutHints: {
     getCounts(
       ...args: IpcInvokeMap["shortcut-hints:get-counts"]["args"]
@@ -835,5 +846,18 @@ export interface GeneratedElectronAPI {
     setBannerSeverity(
       ...args: IpcInvokeMap["window-chrome:set-banner-severity"]["args"]
     ): Promise<IpcInvokeMap["window-chrome:set-banner-severity"]["result"]>;
+  };
+  workspace: {
+    list(
+      ...args: IpcInvokeMap["workspace:list"]["args"]
+    ): Promise<IpcInvokeMap["workspace:list"]["result"]>;
+  };
+  workspaceResidency: {
+    get(
+      ...args: IpcInvokeMap["workspace-residency:get"]["args"]
+    ): Promise<IpcInvokeMap["workspace-residency:get"]["result"]>;
+    set(
+      ...args: IpcInvokeMap["workspace-residency:set"]["args"]
+    ): Promise<IpcInvokeMap["workspace-residency:set"]["result"]>;
   };
 }

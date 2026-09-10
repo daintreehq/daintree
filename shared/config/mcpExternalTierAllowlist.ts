@@ -66,6 +66,19 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // (#11859). Identity only: no env, args or flags at any redaction level.
   "agent.listPresets",
 
+  // The same argument as `agent.listPresets`, one surface out: workspace ids
+  // are minted by Daintree and cannot be reconstructed from outside it.
+  // `Daintree-Workspace-Id` has shipped since #11789 and routes a session to
+  // one workspace deterministically, but nothing on this surface said what the
+  // ids were, so external clients recovered them by hashing candidate paths —
+  // the one lookup `projectStorePaths.ts` says is invalid, since a relocated
+  // project keeps its original id and `mintProjectId`'s `randomBytes(32)`
+  // collision fallback is not derivable at all. Without this the binding
+  // mechanism is only usable by guessing its key (#12307). Identity only:
+  // id, path, name, kind and whether a view is open — nothing about what is
+  // running inside a workspace.
+  "workspace.list",
+
   // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
   // deliberately NOT exposed — external orchestrators fan out
   // `terminal.sendCommand` per terminal (see CLAUDE.tasks.md guidance).
@@ -105,8 +118,86 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // the same name at a wider tier would have given this caller a different
   // contract behind an identical id.
   "terminal.closeOwned",
+  // The last direction in that loop with no route (#12315). A client can launch
+  // an agent, inject into it, read it and dispose of it, and still has no way to
+  // say "here it is" — so `gc attach`, whose entire purpose is putting the
+  // operator in front of a session, returns exit 2 and tells the user the
+  // session exists instead of taking them to it.
+  //
+  // Two shapes were rejected before this one, and both are worth stating,
+  // because both look like reuse and neither is. A `focus` argument on an
+  // existing tool would be the first exception to `useMcpBridge`'s unconditional
+  // `focusPolicy: "preserve"` — written so a client cannot claim a focus policy
+  // any more than it can claim to be the assistant. `panel.focus` here would
+  // fail hardest in exactly the case it was wanted for: `rendererBridge`
+  // resolves a bound workspace without attaching, thawing, activating, focusing
+  // or switching anything, so aiming it at a workspace nobody is watching
+  // selects a panel inside a cached view, moves DOM focus where it cannot be
+  // seen, and returns success.
+  //
+  // What ships instead is the operation that already existed: main verifies the
+  // panel against this session's ownership ledger, then delegates to
+  // `pilot.openRun`, which switches the workspace and carries a one-shot focus
+  // intent the incoming view applies once hydrated — and raises the owning
+  // window afterwards, since a switch alone does nothing when Daintree is
+  // behind another application.
+  //
+  // This is the one entry that deliberately disturbs what the user is looking
+  // at, which is a decision about the contract rather than a spare slot: the
+  // binding path exists precisely so a session driving project A cannot move
+  // someone working in B. Ownership is what keeps that honest — a client can
+  // only be taken to a panel it created, which is no escalation over having
+  // created it — and the ledger is server-authoritative, written from trusted
+  // dispatch results, so the id cannot be claimed into it.
+  "terminal.revealOwned",
+  // The step between waiting and destroying, which this surface did not have
+  // (#12338). A client could launch an agent and watch it, and if the agent had
+  // misread the task its only lever was `terminal.closeOwned` — which takes the
+  // conversation with it, and on a long session the conversation is the
+  // expensive part. Submitting text is not the missing lever either: an agent
+  // mid-turn is not reading its prompt, so a submission queues behind exactly
+  // the work it was meant to stop.
+  //
+  // What is on the surface is one operation meaning "stop this turn", not a
+  // signal API. There is no caller-supplied signal, no key sequence argument
+  // and no process handle: the id is the only thing that crosses, and Daintree
+  // picks the mechanism. A signal would not have worked anyway — node-pty's
+  // `kill()` reaches our wrapper shell, which carries `trap : INT` and swallows
+  // it before the agent sees anything.
+  //
+  // It refuses more than it accepts, deliberately. An agent whose own CLI
+  // advertises a different cancel key is named and refused rather than written
+  // to, and one that is not mid-turn is refused rather than sent a stray
+  // Escape. What it never does is report an interruption: the transport is
+  // one-way, so the result says the keystrokes were handed over and stops
+  // there.
+  "terminal.interruptOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
+  // The one piece of state an orchestrator owns that Daintree had nowhere to
+  // put (#12340). Panel lifetime is ours and the metadata about panels is the
+  // client's, so the two drift by construction: every external orchestrator
+  // kept a sidecar mapping panel ids to its own logical sessions, and that
+  // sidecar dies with the client process, is invisible to every other client,
+  // and silently keeps an entry for a panel the user has closed. Reconciling
+  // after a reconnect is exactly the operation that needs it to be right.
+  //
+  // What earns the slot is that nothing else on this surface can carry it.
+  // `requestedId` is write-once at creation and is an id, not a payload; the
+  // title is a user-visible field `agent.launch` deliberately pins; `env`
+  // writes into the agent's own process environment. The store itself is not
+  // new — `extensionState` is opaque, capped and rides the layout save — so
+  // this is one reserved key on a bag that already shipped, not a key-value
+  // service. It is bounded at 2KB, invisible in the UI, deleted with the
+  // panel, and confers nothing: metadata cannot put a panel in the ownership
+  // ledger, so it buys no `closeOwned` or `revealOwned` authority (#12308).
+  //
+  // Namespaced, not scoped, and the read is deliberately shared. One external
+  // API key means every client hashes to the same bearer entry, so there is no
+  // durable client identity to isolate by — the same answer Kubernetes
+  // annotations and Docker labels give. `terminal.list` carries the read
+  // behind an opt-in flag, which is what keeps this to one slot.
+  "terminal.setClientMetadata",
 
   "worktree.list",
   "worktree.getCurrent",

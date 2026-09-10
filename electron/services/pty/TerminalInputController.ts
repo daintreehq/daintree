@@ -1,7 +1,7 @@
 import type { TerminalInfo } from "./types.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
 import { IdentityWatcher, normalizeShellCommandText } from "./IdentityWatcher.js";
-import { WriteQueue } from "./WriteQueue.js";
+import { WriteQueue, type SubmitExecutionContext } from "./WriteQueue.js";
 import { logIdentityDebug } from "./identityDebug.js";
 import {
   normalizeSubmitText,
@@ -137,18 +137,43 @@ export class TerminalInputController {
   }
 
   write(data: string, traceId?: string): void {
+    this.writeInternal(data, traceId, false);
+  }
+
+  /**
+   * `write` for the submit path, which needs a synchronous pty failure to be a
+   * failure rather than a log line (#12337).
+   *
+   * `write()` swallows a throwing `ptyProcess.write()` into `logWriteError`, so
+   * a genuine EPIPE/EIO never reached `WriteQueue`'s `failed` branch and the
+   * submission looked as though it had gone out. Raw typing keeps that
+   * forgiving behaviour — a dropped keystroke is not worth tearing anything
+   * down — while a tracked submission propagates.
+   *
+   * `tryWrite()` is not the substitute: it falls back to `write()` above 512
+   * bytes, which is precisely the size a context injection lands in.
+   *
+   * Returns whether the data was handed to node-pty. `false` means an entry
+   * guard declined (input locked, terminal exited, no handle) — nothing was
+   * written and nothing threw.
+   */
+  private writeStrict(data: string, traceId?: string): boolean {
+    return this.writeInternal(data, traceId, true);
+  }
+
+  private writeInternal(data: string, traceId: string | undefined, rethrow: boolean): boolean {
     const terminal = this.host.terminalInfo;
     if (this.isInputLocked) {
-      return;
+      return false;
     }
     terminal.lastInputTime = Date.now();
 
     if (terminal.isExited) {
-      return;
+      return false;
     }
 
     if (!terminal.ptyProcess) {
-      return;
+      return false;
     }
 
     if (traceId !== undefined) {
@@ -210,9 +235,11 @@ export class TerminalInputController {
       try {
         terminal.ptyProcess.write(data);
       } catch (error) {
+        if (rethrow) throw error;
         this.host.logWriteError(error, { operation: "write(bracketed-paste)", traceId });
+        return false;
       }
-      return;
+      return true;
     }
 
     // Everything goes straight to the PTY, large payloads included. Daintree
@@ -223,12 +250,18 @@ export class TerminalInputController {
     try {
       terminal.ptyProcess.write(data);
     } catch (error) {
+      if (rethrow) throw error;
       this.host.logWriteError(error, { operation: "write(direct)", traceId });
+      return false;
     }
+    return true;
   }
 
-  submit(text: string): void {
+  submit(text: string, token?: string): void {
     if (this.isInputLocked || this.host.terminalInfo.isExited) {
+      // Refused before the lane sees it, so `WriteQueue` never mints a record.
+      // Answer the token here instead of leaving the caller to read `unknown`.
+      if (token !== undefined) this.host.writeQueue.noteRejectedSubmission(token);
       return;
     }
 
@@ -240,7 +273,7 @@ export class TerminalInputController {
       this.host.analysis.notifySubmission();
     }
 
-    this.host.writeQueue.submit(text);
+    this.host.writeQueue.submit(text, token);
   }
 
   /**
@@ -275,7 +308,13 @@ export class TerminalInputController {
     }
   }
 
-  async performSubmit(text: string): Promise<void> {
+  /**
+   * `ctx.markPtyWritten()` is the ONLY positive signal this method produces.
+   * Every guard below returns normally, so a resolved promise is compatible
+   * with nothing having been written at all — which is the silent loss #12337
+   * is about.
+   */
+  async performSubmit(text: string, ctx?: SubmitExecutionContext): Promise<void> {
     const terminal = this.host.terminalInfo;
     // Re-checked after every await below: a shutdown lock taken mid-submit must
     // abandon the trailing Enter, or it submits whatever the teardown signal
@@ -309,24 +348,30 @@ export class TerminalInputController {
 
     if (body.length === 0) {
       identityWatcher.armSuppressSignal();
-      this.write(enterSuffix);
+      if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
       return;
     }
 
     const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
     const useOutputSettle = !supportsBracketedPaste(terminal);
 
+    let bodyWritten: boolean;
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       const pasteBody = body.replace(/\n/g, "\r");
       const payload = `${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`;
-      this.write(payload);
+      bodyWritten = this.writeStrict(payload);
+    } else if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
+      const softNewline = getSoftNewlineSequence(terminal);
+      bodyWritten = this.writeStrict(body.replace(/\n/g, softNewline));
     } else {
-      if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
-        const softNewline = getSoftNewlineSequence(terminal);
-        this.write(body.replace(/\n/g, softNewline));
-      } else {
-        this.write(body);
-      }
+      bodyWritten = this.writeStrict(body);
+    }
+
+    // A declined body write means the pty went away between the entry guards
+    // and here. Nothing is in the composer, so stop rather than sending a bare
+    // Enter after it.
+    if (!bodyWritten) {
+      return;
     }
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
@@ -353,7 +398,7 @@ export class TerminalInputController {
 
     identityWatcher.armSuppressSignal();
     identityWatcher.onShellSubmit(body);
-    this.write(enterSuffix);
+    if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
   }
 
   // Side-effects shared by both PTY write paths when xterm forwards a CSI I/O

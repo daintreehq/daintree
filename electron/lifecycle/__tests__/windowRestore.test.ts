@@ -27,7 +27,10 @@ function harness(
   overrides: Partial<RestoreWindowFleetDeps> = {},
   createWindowImpl?: (
     projectId: string | undefined,
-    opts?: { revealMode?: "show" | "showInactive" }
+    opts?: {
+      revealMode?: "show" | "showInactive";
+      backgroundProjectIds?: readonly string[];
+    }
   ) => Promise<CreateWindowResult>
 ): Harness {
   const createWindow = vi.fn(createWindowImpl ?? (async () => "ok" as CreateWindowResult));
@@ -258,5 +261,57 @@ describe("restoreWindowFleet", () => {
       expect(h.resumeSaves).toHaveBeenCalledTimes(1);
       expect(h.persisted()).toBe(false);
     });
+  });
+});
+
+describe("restoreWindowFleet — background project lists (#12320)", () => {
+  const bgOf = (h: Harness): (readonly string[] | undefined)[] =>
+    h.createWindow.mock.calls.map(([, opts]) => opts?.backgroundProjectIds);
+
+  it("hands each window its own background list", async () => {
+    const h = harness({
+      records: [
+        { projectId: "a", backgroundProjectIds: ["a1", "a2"] },
+        { projectId: "b", backgroundProjectIds: ["b1"] },
+      ],
+      hadManifest: true,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(bgOf(h)).toEqual([["a1", "a2"], ["b1"]]);
+  });
+
+  it("gives the primary window its list too", async () => {
+    // "The project I was in paints first, the rest fill in behind it" only
+    // holds if the focused window's own background projects are handed over.
+    const h = harness({
+      records: [{ projectId: "a", backgroundProjectIds: ["a1"] }],
+      hadManifest: true,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(h.createWindow.mock.calls[0][1]?.backgroundProjectIds).toEqual(["a1"]);
+  });
+
+  it("passes nothing when a window has no background projects", async () => {
+    const h = harness({ records: [record("a"), record("b")], hadManifest: true });
+    await restoreWindowFleet(h.deps);
+    expect(bgOf(h)).toEqual([undefined, undefined]);
+  });
+
+  it("passes nothing when there was no manifest to restore from", async () => {
+    const h = harness({ hadManifest: false, fallbackProjectId: "last-active" });
+    await restoreWindowFleet(h.deps);
+    expect(h.createWindow.mock.calls[0][1]?.backgroundProjectIds).toBeUndefined();
+  });
+
+  it("still reveals background windows inactive", async () => {
+    const h = harness({
+      records: [
+        { projectId: "a", backgroundProjectIds: ["a1"] },
+        { projectId: "b", backgroundProjectIds: ["b1"] },
+      ],
+      hadManifest: true,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(h.revealModes()).toEqual([undefined, "showInactive"]);
   });
 });

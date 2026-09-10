@@ -44,7 +44,16 @@ export function useDiffContent(
   nextSubject?: DiffSubject | null,
   options?: UseDiffContentOptions
 ): UseDiffContentResult {
-  const [content, setContent] = useState<string | undefined>(undefined);
+  // Tagged with the cache key it was fetched under, for the same reason
+  // `freshnessBaseline` is: a retarget updates `subject` a commit before the
+  // effect clears the old patch, so an untagged value is handed out under the
+  // NEW file's path for one render. Callers read the patch to decide what the
+  // new side is — a gitlink has no readable file (#12309) — so answering with
+  // the previous file's patch is answering about the wrong file.
+  const [contentEntry, setContentEntry] = useState<{
+    subject: string;
+    value: string;
+  } | null>(null);
   // Freshness key the shown diff was fetched under, tagged with its cache key
   // so a navigation in progress never compares one file's baseline against
   // another file's live key.
@@ -102,17 +111,17 @@ export function useDiffContent(
       const freshnessKey = worktreeStore
         ? selectDiffFreshnessKey(worktreeStore.getState(), subject.worktreePath, subject.filePath)
         : undefined;
-      setContent(undefined);
+      setContentEntry(null);
       try {
         const entry = await requestDiff(subject, ignoreWhitespace, bypassCache, freshnessKey);
         if (requestRef.current !== requestId) return;
         // Baseline from the entry, not the local key: a joined in-flight
         // request's content corresponds to its initiator's capture time.
         if (entry) setFreshnessBaseline({ subject: cacheKey, key: entry.freshnessKey });
-        setContent(entry?.content ?? "ERROR");
+        setContentEntry({ subject: cacheKey, value: entry?.content ?? "ERROR" });
       } catch {
         if (requestRef.current !== requestId) return;
-        setContent("ERROR");
+        setContentEntry({ subject: cacheKey, value: "ERROR" });
       }
     },
     [subject, ignoreWhitespace, worktreeStore]
@@ -124,7 +133,7 @@ export function useDiffContent(
 
   useEffect(() => {
     if (subjectKey === null) {
-      setContent(undefined);
+      setContentEntry(null);
       setFreshnessBaseline(null);
       // Invalidate any in-flight response so it can't land on the next subject.
       requestRef.current++;
@@ -138,6 +147,11 @@ export function useDiffContent(
   // skeleton. The dwell timer keeps rapid scrubbing from bursting requests
   // against the shared gitOps rate limit; failures are silently dropped — the
   // foreground fetch will retry and surface its own error.
+  // Read through the tag, so a retarget reports "loading" rather than the patch
+  // the previous file left behind.
+  const content =
+    contentEntry !== null && contentEntry.subject === subjectKey ? contentEntry.value : undefined;
+
   useEffect(() => {
     if (!nextSubject || content === undefined || content === "ERROR") return;
     const timer = window.setTimeout(() => {

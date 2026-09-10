@@ -58,6 +58,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
+      test-matrix: ${{ steps.unit.outputs.matrix }}
     steps:
       - id: set
         run: |
@@ -71,6 +72,18 @@ jobs:
             linux-windows) echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
             *)             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
           esac
+
+      # Windows can exceed the job limit while the full unit suite is still
+      # passing. Partition its files as regular CI does; keep other OSes whole.
+      - id: unit
+        env:
+          PLATFORM_MATRIX: ${{ steps.set.outputs.matrix }}
+        run: |
+          MATRIX=$(jq -c '{include: [.include[] | . as $platform |
+            (if .os == "windows-2022" then 4 else 1 end) as $count |
+            range(1; $count + 1) as $shard |
+            $platform + {shard: $shard, shards: $count}]}' <<< "$PLATFORM_MATRIX")
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   check:
     needs: matrix-setup
@@ -94,8 +107,10 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
+          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
+          test -s /etc/apt/sources.list
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y libarchive-tools
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-2022'
@@ -113,11 +128,11 @@ jobs:
   test:
     needs: matrix-setup
     runs-on: ${{ matrix.os }}
-    name: Test (${{ matrix.name }})
+    name: Test (${{ matrix.name }} ${{ matrix.shard }}/${{ matrix.shards }})
     timeout-minutes: 35
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.test-matrix) }}
 
     steps:
       - name: Check out repository
@@ -132,8 +147,10 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
+          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
+          test -s /etc/apt/sources.list
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y libarchive-tools
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-2022'
@@ -146,7 +163,12 @@ jobs:
         run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Test
+        if: matrix.os != 'windows-2022'
         run: npm run test
+
+      - name: Test (Windows shard)
+        if: matrix.os == 'windows-2022'
+        run: npm run test -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
 
   # Production build + launch smoke on each platform. No packaging, signing, or
   # publishing here — that surface lives in the release dry-runs
@@ -174,8 +196,10 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
+          test -s /etc/apt/sources.list
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y \
             libarchive-tools \
             libxss-dev \
             libsecret-1-dev \
@@ -271,8 +295,10 @@ jobs:
 
       - name: Install Linux dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
+          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
+          test -s /etc/apt/sources.list
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y libarchive-tools
 
       - name: Install dependencies
         run: node scripts/ci/npm-ci-retry.mjs
@@ -297,8 +323,10 @@ jobs:
 
       - name: Install Linux dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
+          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
+          test -s /etc/apt/sources.list
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y libarchive-tools
 
       - name: Install dependencies
         run: node scripts/ci/npm-ci-retry.mjs

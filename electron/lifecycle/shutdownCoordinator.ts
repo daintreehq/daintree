@@ -16,7 +16,7 @@ import { SHUTDOWN_DEADLINE_MS } from "./shutdownConfig.js";
 import { clearSafetyBeltTimer } from "./signalShutdownState.js";
 
 export type ShutdownOutcome = "clean" | "dirty";
-export type ShutdownInitiator = "app-quit" | "update-install";
+export type ShutdownInitiator = "app-quit" | "update-install" | "app-relaunch";
 
 // "cleaning" — the chain is running; the process must not be torn down under it.
 // "handoff"  — the chain settled and the owner's terminal action is running

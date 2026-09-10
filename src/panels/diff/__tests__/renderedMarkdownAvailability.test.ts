@@ -46,6 +46,15 @@ describe("getRenderedMarkdownAvailability", () => {
     });
   });
 
+  it("refuses a .md-suffixed submodule, whose path is a directory (#12309)", () => {
+    const result = getRenderedMarkdownAvailability(input({ isGitlink: true }));
+    expect(result).toEqual({
+      visible: true,
+      enabled: false,
+      reason: expect.stringMatching(/submodule/i),
+    });
+  });
+
   it("enables it for a working-tree markdown diff", () => {
     expect(getRenderedMarkdownAvailability(input())).toEqual({ visible: true, enabled: true });
   });

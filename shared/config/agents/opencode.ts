@@ -98,6 +98,9 @@ export const config: AgentConfig = {
     supportsBracketedPaste: true,
     softNewlineSequence: "\n",
     ignoredInputSequences: ["\n", "\x1b\r"],
+    // Says it outright: "press esc again to interrupt" — the second press is
+    // the CLI's own requirement, not a Daintree convention.
+    interrupt: "double-escape",
   },
   env: {
     COLORFGBG: "15;0",

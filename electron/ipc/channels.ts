@@ -27,6 +27,7 @@ export const CHANNELS = {
   TERMINAL_DATA: "terminal:data",
   TERMINAL_INPUT: "terminal:input",
   TERMINAL_SUBMIT: "terminal:submit",
+  TERMINAL_GET_SUBMISSIONS: "terminal:get-submissions",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_ERROR: "terminal:error",
@@ -383,6 +384,9 @@ export const CHANNELS = {
   PORTAL_TAB_EVICTED: "portal:tab-evicted",
   PORTAL_TABS_EVICTED: "portal:tabs-evicted",
 
+  SESSION_RESTORE_GET_CONFIG: "session-restore:get-config",
+  SESSION_RESTORE_UPDATE_CONFIG: "session-restore:update-config",
+  SESSION_RESTORE_VIEW_HYDRATED: "session-restore:view-hydrated",
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
   HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
@@ -1142,6 +1146,18 @@ export const CHANNELS = {
   SCRATCH_UPDATED: "scratch:updated",
   SCRATCH_REMOVED: "scratch:removed",
   SCRATCH_ON_SWITCH: "scratch:on-switch",
+
+  // Workspace discovery — the catalog of every project and scratch, spanning
+  // both stores, so an MCP client can look a workspace id up instead of
+  // deriving one (#12307).
+  WORKSPACE_LIST: "workspace:list",
+
+  // The user's "keep this workspace resident" grant (#12313). Renderer-only by
+  // design: the action manifest is the MCP tool surface, so routing this
+  // through an action would let a bound client grant itself the residency
+  // #11790 refused to grant it automatically.
+  WORKSPACE_RESIDENCY_GET: "workspace-residency:get",
+  WORKSPACE_RESIDENCY_SET: "workspace-residency:set",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

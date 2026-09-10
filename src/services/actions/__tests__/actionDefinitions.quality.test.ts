@@ -311,7 +311,45 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // rather than quietly no-oped. That distinction is the whole reason the tools
   // exist, and a caller that misses it will hand them ids from `terminal.list`
   // and read the refusals as a bug.
-  const MAX_EXTERNAL_TOTAL_BYTES = 10_300;
+  // 10_300 → 10_700 for #12307's `workspace.list`, whose description is 359 B
+  // against the 400 B per-description ceiling. The 120 B floor means no new
+  // tool fits inside the old ceiling's 184 B of headroom at any wording, so
+  // this is the cost of the tool rather than of its prose. What the prose has
+  // to carry is the correction the issue turned on: a view being open is not
+  // what tells a wrong id from a closed workspace — absence from the list is —
+  // and a caller that misses it goes back to hashing paths.
+  // 10_700 → 10_800 for #12315's `terminal.revealOwned`. The surface stood at
+  // 10_477, so 223 B were free and its 264 B description does not fit — this is
+  // one of the few raises where a shorter wording COULD have stayed under the
+  // old ceiling, and the 100 B is spent deliberately rather than by necessity.
+  // What the prose has to carry is two things nothing else here does: that
+  // calling it takes the user somewhere, so it is not a way to report progress,
+  // and that it reaches only panels this connection created, so ids from
+  // `terminal.list` are not targets. Cutting either one buys 40 B and costs a
+  // caller that uses the tool to announce itself, or reads every ownership
+  // refusal as a bug.
+  // 10_800 → 11_082 for #12338's `terminal.interruptOwned`. Only 59 B were free,
+  // so a 341 B description could not have landed at any wording. What it has to
+  // carry is three things no sibling here says: that this stops a turn without
+  // disposing of the panel (the tool exists because the only other stop was the
+  // close), that it sends keystrokes rather than the prompt text a mid-turn
+  // agent would not read, and that an idle agent or one binding a different
+  // cancel key is refused rather than reported stopped. Cutting the last clause
+  // buys 90 B and costs the caller the one thing the maintainer asked for: an
+  // unsupported target named instead of a success returned at it.
+  // 11_082 → 11_452 for #12340's `terminal.setClientMetadata`, a 370 B
+  // description against the 400 B per-description ceiling and a surface with no
+  // headroom left. What the prose has to carry is the two things a caller gets
+  // wrong at opposite ends. The record is SHARED — one external API key means
+  // every client hashes to the same bearer entry, so a client that reads
+  // "client metadata" as private will put session state somewhere another
+  // client can overwrite. And it confers NOTHING — it is not a claim on the
+  // panel, so an orchestrator that stores a record and then expects
+  // `closeOwned` to come back with it has misread the ownership ledger, which
+  // is written from dispatch results and cannot be reached from here. Dropping
+  // either clause buys ~90 B and costs a caller one of those two mistakes.
+  const MAX_EXTERNAL_TOTAL_BYTES = 11_452;
+
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
@@ -347,7 +385,23 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // per-description ceiling, and the prose names the capability without
   // restating the schema, so there is nothing to tighten. This is the measured
   // total of all 167 descriptions, not a rounded allowance.
-  const MAX_COHORT_TOTAL_BYTES = 52_553;
+  // 52_553 → 52_912 for #12307's `workspace.list`, the same 359 B one cohort
+  // out: it is admitted at workbench as well as external, since the external
+  // tier must never reach past what the in-app assistant already can. Again the
+  // measured total, not a rounded allowance.
+  // 52_912 → 53_176 for #12315's `terminal.revealOwned`, carried on the action
+  // tier for that same subset invariant — the external surface may not reach
+  // past the assistant's. Its 264 B is the whole of the increase, so this stays
+  // the measured total rather than an allowance.
+  // 53_176 → 53_517 for #12338's `terminal.interruptOwned`, carried on the action
+  // tier for that same subset invariant. Its 341 B is the whole of the increase,
+  // so this stays the measured total rather than an allowance — the raw
+  // `terminal.interrupt` it delegates to is on no tier and costs nothing here.
+  // 53_517 → 53_887 for #12340's `terminal.setClientMetadata`. Exactly the 370 B
+  // of the same description the external ceiling above pays for: the tool sits
+  // on the action tier as well, so the in-app cohort is advertised the identical
+  // prose rather than a second wording of it.
+  const MAX_COHORT_TOTAL_BYTES = 53_887;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -860,6 +914,7 @@ describe("duplicate registrations", () => {
  * named ones still do.
  */
 const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
+  "plugin.reloadWindow",
   "git.push",
   "git.pullRebase",
   "git.rebaseOntoBase",
@@ -926,6 +981,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
  * in source — runs via `npm run check:confirm-wiring`.
  */
 const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
+  "plugin.reloadWindow",
   "app.importConfig",
   "terminal.kill",
   "terminal.killAll",
@@ -1258,10 +1314,17 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       projectId: "p-placeholder",
       runnerId: "r-placeholder",
     };
+    // ...except where a schema is strict, which the union above cannot satisfy:
+    // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never
+    // reach the gate under test and the action would look guarded when it was
+    // only malformed.
+    const STRICT_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
+      "terminal.setClientMetadata": { terminalId: "t-placeholder", clientMetadata: null },
+    };
 
     const failures: string[] = [];
     for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
-      const result = await service.dispatch(id, args, { source: "plugin" });
+      const result = await service.dispatch(id, STRICT_ARGS[id] ?? args, { source: "plugin" });
       if (result.ok) {
         failures.push(`${id} (plugin dispatch succeeded — side door open)`);
         continue;

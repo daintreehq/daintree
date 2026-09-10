@@ -3,6 +3,7 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { pluginClient } from "@/clients/pluginClient";
 import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
+import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 
 /**
  * The plugin-authoring feedback loop (#12214). An agent writing a plugin into a
@@ -23,6 +24,31 @@ const DIAGNOSTICS_LOG_LIMIT_DEFAULT = 50;
 const DIAGNOSTICS_LOG_LIMIT_MAX = 500;
 
 export function registerPluginActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+  actions.set("plugin.reloadWindow", () =>
+    defineAction({
+      id: "plugin.reloadWindow",
+      title: "Reload window for plugins",
+      description:
+        "Replace the project document to clear plugin package and custom-element registrations. Asks for confirmation because unsaved view state may be lost.",
+      category: "plugins",
+      kind: "command",
+      danger: "confirm",
+      denyPluginDispatch: true,
+      dangerRationale:
+        "Replaces the whole project document, discarding every view's in-memory state — unsaved edits included — for all panels in the window, not just the plugin that needs it.",
+      scope: "renderer",
+      run: async (_args, ctx) => {
+        // An MCP caller has already cleared the host confirmation; a second
+        // dialog would let a cancel return ok:true with nothing reloaded.
+        if (
+          ctx?.hostConfirmed === true ||
+          (await pluginDocumentRuntime.requestReloadConfirmation())
+        ) {
+          await window.electron.window.reload();
+        }
+      },
+    })
+  );
   actions.set("plugin.validate", () =>
     defineAction({
       id: "plugin.validate",

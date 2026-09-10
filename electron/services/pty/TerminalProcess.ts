@@ -30,7 +30,8 @@ import {
   type TerminalSnapshot,
   DEFAULT_SCROLLBACK,
 } from "./types.js";
-import { WriteQueue } from "./WriteQueue.js";
+import { WriteQueue, type SubmitExecutionContext } from "./WriteQueue.js";
+import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSubmission.js";
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
@@ -477,7 +478,7 @@ export class TerminalProcess {
     this.writeQueue = new WriteQueue({
       isExited: () => !this.lifecycle.isAlive,
       lastOutputTime: () => this.terminalInfo.lastOutputTime,
-      performSubmit: (text) => this.performSubmit(text),
+      performSubmit: (text, ctx) => this.performSubmit(text, ctx),
       onWriteError: (error, context) => this.logWriteError(error, context),
       onSubmitStatus: (state) => this.callbacks.onSubmitStatus?.(this.id, state),
     });
@@ -1271,8 +1272,16 @@ export class TerminalProcess {
     this.inputController.write(data, traceId);
   }
 
-  submit(text: string): void {
-    this.inputController.submit(text);
+  submit(text: string, token?: string): void {
+    this.inputController.submit(text, token);
+  }
+
+  /**
+   * One tracked submission's correlation record, by the token its caller minted
+   * (#12337). `undefined` means this incarnation holds no record for it.
+   */
+  getSubmission(token: string): TerminalSubmissionRecord | undefined {
+    return this.writeQueue.getSubmission(token);
   }
 
   /**
@@ -1289,8 +1298,8 @@ export class TerminalProcess {
     this.inputController.stage(text);
   }
 
-  private async performSubmit(text: string): Promise<void> {
-    await this.inputController.performSubmit(text);
+  private async performSubmit(text: string, ctx: SubmitExecutionContext): Promise<void> {
+    await this.inputController.performSubmit(text, ctx);
   }
 
   /**

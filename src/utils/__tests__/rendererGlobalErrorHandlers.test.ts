@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useErrorStore } from "@/store/errorStore";
+import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
+import { captureRendererException } from "@/utils/rendererSentry";
+
+vi.mock("@/utils/rendererSentry", () => ({ captureRendererException: vi.fn() }));
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -122,6 +126,28 @@ describe("rendererGlobalErrorHandlers", () => {
   });
 
   describe("error", () => {
+    it("attributes deferred plugin errors in both local diagnostics and telemetry", () => {
+      const filename = "plugin://pi-error-test/__dtv-9/dist/editor.js";
+      pluginDocumentRuntime.registerView("acme.editor", filename);
+      window.dispatchEvent(
+        new ErrorEvent("error", {
+          error: new Error("duplicate registration"),
+          message: "duplicate registration",
+          filename,
+        })
+      );
+      expect(useErrorStore.getState().errors[0]?.source).toBe("Plugin Error (acme.editor)");
+      expect(captureRendererException).toHaveBeenLastCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          tags: {
+            source: "plugin-renderer-error",
+            pluginId: "acme.editor",
+            pluginGeneration: "__dtv-9",
+          },
+        })
+      );
+    });
     it("creates an error store entry with location metadata", () => {
       const error = new Error("sync failure");
       const event = new ErrorEvent("error", {

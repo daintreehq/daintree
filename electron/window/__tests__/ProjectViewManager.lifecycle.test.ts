@@ -245,8 +245,14 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { BACKGROUND_HYDRATION_TIMEOUT_MS } from "../ProjectViewRestoreController.js";
 import { logWarn } from "../../utils/logger.js";
-import { registerCachedViewWebContents } from "../webContentsRegistry.js";
+import {
+  registerAppView,
+  registerCachedViewWebContents,
+  registerProjectView,
+  registerWebContents,
+} from "../webContentsRegistry.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { assertLifecycleInvariants, createPortLedger } from "./helpers/lifecycleInvariants.js";
 
@@ -1016,5 +1022,300 @@ describe("ProjectViewManager — lifecycle invariants", () => {
 
       expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).toBeNull();
     });
+  });
+});
+
+/**
+ * Background project restore (#12320).
+ *
+ * The invariants here are the ones whose violation is silent: an attached
+ * background view gets parked mid-load by the next `pruneOrphanedChildren`
+ * sweep, an activated one takes over the window, and one that fires
+ * `onViewReady` steals the window's only PTY MessagePort from the project the
+ * user is actually looking at.
+ */
+describe("ProjectViewManager — background restore", () => {
+  beforeEach(() => {
+    nextWebContentsId = 500;
+    wcQueue.length = 0;
+    resetAppMetricsSnapshotForTesting();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    wcQueue.length = 0;
+  });
+
+  async function restore(
+    setup: ManagerSetup,
+    projectId: string,
+    opts: { lastUsed?: number; hydrate?: boolean } = {}
+  ) {
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground(projectId, `/${projectId}`, {
+      lastUsed: opts.lastUsed ?? 1_000,
+    });
+    // The hydration waiter is armed synchronously, before the first await, so
+    // a signal sent right here is exactly the same-tick case production hits.
+    if (opts.hydrate !== false) setup.manager.signalViewHydrated(wc.id);
+    const result = await promise;
+    await flushImmediates();
+    return { wc, result };
+  }
+
+  it("leaves the restored project cached, registered and not active", async () => {
+    const setup = createManager();
+    const { wc, result } = await restore(setup, "proj-b");
+    expect(result).toEqual({ status: "restored" });
+    const entry = setup.manager.views.get("proj-b");
+    expect(entry?.state).toBe("cached");
+    expect(setup.manager.activeProjectId).toBe("proj-a");
+    expect(setup.manager.getProjectIdForWebContents(wc.id)).toBe("proj-b");
+    // The global registries too, not just the manager's own reverse map:
+    // dropping either of these is silent until the view misses a broadcast.
+    expect(vi.mocked(registerProjectView)).toHaveBeenCalledWith("proj-b", wc);
+    expect(vi.mocked(registerWebContents)).toHaveBeenCalledWith(wc, setup.win);
+    // Indexed as an app view of this window, or notification-owner resolution
+    // and terminal focus IPC silently drop it for the life of the view.
+    expect(setup.windowRegistry.registerAppViewWebContents).toHaveBeenCalledWith(
+      setup.win.id,
+      wc.id
+    );
+  });
+
+  it("never attaches the restored view to the window", async () => {
+    // An attached non-active view is deactivated by pruneOrphanedChildren on
+    // the next switch — mid-load, before it ever hydrates. Asserted against the
+    // whole call history, not the end state: parking removes the child, so a
+    // regression that DID attach during the load would leave the final
+    // children list looking correct.
+    const setup = createManager();
+    const { wc, result } = await restore(setup, "proj-b");
+    expect(result).toEqual({ status: "restored" });
+    const attachedIds = setup.win.contentView.addChildView.mock.calls.map(
+      ([child]) => (child as { webContents?: { id: number } }).webContents?.id
+    );
+    expect(attachedIds).not.toContain(wc.id);
+    expect(setup.win.contentView.children).not.toContain(setup.manager.views.get("proj-b")?.view);
+  });
+
+  it("never activates the restored view — no app-view claim, no focus, not visible", async () => {
+    const setup = createManager();
+    const { wc, result } = await restore(setup, "proj-b");
+    expect(result).toEqual({ status: "restored" });
+    // registerAppView is what `getAppWebContents` resolves to; claiming it
+    // would route the window's IPC at a hidden view.
+    const appViewIds = vi
+      .mocked(registerAppView)
+      .mock.calls.map(([, view]) => (view as { webContents?: { id: number } }).webContents?.id);
+    expect(appViewIds).not.toContain(wc.id);
+    expect(wc.focus).not.toHaveBeenCalled();
+    expect(setup.manager.views.get("proj-b")?.view.setVisible).not.toHaveBeenCalledWith(true);
+  });
+
+  it("never fires onViewReady, so the foreground keeps the window's PTY port", async () => {
+    // The PTY MessagePort is one per window: onViewReady re-brokers it, so a
+    // background view firing it would sever the visible project's terminals.
+    const setup = createManager();
+    setup.onViewReady.mockClear();
+    const { wc, result } = await restore(setup, "proj-b");
+    expect(result).toEqual({ status: "restored" });
+    const readyIds = setup.onViewReady.mock.calls.map(([arg]) => (arg as { id: number }).id);
+    expect(readyIds).not.toContain(wc.id);
+  });
+
+  it("keeps the persisted recency instead of stamping the completion time", async () => {
+    // Restored last means least recently used. Stamping now would invert the
+    // order and have the coldest project evict the ones the user rotates through.
+    const setup = createManager();
+    await restore(setup, "proj-b", { lastUsed: 42 });
+    expect(setup.manager.views.get("proj-b")?.lastUsed).toBe(42);
+  });
+
+  it("stays loading until hydration reports, then parks", async () => {
+    const setup = createManager();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground("proj-b", "/proj-b", { lastUsed: 10 });
+    await flushMicrotasks();
+    // Loaded but not hydrated: parking here would throttle and freeze a
+    // renderer that has not yet respawned its agents.
+    expect(setup.manager.views.get("proj-b")?.state).toBe("loading");
+    setup.manager.signalViewHydrated(wc.id);
+    await promise;
+    expect(setup.manager.views.get("proj-b")?.state).toBe("cached");
+  });
+
+  it("reports a project that already has a view as already-live", async () => {
+    const setup = createManager();
+    const result = await setup.manager.restoreInBackground("proj-a", "/a", { lastUsed: 1 });
+    expect(result).toEqual({ status: "already-live" });
+  });
+
+  it("shares one job between concurrent calls for the same project", async () => {
+    const setup = createManager();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const first = setup.manager.restoreInBackground("proj-b", "/proj-b", { lastUsed: 1 });
+    const second = setup.manager.restoreInBackground("proj-b", "/proj-b", { lastUsed: 1 });
+    expect(second).toBe(first);
+    setup.manager.signalViewHydrated(wc.id);
+    await first;
+  });
+
+  it("defers rather than evicting a sibling when the window is at its ceiling", async () => {
+    // The cap counts the active view, so a manager capped at 1 has no room.
+    const setup = createManager({ cachedProjectViews: 1 });
+    const result = await setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    expect(result).toEqual({ status: "deferred", reason: "capacity" });
+    expect(setup.manager.views.has("proj-b")).toBe(false);
+    expect(setup.manager.views.has("proj-a")).toBe(true);
+  });
+
+  it("abandons an in-flight restore when the user switches to that project", async () => {
+    const setup = createManager();
+    const bgWc = createMockWebContents();
+    wcQueue.push(bgWc);
+    const restorePromise = setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    await flushMicrotasks();
+    expect(setup.manager.views.get("proj-b")?.state).toBe("loading");
+
+    // The half-built entry must not be adopted by the cached fast path: it has
+    // never painted, so its warm gate could never release.
+    const switchWc = createMockWebContents();
+    wcQueue.push(switchWc);
+    const switchPromise = setup.manager.switchTo("proj-b", "/b");
+    await flushMicrotasks();
+    setup.manager.signalViewPainted(switchWc.id);
+    await switchPromise;
+    await flushImmediates();
+
+    expect(setup.manager.activeProjectId).toBe("proj-b");
+    expect(setup.manager.views.get("proj-b")?.view.webContents.id).toBe(switchWc.id);
+    await expect(restorePromise).resolves.toEqual({ status: "skipped", reason: "cancelled" });
+  });
+
+  it("cancels in-flight restores on dispose without leaving the promise pending", async () => {
+    const setup = createManager();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    await flushMicrotasks();
+    setup.manager.dispose();
+    await expect(promise).resolves.toEqual({ status: "skipped", reason: "cancelled" });
+    expect(setup.manager.backgroundRestores.size).toBe(0);
+  });
+
+  it("latches a hydration signal that arrives before anyone waits", async () => {
+    // Hydration routinely completes on the same tick the load settles, so a
+    // signal with no waiter yet must not be dropped.
+    const setup = createManager();
+    setup.manager.signalViewHydrated(9999);
+    await expect(setup.manager.waitForViewHydrated(9999, { timeoutMs: 60_000 })).resolves.toBe(
+      "hydrated"
+    );
+  });
+
+  it("reports a hydration timeout as a timeout, not as a signal", async () => {
+    // The two must stay distinguishable: a timeout means the renderer never
+    // said it restored its panels, so its agents may never have respawned.
+    vi.useFakeTimers();
+    try {
+      const setup = createManager();
+      const pending = setup.manager.waitForViewHydrated(4242, { timeoutMs: 1_000 });
+      vi.advanceTimersByTime(1_000);
+      await expect(pending).resolves.toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports an aborted wait as cancelled", async () => {
+    const setup = createManager();
+    const controller = new AbortController();
+    const pending = setup.manager.waitForViewHydrated(4243, {
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(pending).resolves.toBe("cancelled");
+  });
+
+  it("does not publish a view that never reported hydration", async () => {
+    // Parking it as "cached" would throttle and freeze a half-booted renderer
+    // and hand the user a blank project the next time they switched to it.
+    vi.useFakeTimers();
+    try {
+      const setup = createManager();
+      const wc = createMockWebContents();
+      wcQueue.push(wc);
+      const promise = setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+      await vi.advanceTimersByTimeAsync(BACKGROUND_HYDRATION_TIMEOUT_MS + 1_000);
+      await expect(promise).resolves.toEqual({ status: "skipped", reason: "failed" });
+      expect(setup.manager.views.has("proj-b")).toBe(false);
+      expect(setup.manager.getProjectIdForWebContents(wc.id)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails the restore when the renderer dies between load and hydration", async () => {
+    // Nobody else covers this window: loadView has removed its crash listener
+    // and setupViewHandlers returns early for a "loading" entry, so without an
+    // explicit watch the job would sit until its deadline and then publish a
+    // cached view wrapping a dead document.
+    const setup = createManager();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    await flushMicrotasks();
+    wc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+    await expect(promise).resolves.toEqual({ status: "skipped", reason: "failed" });
+    expect(setup.manager.views.has("proj-b")).toBe(false);
+  });
+
+  it("abandons a restore that is still inside its load", async () => {
+    // The abandon path most likely to strand state: the entry exists, its load
+    // is in flight, and destroying the view rejects that load — the controller
+    // must not then clean up the replacement the switch installed.
+    const setup = createManager();
+    const bgWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(bgWc);
+    const restorePromise = setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+    await flushMicrotasks();
+    expect(setup.manager.views.get("proj-b")?.state).toBe("loading");
+
+    const switchWc = createMockWebContents();
+    wcQueue.push(switchWc);
+    const switchPromise = setup.manager.switchTo("proj-b", "/b");
+    await flushMicrotasks();
+    setup.manager.signalViewPainted(switchWc.id);
+    await switchPromise;
+    await flushImmediates();
+    await restorePromise;
+
+    // The switch's view survives, and the abandoned one left nothing behind.
+    expect(setup.manager.views.get("proj-b")?.view.webContents.id).toBe(switchWc.id);
+    expect(setup.manager.getProjectIdForWebContents(switchWc.id)).toBe("proj-b");
+    expect(setup.manager.getProjectIdForWebContents(bgWc.id)).toBeNull();
+  });
+
+  it("clears the hydration latch when a view is torn down", async () => {
+    // Every foreground cold start reports hydration too; with no waiter the id
+    // latches, and nothing else removes it.
+    const setup = createManager();
+    const { wc } = await restore(setup, "proj-b");
+    setup.manager.signalViewHydrated(wc.id);
+    setup.manager.destroyView("proj-b");
+    // A fresh wait must not be satisfied instantly by the dead view's latch.
+    vi.useFakeTimers();
+    try {
+      const pending = setup.manager.waitForViewHydrated(wc.id, { timeoutMs: 1_000 });
+      vi.advanceTimersByTime(1_000);
+      await expect(pending).resolves.toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

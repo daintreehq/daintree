@@ -15,6 +15,11 @@ export const WORKBENCH_TIER_TOOLS = [
   "mcp.surface",
 
   "project.getAll",
+  // Discovery counterpart to `project.getAll` that also covers scratches and
+  // reports cross-window view presence (#12307). Admitted here as well as
+  // externally: the external tier must never reach past what the in-app
+  // assistant already can.
+  "workspace.list",
   "project.getCurrent",
   "project.getSettings",
   "project.getStats",
@@ -113,6 +118,11 @@ export const WORKBENCH_TIER_TOOLS = [
 ] as const satisfies readonly BuiltInActionId[];
 
 export const ACTION_TIER_ADDONS = [
+  // Carried here for the subset invariant alone: the external tier must never
+  // reach past the in-app assistant (#12340). The assistant has no reconnect
+  // problem to solve — it is in-process — but an action it cannot call while
+  // an api-key client can is the drift that invariant exists to catch.
+  "terminal.setClientMetadata",
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
@@ -155,6 +165,19 @@ export const ACTION_TIER_ADDONS = [
   // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
   // already reach"). Listing it here keeps the direction of the cut honest.
   "terminal.closeOwned",
+  // Carried here for the same subset invariant (#12315): the external tier must
+  // never reach past the in-app assistant. Close to redundant for this caller —
+  // it is pinned to the view the user is already looking at — but the invariant
+  // is asserted rather than assumed, and the direction of the cut has to stay
+  // honest. It tracks `pilot.openRun`, which it delegates to.
+  "terminal.revealOwned",
+  // Carried here for that same subset invariant (#12338). The assistant has the
+  // interactive fleet interrupt sitting beside it and a human watching, so this
+  // adds nothing it could not already do — but the external tier may not reach
+  // past what the assistant can, and that is asserted rather than assumed
+  // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
+  // already reach"). Listing it keeps the direction of the cut honest.
+  "terminal.interruptOwned",
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killBatch",

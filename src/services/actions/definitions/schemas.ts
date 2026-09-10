@@ -463,6 +463,32 @@ export const TerminalSummarySchema = z.object({
   agentState: z.string().nullable(),
   isInputLocked: z.boolean(),
   isFocused: z.boolean(),
+  // The caller's own record (#12340), present only when the listing was asked
+  // for it and null on a terminal carrying none. Optional rather than always
+  // emitted because the default listing is a cheap inventory and these bags are
+  // up to 2KB each.
+  //
+  // `z.record`, never `z.object({})`: this is opaque by contract, and a strict
+  // client running AJV with `removeAdditional` would strip every key out of an
+  // empty object schema — dropping the very payload the field exists to carry.
+  clientMetadata: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+/**
+ * One submission's delivery record (#12337).
+ *
+ * `z.enum` rather than a union of literals on purpose: a union renders as
+ * `anyOf`, which strict-mode MCP clients reject, while an enum renders as a
+ * plain `{ type: "string", enum: [...] }`.
+ */
+export const TerminalSubmissionRecordSchema = z.object({
+  token: z.string(),
+  phase: z
+    .enum(["queued", "writing", "pty_written", "failed", "cancelled", "unknown"])
+    .describe(
+      "How far this submission got. `pty_written`: the text and its Enter reached the pty without error — it does NOT mean the agent read them or acted on them. `queued`/`writing`: still in progress. `failed`/`cancelled`: it did not go out whole, and part may sit in the composer, so neither makes re-sending safe. `unknown`: the terminal was read and holds no record, including tokens aged past the last 32."
+    ),
+  at: z.number().optional().describe("Epoch ms the phase was entered. Absent for `unknown`."),
 });
 
 export const TerminalStatusEntrySchema = z.object({
@@ -477,7 +503,7 @@ export const TerminalStatusEntrySchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Present once the process has exited, so its absence means still running. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
+      "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
     ),
   spawnedAt: z
     .number()
@@ -502,13 +528,54 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent only when the terminal itself could not be resolved."
+      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`."
     ),
+  hasPty: z
+    .boolean()
+    .optional()
+    .describe(
+      "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`."
+    ),
+  submission: TerminalSubmissionRecordSchema.optional().describe(
+    "Delivery record for the token this call named. Absent when no token was asked for, or when this terminal could not be read — which is not the same as it holding no record."
+  ),
   error: z
     .string()
     .optional()
     .describe(
-      "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
+      "Set when the terminal was not found, and also stamped on every resolved entry when a batched fetch fails — the status fields are still populated and only that fetch's own field is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
+    ),
+});
+
+export const TerminalSendCommandResultSchema = z.object({
+  sent: z
+    .boolean()
+    .describe(
+      "Accepted onto the terminal's lane. Not evidence of delivery — use `submissionToken` for that."
+    ),
+  terminalId: z.string(),
+  command: z
+    .string()
+    .describe("The submitted text, truncated past 1024 characters — an echo, not a receipt."),
+  submissionToken: z
+    .string()
+    .describe(
+      "Pass this and `terminalId` to the terminal-status capability to see how far the submission got. Retained for the last 32 per terminal; lost if the terminal restarts."
+    ),
+  message: z.string(),
+});
+
+export const TerminalStatusResultSchema = z.object({
+  terminals: z.array(TerminalStatusEntrySchema),
+  source: z
+    .enum(["renderer", "pty"])
+    .describe(
+      "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
+    ),
+  unavailableFields: z
+    .array(z.enum(["armed", "lastCheckResult", "exitCode", "hasPty"]))
+    .describe(
+      "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),
 });
 

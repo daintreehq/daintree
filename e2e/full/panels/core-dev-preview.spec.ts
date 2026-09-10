@@ -262,6 +262,18 @@ server.listen(0, '127.0.0.1', () => {
         )
         .toContain("localhost:");
 
+      // Opening animates the drawer height and moves the toggle. The terminal
+      // buffer can already be populated before that transition finishes.
+      await expect
+        .poll(
+          () =>
+            drawerEl.evaluate((drawer) =>
+              drawer.getAnimations().every((animation) => animation.playState === "finished")
+            ),
+          { timeout: T_SHORT }
+        )
+        .toBe(true);
+
       // Close the console drawer
       await consoleToggle.click();
       await expect(consoleToggle).toHaveAttribute("aria-expanded", "false", {

@@ -36,7 +36,11 @@ vi.mock("fs", () => ({ default: fsMock, ...fsMock }));
 
 const projectStoreMock = vi.hoisted(() => ({
   getAllProjects: vi.fn<() => Array<{ path: string }>>(() => []),
-  getProjectSettings: vi.fn(() => Promise.resolve({ preferredEditor: null })),
+  // Typed to the real settings shape, not to the null default, so a test can
+  // hand back an actual editor preference.
+  getProjectSettings: vi.fn<
+    (projectId: string) => Promise<{ preferredEditor: { id: string } | null }>
+  >(() => Promise.resolve({ preferredEditor: null })),
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({
@@ -141,6 +145,10 @@ function resetGitMocks() {
   gitServiceMock.listWorktrees.mockResolvedValue([]);
   gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
   fsMock.promises.access.mockResolvedValue(undefined);
+  // The editor handler classifies its resolved target and reads the project's
+  // editor preference, so both are per-suite state like the rest of these.
+  fsMock.promises.stat.mockResolvedValue({ isFile: () => true, isDirectory: () => false });
+  projectStoreMock.getProjectSettings.mockResolvedValue({ preferredEditor: null });
 }
 
 // Rejects the `.git` probe for the given roots, marking them as no longer
@@ -277,7 +285,7 @@ describe("system:open-in-editor containment", () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
     const filePath = path.join(PROJECT_ROOT, "src", "app.ts");
     await handler(fakeEvent, { path: filePath, line: 5, col: 2 });
-    expect(openFileMock).toHaveBeenCalledWith(filePath, 5, 2, null);
+    expect(openFileMock).toHaveBeenCalledWith(filePath, 5, 2, null, false);
   });
 
   it("rejects an out-of-root file without invoking the editor", async () => {
@@ -300,7 +308,82 @@ describe("system:open-in-editor containment", () => {
         ? path.join(PROJECT_ROOT, "scripts", "deploy.ps1")
         : path.join(PROJECT_ROOT, "scripts", "setup.desktop");
     await handler(fakeEvent, { path: scriptPath });
-    expect(openFileMock).toHaveBeenCalledWith(scriptPath, undefined, undefined, null);
+    expect(openFileMock).toHaveBeenCalledWith(scriptPath, undefined, undefined, null, false);
+  });
+
+  // The worktree "Open in Editor" action targets a folder (#12329). The handler
+  // classifies it so EditorService can pick folder-appropriate argv.
+  it("marks a directory target as a directory for the editor service", async () => {
+    fsMock.promises.stat.mockResolvedValue({ isFile: () => false, isDirectory: () => true });
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+    const dirPath = path.join(PROJECT_ROOT, "packages", "app");
+
+    await handler(fakeEvent, { path: dirPath });
+
+    expect(openFileMock).toHaveBeenCalledWith(dirPath, undefined, undefined, null, true);
+  });
+
+  it("classifies the resolved target, not the raw request path", async () => {
+    const linkPath = path.join(PROJECT_ROOT, "current");
+    const realDir = path.join(PROJECT_ROOT, "releases", "v2");
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      Promise.resolve(path.normalize(p) === linkPath ? realDir : path.normalize(p))
+    );
+    fsMock.promises.stat.mockImplementation((p: string) =>
+      Promise.resolve({ isFile: () => p !== realDir, isDirectory: () => p === realDir })
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+
+    await handler(fakeEvent, { path: linkPath });
+
+    expect(fsMock.promises.stat).toHaveBeenCalledWith(realDir);
+    expect(openFileMock).toHaveBeenCalledWith(realDir, undefined, undefined, null, true);
+  });
+
+  // Containment already realpath'd the target, so a stat failure here is a lost
+  // race rather than a bad request. Falling back to "file" keeps every existing
+  // file launch behaving exactly as before instead of inventing a new error.
+  it("still opens the target as a file when classification fails", async () => {
+    fsMock.promises.stat.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+    const filePath = path.join(PROJECT_ROOT, "src", "app.ts");
+
+    await handler(fakeEvent, { path: filePath });
+
+    expect(openFileMock).toHaveBeenCalledWith(filePath, undefined, undefined, null, false);
+  });
+
+  it("passes the project's configured editor through with the directory flag", async () => {
+    const preferredEditor = { id: "zed" as const };
+    projectStoreMock.getProjectSettings.mockResolvedValue({ preferredEditor });
+    fsMock.promises.stat.mockResolvedValue({ isFile: () => false, isDirectory: () => true });
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+    const dirPath = path.join(PROJECT_ROOT, "packages", "app");
+
+    await handler(fakeEvent, { path: dirPath, projectId: "proj-1" });
+
+    expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith("proj-1");
+    expect(openFileMock).toHaveBeenCalledWith(dirPath, undefined, undefined, preferredEditor, true);
+  });
+
+  it("keeps the directory flag when the settings read fails", async () => {
+    projectStoreMock.getProjectSettings.mockRejectedValue(new Error("db closed"));
+    fsMock.promises.stat.mockResolvedValue({ isFile: () => false, isDirectory: () => true });
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+    const dirPath = path.join(PROJECT_ROOT, "packages", "app");
+
+    await handler(fakeEvent, { path: dirPath, projectId: "proj-1" });
+
+    expect(openFileMock).toHaveBeenCalledWith(dirPath, undefined, undefined, null, true);
+  });
+
+  it("propagates a launch failure to the renderer", async () => {
+    openFileMock.mockRejectedValueOnce(new Error("no editor"));
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+
+    await expect(
+      handler(fakeEvent, { path: path.join(PROJECT_ROOT, "src", "app.ts") })
+    ).rejects.toThrow("no editor");
   });
 });
 
@@ -428,7 +511,7 @@ describe("system path-allowlist: tracked worktree roots", () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
     const filePath = path.join(customWorktree, "src", "index.ts");
     await handler(fakeEvent, { path: filePath, line: 1, col: 1 });
-    expect(openFileMock).toHaveBeenCalledWith(filePath, 1, 1, null);
+    expect(openFileMock).toHaveBeenCalledWith(filePath, 1, 1, null, false);
   });
 
   // `git worktree add ~/scratch/hotfix` puts the worktree somewhere no pattern
@@ -563,7 +646,7 @@ describe("system path-allowlist: tracked worktree roots", () => {
     // The healthy linked worktree alongside it is still admitted.
     const filePath = path.join(UNPREDICTED_WORKTREE, "src", "index.ts");
     await handler(fakeEvent, { path: filePath });
-    expect(openFileMock).toHaveBeenCalledWith(filePath, undefined, undefined, null);
+    expect(openFileMock).toHaveBeenCalledWith(filePath, undefined, undefined, null, false);
   });
 
   // The escalated branch must hand the sink the canonical target, not the

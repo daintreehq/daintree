@@ -281,6 +281,25 @@ export const SETTINGS_REGISTRY = [
         keywords: ["update", "channel", "stable", "nightly", "releases"],
       },
       {
+        id: "general-session-restore",
+        subtab: "overview",
+        subtabLabel: "Overview",
+        section: "Startup",
+        title: "Restore live projects",
+        description:
+          "Bring back every project that was running after a restart, not just the one each window was showing.",
+        keywords: [
+          "restore",
+          "startup",
+          "session",
+          "relaunch",
+          "restart",
+          "resume",
+          "reopen",
+          "projects",
+        ],
+      },
+      {
         id: "general-hibernation",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
@@ -1199,6 +1218,7 @@ export const SETTINGS_REGISTRY = [
       "editor",
       "vscode",
       "cursor",
+      "antigravity",
       "ide",
       "image",
       "viewer",
@@ -1210,7 +1230,7 @@ export const SETTINGS_REGISTRY = [
         section: "External editor",
         title: "External editor",
         description:
-          "Configure external editor: VS Code, Cursor, Windsurf, Zed, Neovim, WebStorm, Sublime Text, or custom",
+          "Configure external editor: VS Code, Cursor, Windsurf, Antigravity IDE, Zed, Neovim, WebStorm, Sublime Text, or custom",
         keywords: [
           "editor",
           "vscode",
@@ -1223,6 +1243,7 @@ export const SETTINGS_REGISTRY = [
           "open",
           "ide",
           "windsurf",
+          "antigravity",
         ],
       },
       {
@@ -1787,6 +1808,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Dev Server Command",
         description: "Command to start the development server for live preview",
         keywords: ["dev", "server", "preview", "start", "command"],
+      },
+      {
+        id: "project-agent-integrations",
+        section: "Agent integrations",
+        title: "Keep Workspace Resident",
+        description: "Hold this project's view in the cache so a bound MCP session stays reachable",
+        keywords: ["resident", "mcp", "cache", "evict", "keep", "warm", "tier"],
       },
       {
         id: "project-in-repo-settings",

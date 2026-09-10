@@ -13,7 +13,12 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createSessionServer, validateDisplayImageUrl } from "../sessionServer.js";
+import {
+  createSessionServer,
+  validateDisplayImageUrl,
+  VIEWLESS_MAIN_PROCESS_TOOLS,
+} from "../sessionServer.js";
+import { MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
@@ -39,6 +44,7 @@ import {
   MCP_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS_MAX_BYTES,
   TIER_ALLOWLISTS,
+  WORKSPACE_BINDING_RESOURCE_URI,
 } from "../shared.js";
 import type { DispatchedWorkspaceRef } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
@@ -167,6 +173,9 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     handleSkillsSearch: vi.fn(() => ({ skills: [] })),
     handleSkillsLoad: vi.fn(),
     handleProjectRunCheck: vi.fn(),
+    handleTerminalGetStatusViewless: vi
+      .fn()
+      .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     ...overrides,
@@ -5498,6 +5507,261 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(result.isError).toBeFalsy();
     });
 
+    describe("reaching a workspace with no live view (#12316)", () => {
+      // The bug: view residency is an LRU capped at 5, so an orchestrator across
+      // dozens of projects held a binding for each and a live view for almost
+      // none — and the ceiling refused every call, including the ones that were
+      // never going to reach a renderer.
+      function viewlessDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+        return boundDeps({
+          requestManifest: vi
+            .fn()
+            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+          getCachedManifest: vi.fn(() => null),
+          ...overrides,
+        });
+      }
+
+      // Arguments and the dep each tool's execution lands in, keyed by the
+      // production set below rather than restated beside it.
+      const MAIN_PROCESS_CALLS: Record<
+        string,
+        { args: Record<string, unknown>; handler?: keyof SessionServerDeps }
+      > = {
+        "terminal.waitUntilIdle": {
+          args: { terminalId: "t-1" },
+          handler: "handleWaitUntilIdle",
+        },
+        "terminal.waitUntilIdleBatch": {
+          args: { terminalIds: ["t-1"] },
+          handler: "handleWaitUntilIdleBatch",
+        },
+        "skills.search": { args: { query: "x" }, handler: "handleSkillsSearch" },
+        "skills.load": { args: { id: "s-1" }, handler: "handleSkillsLoad" },
+        // Built here from the manifest rather than through an injected handler.
+        "mcp.surface": { args: {} },
+        "project.runCheck": {
+          args: { projectId: "p-1", runnerId: "test" },
+          handler: "handleProjectRunCheck",
+        },
+      };
+
+      it("covers every tool the production bypass set names", () => {
+        // The guard below is only a drift guard if the cases come from the set
+        // itself. Restating the ids would let a tool be added to the bypass —
+        // the direction that matters — with no test case at all.
+        expect(new Set(Object.keys(MAIN_PROCESS_CALLS))).toEqual(
+          new Set(VIEWLESS_MAIN_PROCESS_TOOLS)
+        );
+      });
+
+      // The bypass widens reachability, never authority — the tier gate runs
+      // first and is untouched. `project.runCheck` is in the set and off the
+      // external tier, so it proves that directly: it is refused here for the
+      // reason it always was, not because a view is missing.
+      const externalTierTools = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
+      const eachMainProcessTool = it.each(
+        [...VIEWLESS_MAIN_PROCESS_TOOLS].map((name) => [name] as const)
+      );
+
+      eachMainProcessTool("does not need a live view to settle %s", async (name) => {
+        const { args, handler } = MAIN_PROCESS_CALLS[name]!;
+        const deps = viewlessDeps();
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name, arguments: args });
+
+        if (externalTierTools.has(name)) {
+          // Success, not merely "not a binding error" — an unrelated refusal
+          // would satisfy the weaker assertion while proving the opposite.
+          expect(result.isError).toBeFalsy();
+          if (handler) expect(deps[handler]).toHaveBeenCalled();
+        } else {
+          expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+          if (handler) expect(deps[handler]).not.toHaveBeenCalled();
+        }
+        // Either way, the answer is never "your workspace has no view", and
+        // nothing was routed at a renderer.
+        expect(JSON.stringify(result.content)).not.toContain(SESSION_BINDING_GONE);
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      });
+
+      eachMainProcessTool("does not resolve the bound manifest to admit %s", async (name) => {
+        // The ceiling asked the manifest a question about renderer dispatch.
+        // A tool that never reaches a renderer should not pay for the answer.
+        const deps = viewlessDeps();
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        await callTool(server, { name, arguments: MAIN_PROCESS_CALLS[name]!.args });
+
+        if (name !== MCP_SURFACE_TOOL_ID) {
+          // `mcp.surface` resolves a manifest for its own report, and falls
+          // back to the host base surface when the workspace is unreachable.
+          expect(deps.requestManifest).not.toHaveBeenCalled();
+        }
+      });
+
+      it("still refuses a renderer action with no live view", async () => {
+        const deps = viewlessDeps();
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+        expect(result.isError).toBe(true);
+        expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("still refuses a confirm-gated action with no live view", async () => {
+        // The bypass must not become a way around the ceiling: nobody is
+        // watching this workspace to approve a dialog either way.
+        const deps = viewlessDeps();
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+        expect(result.isError).toBe(true);
+        // Refused by the ceiling's fail-closed arm: with no reachable manifest
+        // there is no evidence about `danger`, and proceeding would turn a
+        // refusal into an unattended dispatch. `SESSION_BINDING_GONE` rather
+        // than `CONFIRMATION_REQUIRED` is therefore the honest code — the
+        // bypass did not give this action a way past either.
+        expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("still refuses a confirm-gated action whose manifest IS reachable", async () => {
+        // The complementary half: when the ceiling can read the manifest, the
+        // refusal is the confirm one, and the bypass does not reach it.
+        const deps = boundDeps();
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+        expect(toolErrorPayload(result).code).toBe("CONFIRMATION_REQUIRED");
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("answers terminal.getStatus from the pty-host when ids are named", async () => {
+        const handleTerminalGetStatusViewless = vi.fn().mockResolvedValue({
+          terminals: [{ terminalId: "t-1", agentId: "claude", agentState: "working" }],
+          source: "pty",
+          unavailableFields: ["armed", "lastCheckResult", "exitCode"],
+        });
+        const deps = viewlessDeps({ handleTerminalGetStatusViewless });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, {
+          name: "terminal.getStatus",
+          arguments: { terminalIds: ["t-1"] },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({ source: "pty" });
+        // Answered for the workspace the routing itself tried to reach, never
+        // one named by the caller.
+        expect(handleTerminalGetStatusViewless).toHaveBeenCalledWith(
+          { terminalIds: ["t-1"] },
+          WORKSPACE
+        );
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("prefers the renderer for terminal.getStatus whenever a view is live", async () => {
+        // The fallback is reduced — no `armed`, no parsed check result — so it
+        // must never displace the full answer.
+        const handleTerminalGetStatusViewless = vi.fn();
+        const deps = boundDeps({
+          requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.getStatus")]),
+          handleTerminalGetStatusViewless,
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        await callTool(server, {
+          name: "terminal.getStatus",
+          arguments: { terminalIds: ["t-1"] },
+        });
+
+        expect(handleTerminalGetStatusViewless).not.toHaveBeenCalled();
+        expect(deps.dispatchAction).toHaveBeenCalled();
+      });
+
+      it("refuses a filter-only terminal.getStatus, and says which shape works", async () => {
+        // `location` is a panel concept with no pty-host meaning, so answering
+        // the fleet path from the inventory would quietly redefine it.
+        const handleTerminalGetStatusViewless = vi.fn();
+        const deps = viewlessDeps({ handleTerminalGetStatusViewless });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, {
+          name: "terminal.getStatus",
+          arguments: { location: "grid" },
+        });
+
+        const payload = toolErrorPayload(result);
+        expect(payload.code).toBe(SESSION_BINDING_GONE);
+        expect(payload.retriable).toBe(true);
+        // And it names the shape that would have worked, so a poller is not
+        // left retrying the one that never can.
+        expect(JSON.stringify(result.content)).toContain("terminalIds");
+        expect(handleTerminalGetStatusViewless).not.toHaveBeenCalled();
+      });
+
+      it("does not fall back for an ambiguous workspace", async () => {
+        // Two views is a conflict the user has to resolve; answering anyway
+        // would hide it.
+        const handleTerminalGetStatusViewless = vi.fn();
+        const deps = viewlessDeps({
+          requestManifest: vi
+            .fn()
+            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "ambiguous")),
+          handleTerminalGetStatusViewless,
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, {
+          name: "terminal.getStatus",
+          arguments: { terminalIds: ["t-1"] },
+        });
+
+        expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
+        // And it does not hand out the id advice, which cannot resolve a
+        // duplicate view.
+        expect(JSON.stringify(result.content)).not.toContain("terminalIds");
+        expect(handleTerminalGetStatusViewless).not.toHaveBeenCalled();
+      });
+
+      it("does not fall back for a destroyed pin", async () => {
+        // Not a route that comes back — the session's identity is gone.
+        const handleTerminalGetStatusViewless = vi.fn();
+        const deps = viewlessDeps({
+          requestManifest: vi.fn().mockRejectedValue(new SessionBindingError(99)),
+          handleTerminalGetStatusViewless,
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, {
+          name: "terminal.getStatus",
+          arguments: { terminalIds: ["t-1"] },
+        });
+
+        const payload = toolErrorPayload(result);
+        expect(payload.code).toBe(SESSION_BINDING_GONE);
+        expect(payload.retriable).toBe(false);
+        expect(handleTerminalGetStatusViewless).not.toHaveBeenCalled();
+      });
+    });
+
     it("keeps refusing after teardown clears the session's workspace map", async () => {
       // Routing captures the binding once; the surface policy must share that
       // lifetime, or a torn-down session loses its ceiling while its dispatch
@@ -5655,13 +5919,13 @@ describe("workspace-bound external sessions (#11789)", () => {
       ).toBeGreaterThan(1);
     });
 
-    it("reports mcp.surface as an unreachable route rather than describing the base surface", async () => {
-      // `tools/list` and `mcp.surface` deliberately diverge while the binding is
-      // unresolved. `mcp.surface` is a tool call, so it meets the bound
-      // pre-dispatch guard first and never reaches `resolveManifest` — which is
-      // right: it reports what this session can actually reach, and that is
-      // currently nothing. Pinned here because the divergence falls out of
-      // handler ordering, which a later refactor could change silently.
+    it("answers mcp.surface from the base surface, agreeing with tools/list", async () => {
+      // `mcp.surface` runs entirely in main and never reaches a renderer, so
+      // the bound ceiling no longer refuses it for a workspace with no view
+      // (#12316). It then resolves its own manifest through `resolveManifest`,
+      // which already falls back to the host base surface — so the report and
+      // the listing describe one manifest rather than disagreeing about
+      // whether this session has any tools at all.
       const deps = boundDeps({
         requestManifest: vi
           .fn()
@@ -5672,12 +5936,17 @@ describe("workspace-bound external sessions (#11789)", () => {
       await server.connect(makeMockTransport());
 
       const result = await callTool(server, { name: "mcp.surface", arguments: {} });
+      const listed = new Set((await listBaseTools(server)).map((t) => t.name));
 
-      expect(result.isError).toBe(true);
-      expect(toolErrorPayload(result)).toMatchObject({
-        code: SESSION_BINDING_GONE,
-        retriable: true,
-      });
+      expect(result.isError).toBeFalsy();
+      // Set equality, not containment: a report that named every listed tool
+      // *plus* a withheld one would satisfy the weaker check while describing
+      // exactly the surface the ceiling exists to keep off this session.
+      const reported = new Set(
+        (result.structuredContent as { tools: Array<{ id: string }> }).tools.map((t) => t.id)
+      );
+      expect(reported).toEqual(listed);
+      expect(listed.size).toBeGreaterThan(0);
     });
 
     it("never serves a cached manifest after a binding failure", async () => {
@@ -5704,78 +5973,212 @@ describe("workspace-bound external sessions (#11789)", () => {
       );
     });
 
-    it.each([
-      ["resources/list", {}],
+    it("reports an unreachable workspace on a resource read rather than answering as if it were empty", async () => {
+      // `tools/list` gets a host surface because the tool *set* is knowable
+      // without a view; a resource read is not — it reads what is actually open
+      // in that workspace. Answering emptily would be an authoritative "you
+      // have nothing", the same lie the terminal handshake told.
+      //
       // `scrollback` is backed by `terminal.getOutput`, which the external tier
       // permits — a `pulse` URI would be refused as TIER_NOT_PERMITTED before
       // dispatch and never reach the binding at all.
-      ["resources/read", { uri: "daintree://terminal/t-1/scrollback" }],
-    ])(
-      "reports an unreachable workspace on %s rather than answering as if it were empty",
-      async (method, params) => {
-        // `tools/list` gets a host surface because the tool *set* is knowable
-        // without a view; a resource listing is not — it enumerates what is
-        // actually open in that workspace. Answering `{ resources: [] }` there
-        // would be an authoritative "you have nothing", which is the same lie
-        // the terminal handshake told, in a quieter place.
-        const deps = boundDeps({
-          dispatchAction: vi
-            .fn()
-            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-          requestManifest: vi
-            .fn()
-            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-          getCachedManifest: vi.fn(() => null),
-        });
-        const server = createSessionServer(SESSION, deps);
-        await server.connect(makeMockTransport());
-
-        await expect(callHandler(server, method, params)).rejects.toMatchObject({
-          data: { code: SESSION_BINDING_GONE, retriable: true, errorCategory: "business" },
-        });
-      }
-    );
-
-    it.each([["resources/read"], ["resources/subscribe"]])(
-      "refuses %s for host-global agent state while the workspace is unreachable",
-      async (method) => {
-        // `agentState` is the one resource with no backing dispatch — it reads
-        // the process-global agent store, and its tier gate (`terminal.list`)
-        // says nothing about which workspace the agent belongs to. Before
-        // #12082 a bound session could not exist without a live view, so this
-        // was unreachable; now it is, and it must not answer as if the
-        // host-global store were the bound workspace's.
-        const deps = boundDeps({
-          requestManifest: vi
-            .fn()
-            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-          getCachedManifest: vi.fn(() => null),
-        });
-        const server = createSessionServer(SESSION, deps);
-        await server.connect(makeMockTransport());
-
-        await expect(
-          callHandler(server, method, { uri: "daintree://agent/agent-1/state" })
-        ).rejects.toMatchObject({
-          data: { code: SESSION_BINDING_GONE, retriable: true },
-        });
-      }
-    );
-
-    it("serves host-global agent state once the workspace is reachable again", async () => {
-      // The probe is a route check, not a new refusal: a bound session with a
-      // live view reads exactly what it read before.
       const deps = boundDeps({
-        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+        dispatchAction: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
         getCachedManifest: vi.fn(() => null),
       });
       const server = createSessionServer(SESSION, deps);
       await server.connect(makeMockTransport());
 
       await expect(
-        callHandler(server, "resources/subscribe", { uri: "daintree://agent/agent-1/state" })
-      ).resolves.toEqual({});
+        callHandler(server, "resources/read", { uri: "daintree://terminal/t-1/scrollback" })
+      ).rejects.toMatchObject({
+        data: { code: SESSION_BINDING_GONE, retriable: true, errorCategory: "business" },
+      });
     });
+
+    it("answers resources/list with the binding resource instead of refusing outright (#12313)", async () => {
+      // The refusal above used to cover `resources/list` too, on the reasoning
+      // that an empty listing is an authoritative "you have nothing". That
+      // reasoning still holds — what changed is that the listing is no longer
+      // empty. It leads with the binding resource, so dropping the categories
+      // that needed a renderer is not a claim about the workspace's contents:
+      // the client is handed the thing that says the route is gone.
+      //
+      // It has to be `resources/list` specifically that recovers, because a
+      // bound session with no view cannot call anything else — refusing here
+      // left it knowing it was evicted with nothing to ask.
+      const deps = boundDeps({
+        dispatchAction: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const listed = (await callHandler(server, "resources/list", {})) as {
+        resources: Array<{ uri: string }>;
+      };
+      const uris = listed.resources.map((r) => r.uri);
+
+      // Asserted whole rather than by absence: a listing that degraded the
+      // dispatch-backed categories but fabricated an entry in their place would
+      // satisfy any "does not contain" check while telling the same lie.
+      expect(uris).toEqual([WORKSPACE_BINDING_RESOURCE_URI]);
+    });
+
+    it("serves the binding resource without dispatching or probing the route (#12313)", async () => {
+      // The exemption the issue asked for, obtained by construction rather than
+      // by a special case: this read touches no renderer, so there is no route
+      // for a residency probe to be protecting. If it ever grew a dispatch it
+      // would start failing exactly when it is needed most.
+      const dispatchAction = vi
+        .fn()
+        .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found"));
+      const deps = boundDeps({
+        dispatchAction,
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const read = (await callHandler(server, "resources/read", {
+        uri: WORKSPACE_BINDING_RESOURCE_URI,
+      })) as { contents: Array<{ text: string; mimeType: string }> };
+
+      expect(dispatchAction).not.toHaveBeenCalled();
+      // A residency probe would resolve through `requestManifest`, so an
+      // untouched manifest is what proves the exemption is structural rather
+      // than a branch that could be reordered back into the path — the check
+      // that keeps standing now that #12316 removed the probe itself.
+      expect(deps.requestManifest).not.toHaveBeenCalled();
+      const state = JSON.parse(read.contents[0].text);
+      expect(state.workspaceId).toBe(WORKSPACE);
+      expect(state.routeState).toBe("not-found");
+      expect(state.liveViewCount).toBe(0);
+      expect(state.keepResident).toBe(false);
+    });
+
+    it("answers `unbound` for a session with no binding rather than borrowing a workspace", async () => {
+      // The failure this guards is argument mis-wiring: a reader handed the
+      // focused workspace, or a stale one from another session, would look
+      // right in every bound test and be exactly the cross-workspace answer the
+      // binding exists to refuse (#7003).
+      const server = createSessionServer("unbound-session", unboundDeps());
+      await server.connect(makeMockTransport());
+
+      const read = (await callHandler(server, "resources/read", {
+        uri: WORKSPACE_BINDING_RESOURCE_URI,
+      })) as { contents: Array<{ text: string }> };
+
+      const state = JSON.parse(read.contents[0].text);
+      expect(state.workspaceId).toBeNull();
+      expect(state.routeState).toBe("unbound");
+    });
+
+    it("installs and tears down a real subscription to the binding resource", async () => {
+      // `pulse` and `agentState` were the only subscribable kinds; a client that
+      // must poll to notice its workspace returning is the case the issue calls
+      // out, so the push half has to exist even though it is best effort.
+      //
+      // Asserted through the session's subscription bucket rather than the `{}`
+      // acknowledgement: returning `{}` without installing anything would
+      // satisfy the acknowledgement while the client waited forever. The
+      // unsubscribe is also load-bearing here — the listener lives on a
+      // process-global registry, so a test that only subscribes leaks one into
+      // every case that runs after it.
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await callHandler(server, "resources/subscribe", { uri: WORKSPACE_BINDING_RESOURCE_URI });
+      expect(
+        deps.sessionStore.resourceSubscriptions.get(SESSION)?.has(WORKSPACE_BINDING_RESOURCE_URI)
+      ).toBe(true);
+
+      await callHandler(server, "resources/unsubscribe", { uri: WORKSPACE_BINDING_RESOURCE_URI });
+      // `?? false` because an emptied bucket is dropped from the map entirely,
+      // so "no bucket" and "bucket without this uri" are the same answer here.
+      expect(
+        deps.sessionStore.resourceSubscriptions.get(SESSION)?.has(WORKSPACE_BINDING_RESOURCE_URI) ??
+          false
+      ).toBe(false);
+    });
+
+    it("refuses a binding URI naming another workspace", async () => {
+      // `current` is the only id this resource takes. Rejecting at the parse
+      // step means no URI shape can reach the reader asking about a workspace
+      // the session is not bound to.
+      const server = createSessionServer(SESSION, boundDeps());
+      await server.connect(makeMockTransport());
+
+      await expect(
+        callHandler(server, "resources/read", { uri: `daintree://workspace/${WORKSPACE}/binding` })
+      ).rejects.toThrow(/Unknown resource URI/);
+    });
+
+    it("still refuses resources/list for a dead pin, which has no later state to recover into", async () => {
+      // A `SessionBindingError` is a destroyed WebContents the session can never
+      // re-resolve — unlike a workspace, which comes back when the user reopens
+      // it. Degrading the listing there would promise a recovery that cannot
+      // happen, so narrowing the fallback to `WorkspaceBindingError` is
+      // load-bearing rather than incidental.
+      const deps = boundDeps({
+        dispatchAction: vi.fn().mockRejectedValue(new SessionBindingError(1234)),
+        requestManifest: vi.fn().mockRejectedValue(new SessionBindingError(1234)),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(callHandler(server, "resources/list", {})).rejects.toMatchObject({
+        data: { code: SESSION_BINDING_GONE },
+      });
+    });
+
+    it.each([["resources/read"], ["resources/subscribe"]])(
+      "serves %s for host-global agent state whether or not the workspace has a view",
+      async (method) => {
+        // `agentState` is the one resource with no backing dispatch — it reads
+        // the process-global agent store with no renderer involved, so view
+        // residency was never evidence about it (#12316). The probe #12082
+        // added closed only half of a gap it could not close: which workspace
+        // an agent belongs to is unchecked either way, and a bound session with
+        // a live view could always read across it. That is #11789's own scoping
+        // work, and it has to apply to both cases.
+        const reachable = boundDeps({
+          requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+          getCachedManifest: vi.fn(() => null),
+        });
+        const unreachable = boundDeps({
+          requestManifest: vi
+            .fn()
+            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+          getCachedManifest: vi.fn(() => null),
+        });
+
+        for (const deps of [reachable, unreachable]) {
+          const server = createSessionServer(SESSION, deps);
+          await server.connect(makeMockTransport());
+          await expect(
+            callHandler(server, method, { uri: "daintree://agent/agent-1/state" })
+          ).resolves.toBeDefined();
+        }
+        // And the read cost no manifest resolution at all.
+        expect(unreachable.requestManifest).not.toHaveBeenCalled();
+      }
+    );
 
     it("still degrades a resource listing gracefully for an ordinary dispatch failure", async () => {
       // The rethrow above is scoped to route-binding failures; a flaky
@@ -6196,6 +6599,12 @@ describe("session-scoped resource ownership (#11909)", () => {
     return [
       makeManifestEntry("terminal.new"),
       { ...makeManifestEntry("terminal.closeOwned"), kind: "command", danger: "safe" as const },
+      { ...makeManifestEntry("terminal.revealOwned"), kind: "command", danger: "safe" as const },
+      {
+        ...makeManifestEntry("terminal.interruptOwned"),
+        kind: "command",
+        danger: "safe" as const,
+      },
       {
         ...makeManifestEntry("worktree.deleteOwned"),
         kind: "command",
@@ -6204,6 +6613,14 @@ describe("session-scoped resource ownership (#11909)", () => {
       makeManifestEntry("worktree.createWithRecipe"),
       makeManifestEntry("recipe.run"),
       makeManifestEntry("agent.launch"),
+      // With an outputSchema, so an `owned` listing exercises the
+      // structuredContent block as well as the JSON text body — the two read
+      // one `outcome.value`, and a filter applied to only one of them would
+      // otherwise go unnoticed here.
+      {
+        ...makeManifestEntry("terminal.list"),
+        outputSchema: { type: "object", properties: { terminals: { type: "array" } } },
+      },
     ];
   }
 
@@ -6568,6 +6985,424 @@ describe("session-scoped resource ownership (#11909)", () => {
     });
   });
 
+  describe("terminal.interruptOwned (#12338)", () => {
+    const INTERRUPT_RESULT = {
+      terminalId: "terminal-1",
+      agentId: "claude",
+      agentStateAtDispatch: "working",
+      status: "requested",
+    };
+
+    function interruptHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.interrupt": { result: { ok: true, result: INTERRUPT_RESULT } },
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    it("delegates to the renderer interrupt with only the id", async () => {
+      const { server, dispatchAction } = interruptHarness("s-interrupt");
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.interrupt",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+      expect(payloadOf<{ status: string }>(result).status).toBe("requested");
+    });
+
+    // Rebuilding the arguments is what keeps this one operation rather than the
+    // general signal API it was deliberately not made into: a caller cannot
+    // smuggle a key sequence, a signal number or a second target through it.
+    it("strips anything the caller sent beyond the id", async () => {
+      const { server, dispatchAction } = interruptHarness("s-interrupt-strip");
+
+      await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          signal: "SIGKILL",
+          keySequence: "\u0003",
+          confirmed: true,
+        },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.interrupt",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      const { store, server, dispatchAction } = interruptHarness("s-interrupt-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    // The half that separates this from the cleanup tools: a stop is not an
+    // end, so the session keeps the authority to stop the panel again — and to
+    // close it afterwards, which is the point of having a non-destructive stop.
+    it("keeps ownership, so the panel can be interrupted again and then closed", async () => {
+      const { store, server, dispatchAction } = interruptHarness("s-interrupt-twice");
+      const args = { name: "terminal.interruptOwned", arguments: { terminalId: "terminal-1" } };
+
+      const first = await callTool(server, args);
+      const second = await callTool(server, args);
+
+      expect(first.isError).toBeUndefined();
+      expect(second.isError).toBeUndefined();
+      // Counted, not inferred from two successes: a dedup entry would serve the
+      // second call from cache and leave the agent running with both calls green.
+      expect(
+        dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === "terminal.interrupt")
+      ).toHaveLength(2);
+
+      // The point of retaining the record: the stop did not spend the session's
+      // authority, so the close it was a step toward still works.
+      const closed = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(closed.isError).toBeUndefined();
+      expect(store.resourceOwnership.owns("s-interrupt-twice", "terminal", "terminal-1")).toBe(
+        false
+      );
+    });
+
+    // Guards `releasesOwnership: false` itself. Without it the entry would fall
+    // through to the release path, and the structural `closedIds` check is a
+    // separate guard that would mask the flag being wrong.
+    it("retains ownership even if the delegate claims the panel closed", async () => {
+      const { store, server } = harness("s-interrupt-claims-closed", {
+        "terminal.interrupt": {
+          result: { ok: true, result: { ...INTERRUPT_RESULT, closedIds: ["terminal-1"] } },
+        },
+      });
+      store.resourceOwnership.record("s-interrupt-claims-closed", [
+        { kind: "terminal", id: "terminal-1" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(
+        store.resourceOwnership.owns("s-interrupt-claims-closed", "terminal", "terminal-1")
+      ).toBe(true);
+    });
+
+    // A refusal is the delegate declining to write keystrokes, not the panel
+    // going away — so the session keeps it and can close it instead.
+    it("keeps ownership when the delegate refuses the target", async () => {
+      const { store, server } = harness("s-interrupt-refused", {
+        "terminal.interrupt": {
+          result: {
+            ok: false,
+            error: { code: "EXECUTION_ERROR", message: "advertises Ctrl+C as its interrupt" },
+          },
+        },
+      });
+      store.resourceOwnership.record("s-interrupt-refused", [
+        { kind: "terminal", id: "terminal-1" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("Ctrl+C");
+      expect(store.resourceOwnership.owns("s-interrupt-refused", "terminal", "terminal-1")).toBe(
+        true
+      );
+    });
+
+    it("rejects a missing id before anything reaches the renderer", async () => {
+      const { server, dispatchAction } = interruptHarness("s-interrupt-noid");
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: {},
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("VALIDATION_ERROR");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+  describe("terminal.revealOwned (#12315)", () => {
+    /**
+     * A reveal harness with the bridge's reveal route wired. One dep, because
+     * the dispatch and the window raise have to land on the same window and the
+     * bridge is the only thing that can resolve it once.
+     */
+    function revealHarness(
+      sessionId: string,
+      envelopes: Record<string, unknown>,
+      overrides?: Partial<SessionServerDeps>
+    ) {
+      const revealOwnedRun = vi
+        .fn()
+        .mockImplementation((_workspaceId: string | undefined, actionId: string) =>
+          Promise.resolve({
+            envelope: envelopes[actionId] ?? { result: { ok: true, result: null } },
+            raised: true,
+          })
+        );
+      const h = harness(sessionId, envelopes, { revealOwnedRun, ...overrides });
+      return { ...h, revealOwnedRun };
+    }
+
+    it("delegates to pilot.openRun under the delegate's own name for the id", async () => {
+      // `pilot.openRun` is the shipped operation — switch the workspace, then
+      // carry a one-shot focus intent the incoming view applies once hydrated —
+      // and it spells the id `runId` where the public tool spells it
+      // `terminalId`. Arguments are rebuilt, not forwarded, so without that
+      // rename the id would simply not arrive.
+      const { store, server, revealOwnedRun } = revealHarness("s-reveal", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal", [{ kind: "terminal", id: "terminal-1" }], "ws-a");
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(revealOwnedRun).toHaveBeenCalledWith(
+        "ws-a",
+        "pilot.openRun",
+        { runId: "terminal-1", workspaceId: "ws-a" },
+        expect.anything()
+      );
+    });
+
+    it("carries the destination from the ledger, so an unbound session still lands", async () => {
+      // An unbound session's dispatches follow the active view. Create a
+      // terminal in B, let the user switch to A, then reveal: without the
+      // recorded workspace the reveal would look for B's panel inside A.
+      const { store, server, revealOwnedRun } = revealHarness("s-reveal-unbound", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record(
+        "s-reveal-unbound",
+        [{ kind: "terminal", id: "terminal-1" }],
+        "ws-b"
+      );
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(revealOwnedRun).toHaveBeenCalledWith(
+        "ws-b",
+        "pilot.openRun",
+        expect.objectContaining({ workspaceId: "ws-b" }),
+        expect.anything()
+      );
+    });
+
+    it("keeps the session's authority over a panel it revealed", async () => {
+      // The one owned tool that does not release. The delegate deliberately
+      // returns a close-shaped payload naming the panel: the release guard
+      // downstream keys on exactly that shape, so this fails if the
+      // non-releasing policy is dropped and only that guard is left standing.
+      const { store, server } = revealHarness("s-reveal-keep", {
+        "pilot.openRun": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      store.resourceOwnership.record("s-reveal-keep", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(store.resourceOwnership.owns("s-reveal-keep", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("reveals the same panel twice, because the user may have moved away since", async () => {
+      const { store, server, revealOwnedRun } = revealHarness("s-reveal-twice", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal-twice", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const args = { name: "terminal.revealOwned", arguments: { terminalId: "terminal-1" } };
+      const first = await callTool(server, args);
+      const second = await callTool(server, args);
+
+      expect(first.isError).toBeUndefined();
+      expect(second.isError).toBeUndefined();
+      expect(revealOwnedRun).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      // The boundary the whole tool rests on: a client may be taken to what it
+      // made, which is no escalation over having made it, and to nothing else.
+      // `terminal.list` hands out the user's own shells and other clients'
+      // agents, so an id from a listing confers nothing.
+      const { store, server, revealOwnedRun } = revealHarness("s-reveal-foreign", {});
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(revealOwnedRun).not.toHaveBeenCalled();
+      expect(store.resourceOwnership.owns("other-session", "terminal", "terminal-theirs")).toBe(
+        true
+      );
+    });
+
+    it("strips anything the caller sent beyond the id", async () => {
+      // Rebuilding is the enforcement. A caller-supplied `workspaceId` would be
+      // a destination chosen by the client rather than by the ledger, which is
+      // the one thing the ownership check cannot vouch for.
+      const { store, server, revealOwnedRun } = revealHarness("s-reveal-forge", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record(
+        "s-reveal-forge",
+        [{ kind: "terminal", id: "terminal-1" }],
+        "ws-a"
+      );
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1", workspaceId: "ws-somewhere-else" },
+      });
+
+      expect(revealOwnedRun).toHaveBeenCalledWith(
+        "ws-a",
+        "pilot.openRun",
+        { runId: "terminal-1", workspaceId: "ws-a" },
+        expect.anything()
+      );
+    });
+
+    it("routes through the bridge, which owns the window the switch lands in", async () => {
+      // Dispatch and raise are one call because they must agree on one window.
+      // Resolving it twice is not the same as resolving it once: the user can
+      // focus another window while the dispatch is in flight, and a second
+      // lookup would raise a window the switch never touched.
+      const { store, server, revealOwnedRun, dispatchAction } = revealHarness("s-reveal-window", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal-window", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(revealOwnedRun).toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "pilot.openRun",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("reports an error when no window could be brought forward", async () => {
+      // The tool's whole promise is that the user ends up looking at the panel.
+      // A client told "revealed" when nothing came forward has no way to fall
+      // back to telling the user where to go themselves.
+      const { store, server } = revealHarness(
+        "s-reveal-noraise",
+        { "pilot.openRun": { result: { ok: true, result: null } } },
+        {
+          revealOwnedRun: vi.fn(() =>
+            Promise.resolve({
+              envelope: { result: { ok: true as const, result: null } },
+              raised: false,
+            })
+          ),
+        }
+      );
+      store.resourceOwnership.record("s-reveal-noraise", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("window");
+      // Still the session's panel: a reveal the user missed is not a disposal.
+      expect(store.resourceOwnership.owns("s-reveal-noraise", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("raises no window when the reveal itself failed, and says so", async () => {
+      // A run can exit between the client reading it and asking to be taken to
+      // it. Pulling the user across for nothing is worse than not moving them.
+      const { store, server } = revealHarness("s-reveal-failed", {
+        "pilot.openRun": {
+          result: { ok: false, error: { code: "EXECUTION_ERROR", message: "run is gone" } },
+        },
+      });
+      store.resourceOwnership.record("s-reveal-failed", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(store.resourceOwnership.owns("s-reveal-failed", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("falls back to this session's own dispatch when no active-view route is wired", async () => {
+      // A fixture without the route must still reveal rather than fail closed:
+      // the fallback is the ordinary dispatch, which for an unbound session is
+      // the active view anyway.
+      const { store, server, dispatchAction } = harness("s-reveal-no-route", {
+        "pilot.openRun": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-reveal-no-route", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "pilot.openRun",
+        expect.objectContaining({ runId: "terminal-1" }),
+        expect.anything()
+      );
+    });
+  });
+
   describe("worktree.deleteOwned", () => {
     it("delegates to worktree.delete so the real D2 preview and confirmation fire", async () => {
       const { store, server, dispatchAction } = harness("s-del", {
@@ -6920,6 +7755,216 @@ describe("session-scoped resource ownership (#11909)", () => {
         { terminalId: "terminal-1" },
         expect.anything()
       );
+    });
+  });
+
+  describe("terminal.list owned filter (#12308)", () => {
+    /** A view holding one panel this session made and two it did not. */
+    const LISTING = {
+      result: {
+        ok: true,
+        result: {
+          terminals: [
+            { id: "terminal-mine", title: "our agent" },
+            { id: "terminal-users-own", title: "the user's shell" },
+            { id: "terminal-other-session", title: "another client's agent" },
+          ],
+        },
+      },
+    };
+
+    function listedIds(result: { content: unknown }): string[] {
+      return payloadOf<{ terminals: Array<{ id: string }> }>(result).terminals.map((t) => t.id);
+    }
+
+    function structuredOf(result: unknown): Record<string, unknown> | undefined {
+      return (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+    }
+
+    it("returns only what this session created, and consumes the flag before dispatch", async () => {
+      const appendAuditRecord = vi.fn();
+      const { store, server, dispatchAction } = harness(
+        "s-owned",
+        { "terminal.list": LISTING },
+        { appendAuditRecord }
+      );
+      store.resourceOwnership.record("s-owned", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true, location: "grid", worktreeId: "wt-1" },
+      });
+
+      expect(listedIds(result)).toEqual(["terminal-mine"]);
+      // Text body and structuredContent read one filtered value; a filter
+      // reaching only one of them would leak the full listing to the other.
+      expect(structuredOf(result)).toEqual({
+        terminals: [{ id: "terminal-mine", title: "our agent" }],
+      });
+      // The strip is half of one mechanism, not a tidy-up: the renderer
+      // refuses any `owned` it receives, so forwarding it would fail the very
+      // calls the filter exists to serve. Every other argument survives.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.list",
+        { location: "grid", worktreeId: "wt-1" },
+        expect.anything()
+      );
+      // The audit record reports what the caller asked for, not the rewritten
+      // copy — the rewrite is an implementation detail of serving the request.
+      expect(appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "terminal.list",
+          args: { owned: true, location: "grid", worktreeId: "wt-1" },
+        })
+      );
+    });
+
+    it("lists everything when owned is false or omitted", async () => {
+      const { store, server, dispatchAction } = harness("s-unowned", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-unowned", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const explicit = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: false },
+      });
+      const omitted = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      // `false` means "do not narrow", never "the ones I did not create".
+      expect(listedIds(explicit)).toEqual([
+        "terminal-mine",
+        "terminal-users-own",
+        "terminal-other-session",
+      ]);
+      expect(listedIds(omitted)).toEqual(listedIds(explicit));
+      // Consumed in both directions — the renderer cannot honour either value.
+      expect(dispatchAction).toHaveBeenNthCalledWith(1, "terminal.list", {}, expect.anything());
+    });
+
+    it("scopes ownership to the session, so a reconnected client sees none of its old panels", async () => {
+      const { store, deps, server } = harness("s-before", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-before", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      // A reconnect is a new session id over the same live panels, and #12308
+      // deliberately does not carry the ledger across one: the honest answer
+      // is an empty list, which is what lets a client report what it left
+      // behind instead of guessing.
+      seedLiveSession(store, "s-after", "external");
+      store.sessionOriginMap.set("s-after", "external");
+      const reconnected = createSessionServer("s-after", deps);
+
+      const before = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+      const after = await callTool(reconnected, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+
+      expect(listedIds(before)).toEqual(["terminal-mine"]);
+      expect(listedIds(after)).toEqual([]);
+    });
+
+    it("does not read a worktree record as terminal ownership", async () => {
+      const { store, server } = harness("s-kind", { "terminal.list": LISTING });
+      // The ledger keys on kind as well as id, and a listing must not inherit
+      // authority granted over a different taxonomy.
+      store.resourceOwnership.record("s-kind", [{ kind: "worktree", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(listedIds(result)).toEqual([]);
+    });
+
+    it("never manufactures a row for a record whose panel is gone", async () => {
+      const { store, server } = harness("s-stale", { "terminal.list": LISTING });
+      store.resourceOwnership.record("s-stale", [
+        { kind: "terminal", id: "terminal-mine" },
+        { kind: "terminal", id: "terminal-the-user-closed" },
+      ]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      // The listing says what exists; the ledger only says who created it.
+      expect(listedIds(result)).toEqual(["terminal-mine"]);
+    });
+
+    it("leaves a non-boolean owned in place for the renderer's own validation", async () => {
+      const { server, dispatchAction } = harness("s-bad-arg", { "terminal.list": LISTING });
+
+      await callTool(server, { name: "terminal.list", arguments: { owned: "yes" } });
+
+      // Consuming it would launder an out-of-contract request into a legal one
+      // and answer it with the unfiltered list.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.list",
+        { owned: "yes" },
+        expect.anything()
+      );
+    });
+
+    it("passes a failed listing through untouched", async () => {
+      const { store, server } = harness("s-fail", {
+        "terminal.list": {
+          result: { ok: false, error: { code: "EXECUTION_ERROR", message: "renderer said no" } },
+        },
+      });
+      store.resourceOwnership.record("s-fail", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("renderer said no");
+      expect(errorText(result)).toContain("EXECUTION_ERROR");
+    });
+
+    it("fails the call on a payload shape it cannot read, rather than reporting nothing owned", async () => {
+      const { store, server } = harness("s-shape", {
+        "terminal.list": { result: { ok: true, result: { terminals: "not-an-array" } } },
+      });
+      store.resourceOwnership.record("s-shape", [{ kind: "terminal", id: "terminal-mine" }]);
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      // An empty list is a substantive answer here — it is what a client acts
+      // on when it decides it left nothing behind — so an unreadable listing
+      // must not be able to produce one.
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESULT_VALIDATION_ERROR");
+    });
+
+    it("filters a listing whose ownership came from a real creation over HTTP", async () => {
+      // Every other case seeds the ledger by hand. This one drives the whole
+      // round trip — create, then list owned — so the recording hook's
+      // liveness guard, which checks SSE and HTTP session membership
+      // separately, cannot start recognising only one transport unnoticed.
+      const store = makeStore();
+      seedLiveSession(store, "s-http", "external", "http");
+      store.sessionOriginMap.set("s-http", "external");
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockImplementation((actionId: string) => {
+          if (actionId === "terminal.new") {
+            return Promise.resolve({
+              result: { ok: true, result: { terminalId: "terminal-new" } },
+            });
+          }
+          return Promise.resolve({
+            result: {
+              ok: true,
+              result: { terminals: [{ id: "terminal-new" }, { id: "terminal-users-own" }] },
+            },
+          });
+        }),
+        requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+        getCachedManifest: vi.fn(() => ownedManifest()),
+      });
+      const server = createSessionServer("s-http", deps);
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(listedIds(result)).toEqual(["terminal-new"]);
     });
   });
 });

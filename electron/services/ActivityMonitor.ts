@@ -634,7 +634,12 @@ export class ActivityMonitor {
       // #8867 focus gate), treat that as activity: refresh the activity clock
       // so heavy streaming keeps the agent working, and recover idle→busy.
       if (this.simpleOutputVolumeDetector) {
-        const filteredLength = Buffer.byteLength(stripIdleTerminalSequences(data), "utf8");
+        // Cursor placement and SGR resets carry bytes without new text. Grok
+        // emits these after a turn, so counting them can hold busy forever.
+        const filteredLength = Buffer.byteLength(
+          stripAnsi(stripIdleTerminalSequences(data)),
+          "utf8"
+        );
         if (
           filteredLength > 0 &&
           this.simpleOutputVolumeDetector.update(filteredLength, now) &&

@@ -15,6 +15,9 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.waitUntilIdleBatch",
   "terminal.resumeSessions",
 
+  // -- terminalMetaActions --
+  "terminal.setClientMetadata",
+
   // -- panelActions --
   "panel.list",
   "panel.focus",
@@ -104,6 +107,10 @@ export const BUILT_IN_ACTION_IDS = [
   // -- cliAvailabilityActions --
   "cliAvailability.get",
   "cliAvailability.refresh",
+
+  // -- sessionRestoreActions --
+  "sessionRestore.getConfig",
+  "sessionRestore.updateConfig",
 
   // -- hibernationActions --
   "hibernation.getConfig",
@@ -271,10 +278,14 @@ export const BUILT_IN_ACTION_IDS = [
   "project.detectRunners",
   "project.runCheck",
 
+  // -- workspaceActions --
+  "workspace.list",
+
   // -- pluginActions --
   "plugin.validate",
   "plugin.diagnostics",
   "plugin.reloadProject",
+  "plugin.reloadWindow",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -388,6 +399,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.rename",
   "terminal.close",
   "terminal.closeOwned",
+  "terminal.revealOwned",
   "terminal.trash",
   "terminal.kill",
   "terminal.killBatch",
@@ -409,6 +421,8 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.sendToAgent",
   "terminal.inject",
   "terminal.bulkCommand",
+  "terminal.interrupt",
+  "terminal.interruptOwned",
   "terminal.stashInput",
   "terminal.popStash",
 
@@ -539,7 +553,9 @@ export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 // compile-time drift guard: renaming or removing any of these built-ins breaks
 // the build instead of silently leaving a stale entry here (#8341).
 export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
+  "plugin.reloadWindow",
   "terminal.sendCommand",
+  "terminal.setClientMetadata",
   "terminal.paste",
   "project.runCheck",
   // Reloading a project's plugins unloads and re-runs every one of them,
@@ -551,4 +567,6 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "fleet.reject",
   "fleet.interrupt",
   "fleet.retryFailures",
+  "terminal.interrupt",
+  "terminal.interruptOwned",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

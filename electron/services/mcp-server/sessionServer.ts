@@ -24,6 +24,7 @@ import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrant
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
+import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
 import type { AuditOutcome } from "./auditLog.js";
 import type {
   McpTier,
@@ -61,6 +62,7 @@ import {
   WORKSPACE_BINDING_CAPABILITY_KEY,
   type DispatchedWorkspaceRef,
   type McpWorkspaceBinding,
+  WORKSPACE_BINDING_RESOURCE_URI,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
@@ -103,6 +105,7 @@ import {
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
+import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { extractOwnedResourcesFromDispatch, type OwnedResourceKind } from "./resourceOwnership.js";
 
 /**
@@ -118,26 +121,86 @@ const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
+const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
+
 /**
- * The session-scoped cleanup tools (#11909), and the action each one delegates
+ * The tools whose execution never touches a renderer, and which are therefore
+ * answerable for a workspace-bound session whose workspace has no live view
+ * (#12316).
+ *
+ * These skip the bound confirm ceiling below, and only these. The ceiling
+ * exists to stop a dispatch raising a dialog nobody is watching; it answers
+ * that question by resolving the bound view's manifest, which is exactly the
+ * thing an unreachable workspace cannot provide — so a tool that was never
+ * going to reach a renderer failed on evidence it did not need. Each of these
+ * has a short-circuit branch below whose own comment records that it is never
+ * `danger: "confirm"`, and each of those branches returns unconditionally, so
+ * no member can reach renderer dispatch with the ceiling unenforced. The
+ * args-conditional elevations the ceiling also covers (`recipeId`,
+ * `terminal.new`'s `command`/`cwd`) elevate a *dispatch*; a main-process
+ * handler dispatches nothing, so a stray field of that name starts nothing.
+ *
+ * Kept beside the id constants the branches themselves match on, rather than
+ * derived from tier metadata or MCP annotations: annotations are untrusted UX
+ * hints, not an access-control boundary, and a second curated allowlist is the
+ * drift this file has been bitten by before. `sessionServer.test.ts` walks this
+ * set and proves every member both answers viewlessly and never reaches
+ * `dispatchAction`, so a member that stops being main-process-only fails there.
+ *
+ * `terminal.getStatus` is deliberately absent: it is a renderer action with a
+ * reduced main-process fallback, handled separately below.
+ */
+export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
+  TERMINAL_WAIT_UNTIL_IDLE_TOOL,
+  TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL,
+  SKILLS_SEARCH_TOOL,
+  SKILLS_LOAD_TOOL,
+  MCP_SURFACE_TOOL_ID,
+  PROJECT_RUN_CHECK_TOOL,
+]);
+/**
+ * The session-scoped `*Owned` tools (#11909), and the action each one delegates
  * to once ownership checks out.
  *
  * They run here rather than as ordinary renderer actions because the thing they
  * authorize against — which session created which resource — is main-process
  * state keyed by the MCP transport session id. The renderer never sees that id
- * and must not: handing it over would make "am I allowed to close this?" a
+ * and must not: handing it over would make "am I allowed to act on this?" a
  * question the caller's own dispatch could answer about itself.
  *
- * Delegation, not reimplementation. The check happens here; the close and the
- * delete are the shipped actions, dispatched under their own ids so
- * `terminal.close`'s trash/recovery behaviour and `worktree.delete`'s D2
- * confirmation with its real file-count preview
- * (`resolveMcpConfirmPreviewTarget` in `useMcpBridge`, which matches on the
- * literal action id) apply unchanged.
+ * Delegation, not reimplementation. The check happens here; the close, the
+ * delete and the reveal are the shipped actions, dispatched under their own ids
+ * so `terminal.close`'s trash/recovery behaviour, `worktree.delete`'s D2
+ * confirmation with its real file-count preview (`resolveMcpConfirmPreviewTarget`
+ * in `useMcpBridge`, which matches on the literal action id) and
+ * `pilot.openRun`'s switch-then-focus-intent sequence all apply unchanged.
+ *
+ * `releasesOwnership` splits the two things an owned tool can be. Cleanup ends
+ * the resource, so the record goes with it; a reveal only navigates to one that
+ * is still running, and dropping the record there would cost the session the
+ * authority to reveal it a second time — or to clean it up at all.
  */
-const OWNED_CLEANUP_TOOLS: Record<
+const OWNED_RESOURCE_TOOLS: Record<
   string,
-  { resourceKind: OwnedResourceKind; delegateTo: string; idArg: string }
+  {
+    resourceKind: OwnedResourceKind;
+    delegateTo: string;
+    idArg: string;
+    /**
+     * The delegate's own name for the id, where it differs from the public one.
+     * Arguments are rebuilt rather than forwarded, so without this the id
+     * simply would not reach an action that spells it differently.
+     */
+    delegateIdArg?: string;
+    releasesOwnership: boolean;
+    /**
+     * Whether this tool's job is to bring the user to the resource. Only a
+     * reveal sets it, and only a reveal may: it is the single place on the
+     * external surface that deliberately moves the user, so it alone routes
+     * through the active view and raises that view's window.
+     */
+    reveals?: boolean;
+  }
 > = {
   // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
   // and guards comparisons against it with a lint rule, and an ownership
@@ -146,13 +209,121 @@ const OWNED_CLEANUP_TOOLS: Record<
     resourceKind: "terminal",
     delegateTo: "terminal.close",
     idArg: "terminalId",
+    releasesOwnership: true,
   },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
     delegateTo: "worktree.delete",
     idArg: "worktreeId",
+    releasesOwnership: true,
+  },
+  // The panel is still the session's after it has been revealed, so this is the
+  // one entry that keeps its record. `pilot.openRun` spells the id `runId`, and
+  // the workspace it should travel to is supplied from the ledger rather than
+  // left to default: the reveal runs in the view the user is looking at, which
+  // is rarely the one holding the panel (#12315).
+  "terminal.revealOwned": {
+    resourceKind: "terminal",
+    delegateTo: "pilot.openRun",
+    idArg: "terminalId",
+    delegateIdArg: "runId",
+    releasesOwnership: false,
+    reveals: true,
+  },
+  // Keeps its record for the same reason the reveal above does: interrupting a
+  // turn is not a claim the panel stopped existing, and dropping the record
+  // would cost the session the authority to interrupt it again — or to close it
+  // afterwards, which is the whole point of having a non-destructive stop
+  // (#12338). Nothing beyond the id is forwarded, which is what keeps this from
+  // becoming the general signal-passing surface it was deliberately not.
+  "terminal.interruptOwned": {
+    resourceKind: "terminal",
+    delegateTo: "terminal.interrupt",
+    idArg: "terminalId",
+    releasesOwnership: false,
   },
 };
+
+/** The listing whose `owned` filter main resolves against the ledger (#12308). */
+const TERMINAL_LIST_TOOL = "terminal.list";
+
+/**
+ * Split a `terminal.list` call's `owned` flag off the arguments the renderer
+ * receives (#12308).
+ *
+ * The strip and the renderer's refusal are one mechanism rather than two
+ * independent safeguards. Ownership is main-process state keyed by the MCP
+ * session id, which the renderer never sees, so `terminal.list`'s `run()`
+ * throws on any `owned` that reaches it — forwarding the flag would fail every
+ * legitimate call. Dropping it without setting `ownedOnly` would do the
+ * opposite and answer a narrowing question with the whole list. Reading both
+ * out of one destructure is what stops those two halves drifting apart.
+ *
+ * Only an actual boolean is consumed. Anything else is left in place for the
+ * renderer's own schema validation to reject, so a bad value comes back as the
+ * validation error it is instead of being laundered into a legal request —
+ * the same restraint `readSearchLimit` applies to an out-of-contract `limit`.
+ */
+function prepareTerminalListDispatch(
+  actionId: string,
+  args: unknown
+): { dispatchArgs: unknown; ownedOnly: boolean } {
+  if (
+    actionId !== TERMINAL_LIST_TOOL ||
+    args === null ||
+    typeof args !== "object" ||
+    Array.isArray(args)
+  ) {
+    return { dispatchArgs: args, ownedOnly: false };
+  }
+  const { owned, ...rest } = args as Record<string, unknown>;
+  if (typeof owned !== "boolean") return { dispatchArgs: args, ownedOnly: false };
+  return { dispatchArgs: rest, ownedOnly: owned };
+}
+
+/**
+ * Intersect a `terminal.list` result with what this session created (#12308).
+ *
+ * The payload is rebuilt from the renderer's rows rather than spread, so no
+ * field this function did not understand rides along.
+ *
+ * An unreadable payload fails the call rather than emptying it, which is where
+ * this parts company with `filterIntrospectionResultForSession`: there an
+ * empty list IS the denial, while here it is a substantive answer — "you
+ * created none of these" is what a client acts on when it decides it has
+ * nothing to clean up. Reporting that from a listing nothing could read would
+ * be the wrong answer rather than a cautious one.
+ *
+ * Rows are kept, never manufactured: a ledger record with no matching row in
+ * the listing yields nothing, because the listing is what says which panels
+ * exist and the ledger only says who created them.
+ */
+function filterTerminalListToOwned(
+  result: import("../../../shared/types/actions.js").ActionDispatchResult,
+  owns: (terminalId: string) => boolean
+): import("../../../shared/types/actions.js").ActionDispatchResult {
+  if (!result.ok) return result;
+  const payload = result.result as { terminals?: unknown } | null | undefined;
+  if (!Array.isArray(payload?.terminals)) {
+    return {
+      ok: false,
+      error: {
+        code: "RESULT_VALIDATION_ERROR",
+        message:
+          "terminal.list returned a listing that could not be intersected with this session's ownership records.",
+      },
+    };
+  }
+  return {
+    ok: true,
+    result: {
+      terminals: payload.terminals.filter((row) => {
+        const id = (row as { id?: unknown } | null | undefined)?.id;
+        return typeof id === "string" && owns(id);
+      }),
+    },
+  };
+}
 
 /**
  * Whether a `terminal.close` result reports the named panel as actually closed.
@@ -168,7 +339,7 @@ function closedIdsInclude(result: unknown, id: string): boolean {
 }
 
 /**
- * The resource id an `*Owned` cleanup call names, or `undefined` when the
+ * The resource id an `*Owned` call names, or `undefined` when the
  * argument is missing, the wrong type, or blank.
  *
  * Read here rather than trusting the renderer's schema validation, because the
@@ -271,6 +442,28 @@ export interface SessionServerDeps {
     args: unknown,
     confirmed?: boolean
   ) => Promise<DispatchEnvelope>;
+  /**
+   * Take the user to a run, and bring the window it lands in with them
+   * (#12315), reporting whether that window actually came forward.
+   *
+   * `terminal.revealOwned` is the only caller, and it needs this rather than
+   * `dispatchAction` for a reason that is easy to get backwards. A bound
+   * session's dispatches land in its own workspace's view — exactly the view a
+   * reveal is trying to bring forward — so the reveal would ask a cached,
+   * detached renderer to switch to itself, and the visible view it replaced
+   * would be detached with nothing to persist its drafts. The bridge picks the
+   * view being replaced instead, in the window that already holds the
+   * destination, and raises that same window once the dispatch lands.
+   *
+   * Optional: without it a reveal falls back to the ordinary dispatch, which is
+   * the right target for every session except a bound one, and raises nothing.
+   */
+  revealOwnedRun?: (
+    workspaceId: string | undefined,
+    actionId: string,
+    args: unknown,
+    confirmed?: boolean
+  ) => Promise<{ envelope: DispatchEnvelope; raised: boolean }>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -307,6 +500,16 @@ export interface SessionServerDeps {
     rawArgs: unknown,
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
+  /**
+   * Read `terminal.getStatus` off the pty-host for one workspace, with no
+   * renderer (#12316). Used only as a fallback when the bound workspace has no
+   * live view: the renderer answer is richer, and this one reports which fields
+   * it could not observe. Throws {@link McpError} on invalid args.
+   */
+  handleTerminalGetStatusViewless: (
+    rawArgs: unknown,
+    workspaceId: string
+  ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -483,6 +686,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleSkillsSearch,
     handleSkillsLoad,
     handleProjectRunCheck,
+    handleTerminalGetStatusViewless,
     appendAuditRecord,
     getCachedManifest,
     notifyTierMismatch,
@@ -735,17 +939,78 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // the tool contract forbids yields a null `searchLimit` and is left alone,
     // so the renderer's own validation still rejects it rather than having the
     // over-fetch quietly rewrite it into a legal request.
-    const dispatchArgs =
+    const searchDispatchArgs =
       searchLimit !== null && args && typeof args === "object" && !Array.isArray(args)
         ? { ...(args as Record<string, unknown>), limit: ACTIONS_SEARCH_MAX_LIMIT }
         : args;
+    // `terminal.list`'s `owned` filter is decided here and taken off the
+    // forwarded copy in the same call (#12308) — see
+    // `prepareTerminalListDispatch` for why those two are inseparable. Chained
+    // off the search rewrite above rather than folded into it: the two tools
+    // are disjoint, and one rewrite that handled both would have to be re-read
+    // whenever either changed. `args` stays untouched for the audit record.
+    const { dispatchArgs, ownedOnly } = prepareTerminalListDispatch(actionId, searchDispatchArgs);
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
-    // other tool and for a refused cleanup, so neither of those paths can
+    // other tool and for a refused call, so neither of those paths can
     // accidentally rewrite an action id or drop an ownership record (#11909).
-    const ownedCleanup = OWNED_CLEANUP_TOOLS[actionId];
+    const ownedResource = OWNED_RESOURCE_TOOLS[actionId];
     let ownedResourceId: string | undefined;
+
+    /**
+     * Dispatch the real action an `*Owned` tool stands in for, with arguments
+     * rebuilt from scratch rather than forwarded (#11909).
+     *
+     * Rebuilding is the enforcement: the renderer validates against
+     * `worktree.delete`'s schema, which still accepts `force`, `deleteBranch`
+     * and `closeTerminals`, so anything the caller sent beyond the id would
+     * otherwise pass straight through the narrower tool that deliberately omits
+     * them. It is also what lets a delegate spell the id differently —
+     * `pilot.openRun` takes `runId` where the public tool takes `terminalId`.
+     *
+     * A reveal differs in both of the ways that matter (#12315). It carries the
+     * destination workspace, read from the ledger record main wrote when the
+     * panel was created — trusted state, never the caller's argument, and the
+     * only thing that says where an unbound session's panel actually lives. And
+     * it routes through the active view rather than this session's own, because
+     * the view that switches has to be the view on screen.
+     */
+    const dispatchOwnedResourceAction = async (
+      entry: (typeof OWNED_RESOURCE_TOOLS)[string],
+      resourceId: string
+    ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
+      const delegateArgs: Record<string, unknown> = {
+        [entry.delegateIdArg ?? entry.idArg]: resourceId,
+      };
+      if (entry.reveals !== true) {
+        return {
+          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          raised: true,
+        };
+      }
+      const revealWorkspaceId =
+        sessionStore.resourceOwnership.get(sessionId, entry.resourceKind, resourceId)
+          ?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
+      // Omitted rather than guessed when neither is known: `pilot.openRun`
+      // falls back to the executing view's own workspace, which is where the
+      // panel is if the client never left it — the only honest default here.
+      if (revealWorkspaceId !== undefined) {
+        delegateArgs.workspaceId = revealWorkspaceId;
+      }
+      if (deps.revealOwnedRun === undefined) {
+        return {
+          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          raised: true,
+        };
+      }
+      return deps.revealOwnedRun(
+        revealWorkspaceId,
+        entry.delegateTo,
+        delegateArgs,
+        dispatchConfirmed
+      );
+    };
 
     /**
      * Fold a completed dispatch into the session's ownership ledger (#11909):
@@ -759,19 +1024,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * being gone. `terminal.close` reports an empty `closedIds` when it found
      * nothing to close, and dropping the record on that would let one no-op
      * call revoke the session's authority over a panel that is still running.
+     * A non-releasing owned tool — a reveal — returns before any of that:
+     * navigating to a panel is not a claim that it stopped existing (#12315).
      */
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void => {
-      if (ownedCleanup !== undefined) {
+      if (ownedResource !== undefined) {
+        if (!ownedResource.releasesOwnership) return;
         if (ownedResourceId === undefined || !envelope.result.ok) return;
         if (
-          ownedCleanup.resourceKind === "terminal" &&
+          ownedResource.resourceKind === "terminal" &&
           !closedIdsInclude(envelope.result.result, ownedResourceId)
         ) {
           return;
         }
         sessionStore.resourceOwnership.release(
           sessionId,
-          ownedCleanup.resourceKind,
+          ownedResource.resourceKind,
           ownedResourceId
         );
         return;
@@ -926,6 +1194,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       });
     }
 
+    // The workspace to answer `terminal.getStatus` for from the pty-host, set
+    // when the bound workspace has no live view (#12316). Read off the binding
+    // failure the ceiling below already resolved — the exact workspace routing
+    // itself tried to reach — so a caller argument can never redirect the read.
+    let viewlessStatusWorkspaceId: string | undefined;
+
     // Confirm-gated tools are unreachable for a workspace-bound external
     // session, so refuse them here — after tier/grant admission, but before a
     // native grant use is charged, before dedup can cache an answer, and long
@@ -937,48 +1211,91 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // native grant widens dispatch past the tier floor, and must not widen past
     // this one — the dialog those grants would bypass is the same dialog nobody
     // is watching.
-    if (sessionSurface.workspaceBound && tier === "external") {
+    //
+    // Skipped entirely for {@link VIEWLESS_MAIN_PROCESS_TOOLS}: the ceiling is a
+    // question about renderer dispatch, and those tools never reach one, so
+    // resolving the bound view's manifest to answer it made a workspace's view
+    // residency a precondition for calls that never needed a view (#12316).
+    if (
+      sessionSurface.workspaceBound &&
+      tier === "external" &&
+      !VIEWLESS_MAIN_PROCESS_TOOLS.has(actionId)
+    ) {
       let boundManifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
       try {
         boundManifest = getCachedManifest() ?? (await requestManifest());
       } catch (err) {
-        // Fail closed. Proceeding on an unresolved manifest would erase the
-        // only evidence that this action needs confirmation, turning a refusal
-        // into an unattended dispatch. Audited as a throw, matching how the
-        // post-dispatch binding failure below records the same class of error.
-        try {
-          appendAuditRecord({
-            toolId: actionId,
-            sessionId,
-            tier,
-            args,
-            durationMs: Date.now() - startedAt,
-            startedAt,
-            outcome: { kind: "throw", error: err },
-            capturedTurnId,
-          });
-        } catch (auditErr) {
-          console.error("[MCP] Failed to append audit record:", auditErr);
-        }
-        if (err instanceof McpRouteBindingError) {
-          // Deliberately NOT answered from the host base surface, unlike
-          // `tools/list` (#12082). Discovery describes what exists; this gate
-          // decides whether a specific call runs unattended, and the host
-          // catalog is not evidence about the bound view. Fail closed, and say
-          // so retriably when the route can come back.
+        // One exception to failing closed, and it is not a confirm decision:
+        // `terminal.getStatus` has a read-only main-process fallback that reads
+        // the pty-host directly (#12316). Taken only when the workspace simply
+        // has no view — an `ambiguous` binding is a conflict the user must
+        // resolve, and a destroyed pin is not a route that comes back — and only
+        // when the call named its terminals, since the fleet path filters on
+        // `location`, which has no pty-host meaning. The fallback is `danger:
+        // "safe"`, dispatches nothing, and so raises no dialog: the ceiling has
+        // nothing to decide about it.
+        if (
+          actionId === TERMINAL_GET_STATUS_TOOL &&
+          err instanceof WorkspaceBindingError &&
+          err.reason === "not-found" &&
+          viewlessStatusArgsAreAnswerable(args)
+        ) {
+          viewlessStatusWorkspaceId = err.workspaceId;
+          boundManifest = [];
+        } else {
+          // Fail closed. Proceeding on an unresolved manifest would erase the
+          // only evidence that this action needs confirmation, turning a refusal
+          // into an unattended dispatch. Audited as a throw, matching how the
+          // post-dispatch binding failure below records the same class of error.
+          try {
+            appendAuditRecord({
+              toolId: actionId,
+              sessionId,
+              tier,
+              args,
+              durationMs: Date.now() - startedAt,
+              startedAt,
+              outcome: { kind: "throw", error: err },
+              capturedTurnId,
+            });
+          } catch (auditErr) {
+            console.error("[MCP] Failed to append audit record:", auditErr);
+          }
+          if (err instanceof McpRouteBindingError) {
+            // Deliberately NOT answered from the host base surface, unlike
+            // `tools/list` (#12082). Discovery describes what exists; this gate
+            // decides whether a specific call runs unattended, and the host
+            // catalog is not evidence about the bound view. Fail closed, and say
+            // so retriably when the route can come back.
+            //
+            // The one thing added is a way out: a `terminal.getStatus` that named
+            // no terminals is refused here, but the same call *with* explicit
+            // `terminalIds` is answerable from the pty-host without a view
+            // (#12316). Say so, rather than leaving a poller to retry the shape
+            // that cannot work.
+            // Scoped to `not-found`, the only reason the fallback takes.
+            // Telling a caller whose workspace is open in two views to retry
+            // with ids would be advice that cannot work.
+            const viewlessHint =
+              actionId === TERMINAL_GET_STATUS_TOOL &&
+              err instanceof WorkspaceBindingError &&
+              err.reason === "not-found"
+                ? ` Status for specific terminals can still be read while the workspace is closed — call '${actionId}' again with an explicit 'terminalIds' array.`
+                : "";
+            return buildToolError({
+              code: SESSION_BINDING_GONE,
+              message: `${err.message}${viewlessHint}`,
+              retriable: err.retriable,
+            });
+          }
           return buildToolError({
-            code: SESSION_BINDING_GONE,
-            message: err.message,
-            retriable: err.retriable,
+            code: EXECUTION_ERROR_CODE,
+            message: formatErrorMessage(
+              err,
+              `Could not resolve the action surface for workspace-bound tool '${actionId}'`
+            ),
           });
         }
-        return buildToolError({
-          code: EXECUTION_ERROR_CODE,
-          message: formatErrorMessage(
-            err,
-            `Could not resolve the action surface for workspace-bound tool '${actionId}'`
-          ),
-        });
       }
 
       const withheldIds = new Set(
@@ -1021,25 +1338,33 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // exists to avoid. Read through the same extraction points the elevation
       // uses, so the refusal and the elevation can never disagree about which
       // dispatches are gated.
-      const boundConfirmRefusal = withheldIds.has(actionId)
-        ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
-          `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
-          `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
-          `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
-          `workspace binding.`
-        : dispatchCarriesRecipeId(args)
-          ? `Action '${actionId}' was called with a 'recipeId', so it would start that recipe's ` +
-            `terminals and requires confirmation. This MCP session is bound to workspace ` +
-            `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
-            `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
-            `recipe from Daintree, or connect without a workspace binding.`
-          : terminalLaunchArg !== undefined
-            ? `Action '${actionId}' was called with a '${terminalLaunchArg}', so it would start a shell and ` +
-              `requires confirmation. This MCP session is bound to workspace ` +
-              `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
-              `to approve the dialog. The action was not run — call it without 'command' or 'cwd', open ` +
-              `the terminal from Daintree, or connect without a workspace binding.`
-            : undefined;
+      const boundConfirmRefusal =
+        viewlessStatusWorkspaceId !== undefined
+          ? // The fallback runs in main and dispatches nothing, so none of the
+            // three reasons below can apply to it: there is no renderer call to
+            // elevate and no dialog to raise. Skipped explicitly rather than left
+            // to fall through the empty stand-in manifest, which would still let
+            // an args-conditional elevation refuse a read (#12316).
+            undefined
+          : withheldIds.has(actionId)
+            ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
+              `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
+              `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
+              `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
+              `workspace binding.`
+            : dispatchCarriesRecipeId(args)
+              ? `Action '${actionId}' was called with a 'recipeId', so it would start that recipe's ` +
+                `terminals and requires confirmation. This MCP session is bound to workspace ` +
+                `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+                `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
+                `recipe from Daintree, or connect without a workspace binding.`
+              : terminalLaunchArg !== undefined
+                ? `Action '${actionId}' was called with a '${terminalLaunchArg}', so it would start a shell and ` +
+                  `requires confirmation. This MCP session is bound to workspace ` +
+                  `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+                  `to approve the dialog. The action was not run — call it without 'command' or 'cwd', open ` +
+                  `the terminal from Daintree, or connect without a workspace binding.`
+                : undefined;
 
       if (boundConfirmRefusal !== undefined) {
         const message = boundConfirmRefusal;
@@ -1255,17 +1580,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // hook that fires before any other awaiter sees the resolved result.
     const dispatchPromise: Promise<CallToolResultLike> = (async () => {
       try {
-        // Ownership gate for the `*Owned` cleanup tools (#11909). Placed at the
+        // Ownership gate for the `*Owned` tools (#11909). Placed at the
         // very top of the IIFE: a session that does not own the named resource
         // is refused here, before the activity strip is told a call started,
         // before any confirmation is raised, and — the acceptance criterion
         // that matters — before anything reaches a renderer, so a refused call
         // cannot have mutated a panel or a worktree.
-        if (ownedCleanup !== undefined) {
-          const resourceId = readOwnedResourceId(args, ownedCleanup.idArg);
+        if (ownedResource !== undefined) {
+          const resourceId = readOwnedResourceId(args, ownedResource.idArg);
           if (resourceId === undefined) {
             const message =
-              `Action '${actionId}' requires a non-empty '${ownedCleanup.idArg}' naming a resource ` +
+              `Action '${actionId}' requires a non-empty '${ownedResource.idArg}' naming a resource ` +
               `this session created.`;
             outcome = {
               kind: "result",
@@ -1275,7 +1600,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           const record = sessionStore.resourceOwnership.get(
             sessionId,
-            ownedCleanup.resourceKind,
+            ownedResource.resourceKind,
             resourceId
           );
           // One message for "never existed", "another session's", and "the
@@ -1294,8 +1619,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             record.workspaceId !== boundWorkspaceId;
           if (record === undefined || workspaceMismatch) {
             const message =
-              `No ${ownedCleanup.resourceKind} with id '${resourceId}' was created by this session, so ` +
-              `'${actionId}' will not act on it. This tool only cleans up resources this ` +
+              `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
+              `'${actionId}' will not act on it. This tool only acts on resources this ` +
               `connection created; ids from listings may belong to the user, another client, or a plugin.`;
             outcome = {
               kind: "result",
@@ -1398,6 +1723,34 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "waitUntilIdleBatch failed"),
+            });
+          }
+        }
+
+        // Short-circuit: terminal.getStatus, read off the pty-host, when the
+        // bound workspace has no live view (#12316). Unlike its siblings here
+        // this is a *fallback*, not the tool's home: the renderer answer knows
+        // panel identity, arming and the parsed check result, and is used
+        // whenever a view exists. The flag is set by the bound ceiling above,
+        // from the binding failure it already resolved, so this branch never
+        // decides for itself that a view is missing.
+        //
+        // Read-only and never `danger: "confirm"` — the strip shows a plain
+        // in-flight row. Audit and strip-settle unify via the shared `finally`.
+        if (viewlessStatusWorkspaceId !== undefined) {
+          emitToolCallStarted(false);
+          try {
+            const result = await handleTerminalGetStatusViewless(args, viewlessStatusWorkspaceId);
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, `${actionId} failed`),
             });
           }
         }
@@ -1709,28 +2062,35 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
 
         try {
-          // An `*Owned` cleanup that cleared the gate above delegates to the
-          // real action under its own id, with arguments rebuilt from scratch
-          // rather than forwarded (#11909). Rebuilding is the enforcement: the
-          // renderer validates against `worktree.delete`'s schema, which still
-          // accepts `force`, `deleteBranch` and `closeTerminals`, so anything
-          // the caller sent beyond the id would otherwise pass straight
-          // through the narrower tool that deliberately omits them.
-          const envelope = listPaging
-            ? await collectListPages()
-            : ownedCleanup !== undefined && ownedResourceId !== undefined
-              ? await dispatchAction(
-                  ownedCleanup.delegateTo,
-                  { [ownedCleanup.idArg]: ownedResourceId },
-                  dispatchConfirmed
-                )
-              : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
-          // Narrow registry-enumerating results to this session's effective
-          // surface before anything downstream reads them (#11525). Placed
-          // ahead of the `outcome` assignment so the text content, the
-          // structuredContent block, and the audit record all observe one
-          // filtered value — and so both the pinned and unpinned dispatch
-          // paths, which converge on this call, are covered by the same gate.
+          // An `*Owned` tool that cleared the gate above delegates to the real
+          // action under its own id, with arguments rebuilt from scratch rather
+          // than forwarded (#11909). Rebuilding is the enforcement: the renderer
+          // validates against `worktree.delete`'s schema, which still accepts
+          // `force`, `deleteBranch` and `closeTerminals`, so anything the caller
+          // sent beyond the id would otherwise pass straight through the
+          // narrower tool that deliberately omits them. It is also what lets a
+          // delegate spell the id differently — `pilot.openRun` takes `runId`
+          // where the public tool takes `terminalId` (#12315).
+          // `raised` answers the second half of a reveal — whether a window
+          // actually came forward — and is vacuously true for everything else.
+          const { envelope, raised } =
+            listPaging || ownedResource === undefined || ownedResourceId === undefined
+              ? {
+                  envelope: listPaging
+                    ? await collectListPages()
+                    : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed),
+                  raised: true,
+                }
+              : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
+          // Narrow renderer-computed results against this session before
+          // anything downstream reads them: the effective action surface for
+          // the registry-enumerating tools (#11525), and the ownership ledger
+          // for an `owned` listing (#12308). Both narrow on session state the
+          // renderer has no access to, and both are placed ahead of the
+          // `outcome` assignment so the text content, the structuredContent
+          // block, and the audit record all observe one filtered value — and so
+          // both the pinned and unpinned dispatch paths, which converge on this
+          // call, are covered by the same gate.
           outcome = {
             kind: "result",
             value: introspectionSurface
@@ -1740,18 +2100,42 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   introspectionSurface.permittedActionIds,
                   introspectionSurface
                 )
-              : envelope.result,
+              : ownedOnly
+                ? filterTerminalListToOwned(envelope.result, (terminalId) =>
+                    sessionStore.resourceOwnership.owns(sessionId, "terminal", terminalId)
+                  )
+                : envelope.result,
           };
           // Ownership bookkeeping, from the envelope the action actually
           // returned rather than from anything the caller said (#11909).
-          // Reads `envelope.result`, not `outcome.value`: the introspection
-          // filter above rewrites results for the discovery tools, and the
-          // ledger must observe the unnarrowed truth. Recorded for every tier
+          // Reads `envelope.result`, not `outcome.value`: the filters above
+          // rewrite results for the discovery tools and for an `owned`
+          // listing, and the ledger must observe the unnarrowed truth.
+          // Recorded for every tier
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           dispatchedWorkspace = envelope.dispatchedWorkspace;
+          // A raise that did not happen is reported, not swallowed (#12315).
+          // The tool's whole promise is that the user ends up looking at the
+          // panel; a client told "revealed" when no window came forward has no
+          // way to know it should tell them where the run is instead.
+          //
+          // Placed after the ledger bookkeeping above so the panel stays this
+          // session's: a reveal the user missed is not a disposal, and the
+          // obvious next move is to ask for it again.
+          if (!raised && envelope.result.ok) {
+            const message =
+              `The switch to '${ownedResourceId ?? actionId}' was accepted, but no Daintree ` +
+              `window could be brought to the front, so the user may not be looking at it. ` +
+              `Tell them where the run is rather than assuming they can see it.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "EXECUTION_ERROR", message } },
+            };
+            return buildToolError({ code: "EXECUTION_ERROR", message });
+          }
         } catch (err) {
           outcome = { kind: "throw", error: err };
           if (err instanceof McpRouteBindingError) {
@@ -1866,8 +2250,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           );
         }
 
-        // A renderer was reached and reported a failure, so the target is known
-        // and worth reporting — unlike the pre-dispatch errors above.
+        // A renderer was reached, so the target is known and worth reporting —
+        // unlike the pre-dispatch errors above. The failure is usually the
+        // renderer's own, but an `owned` listing main could not read fails
+        // here too (#12308), after a dispatch that itself succeeded.
         return withResolvedWorkspace(
           buildToolError({
             code: outcome.value.error.code,
@@ -1980,40 +2366,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   // (#11799). One capture per request: the listing helpers await dispatches
   // mid-enumeration, and re-reading across those awaits would let one response
   // mix two authorization lifetimes.
-  /**
-   * Confirm a workspace-bound session can still reach its workspace, for a read
-   * that would otherwise never consult it (#12082).
-   *
-   * Most resources are backed by a dispatch, so the binding is checked by the
-   * routing itself. `agentState` is not: it answers from the process-global
-   * `AgentAvailabilityStore`, and its tier gate (`terminal.list`) says nothing
-   * about *which* workspace the agent belongs to. Before this issue a bound
-   * session could not exist without a live view, so the viewless case was
-   * unreachable; now it is, and a bound session with an unreachable workspace
-   * must not read host-global state as if it were its own.
-   *
-   * Deliberately a route check, not an ownership check. Whether a given agent id
-   * belongs to the bound workspace is a separate, pre-existing gap in #11789 —
-   * a bound session with a *live* view can still read another workspace's agent
-   * state, and closing that needs an agent→workspace map this layer does not
-   * have. This closes only the half that is new.
-   *
-   * Probing through `requestManifest` rather than a bespoke resolver keeps the
-   * answer identical to the one dispatch would get: it re-resolves the workspace
-   * the same way and reads a warm per-view cache on success.
-   */
-  const assertBoundRouteReachable = async (): Promise<void> => {
-    if (!sessionSurface.workspaceBound) return;
-    try {
-      await requestManifest();
-    } catch (err) {
-      const routed = routeBindingMcpError(err);
-      if (routed) throw routed;
-      // Anything else is a manifest failure, not a routing one. The read does
-      // not need a manifest, so it is not this probe's business to fail it.
-    }
-  };
-
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const tier = sessionStore.getTier(sessionId);
     if (tier === null) throw sessionGoneError();
@@ -2042,9 +2394,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
-    if (parsed.kind === "agentState") await assertBoundRouteReachable();
+    // `agentState` deliberately has no view-residency probe (#12316). It answers
+    // from the process-global `AgentAvailabilityStore` with no renderer
+    // involved, so requiring the bound workspace to hold a live view made an
+    // orchestrator's reach a function of the user's navigation — the whole
+    // complaint. The probe #12082 added closed only half of a gap it could not
+    // close: which workspace an agent belongs to is not checked here either
+    // way, because that needs an agent→workspace map this layer does not have,
+    // and a bound session with a live view could always read across it. Closing
+    // it properly is #11789's own scoping work, and it has to apply to both.
+    //
+    // `binding` never needed one: it dispatches nothing, so there is no route
+    // for a probe to be protecting. That is the whole point — it is the one
+    // read a session whose workspace is gone can still make (#12313).
     try {
-      return { contents: [await readResourceContents(uri, parsed, dispatchAction)] };
+      return {
+        contents: [
+          await readResourceContents(uri, parsed, dispatchAction, workspaceBinding?.workspaceId),
+        ],
+      };
     } catch (err) {
       const routed = routeBindingMcpError(err);
       if (routed) throw routed;
@@ -2071,11 +2439,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
-    // Same reason as the read above: an `agentState` subscription installs a
-    // listener on a process-global event and would push another workspace's
-    // updates at a session that cannot reach its own.
-    if (parsed.kind === "agentState") await assertBoundRouteReachable();
-    subscribeResource(sessionId, server, uri, parsed, sessionStore);
+    subscribeResource(sessionId, server, uri, parsed, sessionStore, workspaceBinding?.workspaceId);
     return {};
   });
 
@@ -2160,6 +2524,25 @@ async function listConcreteResources(
 ): Promise<Array<{ uri: string; name: string; mimeType: string; description?: string }>> {
   const resources: Array<{ uri: string; name: string; mimeType: string; description?: string }> =
     [];
+  // First, and before anything that dispatches. A workspace-bound session whose
+  // view is gone cannot reach a renderer, so this is the only entry it is
+  // guaranteed to get — and it is what makes the degraded listing below honest
+  // rather than an authoritative "you have nothing" (#12313).
+  if (isResourcePermitted(tier, "binding")) {
+    resources.push({
+      uri: WORKSPACE_BINDING_RESOURCE_URI,
+      name: "This session — workspace binding",
+      mimeType: "application/json",
+      description:
+        "Whether this session's bound workspace has a live view, when eviction last took one, and whether the user asked to keep it resident.",
+    });
+  }
+  // Captured before the first await, so the decision below is a value this
+  // function already holds rather than a state read from inside a catch
+  // (lesson #10222). Its meaning is narrow: an unreachable workspace may only
+  // drop the categories that needed a renderer if the client is simultaneously
+  // being handed the resource that explains why they are missing.
+  const bindingListed = resources.length > 0;
   if (isResourcePermitted(tier, "issues")) {
     resources.push({
       uri: "daintree://project/current/issues",
@@ -2169,7 +2552,7 @@ async function listConcreteResources(
     });
   }
   if (isResourcePermitted(tier, "pulse")) {
-    const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction);
+    const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction, bindingListed);
     for (const wt of worktrees) {
       const id = readStringField(wt, ["id", "worktreeId"]);
       const label = readStringField(wt, ["branch", "name", "path"]) ?? id;
@@ -2183,7 +2566,7 @@ async function listConcreteResources(
     }
   }
   if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
-    const terminals = await tryDispatchList("terminal.list", deps.dispatchAction);
+    const terminals = await tryDispatchList("terminal.list", deps.dispatchAction, bindingListed);
     for (const term of terminals) {
       const id = readStringField(term, ["id", "terminalId"]);
       const label = readStringField(term, ["title", "name"]) ?? id;
@@ -2248,8 +2631,16 @@ function listResourceTemplates(
 async function readResourceContents(
   uri: string,
   parsed: ParsedResourceUri,
-  dispatchAction: SessionServerDeps["dispatchAction"]
+  dispatchAction: SessionServerDeps["dispatchAction"],
+  boundWorkspaceId: string | undefined
 ): Promise<{ uri: string; mimeType: string; text: string }> {
+  if (parsed.kind === "binding") {
+    // Resolved fresh on every read, from the same registry routing consults, so
+    // "this says available" and "a call would route" cannot drift (#7003 — never
+    // a cache, and never another session's or window's state).
+    const state = readWorkspaceBindingState(boundWorkspaceId ?? null);
+    return { uri, mimeType: "application/json", text: JSON.stringify(state) };
+  }
   if (parsed.kind === "pulse") {
     const envelope = await dispatchAction("git.getProjectPulse", {
       worktreeId: parsed.id,
@@ -2303,7 +2694,8 @@ async function readResourceContents(
 
 async function tryDispatchList(
   actionId: string,
-  dispatchAction: SessionServerDeps["dispatchAction"]
+  dispatchAction: SessionServerDeps["dispatchAction"],
+  bindingResourceListed: boolean
 ): Promise<unknown[]> {
   try {
     const envelope = await dispatchAction(actionId, {});
@@ -2322,6 +2714,20 @@ async function tryDispatchList(
     // have nothing" for a bound session whose workspace is simply not open —
     // the same lie the terminal handshake used to tell, in a quieter place.
     // Ordinary enumeration failures keep degrading to a partial listing.
+    //
+    // What changed in #12313 is that the listing can now say so. When the
+    // binding resource is in the response, dropping this category is not a
+    // claim about the workspace's contents — the client is holding a resource
+    // that reports the route is gone, when eviction took it, and that it will
+    // come back. Without that resource the old refusal is still the only honest
+    // answer, so the flag is checked rather than assumed.
+    //
+    // Narrowed to `WorkspaceBindingError` deliberately. A `SessionBindingError`
+    // is a dead WebContents pin: the session's identity is a destroyed view it
+    // can never re-resolve, so there is no later state in which the listing
+    // fills back in, and degrading it would promise a recovery that cannot
+    // happen. That one still refuses.
+    if (bindingResourceListed && err instanceof WorkspaceBindingError) return [];
     const routed = routeBindingMcpError(err);
     if (routed) throw routed;
     console.error(`[MCP] Failed to enumerate resources via ${actionId}:`, err);
@@ -2345,9 +2751,10 @@ function subscribeResource(
   server: Server,
   uri: string,
   parsed: ParsedResourceUri,
-  sessionStore: SessionStore
+  sessionStore: SessionStore,
+  boundWorkspaceId: string | undefined
 ): void {
-  if (parsed.kind !== "pulse" && parsed.kind !== "agentState") {
+  if (parsed.kind !== "pulse" && parsed.kind !== "agentState" && parsed.kind !== "binding") {
     throw new McpError(
       ErrorCode.InvalidRequest,
       `Subscriptions are not supported for resource '${uri}'.`
@@ -2368,7 +2775,22 @@ function subscribeResource(
   };
 
   let unsub: () => void;
-  if (parsed.kind === "agentState") {
+  if (parsed.kind === "binding") {
+    // Push is latency reduction, never the contract. The transport is built
+    // without an `eventStore` (`httpLifecycle.ts`), and the SDK's `send()`
+    // returns silently when no client is holding the standalone GET stream, so
+    // a notification can be dropped with no error anywhere — which is exactly
+    // why the read above is the authoritative half and this only says "read
+    // again" (#12313).
+    //
+    // An unbound session subscribing gets a live, permanently quiet
+    // subscription: it has no binding, so nothing can change about one. Cheaper
+    // and more predictable than refusing, and its read still answers `unbound`.
+    unsub =
+      boundWorkspaceId === undefined
+        ? () => {}
+        : onWorkspaceResidencyChanged(boundWorkspaceId, fire);
+  } else if (parsed.kind === "agentState") {
     unsub = events.on("agent:state-changed", (payload) => {
       if (payload.agentId === parsed.id) fire();
     });

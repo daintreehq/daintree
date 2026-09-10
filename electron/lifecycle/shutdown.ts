@@ -48,6 +48,7 @@ import {
 } from "../window/serviceRefs.js";
 import { haltDeferredQueue } from "../window/deferredInitQueue.js";
 import { freezeAndSnapshotOpenWindows } from "../window/openWindowsTracker.js";
+import { cancelBackgroundRestores } from "./projectRestore.js";
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -171,6 +172,14 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // be resumed). Tasks that start during the dialog run against a fully live
   // app and are torn down by the cleanup chain like any other service.
   haltDeferredQueue();
+
+  // Stop the background-project restore queue before the manifest snapshot
+  // below (#12320). A project still queued when the quit commits was never
+  // restored, so persisting it as pending would have the next launch promise a
+  // fleet this session did not actually have. Same placement rationale as
+  // `haltDeferredQueue` above: after the quit-confirmation dialog, because
+  // stopping is permanent and a cancelled quit must never reach it.
+  cancelBackgroundRestores();
 
   // Capture the open-window manifest and latch its writes off, for the same
   // reason and in the same place (#11492). Two hazards this closes: a pending

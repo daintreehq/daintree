@@ -1571,6 +1571,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { level: "errors" | "off" | "full"; hasSeenPrompt: boolean };
   };
+  "session-restore:get-config": {
+    args: [];
+    result: import("./sessionRestore.js").SessionRestoreConfig;
+  };
+  "session-restore:update-config": {
+    args: [config: Partial<import("./sessionRestore.js").SessionRestoreConfig>];
+    result: import("./sessionRestore.js").SessionRestoreConfig;
+  };
+  "session-restore:view-hydrated": {
+    args: [];
+    result: void;
+  };
   "shortcut-hints:get-counts": {
     args: [];
     result: Record<string, number>;
@@ -1766,6 +1778,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { visualBuffers: SharedArrayBuffer[]; signalBuffer: SharedArrayBuffer | null };
   };
+  "terminal:get-submissions": {
+    args: [terminalIds: string[], submissionToken: string];
+    result: Record<string, import("../terminalSubmission.js").TerminalSubmissionLookup>;
+  };
   "terminal:graceful-kill": {
     args: [id: string];
     result: string | null;
@@ -1860,7 +1876,7 @@ export interface GeneratedIpcInvokeMap {
     result: string;
   };
   "terminal:submit": {
-    args: [id: string, text: string];
+    args: [id: string, text: string, submissionToken?: string | undefined];
     result: void;
   };
   "terminal:trash": {
@@ -1895,6 +1911,18 @@ export interface GeneratedIpcInvokeMap {
   "window-chrome:set-banner-severity": {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;
+  };
+  "workspace-residency:get": {
+    args: [payload: { workspaceId: string }];
+    result: boolean;
+  };
+  "workspace-residency:set": {
+    args: [payload: { workspaceId: string; keepResident: boolean }];
+    result: void;
+  };
+  "workspace:list": {
+    args: [];
+    result: import("./workspace.js").WorkspaceListEntry[];
   };
   "worktree-config:dismiss-wsl-banner": {
     args: [payload: { worktreeId: string }];

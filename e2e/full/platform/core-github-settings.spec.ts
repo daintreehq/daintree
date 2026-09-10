@@ -3,7 +3,12 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { injectFault, clearAllFaults } from "../../helpers/ipcFaults";
-import { connectGitHub, clearGitHubToken, refreshGitHubConfig } from "../../helpers/githubHelpers";
+import {
+  connectGitHub,
+  clearGitHubToken,
+  refreshGitHubConfig,
+  selectGitHubSettingsProvider,
+} from "../../helpers/githubHelpers";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 import { openSettings } from "../../helpers/panels";
@@ -23,6 +28,7 @@ async function openGitHubSettings(window: Page): Promise<void> {
     .getByRole("tab", { name: "Code Forge", exact: true })
     .click();
   await expect(window.locator("h3", { hasText: "Code Forge" })).toBeVisible({ timeout: T_SHORT });
+  await selectGitHubSettingsProvider(window);
   await expect(window.locator("text=Loading GitHub settings...")).not.toBeVisible({
     timeout: T_MEDIUM,
   });

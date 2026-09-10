@@ -2,6 +2,19 @@ import { describe, it, expect } from "vitest";
 import { stripIdleTerminalSequences } from "../IdleSequenceFilter.js";
 
 describe("stripIdleTerminalSequences", () => {
+  it("strips Grok's repeated Kitty image deletion without removing visible output", () => {
+    const deletion = "\x1b_Ga=d,d=i,i=1,q=2\x1b\\";
+    expect(stripIdleTerminalSequences(deletion)).toBe("");
+    expect(stripIdleTerminalSequences(`READY${deletion}❯`)).toBe("READY❯");
+  });
+
+  it("preserves Kitty image transmission and incomplete delete commands", () => {
+    const transmission = "\x1b_Ga=T,f=100;AAAA\x1b\\";
+    const incomplete = "\x1b_Ga=d,d=i,i=1,q=2";
+    expect(stripIdleTerminalSequences(transmission)).toBe(transmission);
+    expect(stripIdleTerminalSequences(incomplete)).toBe(incomplete);
+  });
+
   it("returns plain text unchanged", () => {
     expect(stripIdleTerminalSequences("hello world")).toBe("hello world");
   });

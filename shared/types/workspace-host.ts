@@ -505,6 +505,12 @@ export type WorkspaceHostRequest =
        * to `origin` (#11747).
        */
       remoteName?: string;
+      /**
+       * Complete `src:dst` refspec from the forge provider, resolved in main
+       * (#12324) so the host stays forge-neutral. Omitted falls back to the
+       * GitHub-shaped `pull/<n>/head:<headRefName>`.
+       */
+      refspec?: string;
     }
   // Git operations
   | {

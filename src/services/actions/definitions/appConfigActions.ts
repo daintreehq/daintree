@@ -5,6 +5,7 @@ import {
   agentSettingsClient,
   appClient,
   hibernationClient,
+  sessionRestoreClient,
   idleTerminalClient,
   idleBackgroundAutoCloseClient,
   worktreeConfigClient,
@@ -13,6 +14,9 @@ import { dispatchEscape } from "@/lib/escapeStack";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
+
+/** Shared by `sessionRestore.updateConfig`'s declared schema and its body. */
+const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional() });
 
 export function registerAppConfigActions(
   actions: ActionRegistry,
@@ -101,6 +105,45 @@ export function registerAppConfigActions(
         isInitialized: true,
       });
       return updated;
+    },
+  }));
+
+  actions.set("sessionRestore.getConfig", () => ({
+    id: "sessionRestore.getConfig",
+    title: "Get Session Restore Config",
+    description:
+      "Read whether a relaunch brings back every project that was live, or only the one project each window was showing. No arguments. Returns { enabled }: `enabled` is whether live projects are restored on startup. Default on.",
+    category: "settings",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    resultSchema: z.object({
+      enabled: z.boolean(),
+    }),
+    run: async () => {
+      return await sessionRestoreClient.getConfig();
+    },
+  }));
+
+  actions.set("sessionRestore.updateConfig", () => ({
+    id: "sessionRestore.updateConfig",
+    title: "Update Session Restore Config",
+    description: "Update whether live projects are restored after a relaunch",
+    category: "settings",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
+    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
+    palette: { mode: "hidden" },
+    argsSchema: SessionRestoreConfigPatchSchema,
+    run: async (args: unknown) => {
+      // Parsed rather than asserted. The neighbours here cast `args` and each
+      // one costs a `no-unsafe-type-assertion` warning; the schema is already
+      // declared above, so re-reading it is both free and actually type-safe —
+      // a caller sending `{ enabled: "yes" }` is rejected here instead of
+      // reaching the store.
+      return await sessionRestoreClient.updateConfig(SessionRestoreConfigPatchSchema.parse(args));
     },
   }));
 

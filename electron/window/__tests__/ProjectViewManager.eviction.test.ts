@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
+/** Workspaces the user granted residency, read by the mocked preference below. */
+const residentWorkspaces = new Set<string>();
+
 let nextWebContentsId = 100;
 let nextOsProcessId = 1000;
 
@@ -87,6 +90,17 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterProjectView: vi.fn(),
   registerCachedViewWebContents: vi.fn(),
   unregisterCachedViewWebContents: vi.fn(),
+}));
+
+const residencyLedger = vi.hoisted(() => ({
+  recordWorkspaceEviction: vi.fn(),
+  clearWorkspaceEviction: vi.fn(),
+  notifyWorkspaceViewsChanged: vi.fn(),
+}));
+
+vi.mock("../../services/workspaceResidency.js", () => ({
+  isWorkspaceKeepResident: (workspaceId: string) => residentWorkspaces.has(workspaceId),
+  ...residencyLedger,
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
@@ -3707,5 +3721,269 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
     mgr.setCachedViewLimit(1);
 
     expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+});
+
+describe("ProjectViewManager — user-granted workspace residency (#12313)", () => {
+  let win: ReturnType<typeof createMockWindow>;
+  let boundWorkspaces: Set<string>;
+  let managers: ProjectViewManager[];
+
+  type MemInfo = { free: number; purgeable?: number; total: number };
+  const originalSystemMemoryInfo = (process as unknown as { getSystemMemoryInfo?: () => MemInfo })
+    .getSystemMemoryInfo;
+
+  function setAvailableMb(availableMb: number) {
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: () => ({ free: availableMb * 1024, purgeable: 0, total: 8 * 1024 * 1024 }),
+    });
+  }
+
+  const evictionLogFor = (projectId: string) =>
+    vi
+      .mocked(logInfo)
+      .mock.calls.find(
+        ([event, ctx]) =>
+          event === "projectview.eviction" && (ctx as { projectId: string }).projectId === projectId
+      )?.[1] as Record<string, unknown> | undefined;
+
+  function makeManager(cachedProjectViews: number) {
+    const mgr = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews,
+      assistantBackendsForProject,
+      isTerminalLive,
+      mcpViewActivity: (workspaceId: string) => ({
+        liveBinding: boundWorkspaces.has(workspaceId),
+        dispatchLease: false,
+      }),
+    });
+    managers.push(mgr);
+    return mgr;
+  }
+
+  /** Three views: proj-a and proj-b cached (oldest-first), proj-c active. */
+  async function seedThreeViews(mgr: ProjectViewManager) {
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    await mgr.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await mgr.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+  }
+
+  /** Bind a running assistant to the project's current view — the view the session pinned. */
+  function bindLiveAssistant(mgr: ProjectViewManager, projectId: string, terminalId: string) {
+    const wc = mgr.getAllViews().find((v) => v.projectId === projectId)!.view.webContents;
+    assistantBackends.set(projectId, { terminalId, webContentsId: wc.id });
+    liveTerminals.add(terminalId);
+  }
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    nextOsProcessId = 1000;
+    vi.clearAllMocks();
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
+    assistantBackends.clear();
+    liveTerminals.clear();
+    residentWorkspaces.clear();
+    boundWorkspaces = new Set();
+    managers = [];
+    win = createMockWindow();
+  });
+
+  afterEach(() => {
+    for (const mgr of managers) mgr.dispose();
+    managers = [];
+    residentWorkspaces.clear();
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: originalSystemMemoryInfo,
+    });
+  });
+
+  it("keeps a granted workspace resident even though it is the LRU candidate", async () => {
+    // The whole ask: an operator rotating through other projects evicts the one
+    // holding their orchestrator's agents, and no cached-view limit makes it
+    // reliably resident. proj-a is the oldest, so pure LRU takes it first.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    residentWorkspaces.add("proj-a");
+
+    mgr.setCachedViewLimit(2);
+
+    expect(
+      mgr
+        .getAllViews()
+        .map((v) => v.projectId)
+        .sort()
+    ).toEqual(["proj-a", "proj-c"]);
+  });
+
+  it("holds at most one grant fewer than the cap, keeping the most recently used", async () => {
+    // Residency spends the user's own budget rather than adding to it. With a
+    // cap of 2 the active view takes one slot, so exactly one grant can be held
+    // — and it is the workspace they have actually been working in.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    residentWorkspaces.add("proj-a");
+    residentWorkspaces.add("proj-b");
+
+    mgr.setCachedViewLimit(2);
+
+    expect(
+      mgr
+        .getAllViews()
+        .map((v) => v.projectId)
+        .sort()
+    ).toEqual(["proj-b", "proj-c"]);
+  });
+
+  it("never carries the cache over the configured cap", async () => {
+    // The invariant that makes this a grant and not the floor #11790 refused:
+    // held grants plus the active view can never exceed `effectiveMax`, so
+    // granting every workspace cannot pin the cache.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    residentWorkspaces.add("proj-a");
+    residentWorkspaces.add("proj-b");
+    residentWorkspaces.add("proj-c");
+
+    mgr.setCachedViewLimit(1);
+
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  it("yields every grant to a forced critical reclaim", async () => {
+    // The pressure valve stays working. `effectiveMax` is 1 on a forced pass,
+    // so the slot count reaches zero on its own — residency needs no
+    // critical-pressure branch to get out of the way.
+    const mgr = makeManager(3);
+    mgr.setMemoryPressurePolicy({ criticalMb: 1000, warningMb: 2000 });
+    setAvailableMb(2500);
+    await seedThreeViews(mgr);
+    residentWorkspaces.add("proj-a");
+    residentWorkspaces.add("proj-b");
+
+    expect(mgr.reclaimCachedViewsUnderPressure()).toBe(2);
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  it("tells the ledger which workspace it took, and why", async () => {
+    // Without this the ledger mocks are unchecked and every production call
+    // site could be deleted with the suite still green — while a bound session
+    // would silently lose the one signal that distinguishes "evicted" from
+    // "this id was never right".
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+
+    mgr.setCachedViewLimit(2);
+
+    expect(residencyLedger.recordWorkspaceEviction).toHaveBeenCalledWith("proj-a", "limit-change");
+  });
+
+  it("clears the ledger for a workspace that opens again", async () => {
+    // The reopen half (lesson #10821): a ledger only ever written would let a
+    // subscribe-then-read client settle on a loss the workspace has recovered
+    // from.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+
+    expect(residencyLedger.clearWorkspaceEviction).toHaveBeenCalledWith("proj-b");
+    expect(residencyLedger.clearWorkspaceEviction).toHaveBeenCalledWith("proj-c");
+  });
+
+  it("records the grant on the eviction it was overridden by", async () => {
+    // Eviction reported rather than silent. Without this the log reads as if
+    // the grant were simply ignored, instead of outranked by the cap.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    residentWorkspaces.add("proj-a");
+    residentWorkspaces.add("proj-b");
+
+    mgr.setCachedViewLimit(2);
+
+    expect(evictionLogFor("proj-a")).toMatchObject({ keepResident: true });
+  });
+
+  it("outranks a quiet bound session, which the client got for free", async () => {
+    // `boundMcpSessionFallback` is automatic ordering any connected client
+    // earns by existing; a grant is the user spending their own budget. When
+    // only one can be held, the user's choice wins.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    residentWorkspaces.add("proj-a");
+    boundWorkspaces.add("proj-b");
+
+    mgr.setCachedViewLimit(2);
+
+    expect(
+      mgr
+        .getAllViews()
+        .map((v) => v.projectId)
+        .sort()
+    ).toEqual(["proj-a", "proj-c"]);
+  });
+
+  it("does not widen an overflow another protection already caused", async () => {
+    // The cap bound only means anything in composition. A live assistant's
+    // floor is unconditional and already holds the cache over its cap; a grant
+    // that could refuse eviction would hold a third view on top, where without
+    // it the pass settles at two. Because `residentGranted` only sits last in
+    // `candidates`, the grant is the one thing this pass may still take, so the
+    // assistant overflows as it is entitled to and the grant adds nothing.
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    bindLiveAssistant(mgr, "proj-b", "term-assistant");
+    residentWorkspaces.add("proj-a");
+
+    mgr.setCachedViewLimit(2);
+
+    expect(
+      mgr
+        .getAllViews()
+        .map((v) => v.projectId)
+        .sort()
+    ).toEqual(["proj-b", "proj-c"]);
+  });
+
+  it("protects nothing for a grant with no live view", async () => {
+    // The preference record is keyed by workspace id and nothing prunes it when
+    // a project is deleted or moved, so the grant only ever meets a view that
+    // actually exists — a stale row cannot hold the cache open (#11162).
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+    residentWorkspaces.add("proj-never-opened");
+
+    mgr.setCachedViewLimit(2);
+
+    expect(
+      mgr
+        .getAllViews()
+        .map((v) => v.projectId)
+        .sort()
+    ).toEqual(["proj-b", "proj-c"]);
+  });
+
+  it("changes nothing when the user has granted no workspace", async () => {
+    const mgr = makeManager(3);
+    await seedThreeViews(mgr);
+
+    mgr.setCachedViewLimit(2);
+
+    expect(
+      mgr
+        .getAllViews()
+        .map((v) => v.projectId)
+        .sort()
+    ).toEqual(["proj-b", "proj-c"]);
   });
 });

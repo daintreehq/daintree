@@ -42,6 +42,7 @@ const CANONICAL_CATEGORIES = new Set<string>([
   "terminal",
   "ui",
   "voice",
+  "workspace",
   "worktree",
 ]);
 // Lowercase segment start; camelCase allowed within each dot-separated segment.

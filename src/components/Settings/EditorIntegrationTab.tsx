@@ -5,7 +5,9 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
-import { useProjectStore } from "@/store";
+import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
+import { useProjectStore, patchCachedProjectSettings } from "@/store";
+import { invalidateProjectSettingsCache } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 
@@ -14,24 +16,13 @@ const EDITOR_LABELS: Record<KnownEditorId, string> = {
   "vscode-insiders": "VS Code Insiders",
   cursor: "Cursor",
   windsurf: "Windsurf",
+  "antigravity-ide": "Antigravity IDE",
   zed: "Zed",
   neovim: "Neovim",
   webstorm: "WebStorm / IntelliJ",
   sublime: "Sublime Text",
   custom: "Custom…",
 };
-
-const ORDERED_KNOWN_IDS: KnownEditorId[] = [
-  "vscode",
-  "vscode-insiders",
-  "cursor",
-  "windsurf",
-  "zed",
-  "neovim",
-  "webstorm",
-  "sublime",
-  "custom",
-];
 
 export function EditorIntegrationTab() {
   const [discoveredEditors, setDiscoveredEditors] = useState<DiscoveredEditor[]>([]);
@@ -113,6 +104,11 @@ export function EditorIntegrationTab() {
         customTemplate: selectedId === "custom" ? customTemplate.trim() || undefined : undefined,
       };
       await editorClient.setConfig({ editor, projectId: activeProjectId });
+      // Main writes preferredEditor straight into the project settings file, so
+      // every renderer-side copy is now stale. Both must be refreshed before
+      // anything else reads or re-saves the whole settings object (#12326).
+      invalidateProjectSettingsCache(activeProjectId);
+      patchCachedProjectSettings(activeProjectId, { preferredEditor: editor });
       if (!isMountedRef.current) return;
       setPreferredEditor(editor);
     } catch (err) {
@@ -131,7 +127,10 @@ export function EditorIntegrationTab() {
       // Open the active project's root to test the editor integration. It is a
       // known-to-exist path inside an allowed root, so it passes the main-process
       // path-containment guard (homeDir would now be rejected as outside-root).
-      await window.electron.system.openInEditor({ path: activeProjectPath });
+      await window.electron.system.openInEditor({
+        path: activeProjectPath,
+        projectId: activeProjectId,
+      });
       if (!isMountedRef.current) return;
       setTestResult("ok");
     } catch {
@@ -171,7 +170,7 @@ export function EditorIntegrationTab() {
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
                 className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
               >
-                {ORDERED_KNOWN_IDS.map((id) => {
+                {KNOWN_EDITOR_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
                   const available = id === "custom" ? true : (disc?.available ?? false);
                   return (
@@ -279,7 +278,7 @@ export function EditorIntegrationTab() {
 
             {testResult === "ok" && (
               <span className="flex items-center gap-1 text-xs text-status-success">
-                <CheckCircle className="w-3.5 h-3.5" /> Editor opened
+                <CheckCircle className="w-3.5 h-3.5" /> Open requested
               </span>
             )}
             {testResult === "error" && (

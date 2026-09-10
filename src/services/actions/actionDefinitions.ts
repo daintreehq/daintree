@@ -20,6 +20,7 @@ import { registerProjectActions } from "./definitions/projectActions";
 import { registerRecipeActions } from "./definitions/recipeActions";
 import { registerSystemActions } from "./definitions/systemActions";
 import { registerTerminalQueryActions } from "./definitions/terminalQueryActions";
+import { registerTerminalMetaActions } from "./definitions/terminalMetaActions";
 import { registerTerminalSpawnActions } from "./definitions/terminalSpawnActions";
 import { registerTerminalLifecycleActions } from "./definitions/terminalLifecycleActions";
 import { registerTerminalNavigationActions } from "./definitions/terminalNavigationActions";
@@ -29,6 +30,7 @@ import { registerTerminalWorktreeActions } from "./definitions/terminalWorktreeA
 import { registerFleetActions } from "./definitions/fleetActions";
 import { registerVoiceActions } from "./definitions/voiceActions";
 import { registerWatchdogActions } from "./definitions/watchdogActions";
+import { registerWorkspaceActions } from "./definitions/workspaceActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
 import { registerWorktreeBulkActions } from "./definitions/worktreeBulkActions";
@@ -46,6 +48,7 @@ export function createActionDefinitions(
   actions ??= new Map();
 
   registerTerminalQueryActions(actions, callbacks);
+  registerTerminalMetaActions(actions, callbacks);
   registerTerminalSpawnActions(actions, callbacks);
   registerTerminalLifecycleActions(actions, callbacks);
   registerTerminalNavigationActions(actions, callbacks);
@@ -60,6 +63,7 @@ export function createActionDefinitions(
   registerWorktreeBulkActions(actions);
   registerRecipeActions(actions, callbacks);
   registerProjectActions(actions, callbacks);
+  registerWorkspaceActions(actions);
   registerEnvActions(actions, callbacks);
   registerForgeActions(actions, callbacks);
   registerGitActions(actions, callbacks);

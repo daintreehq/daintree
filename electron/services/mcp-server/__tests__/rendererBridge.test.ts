@@ -1,40 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 
-const { mockIpcMain, mockWebContentsRegistry, mockProjectViews } = vi.hoisted(() => {
-  class IpcMainMock {
-    private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-    on(event: string, listener: (...args: unknown[]) => void): this {
-      const set = this.listeners.get(event) ?? new Set();
-      set.add(listener);
-      this.listeners.set(event, set);
-      return this;
+const { mockIpcMain, mockWebContentsRegistry, mockProjectViews, mockWindowForWebContents } =
+  vi.hoisted(() => {
+    class IpcMainMock {
+      private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+      on(event: string, listener: (...args: unknown[]) => void): this {
+        const set = this.listeners.get(event) ?? new Set();
+        set.add(listener);
+        this.listeners.set(event, set);
+        return this;
+      }
+      removeListener(event: string, listener: (...args: unknown[]) => void): this {
+        this.listeners.get(event)?.delete(listener);
+        return this;
+      }
+      emit(event: string, ...args: unknown[]): boolean {
+        const set = this.listeners.get(event);
+        if (!set) return false;
+        for (const fn of set) fn(...args);
+        return set.size > 0;
+      }
+      removeAllListeners(): this {
+        this.listeners.clear();
+        return this;
+      }
     }
-    removeListener(event: string, listener: (...args: unknown[]) => void): this {
-      this.listeners.get(event)?.delete(listener);
-      return this;
-    }
-    emit(event: string, ...args: unknown[]): boolean {
-      const set = this.listeners.get(event);
-      if (!set) return false;
-      for (const fn of set) fn(...args);
-      return set.size > 0;
-    }
-    removeAllListeners(): this {
-      this.listeners.clear();
-      return this;
-    }
-  }
-  return {
-    mockIpcMain: new IpcMainMock(),
-    mockWebContentsRegistry: new Map<number, unknown>(),
-    // workspaceId -> the live views registered for it (#11789). Drives
-    // `getWebContentsForProject`, which is the only thing the workspace route
-    // consults — deliberately, since it reads the registry without attaching,
-    // thawing, focusing, or switching anything.
-    mockProjectViews: new Map<string, unknown[]>(),
-  };
-});
+    return {
+      mockIpcMain: new IpcMainMock(),
+      mockWebContentsRegistry: new Map<number, unknown>(),
+      // workspaceId -> the live views registered for it (#11789). Drives
+      // `getWebContentsForProject`, which is the only thing the workspace route
+      // consults — deliberately, since it reads the registry without attaching,
+      // thawing, focusing, or switching anything.
+      mockProjectViews: new Map<string, unknown[]>(),
+      // webContents id -> the window that holds it (#12315). Only the reveal
+      // route reads this, and it reads it twice: once to hop from a holder to
+      // its window's active view, and once after the dispatch to raise the
+      // window the switch actually ran in.
+      mockWindowForWebContents: new Map<number, unknown>(),
+    };
+  });
 
 vi.mock("electron", () => ({
   ipcMain: mockIpcMain,
@@ -49,6 +55,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWebContentsForProject: (projectId: string) => mockProjectViews.get(projectId) ?? [],
+  getWindowForWebContents: (wc: { id: number }) => mockWindowForWebContents.get(wc.id) ?? null,
 }));
 
 // `unfreezeWebContents` is the only member the bridge imports. Mocked so the
@@ -1770,5 +1777,377 @@ describe("binding error retriability (#12082)", () => {
       buildMcpErrorPayload({ code: err.code, message: err.message, retriable: err.retriable })
         .retriable
     ).toBe(retriable);
+  });
+});
+
+describe("rendererBridge — reveal routing and window raise (#12315)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+  /** Every raise call across every window, in the order they happened. */
+  let raiseLog: string[];
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    mockWindowForWebContents.clear();
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+    raiseLog = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  interface FakeWindow {
+    id: number;
+    isDestroyed: () => boolean;
+    isMinimized: () => boolean;
+    restore: ReturnType<typeof vi.fn>;
+    show: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
+    /** Test-only: model the window going away mid-dispatch. */
+    markDestroyed: () => void;
+  }
+
+  function makeWindow(
+    id: number,
+    options: { destroyed?: boolean; minimized?: boolean; showThrows?: boolean } = {}
+  ): FakeWindow {
+    let destroyed = options.destroyed === true;
+    return {
+      id,
+      isDestroyed: () => destroyed,
+      isMinimized: () => options.minimized === true,
+      restore: vi.fn(() => {
+        raiseLog.push(`${id}:restore`);
+      }),
+      show: vi.fn(() => {
+        raiseLog.push(`${id}:show`);
+        if (options.showThrows) throw new Error("window gone");
+      }),
+      focus: vi.fn(() => {
+        raiseLog.push(`${id}:focus`);
+      }),
+      markDestroyed: () => {
+        destroyed = true;
+      },
+    };
+  }
+
+  /**
+   * Registry double for both halves of a reveal: `getByWindowId` is the
+   * holder → active-view hop, `focusOrder` is the no-holder fallback. They
+   * read the same mutable list, so a test can move focus mid-dispatch.
+   */
+  function makeRegistry(entriesRef: {
+    current: Array<{ window: FakeWindow; activeWebContents: FakeWebContents | null }>;
+  }) {
+    const contexts = () =>
+      entriesRef.current.map(({ window, activeWebContents }) => ({
+        windowId: window.id,
+        browserWindow: window,
+        services: {
+          projectViewManager: {
+            getActiveView: () => (activeWebContents ? { webContents: activeWebContents } : null),
+          },
+        },
+      }));
+    return {
+      all: () => contexts(),
+      focusOrder: () => contexts(),
+      getByWindowId: (id: number) => contexts().find((ctx) => ctx.windowId === id),
+      getByWebContentsId: () => undefined,
+    };
+  }
+
+  /** Makes `wc` reachable to the pinned dispatch route, and to the window lookup. */
+  function register(wc: FakeWebContents, win?: FakeWindow): void {
+    mockWebContentsRegistry.set(wc.id, wc);
+    if (win) mockWindowForWebContents.set(wc.id, win);
+  }
+
+  /** Answers a dispatch request as `wc`, optionally after a mid-flight change. */
+  function respondWith(
+    wc: FakeWebContents,
+    result: { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } },
+    beforeRespond?: () => void
+  ): void {
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      queueMicrotask(() => {
+        beforeRespond?.();
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: wc.id } },
+          { requestId: payload.requestId, result }
+        );
+      });
+    });
+  }
+
+  function makeBridge(registry: ReturnType<typeof makeRegistry>) {
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => registry as never
+    );
+    bridge.setupListeners([]);
+    return bridge;
+  }
+
+  it("runs the reveal in the holder window's active view, not in the holder", async () => {
+    const holder = makeWebContents(3001);
+    const active = makeWebContents(3002);
+    const elsewhere = makeWebContents(3003);
+    const holderWindow = makeWindow(1);
+    const otherWindow = makeWindow(2);
+    register(holder, holderWindow);
+    register(active, holderWindow);
+    register(elsewhere, otherWindow);
+    respondWith(active, { ok: true, result: "opened" });
+    // The workspace's own view is cached in window 1, which currently shows a
+    // different project; window 2 is the focused one.
+    mockProjectViews.set("ws-owned", [holder]);
+    const entries = {
+      current: [
+        { window: otherWindow, activeWebContents: elsewhere },
+        { window: holderWindow, activeWebContents: active },
+      ],
+    };
+    const bridge = makeBridge(makeRegistry(entries));
+
+    const { envelope, raised } = await bridge.revealOwnedRun(
+      "ws-owned",
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "assistant-pane"
+    );
+
+    expect(active.send).toHaveBeenCalledTimes(1);
+    expect(holder.send).not.toHaveBeenCalled();
+    expect(elsewhere.send).not.toHaveBeenCalled();
+    expect(envelope.result).toEqual({ ok: true, result: "opened" });
+    expect(raised).toBe(true);
+    expect(raiseLog).toEqual(["1:show", "1:focus"]);
+    expect(otherWindow.show).not.toHaveBeenCalled();
+    // Provenance survives the reveal route — an external client's call must not
+    // reach the renderer stamped as the assistant's.
+    expect(active.send.mock.calls[0][1]).toMatchObject({ sessionOrigin: "assistant-pane" });
+  });
+
+  it.each([
+    ["no workspace at all", undefined],
+    ["a workspace no view holds", "ws-nowhere"],
+  ])("falls back to the active view for %s", async (_label, workspaceId) => {
+    const active = makeWebContents(3011);
+    const win = makeWindow(1);
+    register(active, win);
+    respondWith(active, { ok: true, result: "opened" });
+    const bridge = makeBridge(
+      makeRegistry({ current: [{ window: win, activeWebContents: active }] })
+    );
+
+    const { raised } = await bridge.revealOwnedRun(
+      workspaceId,
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external"
+    );
+
+    expect(active.send).toHaveBeenCalledTimes(1);
+    expect(raised).toBe(true);
+  });
+
+  it("skips holders whose window is gone or unknown and takes the next live one", async () => {
+    const orphanHolder = makeWebContents(3021);
+    const deadHolder = makeWebContents(3022);
+    const liveHolder = makeWebContents(3023);
+    const active = makeWebContents(3024);
+    const deadWindow = makeWindow(1, { destroyed: true });
+    const liveWindow = makeWindow(2);
+    // No window mapping at all for the first holder.
+    register(orphanHolder);
+    register(deadHolder, deadWindow);
+    register(liveHolder, liveWindow);
+    register(active, liveWindow);
+    respondWith(active, { ok: true, result: "opened" });
+    mockProjectViews.set("ws-owned", [orphanHolder, deadHolder, liveHolder]);
+    const bridge = makeBridge(
+      makeRegistry({
+        current: [
+          { window: deadWindow, activeWebContents: null },
+          { window: liveWindow, activeWebContents: active },
+        ],
+      })
+    );
+
+    const { raised } = await bridge.revealOwnedRun(
+      "ws-owned",
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external"
+    );
+
+    expect(active.send).toHaveBeenCalledTimes(1);
+    expect(raised).toBe(true);
+    expect(raiseLog).toEqual(["2:show", "2:focus"]);
+  });
+
+  it("skips a holder whose window shows no project view", async () => {
+    const emptyHolder = makeWebContents(3031);
+    const liveHolder = makeWebContents(3032);
+    const active = makeWebContents(3033);
+    const emptyWindow = makeWindow(1);
+    const liveWindow = makeWindow(2);
+    register(emptyHolder, emptyWindow);
+    register(liveHolder, liveWindow);
+    register(active, liveWindow);
+    respondWith(active, { ok: true, result: "opened" });
+    mockProjectViews.set("ws-owned", [emptyHolder, liveHolder]);
+    const bridge = makeBridge(
+      makeRegistry({
+        current: [
+          { window: emptyWindow, activeWebContents: null },
+          { window: liveWindow, activeWebContents: active },
+        ],
+      })
+    );
+
+    await bridge.revealOwnedRun("ws-owned", "pilot.openRun", { runId: "t1" }, false, "external");
+
+    expect(active.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("raises the window it dispatched into, not the one focused when the dispatch returned", async () => {
+    const holder = makeWebContents(3041);
+    const active = makeWebContents(3042);
+    const latecomer = makeWebContents(3043);
+    const revealWindow = makeWindow(1);
+    const stolenFocusWindow = makeWindow(2);
+    register(holder, revealWindow);
+    register(active, revealWindow);
+    register(latecomer, stolenFocusWindow);
+    mockProjectViews.set("ws-owned", [holder]);
+    const entries = {
+      current: [
+        { window: revealWindow, activeWebContents: active },
+        { window: stolenFocusWindow, activeWebContents: latecomer },
+      ],
+    };
+    // The user focuses the other window, and the workspace's holder moves with
+    // it, while the switch is in flight. Re-resolving after the await would
+    // raise window 2 and report a reveal that never happened there.
+    respondWith(active, { ok: true, result: "opened" }, () => {
+      entries.current = [entries.current[1], entries.current[0]];
+      mockProjectViews.set("ws-owned", [latecomer]);
+    });
+    const bridge = makeBridge(makeRegistry(entries));
+
+    const { raised } = await bridge.revealOwnedRun(
+      "ws-owned",
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external"
+    );
+
+    expect(raised).toBe(true);
+    expect(raiseLog).toEqual(["1:show", "1:focus"]);
+    expect(stolenFocusWindow.show).not.toHaveBeenCalled();
+  });
+
+  it("leaves every window alone when the dispatch itself failed", async () => {
+    const active = makeWebContents(3051);
+    const win = makeWindow(1);
+    register(active, win);
+    respondWith(active, {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "run is gone" },
+    });
+    const bridge = makeBridge(
+      makeRegistry({ current: [{ window: win, activeWebContents: active }] })
+    );
+
+    const { envelope, raised } = await bridge.revealOwnedRun(
+      undefined,
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external"
+    );
+
+    expect(envelope.result.ok).toBe(false);
+    expect(raised).toBe(false);
+    expect(raiseLog).toEqual([]);
+  });
+
+  it("reports raised:false when the window it switched is gone by the time it returns", async () => {
+    const active = makeWebContents(3061);
+    const win = makeWindow(1);
+    register(active, win);
+    respondWith(active, { ok: true, result: "opened" }, () => win.markDestroyed());
+    const bridge = makeBridge(
+      makeRegistry({ current: [{ window: win, activeWebContents: active }] })
+    );
+
+    const { envelope, raised } = await bridge.revealOwnedRun(
+      undefined,
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external"
+    );
+
+    expect(envelope.result.ok).toBe(true);
+    expect(raised).toBe(false);
+    expect(raiseLog).toEqual([]);
+  });
+
+  it("reports raised:false when raising throws, without failing the dispatch", async () => {
+    const active = makeWebContents(3071);
+    const win = makeWindow(1, { showThrows: true });
+    register(active, win);
+    respondWith(active, { ok: true, result: "opened" });
+    const bridge = makeBridge(
+      makeRegistry({ current: [{ window: win, activeWebContents: active }] })
+    );
+
+    const { envelope, raised } = await bridge.revealOwnedRun(
+      undefined,
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external"
+    );
+
+    expect(envelope.result.ok).toBe(true);
+    expect(raised).toBe(false);
+    expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it("restores a minimized window before showing and focusing it", async () => {
+    const active = makeWebContents(3081);
+    const win = makeWindow(1, { minimized: true });
+    register(active, win);
+    respondWith(active, { ok: true, result: "opened" });
+    const bridge = makeBridge(
+      makeRegistry({ current: [{ window: win, activeWebContents: active }] })
+    );
+
+    const { raised } = await bridge.revealOwnedRun(
+      undefined,
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external"
+    );
+
+    expect(raised).toBe(true);
+    expect(raiseLog).toEqual(["1:restore", "1:show", "1:focus"]);
   });
 });

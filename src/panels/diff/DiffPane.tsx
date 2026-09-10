@@ -62,6 +62,7 @@ import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
 import { useDiffFileSource } from "./useDiffFileSource";
 import { getFullFileAvailability } from "./fullFileAvailability";
+import { isGitlinkPatch } from "./gitlinkPatch";
 import {
   getRenderedMarkdownAvailability,
   isRenderedMarkdownSupported,
@@ -468,19 +469,6 @@ export function DiffPane({
     return () => root?.removeEventListener("keydown", onKeyDown);
   }, [isFocused, navigateFile, currentEntry, worktreePath, toggleViewed]);
 
-  const isImageMode = Boolean(
-    filePath && fileStatus && isImageDiffCandidate(filePath) && panel?.diffSource !== "base-branch"
-  );
-  // Media shows only the current working-tree version (no side-by-side diff —
-  // the media pipeline has no cheap "old vs new" comparison), so unlike
-  // isImageMode this applies to every diff source, base-branch included.
-  const isVideoMode = Boolean(filePath && isVideoFilePath(filePath));
-  const isAudioMode = Boolean(filePath && isAudioFilePath(filePath));
-  const isMediaMode = isVideoMode || isAudioMode;
-  // PDFs likewise show only the current working-tree version: the built-in
-  // viewer renders a whole document, not a comparison, so like media this
-  // applies to every diff source.
-  const isPdfMode = Boolean(filePath && isPdfFilePath(filePath));
   // Sentinels the viewer turns into empty states rather than a rendered diff.
   // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
   // oversized ones matter to the full-file scope, which has nothing to expand
@@ -491,13 +479,39 @@ export function DiffPane({
     content === "BINARY_FILE" ||
     content === "FILE_TOO_LARGE";
   const hasDiff = Boolean(content && content.trim() && !isDiffSentinel);
+  // A submodule's path is its checkout directory, so every mode below that
+  // would read or preview the file on disk has to stand down (#12309). Read
+  // from the patch rather than the change set because the patch is the one
+  // thing guaranteed present by the time the whole-file and rendered-layout
+  // reads ask — both are downstream of `hasDiff`. The media modes below are
+  // not, so they correct themselves when the patch lands rather than never
+  // being wrong.
+  const isGitlink = hasDiff && isGitlinkPatch(content);
+
+  const isImageMode = Boolean(
+    filePath &&
+    fileStatus &&
+    !isGitlink &&
+    isImageDiffCandidate(filePath) &&
+    panel?.diffSource !== "base-branch"
+  );
+  // Media shows only the current working-tree version (no side-by-side diff —
+  // the media pipeline has no cheap "old vs new" comparison), so unlike
+  // isImageMode this applies to every diff source, base-branch included.
+  const isVideoMode = Boolean(filePath && !isGitlink && isVideoFilePath(filePath));
+  const isAudioMode = Boolean(filePath && !isGitlink && isAudioFilePath(filePath));
+  const isMediaMode = isVideoMode || isAudioMode;
+  // PDFs likewise show only the current working-tree version: the built-in
+  // viewer renders a whole document, not a comparison, so like media this
+  // applies to every diff source.
+  const isPdfMode = Boolean(filePath && !isGitlink && isPdfFilePath(filePath));
 
   // Whether this file *can* show its whole contents, independent of whether the
   // user currently wants to — the toggle stays visible either way so the option
   // is discoverable, and explains itself when it can't be used.
   const sourceAvailability = useMemo(
-    () => getFullFileAvailability(diffSource, fileStatus),
-    [diffSource, fileStatus]
+    () => getFullFileAvailability(diffSource, fileStatus, isGitlink),
+    [diffSource, fileStatus, isGitlink]
   );
   // An image diff already shows the whole asset, and a diff that hasn't loaded
   // has nothing to expand — folding both into the availability verdict keeps
@@ -538,7 +552,8 @@ export function DiffPane({
   // against. Without it, a Refresh after a partial revert would verify the one
   // surviving hunk and then copy the reverted text out of the stale snapshot as
   // trusted context.
-  const renderedNeedsSource = renderedRequested && hasDiff && !stale && fileStatus !== "deleted";
+  const renderedNeedsSource =
+    renderedRequested && hasDiff && !stale && !isGitlink && fileStatus !== "deleted";
   const { source, errorCode: sourceErrorCode } = useDiffFileSource(
     sourceSubject,
     wantsFullFile || renderedNeedsSource
@@ -607,6 +622,7 @@ export function DiffPane({
     // a failed full-file read says nothing about a layout that never asked.
     sourceErrorCode: renderedNeedsSource ? sourceErrorCode : null,
     engineFailure: renderedEngineFailure,
+    isGitlink,
   });
 
   // What the body actually shows. A requested rendered layout that turns out to
@@ -649,7 +665,12 @@ export function DiffPane({
   const fullFileNotice: { message: string; recoverable: boolean } | null =
     wantsFullFile && !showRendered
       ? sourceErrorCode
-        ? { message: FILE_READ_ERROR_MESSAGES[sourceErrorCode], recoverable: true }
+        ? {
+            message: FILE_READ_ERROR_MESSAGES[sourceErrorCode],
+            // A directory never becomes readable as a file, so this one gets no
+            // action rather than a Retry that can only fail again (#12309).
+            recoverable: sourceErrorCode !== "NOT_A_FILE",
+          }
         : activeViewerFallback
           ? {
               message: FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback],

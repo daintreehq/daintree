@@ -77,6 +77,8 @@ export const config: AgentConfig = {
     supportsBracketedPaste: true,
     softNewlineSequence: "\x1b\r",
     ignoredInputSequences: ["\x1b\r"],
+    // Footer offers both: "Esc/Ctrl+C to interrupt".
+    interrupt: "double-escape",
   },
   detection: {
     primaryPatterns: [

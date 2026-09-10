@@ -509,6 +509,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           "--no-ext-diff",
           "--no-textconv",
           "--no-color",
+          // Pins the gitlink format against the user's `diff.submodule`, which
+          // would otherwise replace the patch with a commit summary or with the
+          // submodule's own files (#12309).
+          "--submodule=short",
           ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
           "--end-of-options",
           range,

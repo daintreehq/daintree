@@ -3,10 +3,10 @@ import type { DiffPanelData } from "@shared/types/panel";
 
 /**
  * Whether the full-file scope can be offered for one file, and why not when it
- * can't. Two independent things disqualify a file, so both are checked here
- * rather than in the toolbar: the diff may already carry the whole file (an
- * addition has no hidden context to reveal), or the new side may not be
- * readable from disk at all.
+ * can't. Three independent things disqualify a file, so all are checked here
+ * rather than in the toolbar: the entry may not be a file at all (a submodule
+ * gitlink), the diff may already carry the whole file (an addition has no
+ * hidden context to reveal), or the new side may not be readable from disk.
  */
 export type FullFileAvailability = { available: true } | { available: false; reason: string };
 
@@ -36,8 +36,20 @@ const DISK_BACKED_SOURCES: ReadonlySet<string> = new Set(["working-tree", "unsta
 
 export function getFullFileAvailability(
   diffSource: DiffPanelData["diffSource"],
-  fileStatus: GitStatus | undefined
+  fileStatus: GitStatus | undefined,
+  isGitlink = false
 ): FullFileAvailability {
+  // Outranks every status and source reason below: a gitlink's new side is a
+  // commit reference, so the path on disk is the submodule's own working
+  // directory. Offering the scope sends `files:read` at a directory, which
+  // fails with a message no retry can clear (#12309).
+  if (isGitlink) {
+    return {
+      available: false,
+      reason: "This is a submodule — its diff is a commit reference, not file contents",
+    };
+  }
+
   // Mirrors `buildSubject`, which defaults a missing status the same way.
   const status = fileStatus ?? "modified";
 

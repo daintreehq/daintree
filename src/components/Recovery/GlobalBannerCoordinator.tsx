@@ -10,6 +10,11 @@ import { useEffect, useState } from "react";
 import { useGlobalBannerPriority } from "./useGlobalBannerPriority";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 import type { BannerSeverity } from "@shared/config/windowChrome";
+import {
+  PluginDocumentWarning,
+  PluginDocumentReloadDialog,
+  usePluginDocumentNotifications,
+} from "@/components/Plugin/PluginDocumentWarning";
 
 // Chrome tinting is decoration: a rejected report (host without the bridge, a
 // window torn down mid-flight) must not surface as an unhandled rejection.
@@ -31,6 +36,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <MissingPrerequisiteBanner />;
     case "forge-token":
       return <ForgeTokenBanner />;
+    case "plugin-document":
+      return <PluginDocumentWarning />;
     case "cloud-sync":
       return <CloudSyncBanner />;
     case "rosetta":
@@ -53,6 +60,7 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
 // them, on every platform.
 export function GlobalBannerCoordinator() {
   const slot = useGlobalBannerPriority();
+  usePluginDocumentNotifications();
 
   // The native Windows caption strip is painted above all web content, so main
   // has to be told which banner colour sits under it. The severity comes from
@@ -101,10 +109,14 @@ export function GlobalBannerCoordinator() {
   }, [severity]);
 
   const banner = activeBanner(slot);
-  if (!banner) return null;
   return (
-    <WindowControlsInsetProvider onSeverityChange={setSeverity}>
-      {banner}
-    </WindowControlsInsetProvider>
+    <>
+      {banner && (
+        <WindowControlsInsetProvider onSeverityChange={setSeverity}>
+          {banner}
+        </WindowControlsInsetProvider>
+      )}
+      <PluginDocumentReloadDialog />
+    </>
   );
 }

@@ -315,7 +315,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `pilot.openProject` | View this project's agents | safe | — |
-| `pilot.openRun` | Open run | safe | `runId`, `workspaceId` |
+| `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
 | `project.add` | Add Project | safe | `path?` |
 | `project.cloneRepo` | Clone Repository | safe | — |
@@ -368,6 +368,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `keybinding.removeOverride` | Remove Keybinding Override | safe | `actionId` |
 | `keybinding.resetAll` | Reset All Keybinding Overrides | confirm | — |
 | `keybinding.setOverride` | Set Keybinding Override | safe | `actionId`, `combo` |
+| `sessionRestore.getConfig` | Get Session Restore Config | safe | — |
+| `sessionRestore.updateConfig` | Update Session Restore Config | safe | `enabled?` |
 | `terminalConfig.get` | Get Terminal Config | safe | — |
 | `terminalConfig.setCachedProjectViews` | Set Cached Project Views | safe | `cachedProjectViews` |
 | `terminalConfig.setFontFamily` | Set Terminal Font Family | safe | `fontFamily` |
@@ -430,7 +432,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.duplicate` | Duplicate Panel | safe | `focusPolicy?`, `spawnedBy?`, `terminalId?` |
 | `terminal.forceResume` | Force Resume | safe | `terminalId?` |
 | `terminal.getOutput` | Get Terminal Output | safe | `terminalId`, `maxLines?`, `stripAnsi?` |
-| `terminal.getStatus` | Get Terminal Status | safe | `includeOutput?`, `location?`, `terminalIds?`, `worktreeId?` |
+| `terminal.getStatus` | Get Terminal Status | safe | `includeOutput?`, `location?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
 | `terminal.gridLayout.setStrategy` | Set Grid Layout Strategy | safe | `strategy` |
 | `terminal.gridLayout.setValue` | Set Grid Layout Value | safe | `value` |
 | `terminal.info.get` | Get Terminal Info | safe | `terminalId?` |
@@ -439,7 +441,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.kill` | Kill Terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.killAll` | Kill All Terminals | confirm | `confirmed?` |
 | `terminal.killBatch` | Kill terminals | confirm | `terminalIds` |
-| `terminal.list` | List Terminals | safe | `location?`, `worktreeId?` |
+| `terminal.list` | List Terminals | safe | `includeClientMetadata?`, `location?`, `owned?`, `terminalId?`, `worktreeId?` |
 | `terminal.moveToDock` | Move to Dock | safe | `terminalId?` |
 | `terminal.moveToGrid` | Move to Grid | safe | `terminalId?` |
 | `terminal.moveToNewWorktree` | Move to New Worktree… | safe | `terminalId?` |
@@ -454,6 +456,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.restart` | Restart Terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restartService` | Restart Terminal Service | safe | — |
 | `terminal.resumeSessions` | Resume Session… | safe | — |
+| `terminal.revealOwned` | Reveal Owned Terminal | safe | `terminalId` |
 | `terminal.sendToAgent` | Send to Agent | safe | `terminalId?` |
 | `terminal.stashInput` | Stash Input | safe | — |
 | `terminal.toggleDock` | Toggle Dock | safe | `terminalId?` |
@@ -479,6 +482,12 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `window.zoomIn` | Zoom In | safe | — |
 | `window.zoomOut` | Zoom Out | safe | — |
 | `window.zoomReset` | Reset Zoom | safe | — |
+
+## workspace
+
+| Action | Title | Danger | Arguments |
+| --- | --- | --- | --- |
+| `workspace.list` | List Workspaces | safe | — |
 
 ## worktree
 

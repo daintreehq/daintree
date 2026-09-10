@@ -16,6 +16,10 @@ export type AppErrorCode =
   // pattern-matching library error text after the fact (#11409). `NOT_FOUND`
   // and `PERMISSION` cover the rest of that set.
   | "NOT_A_DIRECTORY"
+  // The path resolved to a directory where a file was required. A submodule
+  // gitlink is the case that surfaces it: its path is the submodule's own
+  // checkout, so reading it as a file gets EISDIR (#12309).
+  | "NOT_A_FILE"
   | "GIT_NOT_INSTALLED"
   | "DUBIOUS_OWNERSHIP"
   | "PROJECT_OPEN_FAILED"

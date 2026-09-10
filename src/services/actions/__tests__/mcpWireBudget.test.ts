@@ -310,7 +310,119 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `baseBranch` on an existing-branch reuse, a `branchName` beside a pull
   // request — which runtime zod then silently stripped. The bytes buy a schema
   // that refuses the combination instead of quietly ignoring half of it.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 46_200;
+  // 46_200 → 46_400 for `terminal.list`'s `owned` filter: 191 B, 2 B of it
+  // description and 189 B the params advertising the boolean and the sentence
+  // saying what it answers — the terminals this session's own ledger recorded,
+  // so a session that reconnected owns none. Unsaid, that honest empty result
+  // reads as a broken filter and the caller falls back to the unfiltered
+  // listing, which is the fan-out the filter exists to remove. A ceiling gates;
+  // it does not instruct a rewrite, and this is the text that standard protects.
+  // The headroom went to #12312's `workspace.list`; each PR fits alone and only
+  // the landing order does not.
+  // 46_400 → 46_600 ahead of the spend, for #12189's two additions to the
+  // external tier:
+  //   - `agent.listAvailable`'s `defaultAgentId` and `resolvedDefaultAgentId`,
+  //     207 B. The user's explicit pick and what a launch would actually spawn
+  //     are different answers whenever the pick is unset or its CLI is not
+  //     launchable, and a caller that reads one as the other names an agent the
+  //     host then refuses. The two descriptions are what make the pair legible;
+  //     without them "resolved" is a word a client has to guess at.
+  //   - `agent.launch`'s `worktreeId`, 36 B. The action now fails closed when a
+  //     headless caller omits it, so the old "Defaults to the active worktree"
+  //     describes a behaviour only a person driving the UI still gets.
+  // #12189 is within budget alone; #12312's `workspace.list` consumed the prior
+  // headroom and only the landing order exceeds the ceiling.
+  //
+  // Raised here rather than on that branch because #12317, #12318 and #12319 are
+  // all open against this same surface and would otherwise each re-raise it on
+  // rebase.
+  // 46_600 → 47_600, extending that same pre-spend to the two of those three
+  // that actually cost bytes. Both were raising this constant on their own
+  // branches and colliding with each other on every rebase:
+  //   - #12318's `terminal.getStatus`, 462 B. An orchestrator holding a bound
+  //     workspace whose view has been evicted had no way to read that terminal
+  //     at all; the status is what makes an evicted binding reachable instead
+  //     of merely reported.
+  //   - #12319's `terminal.revealOwned`, 479 B. An owning session could act on
+  //     its panel but not bring the user to it, so a client that needed a human
+  //     to look had nothing to call.
+  // #12317 spends nothing here — its additions are main-process resources, and
+  // this budget measures the renderer action registry.
+  // The cost of pre-spending is real: measured external usage on develop is
+  // 46_332 B, so develop sits 1_268 B under its own ceiling until all three
+  // land, and a spend that drifts into that window will not be caught. Once
+  // #12189 (243 B), #12318 and #12319 are in, usage is 47_516 B and the ratchet
+  // is back to biting with 84 B of slack.
+  // 47_600 → 48_865 for #12338's `terminal.interruptOwned`. Most of the spend is
+  // its output schema, and that is the tool rather than its prose: it is the one
+  // tool here whose contract is mostly what it does NOT confirm.
+  // `batchDoubleEscape` is a one-way `ipcRenderer.send`, so every outcome it can
+  // report is something it asked for — `requested` or `requested-unverified`,
+  // the latter meaning the target's CLI names no interrupt key at all — and
+  // `agentStateAtDispatch` is the heuristic that gated the call rather than
+  // evidence a turn was running. A caller that reads a bare success here retries
+  // against an agent it never stopped, so each of those needs advertising.
+  // 48_865 → 49_150 for the `hasPty` field #12342 added to `terminal.getStatus`
+  // on develop; the tool is externally advertised, so this branch inherits the
+  // 285 B on rebase rather than spending them.
+  // 49_150 is develop's own measured total, not headroom: #12342's `hasPty` and
+  // #12345's interrupt tools both landed while this branch was open, so it
+  // inherits their bytes on rebase and spends only the 3_255 B below.
+  // 49_150 → 52_500 for #12339's two wait tools, measured at 52_405 B. Almost
+  // all of it is the output schemas they never advertised: 1_865 B for
+  // `terminal.waitUntilIdle` and 1_366 B for the batch, against a net wait-tool
+  // growth of 3_255 B.
+  // Both carried a hand-written `rawOutputSchema` without `mcpOutputSchema`, so
+  // `computeSchemas` produced nothing and `tools/list` published no output
+  // contract at all — while the main-process short-circuit was already
+  // attaching `structuredContent` on every call, with no advertised schema for
+  // a client to validate it against. Turning the flag on is what closes that
+  // mismatch, and the bytes are the contract itself, not decoration: the point
+  // of the issue is that a reconciler cannot tell an agent that finished from a
+  // session that is gone, and `trackingState` is only actionable if a generated
+  // client can see it.
+  // Not paid for by weakening the output schemas, whose structure is
+  // AJV-validated client-side; the descriptions were tightened instead.
+  // MAX_PROPERTIES_OVER_TARGET was deliberately NOT raised — `waitUntilIdle`'s
+  // `terminalId` description was kept under the 160 B target instead.
+  //
+  // 52_500 → 54_100 for #12340's `terminal.setClientMetadata` plus the two
+  // arguments it adds to `terminal.list`, measured at 54_039 B. The writer is
+  // 1_126 B of the measured 1_634 — 370 B description, 542 B input schema,
+  // 214 B output — and the rest
+  // is the read: `includeClientMetadata` and `terminalId` on the existing
+  // listing, plus the row field they return. Carrying the read there rather
+  // than as a second tool is what holds the feature to one allowlist slot;
+  // those two arguments are what make it opt-in and narrowable instead of
+  // making every discovery call pay for records up to 2 KB each.
+  //
+  // Trimmed before raising, so the spend is the tool and not its prose: both
+  // new property descriptions were brought under the 160 B one-clause target,
+  // leaving MAX_PROPERTIES_OVER_TARGET untouched at 49.
+  //
+  // 54_100 → 55_900 for #12337's submission correlation, split across both
+  // tools it takes to answer one question:
+  //   - `terminal.sendCommand` gains an output schema it never had, so the
+  //     `submissionToken` it now returns lands in validated `structuredContent`
+  //     rather than only in the text body. A correlator a client has to scrape
+  //     back out of prose is not a contract, and correlation is the entire
+  //     point of the issue.
+  //   - `terminal.getStatus` gains the `submissionToken` input and the
+  //     `submission` record. Most of that record is the `phase` enum's
+  //     description, and the length is load-bearing: `pty_written` is the
+  //     strongest thing observable at this boundary, and a model that reads it
+  //     as "the agent got it" would draw exactly the false conclusion this
+  //     tracking exists to prevent.
+  // Deliberately NOT funded by trimming the neighbouring `exitCode`,
+  // `lastCheckResult` and `error` descriptions, which is where the ~1_500 B
+  // would have to come from. Those are honesty caveats guarded by
+  // `schemaDescriptions.test.ts`; spending them to buy room for a new caveat
+  // trades one safeguard for another and nets nothing.
+  // Re-measured at 55_850 B after #12346 landed `terminal.setClientMetadata`
+  // on develop under this branch. This PR's own spend is unchanged at 1_811 B
+  // over whatever develop measures; the step from 54_100 is that constant plus
+  // #12346's inherited baseline, not a wider spend here.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_900;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -354,7 +466,28 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `pr` and `reason` as independent optionals the advertised schema accepted
   // `{status:"found"}` with no PR and `{status:"not_found"}` carrying one —
   // contradictions a strict client would have validated as fine.
-  const MAX_COHORT_PAYLOAD_BYTES = 204_400;
+  // 204_400 → 204_685 for the same 285 B: `terminal.getStatus` sits on both
+  // tiers, so the cohort total moved by the identical amount.
+  // 204_685 → 207_900 for the same two output schemas as the external ceiling
+  // above. Both wait tools are on the external tier, so both totals take the
+  // identical spend; the two ceilings move by different amounts only because
+  // they had different headroom to begin with, not because anything was trimmed
+  // from one and not the other.
+  // Measured at 207_890 B — the same 3_255 B on top of develop's 204_635.
+  //
+  // 207_900 → 209_600 for the same #12340 additions, measured at 209_524 B —
+  // the identical 1_634 B, because every tool it touches is on both tiers. On
+  // this branch alone the feature fitted under 204_400 with 5 B to spare, the
+  // difference being one redundant word in the tool description. #12338,
+  // #12342, #12343 and #12345 have all landed on develop since and spent that
+  // window, so the cohort now carries the same additions as a raise rather
+  // than absorbing them.
+  //
+  // 209_600 → 211_400 for #12337, measured at 211_335 B. Both tools are on the
+  // external tier, so this total moves by the same 1_811 B as the external one
+  // above and was re-measured over #12346's landing; it needs no separate
+  // justification beyond the entry above.
+  const MAX_COHORT_PAYLOAD_BYTES = 211_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

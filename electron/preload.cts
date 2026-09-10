@@ -69,6 +69,7 @@ import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
+import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
@@ -80,11 +81,13 @@ import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapab
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
+import { buildWorkspaceResidencyPreloadBindings } from "./ipc/handlers/workspaceResidency.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
+import { buildWorkspacePreloadBindings } from "./ipc/handlers/workspace.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
@@ -1208,7 +1211,16 @@ function buildElectronApi(): ElectronAPI {
 
       write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
 
-      submit: (id: string, text: string) => _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text),
+      submit: (id: string, text: string, submissionToken?: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken),
+
+      /**
+       * Resolve one submission token across several terminals (#12337). A
+       * terminal that was read but holds no record maps to `null`, which the
+       * caller reports as the `unknown` phase.
+       */
+      getSubmissions: (terminalIds: string[], submissionToken: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_SUBMISSIONS, terminalIds, submissionToken),
 
       resize: (id: string, cols: number, rows: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),
@@ -1522,6 +1534,7 @@ function buildElectronApi(): ElectronAPI {
 
     // Per-window back/forward over visited projects
     projectHistory: buildProjectHistoryPreloadBindings(_unwrappingInvoke),
+    workspace: buildWorkspacePreloadBindings(_unwrappingInvoke),
 
     // Move or rename project — preview + apply (#11282, phase 4)
     projectRelocation: buildProjectRelocationPreloadBindings(_unwrappingInvoke),
@@ -2380,6 +2393,10 @@ function buildElectronApi(): ElectronAPI {
     },
 
     // Hibernation API
+    sessionRestore: {
+      ...buildSessionRestorePreloadBindings(_unwrappingInvoke),
+    },
+
     hibernation: {
       ...buildHibernationPreloadBindings(_unwrappingInvoke),
 
@@ -2630,6 +2647,8 @@ function buildElectronApi(): ElectronAPI {
 
     // Daintree CLI install API
     cli: buildCliPreloadBindings(_unwrappingInvoke),
+
+    workspaceResidency: buildWorkspaceResidencyPreloadBindings(_unwrappingInvoke),
 
     // Commands API
     commands: buildCommandsPreloadBindings(_unwrappingInvoke),

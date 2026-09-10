@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
   OPEN_WINDOWS_MANIFEST_VERSION,
   filterRestorableWindows,
@@ -197,5 +198,127 @@ describe("filterRestorableWindows", () => {
 
   it("keeps both windows when a duplicated project still exists", () => {
     expect(filterRestorableWindows([record("a"), record("a")], new Set(["a"]))).toHaveLength(2);
+  });
+});
+
+describe("background project ids (#12320)", () => {
+  const withBg = (projectId: string | null, backgroundProjectIds: string[]): OpenWindowRecord => ({
+    projectId,
+    backgroundProjectIds,
+  });
+
+  it("round-trips a background list", () => {
+    const records = [withBg("alpha", ["beta", "gamma"]), record("delta")];
+    expect(parseOpenWindowsManifest(serializeOpenWindowsManifest(records))).toEqual(records);
+  });
+
+  it("preserves background order — order is the recency signal", () => {
+    const parsed = parseOpenWindowsManifest(
+      serializeOpenWindowsManifest([withBg("a", ["z", "m", "b"])])
+    );
+    expect(parsed[0].backgroundProjectIds).toEqual(["z", "m", "b"]);
+  });
+
+  it("reads a manifest written before the field as a window with no background projects", () => {
+    // The field was added without a version bump precisely so this holds: a
+    // bump would make every stored manifest unreadable and cost users the
+    // fleet the feature exists to restore.
+    const parsed = parseOpenWindowsManifest(manifestJson([{ projectId: "alpha" }]));
+    expect(parsed).toEqual([{ projectId: "alpha" }]);
+    expect(parsed[0]).not.toHaveProperty("backgroundProjectIds");
+  });
+
+  it("omits an empty list when serializing, so the pre-#12320 shape is unchanged", () => {
+    expect(serializeOpenWindowsManifest([withBg("alpha", [])])).toBe(
+      serializeOpenWindowsManifest([record("alpha")])
+    );
+  });
+
+  it.each([
+    ["a string", "beta"],
+    ["an object", { beta: true }],
+    ["a number", 7],
+    ["null", null],
+  ])("keeps the window when its background field is %s", (_label, backgroundProjectIds) => {
+    // Losing the window is worse than losing which extra projects it had.
+    const parsed = parseOpenWindowsManifest(
+      manifestJson([{ projectId: "alpha", backgroundProjectIds }])
+    );
+    expect(parsed).toEqual([{ projectId: "alpha" }]);
+  });
+
+  it("drops malformed entries but keeps the well-formed ones", () => {
+    const parsed = parseOpenWindowsManifest(
+      manifestJson([{ projectId: "alpha", backgroundProjectIds: ["beta", "", 3, null, "gamma"] }])
+    );
+    expect(parsed[0].backgroundProjectIds).toEqual(["beta", "gamma"]);
+  });
+
+  it("deduplicates", () => {
+    const parsed = parseOpenWindowsManifest(
+      manifestJson([{ projectId: "alpha", backgroundProjectIds: ["beta", "beta", "gamma"] }])
+    );
+    expect(parsed[0].backgroundProjectIds).toEqual(["beta", "gamma"]);
+  });
+
+  it("never lets a window list its own foreground project", () => {
+    // A second view for the workspace the manager already has would sit in the
+    // cache doing nothing but occupying a slot a real project needed.
+    const parsed = parseOpenWindowsManifest(
+      manifestJson([{ projectId: "alpha", backgroundProjectIds: ["alpha", "beta"] }])
+    );
+    expect(parsed[0].backgroundProjectIds).toEqual(["beta"]);
+  });
+
+  it("caps the list", () => {
+    const many = Array.from({ length: MAX_BACKGROUND_PROJECTS_PER_WINDOW + 5 }, (_v, i) => `p${i}`);
+    const parsed = parseOpenWindowsManifest(
+      manifestJson([{ projectId: "alpha", backgroundProjectIds: many }])
+    );
+    expect(parsed[0].backgroundProjectIds).toHaveLength(MAX_BACKGROUND_PROJECTS_PER_WINDOW);
+  });
+
+  it("reads as readable — a background list is not corruption", () => {
+    expect(
+      isReadableOpenWindowsManifest(
+        manifestJson([{ projectId: "alpha", backgroundProjectIds: ["beta"] }])
+      )
+    ).toBe(true);
+  });
+});
+
+describe("filterRestorableWindows with background projects (#12320)", () => {
+  it("drops deleted background workspaces and keeps the window", () => {
+    const filtered = filterRestorableWindows(
+      [{ projectId: "alpha", backgroundProjectIds: ["gone", "beta"] }],
+      new Set(["alpha", "beta"])
+    );
+    expect(filtered).toEqual([{ projectId: "alpha", backgroundProjectIds: ["beta"] }]);
+  });
+
+  it("removes the field entirely when every background workspace is gone", () => {
+    const filtered = filterRestorableWindows(
+      [{ projectId: "alpha", backgroundProjectIds: ["gone", "also-gone"] }],
+      new Set(["alpha"])
+    );
+    expect(filtered).toEqual([{ projectId: "alpha" }]);
+  });
+
+  it("still drops the window when its own project is gone", () => {
+    expect(
+      filterRestorableWindows(
+        [{ projectId: "gone", backgroundProjectIds: ["beta"] }],
+        new Set(["beta"])
+      )
+    ).toEqual([]);
+  });
+
+  it("keeps a picker window's surviving background projects", () => {
+    expect(
+      filterRestorableWindows(
+        [{ projectId: null, backgroundProjectIds: ["beta"] }],
+        new Set(["beta"])
+      )
+    ).toEqual([{ projectId: null, backgroundProjectIds: ["beta"] }]);
   });
 });

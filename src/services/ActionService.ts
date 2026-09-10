@@ -19,6 +19,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { ConfirmationStagedError } from "./actions/confirmationStaged";
+import { UnactionableTargetError } from "./actions/unactionableTarget";
 import {
   WORKBENCH_TIER_TOOLS,
   ACTION_TIER_ADDONS,
@@ -705,12 +706,19 @@ export class ActionService {
         // proceed because it needs an approval it does not have. What it must
         // NOT be is `ok` — an agent read a staged kill as a completed one
         // (#12120).
+        // `UnactionableTargetError` is the third: an action that refused the
+        // target it was given rather than failing at it. It maps to
+        // `VALIDATION_ERROR` for one reason — `EXECUTION_ERROR` is in
+        // `RETRIABLE_ERROR_CODES`, and telling a caller to retry a refusal it
+        // cannot change is how a model ends up looping on one (#12338).
         code:
           err instanceof ConfirmationStagedError
             ? "CONFIRMATION_REQUIRED"
             : err instanceof PartialSuccessError
               ? "PARTIAL_SUCCESS"
-              : "EXECUTION_ERROR",
+              : err instanceof UnactionableTargetError
+                ? "VALIDATION_ERROR"
+                : "EXECUTION_ERROR",
         message,
         details: err,
       };

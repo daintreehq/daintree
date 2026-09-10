@@ -815,6 +815,20 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       tabGroupCount: tabGroupRestoreCount,
     });
 
+    // Tell main this view is restored — panels back, saved agent terminals
+    // respawned (#12320). In the `finally` so it fires on the failure path too:
+    // a background restore waiting on it must be released by a hydration that
+    // threw just as surely as by one that succeeded, or it sits until its
+    // timeout. Never gated on an animation frame, unlike first-interactive —
+    // a background-restored view is never composited and would never send it.
+    try {
+      void window.electron?.sessionRestore?.notifyViewHydrated?.().catch(() => {
+        // Main may already have timed out or torn the view down.
+      });
+    } catch {
+      // A disposed preload bridge must not fail hydration.
+    }
+
     if (isRendererPerfCaptureEnabled() && window.electron?.perf) {
       const marks = window.__DAINTREE_PERF_MARKS__ ?? [];
       window.electron.perf.flushMarks({

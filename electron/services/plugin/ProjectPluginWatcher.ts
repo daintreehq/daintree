@@ -53,6 +53,7 @@ const REARM_MAX_ATTEMPTS = 5;
 /** Overridable cadence, so tests do not have to spend real seconds on backoff. */
 export interface ProjectPluginWatcherTimings {
   debounceMs: number;
+  sentinelPollMs: number;
   gitLockPollMs: number;
   gitLockMaxDeferMs: number;
   invalidManifestRetryMs: number;
@@ -61,6 +62,7 @@ export interface ProjectPluginWatcherTimings {
 
 const DEFAULT_TIMINGS: ProjectPluginWatcherTimings = {
   debounceMs: RELOAD_DEBOUNCE_MS,
+  sentinelPollMs: 5_000,
   gitLockPollMs: GIT_LOCK_POLL_MS,
   gitLockMaxDeferMs: GIT_LOCK_MAX_DEFER_MS,
   invalidManifestRetryMs: INVALID_MANIFEST_RETRY_MS,
@@ -113,6 +115,7 @@ interface WatchState {
    * inward as each ancestor appears (#12212).
    */
   sentinelPath: string | null;
+  sentinelTimer: ReturnType<typeof setInterval> | null;
   /**
    * Reconcile on the next settle even when no fingerprint moved.
    *
@@ -243,6 +246,7 @@ export class ProjectPluginWatcher {
       subscription: null,
       sentinel: null,
       sentinelPath: null,
+      sentinelTimer: null,
       forceReconcile: false,
       rearmAttempts: 0,
       arming: false,
@@ -430,38 +434,56 @@ export class ProjectPluginWatcher {
     // non-recursive watch on the project root will never report
     // `.daintree/plugins` being created inside it. Migrate inward.
     if (state.sentinel) this.disarmSentinel(state);
+    this.startSentinelPoll(state, generation);
     try {
       const sentinel = fsWatch(parent, { persistent: false }, () => {
-        if (this.isStale(state, generation)) return;
-        if (!existsSync(state.pluginsRoot)) {
-          // Not the folder we are waiting for, but an ancestor of it may have
-          // just appeared — re-arm so the next level down is watched too.
-          this.armSentinel(state, generation);
-          return;
-        }
-        this.disarmSentinel(state);
-        // The folder appeared, possibly with content already in it. `arm()`
-        // seeds a fingerprint for everything it finds, so without this the
-        // settle below would see nothing changed and stop short of the
-        // controller — no prompt, no invalid state, no log (#12212).
-        state.forceReconcile = true;
-        void this.arm(state).then(() => {
-          if (!this.isStale(state, generation)) {
-            state.reloadAll = true;
-            this.schedule(state, this.timings.debounceMs);
-          }
-        });
+        this.checkSentinel(state, generation);
       });
-      sentinel.on("error", () => this.disarmSentinel(state));
+      sentinel.on("error", () => {
+        if (state.sentinel !== sentinel) return;
+        this.disarmSentinel(state);
+        if (!this.isStale(state, generation)) this.startSentinelPoll(state, generation);
+      });
       state.sentinel = sentinel;
       state.sentinelPath = parent;
     } catch {
-      // Exotic filesystem or a watch-limit ceiling. The next project switch
-      // re-arms; nothing is lost but the latency.
+      // The existence poll also recovers from unavailable native watches.
     }
   }
 
+  private startSentinelPoll(state: WatchState, generation: number): void {
+    if (state.sentinelTimer) return;
+    // Native directory notifications can be missed under load. Only poll
+    // while waiting for the plugins root, and stop once its watcher is live.
+    state.sentinelTimer = setInterval(
+      () => this.checkSentinel(state, generation),
+      this.timings.sentinelPollMs
+    );
+    state.sentinelTimer.unref?.();
+  }
+
+  private checkSentinel(state: WatchState, generation: number): void {
+    if (this.isStale(state, generation) || state.arming || state.subscription) return;
+    if (!existsSync(state.pluginsRoot)) {
+      this.armSentinel(state, generation);
+      return;
+    }
+    // The seed scan can already include the entire arriving plugin, so its
+    // first reconcile must not depend on a subsequent fingerprint change.
+    state.forceReconcile = true;
+    void this.arm(state).then(() => {
+      if (!this.isStale(state, generation) && state.subscription) {
+        state.reloadAll = true;
+        this.schedule(state, this.timings.debounceMs);
+      }
+    });
+  }
+
   private disarmSentinel(state: WatchState): void {
+    if (state.sentinelTimer) {
+      clearInterval(state.sentinelTimer);
+      state.sentinelTimer = null;
+    }
     const sentinel = state.sentinel;
     state.sentinel = null;
     state.sentinelPath = null;

@@ -62,3 +62,78 @@ export function resolveLaunchIntent(signals: LaunchIntentSignals): LaunchIntent 
 export function shouldRestoreWindowFleet(intent: LaunchIntent): boolean {
   return intent === "cold";
 }
+
+const CLI_PATH_FLAG = "--cli-path";
+const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
+
+/**
+ * The inverse of the argv half of {@link resolveLaunchIntent}: an argv with
+ * every targeting token removed, so the launch it describes classifies as
+ * `"cold"` (#12320).
+ *
+ * Lives here, beside the classifier, because the two are one contract read in
+ * opposite directions — a token added to `resolveLaunchIntent` and not to this
+ * is a token that survives an app-initiated relaunch and quietly reduces the
+ * next launch to a single window.
+ *
+ * Why that matters: `app.relaunch()` hands the child process the parent's argv
+ * verbatim, so a session started with `--cli-path` or a Linux "Open in
+ * Daintree" still carries it hours later. Restarting after a GPU reset or an
+ * app-state reset would then read as "the user launched us to open this one
+ * folder" and abandon the fleet they actually had.
+ *
+ * Deliberately conservative: only the tokens the classifier reads as targeting
+ * are dropped, so switches Chromium or the user added — `--disable-gpu`,
+ * `--reset-data`, `--e2e` — survive. The in-process `pendingOpenDirPaths` /
+ * `pendingOpenFilePaths` queues need no equivalent: they do not cross a
+ * process boundary.
+ */
+export function stripLaunchTargets(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  // Set by a two-token `--cli-path` whose operand was displaced by an injected
+  // switch (#11410). Chromium orders positionals after switches, so the path is
+  // further along — the same forward search `extractCliPath` performs.
+  let seekingDisplacedOperand = false;
+
+  for (const arg of argv) {
+    if (arg === CLI_PATH_FLAG) {
+      seekingDisplacedOperand = true;
+      continue;
+    }
+    // Single-token form is self-contained: its value never displaces.
+    if (arg.startsWith(CLI_PATH_PREFIX)) continue;
+    if (arg.startsWith("file://")) continue;
+    // Bare `.dntr` archives (a double-clicked plugin on Windows/Linux) survive
+    // in argv even though the in-process queue that carried them does not, and
+    // `windowServices` re-extracts them from argv on the next launch. Left in,
+    // every app-initiated relaunch would re-open the plugin install prompt.
+    if (isDntrToken(arg)) continue;
+
+    if (seekingDisplacedOperand) {
+      // A switch is not the operand — Chromium injected it into that slot, and
+      // `extractCliPath` skips past it rather than treating it as the path.
+      // Consuming it here would silently drop switches like `--disable-gpu`
+      // from the relaunch that exists to apply them.
+      if (isSwitchToken(arg)) {
+        out.push(arg);
+        continue;
+      }
+      // The first positional past the flag: the operand, adjacent or displaced.
+      seekingDisplacedOperand = false;
+      continue;
+    }
+
+    out.push(arg);
+  }
+  return out;
+}
+
+/** `extractCliPath`'s own switch test — `--` prefixed, not `-`. */
+function isSwitchToken(arg: string): boolean {
+  return arg.startsWith("--");
+}
+
+/** `extractDntrPaths`' own archive test: a non-switch token ending in `.dntr`. */
+function isDntrToken(arg: string): boolean {
+  return !isSwitchToken(arg) && arg.toLowerCase().endsWith(".dntr");
+}

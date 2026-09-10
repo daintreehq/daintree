@@ -1432,7 +1432,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Snapshot agent and process state across many terminals, with optional output tails. This is the batched polling path: prefer it over listing terminals for agent state, or reading each terminal's output in turn. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the shared fetch failed. Use the blocking wait to proceed the moment an agent finishes.",
+      "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
     enabled: true,
     id: "terminal.getStatus",
     inputSchema: {
@@ -1458,6 +1458,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Filter by panel location (ignored when `terminalIds` is provided). Defaults to all locations except trash and background.",
           type: "string",
           enum: ["grid", "dock", "trash", "background"],
+        },
+        submissionToken: {
+          description:
+            "A token from the text-submission capability. Adds that submission's delivery record to each entry. Requires `terminalIds`.",
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
         },
         includeOutput: {
           description:
@@ -1523,7 +1530,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               exitCode: {
                 description:
-                  "Present once the process has exited, so its absence means still running. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output.",
+                  "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output.",
                 anyOf: [
                   {
                     type: "integer",
@@ -1590,12 +1597,39 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               armed: {
                 description:
-                  "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent only when the terminal itself could not be resolved.",
+                  "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`.",
                 type: "boolean",
+              },
+              hasPty: {
+                description:
+                  "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`.",
+                type: "boolean",
+              },
+              submission: {
+                description:
+                  "Delivery record for the token this call named. Absent when no token was asked for, or when this terminal could not be read — which is not the same as it holding no record.",
+                type: "object",
+                properties: {
+                  token: {
+                    type: "string",
+                  },
+                  phase: {
+                    type: "string",
+                    enum: ["queued", "writing", "pty_written", "failed", "cancelled", "unknown"],
+                    description:
+                      "How far this submission got. `pty_written`: the text and its Enter reached the pty without error — it does NOT mean the agent read them or acted on them. `queued`/`writing`: still in progress. `failed`/`cancelled`: it did not go out whole, and part may sit in the composer, so neither makes re-sending safe. `unknown`: the terminal was read and holds no record, including tokens aged past the last 32.",
+                  },
+                  at: {
+                    description: "Epoch ms the phase was entered. Absent for `unknown`.",
+                    type: "number",
+                  },
+                },
+                required: ["token", "phase"],
+                additionalProperties: false,
               },
               error: {
                 description:
-                  "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole.",
+                  "Set when the terminal was not found, and also stamped on every resolved entry when a batched fetch fails — the status fields are still populated and only that fetch's own field is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole.",
                 type: "string",
               },
             },
@@ -1603,8 +1637,23 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             additionalProperties: false,
           },
         },
+        source: {
+          type: "string",
+          enum: ["renderer", "pty"],
+          description:
+            "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window.",
+        },
+        unavailableFields: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["armed", "lastCheckResult", "exitCode", "hasPty"],
+          },
+          description:
+            "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",
+        },
       },
-      required: ["terminals"],
+      required: ["terminals", "source", "unavailableFields"],
       additionalProperties: false,
     },
     requiresArgs: false,
@@ -1640,7 +1689,62 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means none are open, not a failure.",
+      "Stop the turn an agent is running in a panel this connection created, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+    enabled: true,
+    id: "terminal.interruptOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "The agent panel to interrupt, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
+        },
+      },
+      required: ["terminalId"],
+    },
+    keywords: ["stop", "cancel", "escape", "owned"],
+    kind: "command",
+    name: "terminal.interruptOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          description: "The panel the cancel keystrokes were addressed to.",
+        },
+        agentId: {
+          type: "string",
+          description: "The agent Daintree resolved for that panel, from its runtime identity.",
+        },
+        agentStateAtDispatch: {
+          type: "string",
+          enum: ["working", "waiting"],
+          description:
+            "What the agent was last observed doing. Read off its own output and often wrong; it gated the request, it is not proof a turn was running.",
+        },
+        status: {
+          type: "string",
+          enum: ["requested", "requested-unverified"],
+          description:
+            "`requested`: keystrokes handed over to an agent whose CLI names Escape as its interrupt. `requested-unverified`: same, but that CLI names no interrupt key, so the effect is unknown. Neither says the keystrokes arrived or the agent stopped — read the terminal's output to find out.",
+        },
+      },
+      required: ["terminalId", "agentId", "agentStateAtDispatch", "status"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Interrupt Owned Agent",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     enabled: true,
     id: "terminal.list",
     inputSchema: {
@@ -1657,6 +1761,22 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Restricts the listing to terminals in one place: the main grid, the sidebar dock, the trash, or the background. Omitted, trashed and backgrounded terminals are left out, so ask for those explicitly to see them.",
           type: "string",
           enum: ["grid", "dock", "trash", "background"],
+        },
+        owned: {
+          description:
+            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none.",
+          type: "boolean",
+        },
+        terminalId: {
+          description:
+            "Restricts the listing to one terminal, using a panel id. An id that is not open yields an empty listing rather than an error.",
+          type: "string",
+          minLength: 1,
+        },
+        includeClientMetadata: {
+          description:
+            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId on a large fleet.",
+          type: "boolean",
         },
       },
     },
@@ -1735,6 +1855,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               isFocused: {
                 type: "boolean",
               },
+              clientMetadata: {
+                anyOf: [
+                  {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {},
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
             },
             required: [
               "id",
@@ -1805,7 +1939,34 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing off a partial message. This returns once the submission is queued, not once it has been delivered or run, so inspect the terminal afterwards to see what happened. It runs with the terminal's own privileges.",
+      "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+    enabled: true,
+    id: "terminal.revealOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "The panel to reveal, as an `id` this session received when it created the panel.",
+        },
+      },
+      required: ["terminalId"],
+    },
+    keywords: ["focus", "attach", "show", "owned"],
+    kind: "command",
+    name: "terminal.revealOwned",
+    requiresArgs: true,
+    title: "Reveal Owned Terminal",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing a partial message. This returns once the submission is queued, not once it was delivered or run: pass the returned `submissionToken` to the status capability to find out. Runs with the terminal's privileges.",
     enabled: true,
     id: "terminal.sendCommand",
     inputSchema: {
@@ -1815,6 +1976,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         terminalId: {
           type: "string",
           minLength: 1,
+          maxLength: 512,
           description:
             "Identifies the terminal to submit to, using a panel id from the terminal-listing capability.",
         },
@@ -1829,6 +1991,35 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     },
     kind: "command",
     name: "terminal.sendCommand",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        sent: {
+          type: "boolean",
+          description:
+            "Accepted onto the terminal's lane. Not evidence of delivery — use `submissionToken` for that.",
+        },
+        terminalId: {
+          type: "string",
+        },
+        command: {
+          type: "string",
+          description:
+            "The submitted text, truncated past 1024 characters — an echo, not a receipt.",
+        },
+        submissionToken: {
+          type: "string",
+          description:
+            "Pass this and `terminalId` to the terminal-status capability to see how far the submission got. Retained for the last 32 per terminal; lost if the terminal restarts.",
+        },
+        message: {
+          type: "string",
+        },
+      },
+      required: ["sent", "terminalId", "command", "submissionToken", "message"],
+      additionalProperties: false,
+    },
     requiresArgs: true,
     title: "Submit text to terminal",
   },
@@ -1837,7 +2028,89 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working; an exit code appears only once the process ends, so confirm success there before acting irreversibly.",
+      "Attach your own JSON record to a terminal, so a reconnecting client can tell which panel is which instead of keeping a sidecar that goes stale. It outlives your connection, survives a restart, and is deleted with the panel. Read it back from the terminal listing; null clears it. Shared namespace: every external client sees the same record, and it confers no ownership.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          terminalId: "term-abc123",
+          clientMetadata: {
+            session: "gc-42",
+            role: "reviewer",
+          },
+        },
+        description: "Record which of your logical sessions a terminal belongs to",
+      },
+      {
+        args: {
+          terminalId: "term-abc123",
+          clientMetadata: null,
+        },
+        description: "Clear the record you stored against a terminal",
+      },
+    ],
+    id: "terminal.setClientMetadata",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Identifies the terminal to annotate, using a panel id from the terminal-listing capability.",
+        },
+        clientMetadata: {
+          anyOf: [
+            {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {},
+            },
+            {
+              type: "null",
+            },
+          ],
+          description:
+            "Replaces the whole record — send every key you want kept, not a patch. Max 2048 bytes of JSON, 16 deep. Null deletes it. Namespace your keys: this is shared.",
+        },
+      },
+      required: ["terminalId", "clientMetadata"],
+      additionalProperties: false,
+    },
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    name: "terminal.setClientMetadata",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+        },
+        changed: {
+          type: "boolean",
+        },
+      },
+      required: ["terminalId", "changed"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Set Terminal Client Metadata",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState` before trusting it.",
     enabled: true,
     id: "terminal.waitUntilIdle",
     inputSchema: {
@@ -1848,7 +2121,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked resolves as idle rather than failing.",
+            "Identifies the terminal to act on, using a panel id from the terminal-listing capability. A closed or unknown id resolves as idle rather than failing.",
         },
         timeoutMs: {
           description:
@@ -1867,6 +2140,62 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       destructiveHint: false,
     },
     name: "terminal.waitUntilIdle",
+    outputSchema: {
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+        },
+        agentId: {
+          type: "string",
+        },
+        busyState: {
+          type: "string",
+          enum: ["working", "idle"],
+        },
+        idleReason: {
+          type: "string",
+          enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+          description:
+            "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+        },
+        trackingState: {
+          type: "string",
+          enum: ["tracked", "closed", "unknown"],
+          description:
+            "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).",
+        },
+        waitingReason: {
+          type: "string",
+          enum: ["prompt", "question", "approval", "error"],
+          description:
+            "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
+        },
+        previousBusyState: {
+          type: "string",
+          enum: ["working", "idle"],
+        },
+        lastTransitionAt: {
+          type: "number",
+        },
+        exitCode: {
+          type: ["number", "null"],
+          description:
+            "Process exit code, present only when idleReason is 'completed' or 'exited'. null = signal-terminated with no numeric code.",
+        },
+        exitSignal: {
+          type: "number",
+          description:
+            "OS signal number that terminated the process, when applicable (completed/exited only).",
+        },
+        timedOut: {
+          type: "boolean",
+          description:
+            "True when the wait elapsed with the agent still working. Call again to keep waiting — it is not a failure.",
+        },
+      },
+      required: ["terminalId", "busyState", "trackingState", "timedOut"],
+    },
     requiresArgs: true,
     title: "Wait until terminal idle",
   },
@@ -1875,7 +2204,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold the call open for a minute interactively, far longer headless. Timing out means not met yet; untracked terminals count as finished.",
+      "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdleBatch",
     inputSchema: {
@@ -1891,7 +2220,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             minLength: 1,
           },
           description:
-            "Identifies the terminals to watch (1-256), using panel ids from the terminal-listing capability. Ids no longer tracked count as already finished rather than failing the batch.",
+            "Identifies the terminals to watch (1-256), using panel ids from the terminal-listing capability. Closed or unknown ids count as already settled rather than failing the batch; each row's `trackingState` says which.",
         },
         mode: {
           description:
@@ -1916,8 +2245,125 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       destructiveHint: false,
     },
     name: "terminal.waitUntilIdleBatch",
+    outputSchema: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["first", "all"],
+        },
+        results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              agentId: {
+                type: "string",
+              },
+              busyState: {
+                type: "string",
+                enum: ["working", "idle"],
+              },
+              idleReason: {
+                type: "string",
+                enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+              },
+              trackingState: {
+                type: "string",
+                enum: ["tracked", "closed", "unknown"],
+                description:
+                  "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).",
+              },
+              waitingReason: {
+                type: "string",
+                enum: ["prompt", "question", "approval", "error"],
+              },
+              previousBusyState: {
+                type: "string",
+                enum: ["working", "idle"],
+              },
+              lastTransitionAt: {
+                type: "number",
+              },
+              exitCode: {
+                type: ["number", "null"],
+              },
+              exitSignal: {
+                type: "number",
+              },
+              settled: {
+                type: "boolean",
+                description:
+                  "True once this row satisfied the wait. Gone terminals settle so the batch cannot hang; that is not a claim work completed, so read trackingState.",
+              },
+            },
+            required: ["terminalId", "busyState", "trackingState", "settled"],
+          },
+        },
+        settledTerminalIds: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        timedOut: {
+          type: "boolean",
+        },
+      },
+      required: ["mode", "results", "settledTerminalIds", "timedOut"],
+    },
     requiresArgs: true,
     title: "Wait until terminals idle (batch)",
+  },
+  {
+    band: "reversible",
+    category: "workspace",
+    danger: "safe",
+    description:
+      "List every project and scratch Daintree knows about, open or not, so a client can look up a workspace id rather than derive one by hashing a path. workspaceId is what the Daintree-Workspace-Id header binds to; kind is project or scratch. hasLiveView says whether a view is open, not whether an id is valid — absence from this list is what makes an id wrong.",
+    enabled: true,
+    id: "workspace.list",
+    kind: "query",
+    name: "workspace.list",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        workspaces: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              workspaceId: {
+                type: "string",
+              },
+              path: {
+                type: "string",
+              },
+              name: {
+                type: "string",
+              },
+              kind: {
+                type: "string",
+                enum: ["project", "scratch"],
+              },
+              hasLiveView: {
+                type: "boolean",
+              },
+            },
+            required: ["workspaceId", "path", "name", "kind", "hasLiveView"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["workspaces"],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "List Workspaces",
   },
   {
     band: "reversible",

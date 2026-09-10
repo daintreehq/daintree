@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
+  Anchor,
   Image,
   Upload,
   X,
@@ -25,6 +26,7 @@ import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { DaintreeMcpTier, Project } from "@shared/types/project";
+import { workspaceResidencyClient } from "@/clients/workspaceResidencyClient";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { findDevServerCandidate } from "@/utils/devServerDetection";
@@ -130,6 +132,13 @@ export function GeneralTab({
   isOpen,
 }: GeneralTabProps) {
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
+  const [keepResident, setKeepResident] = useState(false);
+  // Read by the residency save handler to tell "still this project" from "the
+  // dialog moved on"; a captured `projectId` would only ever equal itself.
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const [keepResidentBusy, setKeepResidentBusy] = useState(true);
+  const [keepResidentError, setKeepResidentError] = useState<string | null>(null);
   const [iconError, setIconError] = useState<string | null>(null);
   const [isDraggingIcon, setIsDraggingIcon] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -326,6 +335,62 @@ export function GeneralTab({
       setInRepoError(formatErrorMessage(err, "Failed to disable in-repo settings"));
     } finally {
       setInRepoEnabling(false);
+    }
+  };
+
+  // Loaded on open rather than held in a store: the grant lives in
+  // electron-store, another window can change it, and this dialog is the only
+  // place that reads it — so a fresh read when the tab opens is both simpler and
+  // more current than anything cached would be.
+  useEffect(() => {
+    if (!isOpen || !projectId) {
+      // The toggle starts disabled and only the load re-enables it, so a tab
+      // that never loads must not leave it stuck that way.
+      setKeepResidentBusy(false);
+      return;
+    }
+    let cancelled = false;
+    setKeepResidentBusy(true);
+    setKeepResidentError(null);
+    void workspaceResidencyClient
+      .get(projectId)
+      .then((value) => {
+        if (!cancelled) setKeepResident(value);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setKeepResidentError(formatErrorMessage(err, "Failed to read the residency setting"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setKeepResidentBusy(false);
+      });
+    return () => {
+      // Guards the late response after the dialog closes or the project
+      // changes — otherwise a slow read lands on the next project's toggle.
+      cancelled = true;
+    };
+  }, [isOpen, projectId]);
+
+  const handleKeepResidentToggle = async () => {
+    const next = !keepResident;
+    // The write is for the project as it stands now. The dialog can be pointed
+    // at another project while it is in flight, and the load effect's own guard
+    // does not cover this direction — without the capture, a slow save for one
+    // project lands its result on whichever project the tab is showing when it
+    // settles, reporting the wrong grant or the wrong error.
+    const savingProjectId = projectId;
+    setKeepResidentBusy(true);
+    setKeepResidentError(null);
+    try {
+      await workspaceResidencyClient.set(savingProjectId, next);
+      if (savingProjectId === projectIdRef.current) setKeepResident(next);
+    } catch (err) {
+      if (savingProjectId === projectIdRef.current) {
+        setKeepResidentError(formatErrorMessage(err, "Failed to save the residency setting"));
+      }
+    } finally {
+      if (savingProjectId === projectIdRef.current) setKeepResidentBusy(false);
     }
   };
 
@@ -582,7 +647,7 @@ export function GeneralTab({
         </div>
       </div>
 
-      <div className="mb-6 pb-6 border-b border-border-default">
+      <div id="project-agent-integrations" className="mb-6 pb-6 border-b border-border-default">
         <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <McpServerIcon className="h-4 w-4" />
           Agent integrations
@@ -614,6 +679,28 @@ export function GeneralTab({
                 irreversible or visible to teammates. Only enable it for projects where you trust
                 the agent to take that kind of action.
               </div>
+            </div>
+          )}
+
+          <SettingsSwitchCard
+            icon={Anchor}
+            title="Keep workspace resident"
+            subtitle="Holds this project's view in the cache so a bound MCP session stays reachable"
+            isEnabled={keepResident}
+            onChange={() => void handleKeepResidentToggle()}
+            ariaLabel="Keep workspace resident"
+            disabled={keepResidentBusy}
+          />
+          <p className="text-xs text-text-secondary">
+            Other projects are closed first to stay within your cached-view limit, rather than
+            raising it. Low memory can still unload this one.
+          </p>
+          {keepResidentError && (
+            <div
+              className="whitespace-pre-line text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] p-2"
+              role="alert"
+            >
+              {keepResidentError}
             </div>
           )}
         </div>

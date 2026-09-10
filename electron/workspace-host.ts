@@ -595,7 +595,8 @@ port.on("message", async (rawMsg: any) => {
           request.rootPath,
           request.prNumber,
           request.headRefName,
-          request.remoteName
+          request.remoteName,
+          request.refspec
         );
         break;
 

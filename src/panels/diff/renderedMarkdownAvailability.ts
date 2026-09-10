@@ -60,6 +60,11 @@ export interface RenderedMarkdownAvailabilityInput {
   sourceErrorCode: FileReadErrorCode | null;
   /** The engine's verdict on the diff currently shown, once it has one. */
   engineFailure: MarkdownDiffFailure | null;
+  /**
+   * The patch describes a submodule gitlink, so the path names a directory
+   * rather than the Markdown document the reconstruction would read (#12309).
+   */
+  isGitlink?: boolean;
 }
 
 /**
@@ -86,8 +91,19 @@ export function getRenderedMarkdownAvailability({
   stale,
   sourceErrorCode,
   engineFailure,
+  isGitlink = false,
 }: RenderedMarkdownAvailabilityInput): RenderedMarkdownAvailability {
   if (!filePath || !isMarkdownFilePath(filePath)) return { visible: false };
+
+  // A `.md`-suffixed submodule directory still reaches here, and the layout is
+  // rebuilt from a whole-file read the path can never satisfy.
+  if (isGitlink) {
+    return {
+      visible: true,
+      enabled: false,
+      reason: "This is a submodule — its diff is a commit reference, not a Markdown document",
+    };
+  }
 
   if (!isRenderedMarkdownSupported(filePath, diffSource)) {
     return {

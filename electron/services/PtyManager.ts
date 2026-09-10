@@ -10,6 +10,7 @@ import type { DetectionResult } from "./ProcessDetector.js";
 import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
 import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
 import type { PanelTitleMode } from "../../shared/types/panel.js";
+import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -595,13 +596,26 @@ export class PtyManager extends EventEmitter {
    * Submit text as a command to the terminal.
    * Handles bracketed paste and CR timing on the backend for reliable execution.
    */
-  submit(id: string, text: string): void {
+  submit(id: string, text: string, submissionToken?: string): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
       logWarn(`Terminal ${id} not found, cannot submit`);
+      // Nothing to record against: the ledger is per terminal incarnation, so a
+      // submit into a terminal that is not here leaves no record anywhere and
+      // reads back as `unknown` (#12337). Deliberately not a global tombstone —
+      // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text);
+    terminal.submit(text, submissionToken);
+  }
+
+  /**
+   * One terminal's record for a submission token (#12337). `undefined` covers
+   * both "no such terminal" and "this terminal has no record" — the read
+   * surfaces already distinguish those, having resolved the terminal first.
+   */
+  getSubmission(id: string, submissionToken: string): TerminalSubmissionRecord | undefined {
+    return this.registry.get(id)?.getSubmission(submissionToken);
   }
 
   /**

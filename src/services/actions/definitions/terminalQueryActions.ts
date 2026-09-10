@@ -1,6 +1,10 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { TerminalSummarySchema, TerminalStatusEntrySchema } from "./schemas";
+import {
+  TerminalSummarySchema,
+  TerminalStatusResultSchema,
+  TerminalSendCommandResultSchema,
+} from "./schemas";
 import { tailCapturedOutput } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
@@ -8,8 +12,8 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import type { AgentState, WaitingReason } from "@shared/types/agent";
-import type { TerminalCheckResult } from "@shared/types/checkResult";
+import type { TerminalStatusEntry } from "@shared/types/terminalStatus";
+import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -20,7 +24,22 @@ import {
   WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
-import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import {
+  isEphemeralPanel,
+  isClientMetadataEligible,
+} from "@/store/slices/panelRegistry/panelCount";
+import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+
+/**
+ * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
+ *
+ * Bounded because the result advertises an output schema: over the 50 KiB
+ * response budget the transport drops `structuredContent` and flags the call
+ * `isError`, so an unbounded echo would turn a successful large submission into
+ * a reported failure with its own correlation token truncated away.
+ */
+const MAX_ECHOED_COMMAND_CHARS = 1024;
+
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -29,7 +48,7 @@ export function registerTerminalQueryActions(
     id: "terminal.list",
     title: "List Terminals",
     description:
-      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means none are open, not a failure.",
+      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -48,15 +67,51 @@ export function registerTerminalQueryActions(
           .describe(
             "Restricts the listing to terminals in one place: the main grid, the sidebar dock, the trash, or the background. Omitted, trashed and backgrounded terminals are left out, so ask for those explicitly to see them."
           ),
+        owned: z
+          .boolean()
+          .optional()
+          .describe(
+            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none."
+          ),
+        terminalId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Restricts the listing to one terminal, using a panel id. An id that is not open yields an empty listing rather than an error."
+          ),
+        includeClientMetadata: z
+          .boolean()
+          .optional()
+          .describe(
+            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId on a large fleet."
+          ),
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { worktreeId, location } = (args ?? {}) as {
+      const { worktreeId, location, owned, terminalId, includeClientMetadata } = (args ?? {}) as {
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
+        owned?: boolean;
+        terminalId?: string;
+        includeClientMetadata?: boolean;
       };
+      // `owned` is answered in main and never here (#12308): ownership is
+      // keyed by the MCP session id, which the renderer deliberately never
+      // sees. Main consumes the flag, so a value reaching `run()` came from a
+      // dispatch path with no ownership authority — and answering it with the
+      // unfiltered list would report every panel as this caller's own.
+      //
+      // `false` is refused too. The renderer cannot honour the argument in
+      // either direction, and refusing both is what makes a broken strip in
+      // main fail loudly instead of quietly returning the wrong set.
+      if (owned !== undefined) {
+        throw new Error(
+          "terminal.list `owned` filters on the MCP session that created each terminal, which only the Daintree host can resolve. A direct dispatch cannot answer it — call the tool over MCP, or omit the argument."
+        );
+      }
       const state = usePanelStore.getState();
       // Ephemeral panels (e.g. the Daintree Assistant's own dock terminal)
       // are tooling-internal and must not appear in the MCP-visible list,
@@ -69,6 +124,12 @@ export function registerTerminalQueryActions(
       // Filter by worktree if specified
       if (worktreeId) {
         terminals = terminals.filter((t) => t.worktreeId === worktreeId);
+      }
+
+      // A narrowing filter, not a lookup: an id nothing matches yields an empty
+      // listing, the same answer every other filter here gives.
+      if (terminalId) {
+        terminals = terminals.filter((t) => t.id === terminalId);
       }
 
       // Filter by location if specified
@@ -91,6 +152,21 @@ export function registerTerminalQueryActions(
         agentState: isPtyPanel(t) ? (t.agentState ?? null) : null,
         isInputLocked: isPtyPanel(t) ? (t.isInputLocked ?? false) : false,
         isFocused: t.id === state.focusedId,
+        // ONLY the reserved key, and only off a panel the writer could have
+        // written to. Two separate leaks live here. `extensionState` also
+        // carries `presetEnv` on a terminal — a real subprocess environment,
+        // session-scoped secrets included. And a plugin owns its whole bag
+        // under keys it chooses, so one that happens to persist its own `mcp`
+        // key would have it read out here despite no external caller being
+        // able to write it. Gating the read on the same predicate as the write
+        // is what keeps the two halves describing the same thing.
+        ...(includeClientMetadata
+          ? {
+              clientMetadata: isClientMetadataEligible(t)
+                ? readClientMetadata(t.extensionState)
+                : null,
+            }
+          : {}),
       }));
 
       return { terminals: result };
@@ -193,7 +269,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Snapshot agent and process state across many terminals, with optional output tails. This is the batched polling path: prefer it over listing terminals for agent state, or reading each terminal's output in turn. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the shared fetch failed. Use the blocking wait to proceed the moment an agent finishes.",
+      "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -218,6 +294,14 @@ export function registerTerminalQueryActions(
           .describe(
             "Filter by panel location (ignored when `terminalIds` is provided). Defaults to all locations except trash and background."
           ),
+        submissionToken: z
+          .string()
+          .min(1)
+          .max(128)
+          .optional()
+          .describe(
+            "A token from the text-submission capability. Adds that submission's delivery record to each entry. Requires `terminalIds`."
+          ),
         includeOutput: z
           .object({
             lines: z
@@ -240,34 +324,25 @@ export function registerTerminalQueryActions(
           ),
       })
       .optional(),
-    resultSchema: z.object({ terminals: z.array(TerminalStatusEntrySchema) }),
+    resultSchema: TerminalStatusResultSchema,
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { terminalIds, worktreeId, location, includeOutput } = (args ?? {}) as {
+      const { terminalIds, worktreeId, location, includeOutput, submissionToken } = (args ??
+        {}) as {
         terminalIds?: string[];
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
         includeOutput?: { lines?: number; stripAnsi?: boolean };
+        submissionToken?: string;
       };
+      if (submissionToken !== undefined && terminalIds === undefined) {
+        throw new Error("terminal.getStatus requires `terminalIds` when `submissionToken` is set.");
+      }
 
       const state = usePanelStore.getState();
       const panelsById = state.panelsById;
       // Fresh point-in-time snapshot of the fleet arming set for this call.
       const armedIds = useFleetArmingStore.getState().armedIds;
-
-      type StatusEntry = {
-        terminalId: string;
-        agentId: string | null;
-        agentState: AgentState | null;
-        waitingReason?: WaitingReason;
-        lastTransitionAt?: number;
-        exitCode?: number | null;
-        spawnedAt?: number;
-        lastCheckResult?: TerminalCheckResult;
-        recentOutput?: string | null;
-        armed?: boolean;
-        error?: string;
-      };
 
       const resolved: Array<{ id: string; terminal: PanelInstance | undefined }> = [];
 
@@ -327,7 +402,25 @@ export function registerTerminalQueryActions(
         }
       }
 
-      const entries: StatusEntry[] = resolved.map(({ id, terminal }) => {
+      // Delivery records live in the pty-host, so this is the one thing the
+      // panel store cannot answer (#12337). One batched hop, and only when a
+      // token was asked for — the default poll path issues no extra IPC.
+      let submissions: Record<string, TerminalSubmissionLookup> | null = null;
+      let submissionError: string | undefined;
+      if (submissionToken !== undefined) {
+        const idsToLookUp = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
+        if (idsToLookUp.length > 0) {
+          try {
+            submissions = await terminalClient.getSubmissions(idsToLookUp, submissionToken);
+          } catch (err) {
+            submissionError = formatErrorMessage(err, "Failed to fetch submission status");
+          }
+        } else {
+          submissions = {};
+        }
+      }
+
+      const entries: TerminalStatusEntry[] = resolved.map(({ id, terminal }) => {
         if (!terminal) {
           return {
             terminalId: id,
@@ -337,7 +430,7 @@ export function registerTerminalQueryActions(
           };
         }
 
-        const entry: StatusEntry = {
+        const entry: TerminalStatusEntry = {
           terminalId: terminal.id,
           agentId: isPtyPanel(terminal)
             ? (terminal.detectedAgentId ?? terminal.launchAgentId ?? null)
@@ -363,13 +456,44 @@ export function registerTerminalQueryActions(
           entry.waitingReason = terminal.waitingReason;
         }
 
+        // Both batch fetches below can fail independently, and each is a
+        // separate thing the caller lost. Appending rather than assigning stops
+        // the later one reporting as the only failure while the earlier one
+        // vanishes along with the field it would have filled.
+        const appendError = (message: string) => {
+          entry.error = entry.error === undefined ? message : `${entry.error}; ${message}`;
+        };
+
+        if (submissionToken !== undefined) {
+          if (submissionError !== undefined) {
+            // The lookup failed for the whole batch, so no entry can claim a
+            // record. Report that as an error rather than as `unknown`, which
+            // would assert the terminal has no such submission.
+            appendError(submissionError);
+          } else if (submissions !== null) {
+            const lookup = submissions[terminal.id] ?? { status: "unreadable" as const };
+            if (lookup.status === "found") {
+              entry.submission = lookup.record;
+            } else if (lookup.status === "absent") {
+              // The terminal WAS read and holds nothing, so absence is
+              // evidence and `unknown` is a claim we can make.
+              entry.submission = { token: submissionToken, phase: "unknown" };
+            } else {
+              // Nothing was observed. Saying `unknown` here would assert this
+              // terminal has no such submission on the strength of an RPC that
+              // failed — the false certainty this issue exists to remove.
+              appendError("Submission status unavailable for this terminal");
+            }
+          }
+        }
+
         if (includeOutput) {
           if (outputError !== undefined) {
             // The IPC failed for the whole batch (transport-level failure),
             // so every successfully-resolved entry gets the same error.
             // Status fields are kept intact so the caller still has something
             // useful to act on — recentOutput is the only thing we lost.
-            entry.error = outputError;
+            appendError(outputError);
             entry.recentOutput = null;
           } else if (outputs !== null) {
             const serialized = outputs[terminal.id] ?? null;
@@ -391,7 +515,25 @@ export function registerTerminalQueryActions(
         return entry;
       });
 
-      return { terminals: entries };
+      // `source` and `unavailableFields` are the same envelope the main-process
+      // fallback answers in (#12316), so a client reads one shape whether or not
+      // its workspace had a live view.
+      //
+      // `hasPty` is the one field this richer surface cannot observe (#12336).
+      // `PtyPanelData.hasPty` exists on the type but nothing in the renderer
+      // ever writes it — not `addPanel`, not `statePatcher` on restore or
+      // reconnect, and not the `onExit` listener in `store/listeners/panel/
+      // lifecycle.ts` — which is why `fleetEligibility.ts` records that it lags
+      // and reaches for `runtimeStatus` instead. Forwarding it would emit
+      // nothing while claiming a view saw everything; deriving it from
+      // `runtimeStatus` would publish an interpretation as a process fact. The
+      // pty-host computes it, so the reduced answer reports it and this one
+      // says it could not look.
+      return {
+        terminals: entries,
+        source: "renderer" as const,
+        unavailableFields: ["hasPty" as const],
+      };
     },
   }));
 
@@ -411,12 +553,11 @@ export function registerTerminalQueryActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
-      terminalId: z
-        .string()
-        .min(1)
-        .describe(
-          "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked resolves as idle rather than failing."
-        ),
+      terminalId: z.string().min(1).describe(
+        // Kept under the 160 B property target; `trackingState` is explained
+        // in the tool description and its own output-schema entry.
+        "Identifies the terminal to act on, using a panel id from the terminal-listing capability. A closed or unknown id resolves as idle rather than failing."
+      ),
       timeoutMs: z
         .number()
         .int()
@@ -428,6 +569,10 @@ export function registerTerminalQueryActions(
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+    // Without this, `computeSchemas` leaves `outputSchema` undefined and
+    // tools/list advertises nothing — even though the main-process path already
+    // attaches `structuredContent` unconditionally (#12339).
+    mcpOutputSchema: true,
     mcpAnnotations: {
       readOnlyHint: true,
       idempotentHint: false,
@@ -457,7 +602,7 @@ export function registerTerminalQueryActions(
         .min(1)
         .max(MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS)
         .describe(
-          `Identifies the terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}), using panel ids from the terminal-listing capability. Ids no longer tracked count as already finished rather than failing the batch.`
+          `Identifies the terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}), using panel ids from the terminal-listing capability. Closed or unknown ids count as already settled rather than failing the batch; each row's \`trackingState\` says which.`
         ),
       mode: z
         .enum(["first", "all"])
@@ -476,6 +621,8 @@ export function registerTerminalQueryActions(
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
+    // See the note on terminal.waitUntilIdle above.
+    mcpOutputSchema: true,
     mcpAnnotations: {
       readOnlyHint: true,
       idempotentHint: false,
@@ -492,7 +639,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing off a partial message. This returns once the submission is queued, not once it has been delivered or run, so inspect the terminal afterwards to see what happened. It runs with the terminal's own privileges.",
+      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing a partial message. This returns once the submission is queued, not once it was delivered or run: pass the returned `submissionToken` to the status capability to find out. Runs with the terminal's privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -511,6 +658,15 @@ export function registerTerminalQueryActions(
       terminalId: z
         .string()
         .min(1)
+        // Bounded because it is echoed back in the result, and the result is
+        // schema-advertised: past the response budget the transport drops
+        // `structuredContent` and flags the call `isError`, which would lose
+        // the token for a submission that went out. `agent.launch` accepts an
+        // arbitrary `requestedId`, so an id long enough to do that is
+        // reachable. Panel ids are short; this rejects only pathological ones,
+        // and rejecting is clearer than a truncated success reported as a
+        // failure.
+        .max(512)
         .describe(
           "Identifies the terminal to submit to, using a panel id from the terminal-listing capability."
         ),
@@ -521,6 +677,8 @@ export function registerTerminalQueryActions(
           "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
         ),
     }),
+    resultSchema: TerminalSendCommandResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { terminalId, command } = args as { terminalId: string; command: string };
 
@@ -547,15 +705,30 @@ export function registerTerminalQueryActions(
         throw new Error("Terminal does not have PTY capability");
       }
 
-      // Send command via submit (handles bracketed paste)
-      await terminalClient.submit(terminalId, command);
+      // Minted here rather than in main so the caller gets a correlator even if
+      // the submit itself rejects — and minted after validation, so a token is
+      // only ever handed out for a submission that was actually dispatched
+      // (#12337). Not an idempotency key: two identical commands get two
+      // tokens, because they are two submissions.
+      const submissionToken = crypto.randomUUID();
+
+      // Send command via submit (handles bracketed paste). Resolving means
+      // queued, not written — which is exactly why the token exists.
+      await terminalClient.submit(terminalId, command, submissionToken);
 
       // Return a clear message so the AI model knows not to repeat this action
       return {
         sent: true,
         terminalId,
-        command,
-        message: `Command sent to terminal. Do not send this command again to the same terminal.`,
+        // Echoed back bounded, never whole. The result now advertises an output
+        // schema, and an oversized result does not merely truncate: it drops
+        // `structuredContent` and comes back flagged `isError`. A large context
+        // injection echoed in full would therefore report a submission that DID
+        // go out as a failed call, with the token it needs to check that gone
+        // from the truncated body — the exact silent loss this issue closes.
+        command: command.slice(0, MAX_ECHOED_COMMAND_CHARS),
+        submissionToken,
+        message: `Submission queued. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
       };
     },
   }));

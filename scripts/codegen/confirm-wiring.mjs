@@ -26,6 +26,7 @@ const TSCONFIG_PATH = path.join(REPO_ROOT, "tsconfig.json");
 // Mirror of EXPECTED_CONFIRM_DANGER from actionDefinitions.quality.test.ts.
 // Keep in sync when adding/removing destructive actions.
 const EXPECTED_CONFIRM_DANGER = new Set([
+  "plugin.reloadWindow",
   "git.push",
   "git.pullRebase",
   "git.rebaseOntoBase",
@@ -80,6 +81,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
 // as the action ID string. The script verifies each action has at least one such file.
 // Mirror of CONFIRMED_WIRED in actionDefinitions.quality.test.ts.
 const CONFIRMED_WIRED = [
+  "plugin.reloadWindow",
   "app.importConfig",
   "terminal.kill",
   "terminal.killAll",

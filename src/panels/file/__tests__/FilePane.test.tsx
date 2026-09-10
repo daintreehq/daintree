@@ -3274,6 +3274,22 @@ describe("FilePane copy file contents (#12136)", () => {
     }
   );
 
+  it.each([
+    ["NOT_A_FILE", false],
+    ["PERMISSION", true],
+  ] as const)("offers Retry for %s: %s", async (code, expected) => {
+    // A directory never becomes a readable file, so its Retry would be dead
+    // (#12309) — while a permission failure can genuinely clear.
+    readMock.mockRejectedValue(new ClientAppError(code, code));
+    await renderPane("/repo/vendor/sub");
+
+    expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+    const hasRetry = [...document.querySelectorAll("button")].some(
+      (button) => button.textContent === "Retry"
+    );
+    expect(hasRetry).toBe(expected);
+  });
+
   // Video and audio fetch their bytes into a blob URL; without the stub the
   // element never mounts and the absence assertions below would pass for the
   // wrong reason. Restored one global at a time rather than through

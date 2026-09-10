@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectSettings } from "@/types";
 
 const {
@@ -126,6 +126,12 @@ describe("useProjectSettingsForm", () => {
     resetMocks();
   });
 
+  // Every timer restore below is on the success path, so a failed assertion
+  // would leave fake timers installed and hang the async tests after it.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("stays uninitialized when isOpen is false", () => {
     mockSettings.value = baseSettings;
     const { result } = renderHook(() =>
@@ -241,7 +247,130 @@ describe("useProjectSettingsForm", () => {
     await act(async () => {
       await result.current.flush();
     });
-    expect(mockSaveSettings).toHaveBeenCalled();
+    // The pending debounce persists; the direct fallback must not persist again.
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+
+    // Nothing changed since, so a second flush is a no-op.
+    await act(async () => {
+      await result.current.flush();
+    });
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("flush() does not save when the form is untouched", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = baseSettings;
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(result.current.projectIsInitialized).toBe(true);
+
+    vi.clearAllMocks();
+    // Closing a dialog nobody edited must not rewrite the cached settings —
+    // that write reverts fields other tabs saved out-of-band (#12326).
+    await act(async () => {
+      await result.current.flush();
+    });
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+    expect(mockUpdateProject).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("saveNow() persists even when the form is untouched", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = baseSettings;
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(result.current.projectIsInitialized).toBe(true);
+
+    vi.clearAllMocks();
+    // The environment-variable migration button re-saves unchanged values on
+    // purpose, so the explicit entry point must stay unconditional.
+    await act(async () => {
+      await result.current.saveNow();
+    });
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("flush() persists the edited value exactly once when the form is dirty", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = baseSettings;
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    vi.clearAllMocks();
+    act(() => {
+      result.current.setDevServerCommand("npm run serve");
+    });
+    await act(async () => {
+      await result.current.flush();
+    });
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    expect(mockSaveSettings.mock.calls[0]![0]).toMatchObject({
+      devServerCommand: "npm run serve",
+    });
+    vi.useRealTimers();
+  });
+
+  it("a later form save carries the preference the cache holds, not the one it opened with", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = { ...baseSettings, preferredEditor: { id: "vscode" } };
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(result.current.projectIsInitialized).toBe(true);
+
+    // Another tab saved a new editor and wrote through to the cache. The form
+    // spreads the cache on every save, so it must pick up the new value —
+    // this is what patchCachedProjectSettings exists to make true (#12326).
+    mockSettings.value = { ...baseSettings, preferredEditor: { id: "zed" } };
+    rerender({ isOpen: true, tick: 3 });
+
+    vi.clearAllMocks();
+    act(() => {
+      result.current.setDevServerCommand("npm run serve");
+    });
+    await act(async () => {
+      await result.current.flush();
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    expect(mockSaveSettings.mock.calls[0]![0]).toMatchObject({
+      preferredEditor: { id: "zed" },
+      devServerCommand: "npm run serve",
+    });
     vi.useRealTimers();
   });
 

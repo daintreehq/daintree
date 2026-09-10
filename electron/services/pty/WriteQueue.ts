@@ -1,4 +1,9 @@
 import type { TerminalSubmitStatusState } from "../../../shared/types/pty-host.js";
+import {
+  MAX_RETAINED_SUBMISSIONS,
+  type TerminalSubmissionPhase,
+  type TerminalSubmissionRecord,
+} from "../../../shared/types/terminalSubmission.js";
 
 /**
  * How long one submit may hold the composer before we say so. Reporting only —
@@ -13,13 +18,38 @@ const SUBMIT_SLOW_THRESHOLD_MS = 3000;
  */
 const SUBMIT_STALLED_THRESHOLD_MS = 30000;
 
+/**
+ * Handed to `performSubmit` so it can report the one thing the queue cannot
+ * observe from the outside: that the trailing Enter reached node-pty (#12337).
+ *
+ * A resolved `performSubmit` is NOT that signal — it also resolves on every
+ * path that abandons the Enter (shutdown lock, superseding generation, a pty
+ * that vanished mid-submit), which is exactly the silent loss this tracking
+ * exists to surface.
+ */
+export interface SubmitExecutionContext {
+  /**
+   * Stamp the tracked submission `pty_written`. Called synchronously the
+   * instant the final write returns, not after the await unwinds: a
+   * cancellation landing in that gap would otherwise overwrite a hand-off that
+   * genuinely happened. Idempotent, and a no-op for an untracked submit.
+   */
+  markPtyWritten: () => void;
+}
+
+/** One queued submission plus the caller's optional correlation token. */
+interface SubmitJob {
+  text: string;
+  token?: string;
+}
+
 export interface WriteQueueOptions {
   /** True once the underlying PTY has exited; aborts the output-settle wait. */
   isExited: () => boolean;
   /** Current `lastOutputTime` accessor used by `waitForOutputSettle`. */
   lastOutputTime: () => number;
   /** Per-text submit handler — owns all shell-side-effect bookkeeping. */
-  performSubmit: (text: string) => Promise<void>;
+  performSubmit: (text: string, ctx: SubmitExecutionContext) => Promise<void>;
   /** Optional sink for synchronous PTY write errors. */
   onWriteError?: (error: unknown, context: { operation: string }) => void;
   /**
@@ -68,7 +98,7 @@ export interface OutputSettleOptions {
  * `TerminalProcess`; the queue's job is purely serialisation.
  */
 export class WriteQueue {
-  private submitQueue: string[] = [];
+  private submitQueue: SubmitJob[] = [];
   private submitInFlight = false;
   private disposed = false;
   /**
@@ -80,6 +110,19 @@ export class WriteQueue {
   /** Whether the current submit has already reported slow/stalled — decides
    *  whether its completion is worth a `settled` event. */
   private submitStatusReported = false;
+  /**
+   * Tokened submissions that have not reached a final phase — one queued or
+   * in-flight entry per token (#12337). Kept separate from the finalised ring
+   * so a burst of queued work can never evict a record that has not been
+   * answered yet.
+   */
+  private readonly pendingSubmissions = new Map<string, TerminalSubmissionRecord>();
+  /**
+   * Finalised outcomes, oldest first, capped at MAX_RETAINED_SUBMISSIONS.
+   * Only tokened submits land here, so in-app typing and fleet broadcast
+   * (which pass no token) cost nothing.
+   */
+  private readonly finalizedSubmissions: TerminalSubmissionRecord[] = [];
 
   constructor(private readonly options: WriteQueueOptions) {}
 
@@ -89,12 +132,102 @@ export class WriteQueue {
    * drain in FIFO order. The in-flight flag is set synchronously before the
    * first await so two callers cannot both pass the guard.
    */
-  submit(text: string): void {
-    if (this.disposed) return;
-    this.submitQueue.push(text);
+  submit(text: string, token?: string): void {
+    if (this.disposed) {
+      // A tracked submit into a disposed queue is answered rather than
+      // forgotten: `cancelled` says Daintree dropped it, where silence would
+      // read back as `unknown` and leave the caller unable to tell a dropped
+      // submission from one this incarnation never saw.
+      if (token !== undefined) this.noteRejectedSubmission(token);
+      return;
+    }
+    // A token already in flight keeps its own record: overwriting would push a
+    // live `writing` back to `queued` and answer the earlier submission with
+    // the later one's phase.
+    //
+    // A token names ONE submission. `sendCommand` mints a fresh UUID per call,
+    // so reuse only reaches here through a direct IPC caller, and it is that
+    // caller's error. The text is still submitted either way; only the record
+    // is ambiguous — reuse after the first finished replaces the record
+    // (`retainFinalized` keeps one per token), while reuse mid-flight leaves it
+    // describing the submission already writing. Refusing to queue the second
+    // would be worse: that silently drops text the caller asked to send.
+    if (token !== undefined && !this.pendingSubmissions.has(token)) {
+      this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
+    }
+    this.submitQueue.push({ text, token });
     if (this.submitInFlight) return;
     this.submitInFlight = true;
     void this.drainSubmitQueue();
+  }
+
+  /**
+   * Look up one submission by the token its caller minted. Pending entries win
+   * over finalised ones — a token cannot be in both — and a copy is returned so
+   * a reader cannot mutate the ledger.
+   *
+   * `undefined` means this incarnation holds no record: never accepted here,
+   * aged out of the retained window, or lost to a pty-host restart. The read
+   * surface reports that as `unknown` rather than inventing an outcome.
+   */
+  getSubmission(token: string): TerminalSubmissionRecord | undefined {
+    const pending = this.pendingSubmissions.get(token);
+    if (pending !== undefined) return { ...pending };
+    const finalized = this.finalizedSubmissions.find((record) => record.token === token);
+    return finalized === undefined ? undefined : { ...finalized };
+  }
+
+  /**
+   * Record a tracked submission that was refused before it reached the lane —
+   * an input-locked or already-exited terminal. Without it the caller would
+   * read `unknown`, which says "no record here" and cannot be told apart from
+   * a token this incarnation never saw.
+   */
+  noteRejectedSubmission(token: string): void {
+    if (this.pendingSubmissions.has(token)) {
+      this.finalizeIfPending(token, "cancelled");
+      return;
+    }
+    if (this.finalizedSubmissions.some((record) => record.token === token)) return;
+    this.retainFinalized(token, "cancelled");
+  }
+
+  /** Advance a still-pending submission. No-op once it has been finalised. */
+  private advanceSubmission(token: string, phase: TerminalSubmissionPhase): void {
+    const record = this.pendingSubmissions.get(token);
+    if (record === undefined) return;
+    record.phase = phase;
+    record.at = Date.now();
+  }
+
+  /**
+   * Move a submission to its final phase, but ONLY while it is still pending.
+   *
+   * Pending membership is the whole guard, and it has to be, because the
+   * retained ring is not a reliable record of what has already finished. A
+   * submission that completed can be evicted by 32 later ones before its own
+   * drain continuation resumes; checking the ring would then find nothing and
+   * happily write a second, contradicting outcome — reporting a delivered
+   * submission as `cancelled`. Deleting from the pending map is the one
+   * operation that can only succeed once.
+   */
+  private finalizeIfPending(token: string, phase: TerminalSubmissionPhase): void {
+    if (this.pendingSubmissions.delete(token) === false) return;
+    this.retainFinalized(token, phase);
+  }
+
+  /**
+   * Append to the retained ring, keeping at most one record per token so a
+   * reused token cannot leave two answers behind for `getSubmission` to pick
+   * the wrong one of.
+   */
+  private retainFinalized(token: string, phase: TerminalSubmissionPhase): void {
+    const existing = this.finalizedSubmissions.findIndex((record) => record.token === token);
+    if (existing !== -1) this.finalizedSubmissions.splice(existing, 1);
+    this.finalizedSubmissions.push({ token, phase, at: Date.now() });
+    while (this.finalizedSubmissions.length > MAX_RETAINED_SUBMISSIONS) {
+      this.finalizedSubmissions.shift();
+    }
   }
 
   /**
@@ -145,7 +278,7 @@ export class WriteQueue {
    */
   cancelPendingInput(): void {
     if (this.disposed) return;
-    this.submitQueue = [];
+    this.discardQueuedSubmissions();
     this.clearSubmitStatusTimer();
     if (this.submitStatusReported) {
       this.submitStatusReported = false;
@@ -170,8 +303,24 @@ export class WriteQueue {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.submitQueue = [];
+    this.discardQueuedSubmissions();
     this.clearSubmitStatusTimer();
+  }
+
+  /**
+   * Drop everything still queued, recording each tracked entry as `cancelled`.
+   *
+   * Only the QUEUE is drained — the in-flight submit is deliberately left to
+   * the drain loop, which is the only place that knows whether its trailing
+   * Enter got out. Finalising it here would report `cancelled` for a submission
+   * that had already reached the pty.
+   */
+  private discardQueuedSubmissions(): void {
+    const queued = this.submitQueue;
+    this.submitQueue = [];
+    for (const job of queued) {
+      if (job.token !== undefined) this.finalizeIfPending(job.token, "cancelled");
+    }
   }
 
   /** Deliver a status transition without letting a throwing sink escape into a
@@ -230,22 +379,34 @@ export class WriteQueue {
         const next = this.submitQueue.shift();
         if (next === undefined) continue;
         this.submitStatusReported = false;
+        const token = next.token;
+        if (token !== undefined) this.advanceSubmission(token, "writing");
         try {
           // Await the submit itself — never a race against the timer. The timer
           // reports; it does not release the lane (#11875).
           const startedAt = Date.now();
-          const work = this.options.performSubmit(next);
+          const work = this.options.performSubmit(next.text, {
+            markPtyWritten: () => {
+              if (token !== undefined) this.finalizeIfPending(token, "pty_written");
+            },
+          });
           this.armSlowSubmitReporting(startedAt);
           await work;
           if (this.submitStatusReported) {
             this.emitSubmitStatus("settled");
           }
+          // Resolving proves nothing on its own: performSubmit returns normally
+          // from every path that abandons the Enter. Still pending here means
+          // `markPtyWritten` never fired, so the submission was dropped rather
+          // than handed over (#12337).
+          if (token !== undefined) this.finalizeIfPending(token, "cancelled");
         } catch (error) {
           // A rejected submit is over — it will never write again — so the lane
           // drains normally and the exclusive-ownership invariant still holds.
           // It still surfaces, because the body may already be sitting in the
           // composer with no Enter behind it.
           this.emitSubmitStatus("failed");
+          if (token !== undefined) this.finalizeIfPending(token, "failed");
           this.options.onWriteError?.(error, { operation: "performSubmit" });
         } finally {
           this.clearSubmitStatusTimer();

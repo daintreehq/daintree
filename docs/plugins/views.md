@@ -148,6 +148,29 @@ const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke 
 
 Fetch into a blob rather than pointing an element's `src` at the URL directly; the blob path is the one the host has verified against Electron's media pipeline. This works because views are inline; it is not part of the host API, and a future move to an isolated view host would replace it with one.
 
+## Global registration survives reload
+
+Views share one document per project view, so anything you put in a browser-global registry is shared by every view in that project — and outlives every reload of the plugin that put it there. Custom elements are the sharp case: `customElements.define` is keyed by name and the spec gives no way to unregister one. The entry belongs to the document, so only replacing the document clears it.
+
+That collides with how reload works. A reload re-imports your bundle under a fresh generation, so your module body runs again — against a registry that still holds the entry the previous generation made. Which failure you get is the library's choice, not yours:
+
+| The library's registration code | What a reload does |
+| --- | --- |
+| Guards with `customElements.get(name)` — Trix does this | Skips. The first generation's class stays installed and your rebuilt code is silently ignored |
+| Registers unconditionally — `@37signals/lexxy` does this | Throws `NotSupportedError`. Where the throw lands decides what you see |
+
+The second row is worse than it reads, because a throw during module evaluation and a throw from a timer are not the same event. Lexxy ends its module body with `setTimeout(defineElements, 0)`, so the `import()` **resolves**, your view mounts normally, and the error surfaces afterwards as an uncaught window error — which the host attributes to the plugin when its source URL or registration stack is known. A global banner names the affected plugins and offers a project-window reload, with an inbox entry as the fallback while a higher-priority banner owns the slot; both survive plugin reloads and main-process status snapshots. What you are left looking at is a live generation-2 module graph driving generation-1 element classes.
+
+The same split applies across plugins rather than across reloads: two plugins vendoring the same element library contend for the same document registry. Earlier successful definitions remain installed, independently of the versions each plugin bundles.
+
+**For elements you define yourself,** register under a name that changes per load so a reload installs genuinely new code, and read the class back off the registry rather than closing over it. Old names stay resident and accumulate, like the module records themselves, until the document is replaced.
+
+**For a vendored library that hardcodes its element names,** you cannot rename `lexxy-editor` from outside the library. The workable pattern is to stop re-evaluating it: use a [document package](./document-packages.md): put the library and the integration that shares object identities with it in a separately built adapter, retained by the host document while your view code reloads normally. Merely stripping the `__dtv-N` segment is insufficient: each plugin load also replaces its opaque `plugin://` authority, and unload invalidates that authority. A module-local cache inside the reloading entry does not survive, and an eager static import defeats the arrangement. That buys a working reload of your own code, not a live upgrade of the library; changing the library itself still needs the document replaced.
+
+Closing and reopening the project replaces the document; switching back to a cached project view does not. So does reloading the project renderer, which is the cheaper option. Both reset the registry, and both reset document-local state across the project. State already persisted through the host can be restored, but in-memory edits and view objects cannot be promised to survive. Save edits before reloading.
+
+Custom elements are the strict case because registration is irreversible. Other globals are name-keyed but not permanent — `window.*` singletons can be reassigned, stylesheets removed, service workers unregistered — so give each an explicit lifetime. A per-view stylesheet or listener belongs to the mount disposer; a shared loader such as Monaco’s belongs to its document package. Shared package initialization must not capture one plugin’s host bridge, credentials, or panel state.
+
 ## What doesn't work inline
 
 - Bare npm imports in a raw view. Only the five React specifiers above resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle.

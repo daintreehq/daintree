@@ -39,6 +39,7 @@ export type FileReadErrorCode = _AssertSubset<
   | "NOT_FOUND"
   | "OUTSIDE_ROOT"
   | "INVALID_PATH"
+  | "NOT_A_FILE"
   | "PERMISSION"
 >;
 

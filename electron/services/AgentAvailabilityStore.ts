@@ -24,6 +24,14 @@ function isAvailableState(state: AgentState): boolean {
   return state === "idle" || state === "waiting";
 }
 
+/**
+ * Cap on remembered closed terminals. Evicting the oldest only ever degrades a
+ * `"closed"` answer to `"unknown"` — from "we saw it end" to "we have no
+ * record" — never to "live", so the bound cannot manufacture a false alive.
+ * Sized to match the batched wait's own terminal cap.
+ */
+export const MAX_CLOSED_TERMINALS = 256;
+
 export class AgentAvailabilityStore {
   private agentStates: Map<string, AgentState> = new Map();
   private waitingReasons: Map<string, WaitingReason> = new Map();
@@ -39,6 +47,11 @@ export class AgentAvailabilityStore {
   private spawnedAt: Map<string, number> = new Map();
   private terminalToAgent: Map<string, string> = new Map();
   private agentToTerminal: Map<string, string> = new Map();
+  // Terminals whose agent we observed being killed. Insertion-ordered and
+  // bounded (see MAX_CLOSED_TERMINALS) — this is a tombstone set, not a
+  // registry, so it exists only to answer "was this id closed, or have we
+  // simply never seen it".
+  private closedTerminals: Set<string> = new Set();
   private trashedTerminals: Set<string> = new Set();
   private trashedAgentIds: Set<string> = new Set();
   private helpTerminalIds: Set<string> = new Set();
@@ -57,6 +70,10 @@ export class AgentAvailabilityStore {
         this.terminalToAgent.set(payload.terminalId, payload.agentId);
         this.agentToTerminal.set(payload.agentId, payload.terminalId);
         this.spawnedAt.set(payload.agentId, payload.timestamp);
+        // A respawn under the same terminal id revives it, so drop any
+        // tombstone from the previous session rather than reporting the live
+        // terminal as closed forever.
+        this.closedTerminals.delete(payload.terminalId);
         // A fresh spawn resets the tracked state to "working" so a stale state
         // from a prior session under the same agentId can't outlive a respawn.
         // Without this, a previous "waiting" persists and waitUntilIdle settles
@@ -75,6 +92,21 @@ export class AgentAvailabilityStore {
         if (this.helpTerminalIds.has(payload.terminalId)) {
           this.helpAgentIds.add(payload.agentId);
         }
+      })
+    );
+
+    // The only signal that a specific terminal's agent is gone AND that
+    // reaches the main process. `terminal:exited` is emitted on the pty-host's
+    // own bus and is not in the `PtyHostEvent` union, so it never crosses the
+    // bridge — subscribing to it here would be dead code (same reason
+    // ProjectStatsService and FleetSnapshotService skip it). A kill maps
+    // straight to `idle` in `nextAgentState`, so without this the mapping
+    // outlives the panel and a closed terminal is indistinguishable from an
+    // agent at rest (#12339).
+    this.unsubscribers.push(
+      events.on("agent:killed", (payload) => {
+        if (!payload.terminalId) return;
+        this.releaseTerminal(payload.terminalId);
       })
     );
 
@@ -277,6 +309,53 @@ export class AgentAvailabilityStore {
   }
 
   /**
+   * Release one terminal's mapping and remember that it closed.
+   *
+   * Terminal-scoped on purpose, and deliberately NOT `unregisterAgent`: agent
+   * ids name the agent *type* ("claude"), so several terminals share one, and
+   * unregistering by agent id would erase `agentStates`/`exitCodes`/`spawnedAt`
+   * that a different, still-live terminal of the same type is relying on. Only
+   * the two per-terminal maps are touched, and the reverse entry only when it
+   * still points back here.
+   */
+  releaseTerminal(terminalId: string): void {
+    this.markTerminalClosed(terminalId);
+
+    const agentId = this.terminalToAgent.get(terminalId);
+    if (agentId === undefined) return;
+
+    this.terminalToAgent.delete(terminalId);
+    // `agentToTerminal` holds only the most recent terminal for an agent id, so
+    // a newer terminal of the same type may already own this entry. Dropping it
+    // unconditionally would un-map a live sibling.
+    if (this.agentToTerminal.get(agentId) === terminalId) {
+      this.agentToTerminal.delete(agentId);
+    }
+    this.trashedTerminals.delete(terminalId);
+  }
+
+  /**
+   * Whether this terminal's agent was observed being killed. False for a
+   * terminal we still track and for one we have no record of — the caller
+   * separates those two by whether a mapping exists.
+   */
+  isTerminalClosed(terminalId: string): boolean {
+    return this.closedTerminals.has(terminalId);
+  }
+
+  /** Record a closed terminal, evicting the oldest entry past the bound. */
+  private markTerminalClosed(terminalId: string): void {
+    // Re-insert so a repeat close refreshes recency rather than aging out early.
+    this.closedTerminals.delete(terminalId);
+    this.closedTerminals.add(terminalId);
+    while (this.closedTerminals.size > MAX_CLOSED_TERMINALS) {
+      const oldest = this.closedTerminals.values().next().value;
+      if (oldest === undefined) break;
+      this.closedTerminals.delete(oldest);
+    }
+  }
+
+  /**
    * Unregister an agent when its terminal is removed.
    */
   unregisterAgent(agentId: string): void {
@@ -309,6 +388,7 @@ export class AgentAvailabilityStore {
     this.spawnedAt.clear();
     this.terminalToAgent.clear();
     this.agentToTerminal.clear();
+    this.closedTerminals.clear();
     this.trashedTerminals.clear();
     this.trashedAgentIds.clear();
     this.helpTerminalIds.clear();

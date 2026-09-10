@@ -861,6 +861,14 @@ describe("McpServerService", () => {
         description: "Read worktree state",
         kind: "query",
       }),
+      // On every tier from `action` up, and externally (#12340). The fixture
+      // has to carry it or the subset assertions below read its absence from
+      // this manifest as an absence from the allowlist.
+      createManifestEntry({
+        id: "terminal.setClientMetadata" as ActionId,
+        title: "Set Terminal Client Metadata",
+        description: "Attach an external client's own record to a terminal",
+      }),
       createManifestEntry({
         id: "worktree.create" as ActionId,
         title: "Create Worktree",
@@ -923,6 +931,16 @@ describe("McpServerService", () => {
         id: "terminal.closeOwned" as ActionId,
         title: "Close Owned Terminal",
         description: "Move a terminal this MCP session created to trash",
+      }),
+      createManifestEntry({
+        id: "terminal.revealOwned" as ActionId,
+        title: "Reveal Owned Terminal",
+        description: "Bring the user to a terminal this MCP session created",
+      }),
+      createManifestEntry({
+        id: "terminal.interruptOwned" as ActionId,
+        title: "Interrupt Owned Agent",
+        description: "Stop the turn an agent this MCP session created is running",
       }),
       createManifestEntry({
         id: "terminal.closeAll" as ActionId,

@@ -101,6 +101,9 @@ export const config: AgentConfig = {
     softNewlineSequence: "\x1b\r",
     ignoredInputSequences: ["\x1b\r"],
     quitSubmitMode: "single-write",
+    // Prints "esc to interrupt" in its own working footer — the same hint the
+    // primary patterns below match on.
+    interrupt: "double-escape",
   },
   detection: {
     primaryPatterns: [

@@ -569,6 +569,8 @@ export async function openSession(
       instantiateSchema(manifest.byId.get("skills.load")?.outputSchema) as never,
     handleProjectRunCheck: async () =>
       instantiateSchema(manifest.byId.get("project.runCheck")?.outputSchema) as never,
+    handleTerminalGetStatusViewless: async () =>
+      instantiateSchema(manifest.byId.get("terminal.getStatus")?.outputSchema) as never,
     appendAuditRecord: (input) => {
       audits.push({ toolId: input.toolId, tier: input.tier, outcomeKind: input.outcome.kind });
     },
@@ -800,13 +802,18 @@ export function forbiddenCallSample(
 
 /**
  * Tools that refuse a call for a reason of their own, before the tier gate has
- * anything to say: the two `*Owned` cleanups check the ownership ledger, and
+ * anything to say: every `*Owned` tool checks the ownership ledger, and
  * `help.displayImage` requires a help-session binding. None belongs in a
  * battery whose oracle is "every permitted call is admitted" — PERF-283 grades
- * all three in both directions instead.
+ * them in both directions instead.
+ *
+ * Every `*Owned` tool belongs here, so a new one is a line to add. Left out, it
+ * is called by a battery that reads its correct refusal as a miss.
  */
 export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
+  "terminal.revealOwned",
+  "terminal.interruptOwned",
   "worktree.deleteOwned",
   "help.displayImage",
 ]);

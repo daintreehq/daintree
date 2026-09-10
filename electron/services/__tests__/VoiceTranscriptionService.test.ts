@@ -135,6 +135,10 @@ class MockVadWorker {
 
   postMessage(): void {}
 
+  unref(): this {
+    return this;
+  }
+
   terminate(): Promise<number> {
     this.terminateCalls++;
     return Promise.resolve(0);

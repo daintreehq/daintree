@@ -266,6 +266,28 @@ export interface PanelRegistrySlice {
    * already stored.
    */
   setPanelExtensionState: (id: string, patch: Record<string, unknown>) => boolean;
+  /**
+   * Replace the one `extensionState` key an external MCP client owns (#12340).
+   *
+   * The counterpart to `setPanelExtensionState`, and deliberately not a
+   * relaxation of it: the two policies are disjoint, differing in who may
+   * write, what they may write, and whether the state version moves. This one
+   * reaches only built-in terminals, only under
+   * `MCP_CLIENT_METADATA_KEY`, and never restamps `extensionStateVersion` —
+   * the caller has written nothing the panel's own schema describes.
+   *
+   * `null` deletes the key. Everything else in the bag is preserved, so a
+   * terminal's `presetEnv` survives the write.
+   */
+  setPanelClientMetadata: (
+    id: string,
+    value: Record<string, unknown> | null
+  ) =>
+    | { ok: true; changed: boolean }
+    | {
+        ok: false;
+        reason: import("@shared/utils/mcpClientMetadata.js").ClientMetadataRejection;
+      };
   setDiffPanelFile: (
     id: string,
     filePath: string,

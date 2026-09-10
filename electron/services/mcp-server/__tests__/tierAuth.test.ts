@@ -591,10 +591,58 @@ describe("external tool surface budget (#11585)", () => {
   // after itself — rather than two independent conveniences, and neither
   // widens what the caller can reach: both act only on resources the session
   // itself created.
-  const EXTERNAL_BUDGET_MAX = 28;
+  //
+  // 28 → 29 for #12307's `workspace.list`. The one argument the binding
+  // mechanism already accepts and nothing outside Daintree can answer: ids are
+  // minted here, survive folder moves, and fall back to `randomBytes(32)` on
+  // collision, so the hash external clients were deriving them with is not a
+  // lookup. Raising the ceiling is the decision this budget exists to force
+  // into the open, and it buys a shipped mechanism its missing key.
+  //
+  // 29 → 30 for #12315's `terminal.revealOwned`. The last direction in the
+  // orchestration loop with no route: a client can launch an agent, drive it,
+  // read it and dispose of it, and still cannot bring the user to it. What
+  // makes this worth a slot rather than the two cheaper-looking shapes is that
+  // neither of those works — a `focus` argument would be the first exception to
+  // the unconditional `focusPolicy: "preserve"`, and `panel.focus` here would
+  // select a panel inside a cached view and report success. Ownership is what
+  // keeps the cost bounded: it reveals only a panel this session created.
+  //
+  // 30 → 31 for #12338's `terminal.interruptOwned`. The surface could start an
+  // agent and end it and had nothing in between: submitted text queues behind
+  // the very turn it was meant to stop, so the only working lever was the close,
+  // which discards the conversation. A slot buys the one operation that was
+  // missing rather than a signal API — no signal argument, no key sequence, just
+  // the id — and it stays bounded the same way its two siblings do, by acting
+  // only on a panel this session created.
+  //
+  // 31 → 32 for #12340's `terminal.setClientMetadata`. The surface had a place
+  // to put every kind of state except the caller's own: panel lifetime is
+  // Daintree's and metadata about panels is the client's, so every external
+  // orchestrator kept a sidecar that died with its process and kept entries for
+  // panels the user had closed. Nothing already here can carry it —
+  // `requestedId` is write-once and is an id rather than a payload, the title
+  // is a pinned user-visible field, and `env` writes into the agent's own
+  // process environment. What bounds the cost is that the store is not new:
+  // this is one reserved key on the `extensionState` bag that already ships,
+  // capped at 2KB, and the read rides `terminal.list` behind a flag rather than
+  // taking a second slot. It confers nothing — metadata cannot reach the
+  // ownership ledger, so it buys no `closeOwned` or `revealOwned` authority.
+  const EXTERNAL_BUDGET_MAX = 32;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
+  });
+
+  // Workspace discovery is the one tool on this surface a caller cannot
+  // substitute for, so it gets its own assertion rather than riding on the
+  // count. The external tier must also never reach past the in-app assistant,
+  // which is the half of #10712 that is easy to forget: the two allowlists are
+  // separate files and only a test keeps them from drifting.
+  it("admits workspace discovery externally and in-app alike (#12307)", () => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain("workspace.list");
+    expect(isTierPermitted("external", "workspace.list")).toBe(true);
+    expect(isTierPermitted("workbench", "workspace.list")).toBe(true);
   });
 
   // Guards the opposite failure: a bad merge or an over-eager cut emptying the
@@ -674,6 +722,28 @@ describe("external tool surface budget (#11585)", () => {
     }
     // The in-app assistant, which has a human watching, keeps them.
     expect(isTierPermitted("action", "terminal.close")).toBe(true);
+  });
+
+  // Same split as the closes above, one rung down (#12338): the session-scoped
+  // interrupt is on the surface and the two unscoped ones are not. The fleet
+  // interrupt reaches every armed pane, and the raw single-terminal one reaches
+  // any id a listing hands out — including the user's own agent, mid-turn. What
+  // makes the owned form affordable is that it acts on a panel this session
+  // created and nothing else, which is no escalation over having created it.
+  it("admits only the session-scoped interrupt externally (#12338)", () => {
+    for (const id of ["terminal.interruptOwned", "terminal.interrupt", "fleet.interrupt"]) {
+      // Pin to ground truth: a renamed id must fail loudly, not vacuously pass.
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    }
+    expect(isTierPermitted("external", "terminal.interruptOwned")).toBe(true);
+    expect(shouldExposeTool(makeEntry({ id: "terminal.interruptOwned" }), "external")).toBe(true);
+    // Carried in-app too, or the subset invariant below fails.
+    expect(isTierPermitted("action", "terminal.interruptOwned")).toBe(true);
+
+    expect(isTierPermitted("external", "terminal.interrupt")).toBe(false);
+    expect(shouldExposeTool(makeEntry({ id: "terminal.interrupt" }), "external")).toBe(false);
+    expect(isTierPermitted("external", "fleet.interrupt")).toBe(false);
+    expect(shouldExposeTool(makeEntry({ id: "fleet.interrupt" }), "external")).toBe(false);
   });
 
   // A cut PR that quietly widens is the failure #10710 documents, so assert the

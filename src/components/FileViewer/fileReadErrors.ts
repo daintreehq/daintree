@@ -8,6 +8,7 @@ export const FILE_READ_ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
   NOT_FOUND: "File no longer exists",
   OUTSIDE_ROOT: "File is outside the project root",
   INVALID_PATH: "Invalid file path",
+  NOT_A_FILE: "This is a folder, not a file",
   PERMISSION: "Permission denied — you don't have access to this file",
 };
 

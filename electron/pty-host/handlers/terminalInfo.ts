@@ -25,6 +25,11 @@ export function narrowDetectedAgentId(value: unknown): BuiltInAgentId | undefine
  * a live wide agent into a narrow grid until something refits it (#11718). Read
  * at request time rather than cached, so it can never go stale.
  *
+ * `submission` is the one field that is NOT unconditional: it is projected only
+ * when the caller named a `submissionToken`, because it is a lookup keyed on
+ * that argument rather than a property of the record. Every bulk query family
+ * omits the argument and so keeps the payload it always had.
+ *
  * Read through `readPtyDimension` and only for a LIVE handle, the same contract
  * `TerminalProcess.readPtyGeometry` uses: the getter is native and can throw
  * once the pty is torn down, and an uncaught throw here would take out the whole
@@ -32,7 +37,11 @@ export function narrowDetectedAgentId(value: unknown): BuiltInAgentId | undefine
  * and the batch families lose an entire shard's response. A dead record's last
  * grid is not a live grid either, so it reports unknown and restore falls back.
  */
-export function mapTerminalInfo(t: NonNullable<TerminalInfoLike>, ctx: HostContext) {
+export function mapTerminalInfo(
+  t: NonNullable<TerminalInfoLike>,
+  ctx: HostContext,
+  submissionToken?: string
+) {
   const hasPty = !t.wasKilled && !t.isExited;
   const ptyCols = hasPty ? readPtyDimension(() => t.ptyProcess.cols, null) : null;
   const ptyRows = hasPty ? readPtyDimension(() => t.ptyProcess.rows, null) : null;
@@ -73,5 +82,12 @@ export function mapTerminalInfo(t: NonNullable<TerminalInfoLike>, ctx: HostConte
     everDetectedAgent: t.everDetectedAgent,
     detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
     detectedProcessId: t.detectedProcessIconId,
+    // Only when the query asked for a specific token (#12337). Undefined here
+    // means either "not asked" or "no record", and the two are told apart by
+    // the caller, which knows whether it passed a token.
+    submission:
+      submissionToken === undefined
+        ? undefined
+        : ctx.ptyManager.getSubmission(t.id, submissionToken),
   };
 }

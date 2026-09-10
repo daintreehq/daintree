@@ -139,7 +139,7 @@ interface ActionError {
 | Code | Means |
 | --- | --- |
 | `NOT_FOUND` | no such action id |
-| `VALIDATION_ERROR` | args failed `argsSchema` |
+| `VALIDATION_ERROR` | args failed `argsSchema`, or `run()` threw `UnactionableTargetError` — the args parsed but named a target the action refuses to act on. Both are permanent for identical args, which is what keeps this code out of `RETRIABLE_ERROR_CODES`. |
 | `RESULT_VALIDATION_ERROR` | `run()` succeeded but its return value failed `resultSchema` — a bug in the action, not the caller; the side effects stand |
 | `DISABLED` | `isEnabled(ctx)` returned false; `message` carries `disabledReason` |
 | `RESTRICTED` | `danger: "restricted"`, or `denyPluginDispatch` with a plugin source |
@@ -336,7 +336,7 @@ Use the Event Inspector (Developer Tools) to view action history in real-time.
 
 ## Action Categories
 
-`category` is a free-form string on the definition; the live set is whatever the definitions declare. Today that is 26 values — grep `category: "` under `src/services/actions/definitions/` for the current list. The ones you will meet most:
+`category` is a free-form string on the definition; the live set is whatever the definitions declare — grep `category: "` under `src/services/actions/definitions/` for the current list, and see `CANONICAL_CATEGORIES` in `actionMetadata.test.ts` for the gate a new one has to pass. The ones you will meet most:
 
 | Category | Description | Example Actions |
 | --- | --- | --- |

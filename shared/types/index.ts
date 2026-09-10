@@ -207,6 +207,8 @@ export type {
   IdleTerminalNotifyConfig,
   IdleTerminalNotifyPayload,
   IdleTerminalProjectEntry,
+  // Session restore types
+  SessionRestoreConfig,
   // Idle background-project auto-close types
   IdleBackgroundAutoCloseConfig,
   IdleBackgroundClosedPayload,

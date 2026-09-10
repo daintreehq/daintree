@@ -30,6 +30,7 @@ import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
+import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
@@ -234,6 +235,11 @@ export class McpServerService {
           confirmed,
           sessionOrigin
         ),
+      // Deliberately not this session's own route (#12315): a reveal runs in
+      // the view that is being replaced, in the window that already holds the
+      // destination workspace.
+      revealOwnedRun: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
+        this.bridge.revealOwnedRun(workspaceId, actionId, args, confirmed, sessionOrigin),
       resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
@@ -242,6 +248,8 @@ export class McpServerService {
       handleSkillsSearch: (rawArgs) => handleSkillsSearch(rawArgs),
       handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
+      handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
+        handleTerminalGetStatusViewless(rawArgs, workspaceId),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       getCachedManifestForWorkspace: (workspaceId) =>

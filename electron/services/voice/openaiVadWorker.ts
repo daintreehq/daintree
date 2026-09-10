@@ -76,6 +76,7 @@ async function init(): Promise<void> {
       // to the not-speaking state (the undersized buffer commit is skipped).
       onVADMisfire: () => post({ type: "speech-end" }),
     });
+    if (destroyed) return;
     vad.start();
     post({ type: "ready" });
   } catch (err) {
@@ -85,14 +86,21 @@ async function init(): Promise<void> {
 
 port.on("message", (message: VadWorkerInbound) => {
   if (message.type === "destroy") {
+    if (destroyed) return;
     destroyed = true;
-    const current = vad;
-    vad = null;
-    if (current) {
-      // Drain the in-flight chain, then release the ONNX session.
-      processChain = processChain.then(() => current.destroy()).catch(() => {});
-    }
-    void processChain.finally(() => port.close());
+    // Model creation and inference both own native async work. Keep the
+    // worker alive until they finish and the ONNX session has been released.
+    void initialization
+      .then(async () => {
+        await processChain;
+        const current = vad;
+        vad = null;
+        await current?.destroy();
+      })
+      .catch((err: unknown) => {
+        post({ type: "error", message: formatErrorMessage(err, "VAD cleanup failed") });
+      })
+      .finally(() => port.close());
     return;
   }
 
@@ -100,11 +108,11 @@ port.on("message", (message: VadWorkerInbound) => {
     if (destroyed || !vad) return;
     const frame = pcm16ToFloat32(message.pcm);
     processChain = processChain
-      .then(() => (vad ? vad.processAudio(frame) : undefined))
+      .then(() => (!destroyed && vad ? vad.processAudio(frame) : undefined))
       .catch((err: unknown) => {
         post({ type: "error", message: formatErrorMessage(err, "VAD processing failed") });
       });
   }
 });
 
-void init();
+const initialization = init();

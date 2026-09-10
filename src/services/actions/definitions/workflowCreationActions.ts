@@ -281,7 +281,22 @@ export function registerWorkflowCreationActions(
               `Pull request #${source.pullRequestNumber} has no head branch — cannot create worktree`
             );
           }
-          await worktreeClient.fetchPRBranch(rootPath, source.pullRequestNumber, pr.headRef);
+          // Unlike the dialogs, which try a remote-tracking branch and a local
+          // branch first and render a banner when the fetch fails, this path
+          // fetches unconditionally and its caller is an agent. A raw
+          // "couldn't find remote ref" tells it nothing about what to do next,
+          // so name the branch and the way out. The original git message stays
+          // in the text — it is the only part that says why.
+          try {
+            await worktreeClient.fetchPRBranch(rootPath, source.pullRequestNumber, pr.headRef);
+          } catch (error) {
+            throw new Error(
+              `Couldn't fetch branch "${pr.headRef}" for pull request #${source.pullRequestNumber}. ` +
+                `Fetch it yourself, then retry with source.kind="existingBranch" and source.branchName="${pr.headRef}". ` +
+                `Details: ${formatErrorMessage(error, "the git fetch failed")}`,
+              { cause: error }
+            );
+          }
           requestedBranch = pr.headRef;
           candidateBranch = pr.headRef;
           effectiveBase = pr.headRef;

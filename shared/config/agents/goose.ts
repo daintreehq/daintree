@@ -78,6 +78,11 @@ export const config: AgentConfig = {
     supportsBracketedPaste: true,
     softNewlineSequence: "\n",
     ignoredInputSequences: ["\n", "\x1b\r"],
+    // Advertises "(Ctrl+C to interrupt)" rather than Escape — see the primary
+    // pattern below, which matches that exact footer. Recorded so an
+    // Escape-based interrupt refuses this agent by name instead of writing
+    // keystrokes its TUI never bound.
+    interrupt: "ctrl-c",
   },
   detection: {
     primaryPatterns: [

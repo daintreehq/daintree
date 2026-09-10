@@ -208,5 +208,8 @@ Declaring `shell:exec` raises every command the plugin registers to a confirm di
 | `persistState` bag on the panel | kept | kept | kept with the layout |
 | `host.storage`, `host.settings` | kept | kept | kept |
 | Spawned processes, watchers, badges | kept | killed and cleared | killed and cleared |
+| Custom element registrations | kept | kept — registration is irreversible | cleared with the document |
 
 Design for the middle column. A reload is a fresh worker and a fresh view generation; anything the user would be annoyed to lose belongs in `persistState` or `host.storage`.
+
+The last row is the one that surprises people, because it is the only kind of state a reload cannot give you back: a custom element name outlives the module that registered it, so the rebuilt copy is either silently ignored or rejected outright, depending on whether the library guards its own `define`. [Views → Global registration survives reload](./views.md#global-registration-survives-reload) covers what to do about it.

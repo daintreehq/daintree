@@ -15,6 +15,7 @@ import {
   registerAppView,
   registerProjectView,
 } from "./webContentsRegistry.js";
+import { clearWorkspaceEviction } from "../services/workspaceResidency.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { AppError } from "../utils/errorTypes.js";
 import { logInfo, logWarn } from "../utils/logger.js";
@@ -106,6 +107,14 @@ export async function performSwitch(
       return { view: existing.view, isNew: false };
     }
   }
+
+  // A background restore for this project is a half-built view this switch must
+  // not adopt: the cached fast path below does not check readiness, so it would
+  // activate a renderer that has never painted, behind a warm paint gate that
+  // can never release. The user's switch outranks the restore racing it — drop
+  // the entry and cold-start properly (#12320). No-op when the restore already
+  // finished, which is the common case and leaves a genuine cached view here.
+  host.abandonBackgroundRestore(projectId);
 
   // Snapshot previous state for rollback
   const previousProjectId = host.activeProjectId;
@@ -292,6 +301,11 @@ export async function performSwitch(
   host.views.set(projectId, entry);
   host.webContentsToProject.set(view.webContents.id, projectId);
   registerProjectView(projectId, view.webContents);
+  // The workspace is reachable again, so any eviction recorded against it is
+  // history (#12313). Cleared on the way back in rather than only written on
+  // the way out: a bound MCP session that subscribes and then reads has to see
+  // the reopen, not the loss it already recovered from (lesson #10821).
+  clearWorkspaceEviction(projectId);
 
   // Set up security handlers and attach to window
   setupViewHandlers(host, view, entry);

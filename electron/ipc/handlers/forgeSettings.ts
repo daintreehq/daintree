@@ -16,7 +16,9 @@ import {
   credentialFieldsFor,
   pickPrimaryValue,
 } from "../../services/forge/forgeCredentialUtils.js";
-import type { AuthValidation } from "../../../shared/types/forge.js";
+import { getImplForNamespaceActivating } from "./forgeResolution.js";
+import type { AuthValidation, ForgeProviderImpl } from "../../../shared/types/forge.js";
+import { logWarn } from "../../utils/logger.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -65,10 +67,9 @@ function recordHasCredential(raw: string | undefined): boolean {
 
 /**
  * Push a provider's credentials to the live workspace-host UtilityProcess so
- * branch→PR detection can use them. Mirrors `syncWorkspaceToken` in
- * `GitHubTokenOrchestrator` exactly: a best-effort live push that only
- * reaches currently-spawned hosts and swallows errors when the client is not
- * yet initialized. The host applies no credential VALUES itself — forge calls
+ * branch→PR detection can use them. Best-effort: it only reaches
+ * currently-spawned hosts and swallows errors when the client is not yet
+ * initialized. The host applies no credential VALUES itself — forge calls
  * route over the RPC bridge to main — the push signals presence/absence so
  * detection refreshes or resets promptly (`PRIntegrationService.
  * updateForgeCredentials`). Freshly spawned hosts are covered by the
@@ -88,6 +89,61 @@ async function syncWorkspaceCredential(
     getWorkspaceClient().updateForgeCredentials(providerId, credentials);
   } catch {
     // WorkspaceClient may not be initialized yet — store is the source of truth.
+  }
+}
+
+/**
+ * Ask a provider to re-probe token health because its credential just changed.
+ *
+ * Saving or clearing a credential invalidates whatever the provider's health
+ * service last concluded, but nothing else prompted a re-evaluation — so a
+ * "token expired" banner raised by the old credential survived the save in
+ * every open project view until the next focus/wake probe or an app restart
+ * (#12325). Health is level state written only by the provider's event stream,
+ * so each lifecycle event that invalidates it needs its own explicit trigger.
+ *
+ * `force` skips the provider's focus cooldown, nothing more: the probe stays
+ * authoritative, so the banner clears when the provider confirms the new
+ * credential — never off the `validateToken` result alone.
+ *
+ * Generic on purpose. It goes through the optional `healthEvents` capability
+ * so the host stays forge-neutral; a provider without it simply keeps whatever
+ * health model it has.
+ *
+ * Fire-and-forget, mirroring the focus/wake caller in `window/powerMonitor.ts`
+ * — results arrive via `onTokenHealthChanged`, and a provider that fails here
+ * must not fail the credential mutation. Unlike that caller this also attaches
+ * a rejection handler: the call is async, and an unhandled rejection in main
+ * is worse than the synchronous throw a bare `try` would catch.
+ *
+ * Contained but not silent. A provider failing here leaves the stale banner
+ * standing while the save reports success — the exact symptom of #12325 — so
+ * the failure is logged rather than swallowed. Providers log their own
+ * expected transport failures at debug; reaching here means the call itself
+ * broke, which is a plugin bug worth seeing.
+ */
+function refreshProviderTokenHealth(impl: ForgeProviderImpl, providerId: string): void {
+  const onFailed = (error: unknown) => {
+    // Deliberately no provider error text: a plugin is free to interpolate the
+    // credential it was just handed into its own message, and this buffer is
+    // readable (`logs:getAll`). The scrubber only knows the token shapes it can
+    // pattern-match. Provider id plus the error's constructor names the culprit
+    // without carrying anything the user typed. Wrapped because a hostile error
+    // can throw from `name` too, and reporting a failure must not become one —
+    // that would reject the save and skip the workspace sync.
+    try {
+      logWarn("[forgeSettings] token-health re-probe failed after credential change", {
+        providerId,
+        errorKind: error instanceof Error ? error.name : typeof error,
+      });
+    } catch {
+      // The probe failure is already contained; there is nothing left to do.
+    }
+  };
+  try {
+    void Promise.resolve(impl.healthEvents?.refreshTokenHealth?.({ force: true })).catch(onFailed);
+  } catch (error) {
+    onFailed(error);
   }
 }
 
@@ -190,9 +246,17 @@ export function registerForgeSettingsHandlers(): () => void {
           return { valid: false, error: "Credential is required" };
         }
 
-        const impl = getForgeProviderImpl(providerId);
+        // Saving a credential is often the FIRST interaction with a lazy
+        // provider (fresh session, no matching project open yet), so the impl
+        // may not be bound — activate implicitly like every other forge IPC
+        // surface (#10523 / d434e770c precedent).
+        await awaitPluginInit();
+        const impl = await getImplForNamespaceActivating(providerId);
         if (!impl) {
-          return { valid: false, error: "Provider not activated. Open it in Settings first." };
+          return {
+            valid: false,
+            error: "Provider isn't available — check it's enabled in Plugins",
+          };
         }
 
         const validation = await auditForgeCall(
@@ -217,6 +281,7 @@ export function registerForgeSettingsHandlers(): () => void {
         // plugin bug that should surface, so it is intentionally uncaught,
         // mirroring `validateToken` above.
         impl.setCredentials?.({ kind: "bearer", value: primaryValue });
+        refreshProviderTokenHealth(impl, providerId);
 
         await syncWorkspaceCredential(providerId, primaryValue);
 
@@ -250,7 +315,13 @@ export function registerForgeSettingsHandlers(): () => void {
       // (#9983). The impl may be unbound here — a user can clear a credential
       // without the provider plugin being active — so guard the lookup.
       const impl = getForgeProviderImpl(providerId);
-      if (impl) impl.setCredentials?.(null);
+      if (impl) {
+        impl.setCredentials?.(null);
+        // Re-probe even when nothing was stored under this id: the impl can
+        // still hold in-memory auth — and a stale unhealthy verdict — from a
+        // save the store no longer reflects.
+        refreshProviderTokenHealth(impl, providerId);
+      }
 
       await syncWorkspaceCredential(providerId, null);
     })
