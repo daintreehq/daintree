@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.36.1] - 2026-09-10
+
+A fix release on top of 0.36.0. Codex's new composer animation was holding idle panes in a working state; portaled overlays were unclickable wherever they painted over the toolbar; and a project plugin's empty-canvas surface now has host chrome, a remembered choice, and a way back to the launcher that nothing can paint over.
+
+### Bug Fixes
+
+**Terminals**
+
+- Codex 0.154.0's animated composer field held idle panes in a working state and masked their real working and completion patterns; Codex now launches with the animation off, with a Composer sparkles toggle in Settings › Agents (#12351)
+- The terminal input's placeholder stayed visible underneath dictation ghost text
+
+**UI**
+
+- Context menus, dropdowns, popovers, selects, toasts and the re-entry card were unclickable wherever they painted over the toolbar's window drag region (#12347)
+- A segmented toggle's selected segment was barely distinguishable from its neighbours, and invisible under forced-colors
+
+**Plugins**
+
+- A project plugin claiming the empty-canvas surface read as a stuck panel and could paint over the way back to the launcher; the surface now has host-owned chrome, a first-show notice naming the plugin, and a keep-or-launcher choice remembered per project with a reset in project plugin settings (#12349)
+
+### Other Changes
+
+- The update-ready toast links to the site changelog instead of the GitHub release tag
+
 ## [0.36.0] - 2026-09-10
 
 GitLab joins GitHub as a first-party forge — issues, merge requests, pipeline status and releases, against gitlab.com or a self-hosted instance. Alongside that, the MCP surface gained the primitives an external orchestrator actually needs — workspace discovery and residency, reconnect-durable panel ownership, interrupt and dispatch confirmation — and a relaunch now restores every project that was open rather than one per window.
