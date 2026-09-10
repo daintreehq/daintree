@@ -346,6 +346,9 @@ export function AgentSettings({
     : { customFlags: "", dangerousArgs: "", dangerousEnabled: false };
 
   const defaultDangerousArg = activeAgent ? (DEFAULT_DANGEROUS_ARGS[activeAgent.id] ?? "") : "";
+  const activeDecorations = activeAgent
+    ? getAgentConfig(activeAgent.id)?.capabilities?.decorations
+    : undefined;
 
   if (agentOptions.length === 0) {
     return (
@@ -544,6 +547,26 @@ export function AgentSettings({
               updateAgent={updateAgent}
               onSettingsChange={onSettingsChange}
             />
+
+            {/* Decorative effects — agents that declare an off switch, always agent-level */}
+            {activeDecorations && (
+              <div id="agents-decorations">
+                <SettingsSwitchCard
+                  variant="compact"
+                  title={activeDecorations.label}
+                  subtitle={activeDecorations.description}
+                  isEnabled={activeEntry.decorativeEffects === true}
+                  onChange={() => {
+                    const next = activeEntry.decorativeEffects !== true;
+                    void (async () => {
+                      await updateAgent(activeAgent.id, { decorativeEffects: next });
+                      onSettingsChange?.();
+                    })();
+                  }}
+                  ariaLabel={`${activeDecorations.label} for ${activeAgent.name}`}
+                />
+              </div>
+            )}
 
             {/* Share Clipboard Directory — Gemini only, always agent-level */}
             {activeAgent.id === "gemini" && (

@@ -9,6 +9,7 @@ import { isAgentPinned } from "../../shared/utils/agentPinned";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { setAgentSettingsEntryAccessor } from "./storeAccessors";
 
 /** Bump when a future migration needs to run on existing persisted stores. */
 const CURRENT_SETTINGS_VERSION = 1;
@@ -543,3 +544,10 @@ export function cleanupAgentSettingsStore() {
     isInitialized: false,
   });
 }
+
+// Registered here rather than in the orchestrator so any consumer that reads
+// per-agent launch choices through `storeAccessors` (help sessions) sees them
+// as soon as this store exists, mirroring projectStore's path-index accessor.
+setAgentSettingsEntryAccessor(
+  (agentId) => useAgentSettingsStore.getState().settings?.agents?.[agentId]
+);

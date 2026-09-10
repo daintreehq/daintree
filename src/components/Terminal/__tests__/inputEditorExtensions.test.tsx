@@ -29,6 +29,7 @@ import {
   createFilePasteHandler,
   interimWidgetField,
   setInterimText,
+  createPlaceholder,
   pendingAIField,
   setPendingAIRanges,
   diffChipField,
@@ -1019,6 +1020,27 @@ describe("interimWidgetField", () => {
     // is still the original value — and the undo history holds no entries
     // attributable to these effect-only transactions.
     expect(view.state.doc.toString()).toBe("base");
+    view.destroy();
+  });
+
+  it("hides the placeholder while ghost text is showing on an empty doc", () => {
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [interimWidgetField, createPlaceholder("Ask Claude")],
+      }),
+    });
+
+    expect(view.contentDOM.querySelector(".cm-placeholder")).not.toBeNull();
+    expect(view.contentDOM.classList.contains("cm-voice-interim-active")).toBe(false);
+
+    view.dispatch({ effects: setInterimText.of("dictated words") });
+    expect(view.contentDOM.classList.contains("cm-voice-interim-active")).toBe(true);
+
+    view.dispatch({ effects: setInterimText.of("") });
+    expect(view.contentDOM.classList.contains("cm-voice-interim-active")).toBe(false);
     view.destroy();
   });
 

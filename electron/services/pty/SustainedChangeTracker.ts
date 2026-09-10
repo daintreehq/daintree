@@ -1,3 +1,9 @@
+import {
+  isCosmeticParticleCell,
+  MIN_PARTICLE_CELLS,
+  PARTICLE_FG_COLOR_MODE,
+} from "./CosmeticParticleFilter.js";
+
 export const AGENT_WORKING_RECOVERY_WINDOW_MS = 2500;
 export const AGENT_WORKING_RECOVERY_MIN_SUSTAIN_MS = 2000;
 export const AGENT_WORKING_RECOVERY_MIN_CHANGED_FRAMES = 4;
@@ -259,11 +265,29 @@ function normalizeTextUnits(text: string): string[] {
   return collapseRepeatedUnits(units);
 }
 
+function countParticleCells(rows: readonly (readonly VisibleContentCell[])[]): number {
+  let count = 0;
+  for (const row of rows) {
+    for (const cell of row) {
+      if (
+        cell.width !== 0 &&
+        cell.fgColorMode === PARTICLE_FG_COLOR_MODE &&
+        isCosmeticParticleCell(cell.code, cell.fgColorMode, cell.fgColor)
+      ) {
+        count += 1;
+        if (count >= MIN_PARTICLE_CELLS) return count;
+      }
+    }
+  }
+  return count;
+}
+
 function normalizeCellUnits(rows: readonly (readonly VisibleContentCell[])[]): string[] {
+  const dropParticles = countParticleCells(rows) >= MIN_PARTICLE_CELLS;
   const units: NormalizedVisibleUnit[] = [];
   for (const row of rows) {
     for (const cell of row) {
-      const unit = visibleCellUnit(cell);
+      const unit = visibleCellUnit(cell, dropParticles);
       if (unit !== null) {
         units.push(unit);
       }
@@ -272,13 +296,27 @@ function normalizeCellUnits(rows: readonly (readonly VisibleContentCell[])[]): s
   return collapseRepeatedUnits(units);
 }
 
-function visibleCellUnit(cell: VisibleContentCell): NormalizedVisibleUnit | null {
+function visibleCellUnit(
+  cell: VisibleContentCell,
+  dropParticles: boolean
+): NormalizedVisibleUnit | null {
   if (cell.width === 0) {
     return null;
   }
 
   const chars = cell.chars;
   if (chars.length === 0 || chars === " " || /^\s*$/u.test(chars)) {
+    return null;
+  }
+
+  // Parity with buildViewportUnitsSnapshot's fused pass: inside a particle
+  // field, an ambient particle cell carries no work-progress information.
+  // See CosmeticParticleFilter for the rule and MIN_PARTICLE_CELLS for the gate.
+  if (
+    dropParticles &&
+    cell.fgColorMode === PARTICLE_FG_COLOR_MODE &&
+    isCosmeticParticleCell(cell.code, cell.fgColorMode, cell.fgColor)
+  ) {
     return null;
   }
 

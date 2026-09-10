@@ -7,7 +7,7 @@ import { useDistributionStore } from "@/store/distributionStore";
 
 const AVAILABLE_HINT = 'Use "Check for Updates..." to check again.';
 const UPDATE_CORRELATION_ID = "app-update";
-const RELEASE_NOTES_BASE_URL = "https://github.com/daintreehq/daintree/releases/tag";
+const CHANGELOG_URL = "https://daintree.org/changelog";
 
 /** The stage of the update the user is currently being told about. */
 type UpdateStage = { version: string; downloaded: boolean };
@@ -46,15 +46,12 @@ function restartAction() {
   };
 }
 
-function releaseNotesAction(version: string): NotificationAction {
-  // `version` arrives as bare semver from the updater while GitHub tags carry a
-  // leading `v`. It is NOT pre-validated: AutoUpdaterService runs semver.valid
-  // only to gate the persisted pendingUpdateVersion and broadcasts the raw
-  // string, so encode it as a single path segment — a stray `/`, `?` or `#`
-  // would otherwise retarget the URL elsewhere on github.com.
-  const url = `${RELEASE_NOTES_BASE_URL}/v${encodeURIComponent(version)}`;
+function changelogAction(): NotificationAction {
+  // Site-wide changelog, not a per-version page: daintree.org anchors its
+  // entries by date (#2026-09-07), which the updater's bare semver cannot
+  // resolve, so there is nothing version-specific to deep-link to.
   return {
-    label: "View release notes",
+    label: "View changelog",
     // Secondary keeps "Restart to update" the single load-bearing CTA — this is
     // an informational escape hatch, not a competing decision.
     variant: "secondary",
@@ -62,11 +59,11 @@ function releaseNotesAction(version: string): NotificationAction {
     // inbox-history filter in notify.ts — actions without an actionId are
     // silently dropped, leaving history text with no way to act on it.
     actionId: "system.openExternal",
-    actionArgs: { url },
+    actionArgs: { url: CHANGELOG_URL },
     onClick: () => {
-      const promise = window.electron?.system?.openExternal(url);
+      const promise = window.electron?.system?.openExternal(CHANGELOG_URL);
       if (promise) {
-        safeFireAndForget(promise, { context: "Open release notes" });
+        safeFireAndForget(promise, { context: "Open changelog" });
       }
     },
   };
@@ -87,8 +84,8 @@ function surfaceAvailable(version: string): void {
     // Explicit undefined: if a prior "Update ready" toast is live (stage
     // regression), clear its "Restart to update" action so the user does not
     // accidentally restart into a stale build while a newer one is still
-    // downloading, and clear its "View release notes" link so it cannot point
-    // at the superseded version's tag.
+    // downloading. The "View changelog" link goes with it — it stays valid, but
+    // this stage is an announcement, not a control surface.
     action: undefined,
     actions: undefined,
     // Forwarded to main only when the user explicitly closes the toast —
@@ -117,7 +114,7 @@ function surfaceDownloaded(version: string): void {
       dismissed: false,
       onDismiss: undefined,
       action: restartAction(),
-      actions: [releaseNotesAction(version)],
+      actions: [changelogAction()],
     });
     return;
   }
@@ -138,7 +135,7 @@ function surfaceDownloaded(version: string): void {
     duration: 0,
     correlationId: UPDATE_CORRELATION_ID,
     action: restartAction(),
-    actions: [releaseNotesAction(version)],
+    actions: [changelogAction()],
   });
 }
 
@@ -208,12 +205,14 @@ export function useUpdateListener(suppressToasts = false): void {
         title: "Downloading update",
         message: <DownloadProgress percent={info.percent} />,
         inboxMessage: `Downloading update: ${Math.round(info.percent)}%`,
-        // A download in flight means there is nothing ready to install, so
-        // neither control can be valid here. surfaceAvailable() normally clears
-        // them on the stage regression, but it routes through notify(), which
-        // drops the payload entirely while suppressed (quiet hours, blurred,
-        // rate-limited). Without this the previous version's restart button and
-        // release-notes link ride along onto the downloading toast.
+        // A download in flight means there is nothing ready to install, so the
+        // restart button cannot be valid; the changelog link is dropped with it
+        // to keep the downloading toast a pure progress readout rather than a
+        // control surface. surfaceAvailable() normally clears both on the stage
+        // regression, but it routes through notify(), which drops the payload
+        // entirely while suppressed (quiet hours, blurred, rate-limited).
+        // Without this the previous version's controls ride along onto the
+        // downloading toast.
         action: undefined,
         actions: undefined,
       });

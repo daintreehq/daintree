@@ -16,7 +16,9 @@ import {
   stripAssignedSessionIdArgs,
   supportsSessionIdAssignment,
   reconcileBypassFlags,
+  reconcileDecorationFlags,
   reconcileInlineModeFlag,
+  resolveKeepDecorations,
   resolveEffectiveBypass,
   resolveEffectiveInlineMode,
 } from "@shared/types";
@@ -490,10 +492,14 @@ export const createRestartActions = (
         );
         const dangerousArgs = runtimeForEnv.settings.effectiveEntry.dangerousArgs;
         const reconcileFlags = (base: string[]): string[] =>
-          reconcileInlineModeFlag(
-            reconcileBypassFlags(base, effectiveAgentId, effectiveBypass, dangerousArgs),
+          reconcileDecorationFlags(
+            reconcileInlineModeFlag(
+              reconcileBypassFlags(base, effectiveAgentId, effectiveBypass, dangerousArgs),
+              effectiveAgentId,
+              effectiveInline
+            ),
             effectiveAgentId,
-            effectiveInline
+            resolveKeepDecorations(runtimeForEnv.settings.effectiveEntry)
           );
         if (nextAgentLaunchFlags && nextAgentLaunchFlags.length > 0) {
           nextAgentLaunchFlags = reconcileFlags(nextAgentLaunchFlags);

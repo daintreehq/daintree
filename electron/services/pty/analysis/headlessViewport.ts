@@ -1,4 +1,5 @@
 import type { IBufferCell, Terminal as HeadlessTerminal } from "@xterm/headless";
+import { isCosmeticParticleCell, MIN_PARTICLE_CELLS } from "../CosmeticParticleFilter.js";
 import {
   createVisibleContentSnapshot,
   isCollapsibleFillText,
@@ -28,6 +29,9 @@ interface CachedRawRow {
   units: VisibleContentUnit[];
   collapsible: boolean[];
   hash: number;
+  // The viewport-wide particle-density decision the units were built under;
+  // a row is only reusable when that decision has not flipped.
+  dropParticles: boolean;
 }
 
 type CursorBuffer = {
@@ -216,7 +220,8 @@ function cacheRawRow(
   cols: number,
   units: VisibleContentUnit[],
   collapsible: boolean[],
-  hash: number
+  hash: number,
+  dropParticles: boolean
 ): CachedRawRow {
   const cellCount = Math.min(cols, raw.length);
   const combined: Record<number, string | undefined> = {};
@@ -244,7 +249,56 @@ function cacheRawRow(
     units,
     collapsible,
     hash,
+    dropParticles,
   };
+}
+
+// Cheap pre-pass over the viewport so the per-cell particle skip below can be
+// density-gated like the byte path (see MIN_PARTICLE_CELLS). Integer reads
+// only on the raw path; stops as soon as the gate is met.
+function countParticleCells(
+  buffer: CursorBuffer,
+  start: number,
+  end: number,
+  cols: number,
+  reusableCell: IBufferCell
+): number {
+  let count = 0;
+  for (let y = start; y < end; y += 1) {
+    const line = buffer.getLine(y);
+    if (!line || typeof line.getCell !== "function") continue;
+    const raw = rawBufferLine(line, cols);
+    const cellCount = raw ? Math.min(cols, raw.length) : cols;
+    for (let x = 0; x < cellCount; x += 1) {
+      let codePoint: number | undefined;
+      let fgColorMode: number;
+      let fgColor: number;
+      if (raw) {
+        const offset = x * CELL_SIZE;
+        const content = raw._data[offset] ?? 0;
+        if ((content & CONTENT_IS_COMBINED_MASK) !== 0 || content >>> CONTENT_WIDTH_SHIFT === 0) {
+          continue;
+        }
+        const fg = raw._data[offset + 1] ?? 0;
+        fgColorMode = fg & COLOR_MODE_MASK;
+        if (fgColorMode !== COLOR_RGB) continue;
+        codePoint = content & CONTENT_CODEPOINT_MASK;
+        fgColor = fg & 0xffffff;
+      } else {
+        const cell = line.getCell(x, reusableCell);
+        if (!cell || cell.getWidth() === 0) continue;
+        fgColorMode = cell.getFgColorMode();
+        if (fgColorMode !== COLOR_RGB) continue;
+        codePoint = singleCodePoint(cell.getChars());
+        fgColor = cell.getFgColor();
+      }
+      if (isCosmeticParticleCell(codePoint, fgColorMode, fgColor)) {
+        count += 1;
+        if (count >= MIN_PARTICLE_CELLS) return count;
+      }
+    }
+  }
+  return count;
 }
 
 function hashUnits(units: readonly VisibleContentUnit[]): number {
@@ -312,6 +366,8 @@ function buildViewportUnitsSnapshot(
   const cols = terminal.cols;
   const reusableCell = buffer.getNullCell();
   if (rawRowCache && rawRowCache.length > terminal.rows) rawRowCache.length = terminal.rows;
+  const dropParticles =
+    countParticleCells(buffer, start, end, cols, reusableCell) >= MIN_PARTICLE_CELLS;
 
   const units: VisibleContentUnit[] = [];
   let hash = FNV_SEED;
@@ -335,6 +391,7 @@ function buildViewportUnitsSnapshot(
     if (
       raw !== undefined &&
       cached !== undefined &&
+      cached.dropParticles === dropParticles &&
       (!rowMayHaveChanged || rawRowMatches(cached, raw, cols))
     ) {
       rowUnits = cached.units;
@@ -431,6 +488,19 @@ function buildViewportUnitsSnapshot(
           fgColor = cell.getFgColor();
         }
 
+        // Ambient particle animations (Codex's composer sparkles) repaint dozens
+        // of cells per frame at ~15 fps whether or not the agent is working.
+        // Skipped only inside a particle field (the viewport-wide density
+        // gate above), so a lone grey one-dot glyph that is some CLI's whole
+        // indicator still registers. See CosmeticParticleFilter.
+        if (dropParticles && fgColorMode === COLOR_RGB) {
+          const particleCodePoint =
+            rawCodePoint ?? (chars !== undefined ? singleCodePoint(chars) : undefined);
+          if (isCosmeticParticleCell(particleCodePoint, fgColorMode, fgColor)) {
+            continue;
+          }
+        }
+
         const defaultSingleWidth =
           attributes === 0 && fgColorMode === 0 && fgColor === -1 && width === 1;
         const defaultCodePoint =
@@ -461,7 +531,9 @@ function buildViewportUnitsSnapshot(
       rowHash = hashUnits(rowUnits);
       if (rawRowCache) {
         rawRowCache[rowIndex] =
-          raw === undefined ? undefined : cacheRawRow(raw, cols, rowUnits, rowCollapsible, rowHash);
+          raw === undefined
+            ? undefined
+            : cacheRawRow(raw, cols, rowUnits, rowCollapsible, rowHash, dropParticles);
       }
     }
 

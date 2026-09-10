@@ -148,9 +148,10 @@ export function ContentGridDefault({
                   <div className="col-span-full row-span-full">
                     {/*
                       Passthrough unless a project plugin claims this surface
-                      (§7.8), in which case it adds the one control that swaps
-                      between the plugin's canvas and the host's launcher — so a
-                      claimed surface can never strand the user.
+                      (§7.8), in which case it adds a host-owned strip above the
+                      region that names the plugin's panel and swaps between it
+                      and the host's launcher — so a claimed surface reads as the
+                      empty canvas and can never strand the user.
                     */}
                     <ProjectSurfaceFrame>
                       {ctx.emptyContent ?? (

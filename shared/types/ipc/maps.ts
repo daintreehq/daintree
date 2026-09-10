@@ -2007,6 +2007,11 @@ export interface IpcEventMap {
   // renders from the push rather than refetching.
   "plugin:project-plugin-visibility-changed": import("../plugin.js").ProjectPluginVisibilityChangedEvent;
 
+  // A project's remembered answers about its plugin surface claims changed
+  // (main → renderer, project-scoped). Carries the full set, so every view of
+  // the project — the canvas and its settings disclosure — agrees at once.
+  "plugin:project-surface-choices-changed": import("../plugin.js").ProjectSurfaceChoicesChangedEvent;
+
   // The project's git remote table changed (main → renderer, #11155) — e.g.
   // `git remote add origin`. Signal-only and project-scoped: the renderer drops
   // its cached forge-provider resolution for `projectId` and re-resolves via
@@ -2166,6 +2171,7 @@ export type IpcEventBusMap = Pick<
   | "plugin:project-plugins-changed"
   | "plugin:project-plugin-staged"
   | "plugin:project-plugin-visibility-changed"
+  | "plugin:project-surface-choices-changed"
   // Project's git remotes changed — re-resolve the forge provider (global broadcast)
   | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)

@@ -1,4 +1,4 @@
-import type { TabGroup } from "@shared/types";
+import type { AgentSettingsEntry, TabGroup } from "@shared/types";
 import { getNarrowPanel } from "./slices/panelRegistry/selectors";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
@@ -41,6 +41,23 @@ let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
+let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
+
+export function setAgentSettingsEntryAccessor(
+  getter: (agentId: string) => AgentSettingsEntry | undefined
+): void {
+  _getAgentSettingsEntry = getter;
+}
+
+/**
+ * The persisted per-agent settings entry, or `null` when the agent settings
+ * store is not mounted. Lets controllers that launch agents outside the normal
+ * panel path (help sessions) honour per-agent launch choices without importing
+ * the store module at eval.
+ */
+export function getAgentSettingsEntrySnapshot(agentId: string): AgentSettingsEntry | null {
+  return _getAgentSettingsEntry?.(agentId) ?? null;
+}
 
 export function setPanelStoreAccessor(getter: () => PanelStoreSnapshot): void {
   _getPanelStoreState = getter;

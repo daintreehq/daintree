@@ -666,3 +666,28 @@ describe("ReEntrySummary", () => {
     });
   });
 });
+
+describe("re-entry summary drag-region opt-out (issue #12347)", () => {
+  it("opts the card out of the drag region, not its pointer-events-none wrapper", () => {
+    // top-3 plus the wrapper's p-4 puts the card's header at y≈28px — inside
+    // the toolbar's 48px drag band with no banner needed — so Pin and Dismiss
+    // are swallowed as window drags. The wrapper is full-width and always
+    // mounted, so the opt-out must sit on the card instead.
+    render(<ReEntrySummary state={makeState({ rows: [makeRow()] })} />);
+
+    const dismiss = screen.getByRole("button", { name: "Dismiss summary" });
+    const stamped = dismiss.closest(".app-no-drag");
+    if (!(stamped instanceof HTMLElement)) throw new Error("no opt-out above the dismiss control");
+
+    // Located independently of the stamp, so moving the opt-out up onto the
+    // wrapper fails here rather than quietly satisfying a relative lookup.
+    // Deliberately not a pointer-events check: the card itself carries
+    // `pointer-events-none` until its entry animation runs.
+    const wrapper = document.querySelector(".fixed.top-3");
+    if (!(wrapper instanceof HTMLElement)) throw new Error("summary wrapper not rendered");
+    expect(wrapper.className).toContain("pointer-events-none");
+    expect(wrapper.className.split(/\s+/)).not.toContain("app-no-drag");
+    expect(wrapper.contains(stamped)).toBe(true);
+    expect(stamped).not.toBe(wrapper);
+  });
+});

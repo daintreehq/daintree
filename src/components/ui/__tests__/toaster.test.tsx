@@ -1928,3 +1928,31 @@ describe("Toast stack motion (issue #9618)", () => {
     expect(card.className).not.toContain("motion-reduce:transition-none");
   });
 });
+
+describe("Toast drag-region opt-out (issue #12347)", () => {
+  beforeEach(() => {
+    useNotificationStore.getState().reset();
+  });
+
+  it("opts the toast out of the drag region, not its pointer-events-none column", () => {
+    // A global banner renders above the toolbar, pushing the drag band below
+    // this column's top-14 origin, so toast controls land inside it. Which
+    // element carries the opt-out is the whole fix: the column is full-width
+    // and always mounted, so stamping it would hold a no-drag rect across the
+    // title bar with no toast showing.
+    render(<Toaster />);
+    act(() => {
+      addToast({ message: "Drag region probe" });
+    });
+
+    const dismiss = screen.getByRole("button", { name: "Dismiss notification" });
+    const stamped = dismiss.closest(".app-no-drag");
+    if (!(stamped instanceof HTMLElement)) throw new Error("no opt-out above the dismiss control");
+    expect(stamped.className).toContain("pointer-events-auto");
+    expect(stamped.className).not.toContain("pointer-events-none");
+
+    const column = document.querySelector('[aria-label="Notifications"]');
+    expect(column?.className).toContain("pointer-events-none");
+    expect(column?.className.split(/\s+/)).not.toContain("app-no-drag");
+  });
+});

@@ -292,7 +292,7 @@ describe("useUpdateListener", () => {
     expect(window.electron.update.quitAndInstall).toHaveBeenCalledTimes(1);
   });
 
-  it("offers release notes for the downloaded version alongside the restart action", () => {
+  it("offers the changelog alongside the restart action", () => {
     renderHook(() => useUpdateListener());
 
     act(() => {
@@ -305,25 +305,22 @@ describe("useUpdateListener", () => {
 
     const patch = updateNotificationMock.mock.calls[0]![1];
     // Restart stays the single primary CTA in the singular `action` slot (asserted
-    // by the preceding test); the release-notes link rides `actions[]`, which the
+    // by the preceding test); the changelog link rides `actions[]`, which the
     // toaster renders to its left as muted secondary text.
     expect(patch.actions).toHaveLength(1);
 
     const notes = patch.actions![0]!;
-    expect(notes.label).toBe("View release notes");
+    expect(notes.label).toBe("View changelog");
     expect(notes.variant).toBe("secondary");
     // actionId + actionArgs are what keep the button alive in inbox history —
     // notify.ts drops actions that carry no actionId.
     expect(notes.actionId).toBe("system.openExternal");
-    // The updater reports bare semver; the GitHub tag carries a leading `v`.
-    expect(notes.actionArgs).toEqual({
-      url: "https://github.com/daintreehq/daintree/releases/tag/v2.5.0",
-    });
+    // The site changelog is anchored by date, not version, so the link is the
+    // same page for every release.
+    expect(notes.actionArgs).toEqual({ url: "https://daintree.org/changelog" });
 
     notes.onClick();
-    expect(openExternalMock).toHaveBeenCalledWith(
-      "https://github.com/daintreehq/daintree/releases/tag/v2.5.0"
-    );
+    expect(openExternalMock).toHaveBeenCalledWith("https://daintree.org/changelog");
   });
 
   it("strips both update controls when progress lands on a ready toast", () => {
@@ -413,16 +410,14 @@ describe("useUpdateListener", () => {
         duration: 0,
         action: expect.objectContaining({ label: "Restart to update" }),
         // The fresh-toast branch is the one that writes an inbox entry, so the
-        // release-notes link has to ride this payload too — not just the
+        // changelog link has to ride this payload too — not just the
         // in-place update path.
         actions: [
           expect.objectContaining({
-            label: "View release notes",
+            label: "View changelog",
             variant: "secondary",
             actionId: "system.openExternal",
-            actionArgs: {
-              url: "https://github.com/daintreehq/daintree/releases/tag/v2.5.0",
-            },
+            actionArgs: { url: "https://daintree.org/changelog" },
           }),
         ],
       })
@@ -579,8 +574,8 @@ describe("useUpdateListener", () => {
       capturedAvailable!({ version: "2.5.0" });
     });
     expect(notifyMock.mock.calls[0]![0]).toHaveProperty("action", undefined);
-    // Same reasoning for the release-notes link: left in place it would point
-    // at the superseded version's tag while a newer build downloads.
+    // Same reasoning for the changelog link: a stage regression must leave no
+    // stray control behind while a newer build downloads.
     expect(notifyMock.mock.calls[0]![0]).toHaveProperty("actions", undefined);
   });
 

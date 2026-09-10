@@ -179,7 +179,9 @@ export interface ViewContribution {
  * `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
  * `projectHome` and `defaultLayout` are not here yet.
  */
-export type ProjectSurfaceSlot = "emptyCanvas";
+export const PROJECT_SURFACE_SLOTS = ["emptyCanvas"] as const;
+
+export type ProjectSurfaceSlot = (typeof PROJECT_SURFACE_SLOTS)[number];
 
 /** A surface slot claim naming one of the plugin's own `contributes.views`. */
 export interface SurfaceViewSlot {
@@ -208,6 +210,53 @@ export interface ProjectSurfaceClaim {
 
 /** Every surface claimed in one project, keyed by slot. */
 export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
+
+export function isProjectSurfaceSlot(value: unknown): value is ProjectSurfaceSlot {
+  return PROJECT_SURFACE_SLOTS.some((slot) => slot === value);
+}
+
+/**
+ * What the user wants a claimed slot to show: the plugin's surface, or the
+ * host's own stock content in its place.
+ */
+export type ProjectSurfaceChoice = "surface" | "stock";
+
+export function isProjectSurfaceChoice(value: unknown): value is ProjectSurfaceChoice {
+  return value === "surface" || value === "stock";
+}
+
+/**
+ * One project's remembered answer about one surface slot. Machine-local, in
+ * Daintree's own store: which canvas one person prefers is not a fact about the
+ * repository.
+ */
+export interface ProjectSurfaceChoiceRecord {
+  /**
+   * The MANIFEST id of the plugin the answer was about. A slot that has since
+   * passed to a different plugin is undecided again — agreeing to one plugin's
+   * canvas is not agreeing to whatever claims the slot next.
+   */
+  pluginId: string;
+  choice: ProjectSurfaceChoice;
+  /** Epoch ms of the answer. */
+  decidedAt: number;
+}
+
+/** Every remembered surface answer in one project, keyed by slot. */
+export type ProjectSurfaceChoices = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord>>;
+
+/**
+ * One project's remembered surface answers, named by the project main resolved
+ * them for. Every read, write and push carries the name, so a view can refuse a
+ * set that is not its own.
+ */
+export interface ProjectSurfaceChoicesSnapshot {
+  projectId: string;
+  choices: ProjectSurfaceChoices;
+}
+
+/** `plugin:project-surface-choices-changed` — the full set, for every view of the project. */
+export type ProjectSurfaceChoicesChangedEvent = ProjectSurfaceChoicesSnapshot;
 
 /**
  * The attribute the host stamps on the element a plugin view renders into, and
