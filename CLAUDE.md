@@ -82,7 +82,7 @@ CI on PRs: `check` + vitest (4 shards) + build + smoke, Ubuntu only, no E2E. `ci
 
 ## Product invariants
 
-**Never modify user-owned agent config** — `~/.claude/`, `~/.gemini/`, `~/.codex/`, user hooks, or CLAUDE.md/AGENTS.md files in the user's own projects — not even additive CLI injection like `--settings`. If a capability needs it, the capability is out of scope; use passive observation instead (output parsing, OSC titles, process tree, `AgentPatternDetector`-style regex). Precedent #4100.
+**Never modify user-owned agent config** — `~/.claude/`, `~/.gemini/`, `~/.codex/`, user hooks, or CLAUDE.md/AGENTS.md files in the user's own projects — not even additive CLI injection like `--settings`. If a capability needs it, the capability is out of scope; use passive observation instead (output parsing, OSC titles, process tree, `AgentPatternDetector`-style regex). Precedent #4100. The one sanctioned shape is a **display-only** launch switch declared as a registry capability with a user-facing setting — `inlineModeFlag`/`altScreenFlag` and `decorations` (Codex's `-c tui.whimsy=false`, default off since the composer sparkles made every idle pane repaint at 15 fps). Those change how the CLI draws, never what it does or which config it loads.
 
 **Surface observations, not interpretations.** Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong; MCP tools and UI should expose what we saw, never what we concluded from it. `running` is a runtime status, not an agent state.
 

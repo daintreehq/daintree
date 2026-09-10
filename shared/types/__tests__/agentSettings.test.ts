@@ -14,6 +14,7 @@ import {
   combineInlineModes,
   resolveEffectiveInlineMode,
   reconcileInlineModeFlag,
+  reconcileDecorationFlags,
   isAgentBypassSupported,
   buildAssignedSessionIdArgs,
   supportsSessionIdAssignment,
@@ -1576,5 +1577,64 @@ describe("DEFAULT_AGENT_SETTINGS inline seeding (#10876)", () => {
 
   it("defaults globalUseAltScreen off", () => {
     expect(DEFAULT_AGENT_SETTINGS.globalUseAltScreen).toBe(false);
+  });
+});
+
+describe("decorative effects (registry capabilities.decorations)", () => {
+  const OFF = ["-c", "tui.whimsy=false"];
+
+  it("switches codex's composer sparkles off by default on every launch path", () => {
+    expect(buildAgentLaunchFlags({}, "codex")).toEqual(expect.arrayContaining(OFF));
+    // The value is a non-dash token, so the command builders shell-quote it.
+    expect(generateAgentCommand("codex", {}, "codex")).toMatch(/-c '?tui\.whimsy=false'?/);
+    // A `-c` override is a global option, so it must precede the subcommand.
+    expect(buildResumeCommand("codex", "abc-123", buildAgentLaunchFlags({}, "codex"))).toMatch(
+      /^codex .*-c '?tui\.whimsy=false'? resume abc-123$/
+    );
+  });
+
+  it("keeps the effects when the user opts in", () => {
+    expect(buildAgentLaunchFlags({ decorativeEffects: true }, "codex")).not.toContain("-c");
+    expect(generateAgentCommand("codex", { decorativeEffects: true }, "codex")).not.toContain(
+      "tui.whimsy"
+    );
+  });
+
+  it("leaves agents that declare no decorations alone", () => {
+    expect(buildAgentLaunchFlags({}, "claude")).toEqual([]);
+    expect(reconcileDecorationFlags(["--verbose"], "claude", false)).toEqual(["--verbose"]);
+  });
+
+  it("does not duplicate tokens the user already put in custom flags", () => {
+    const flags = buildAgentLaunchFlags({ customFlags: "-c tui.whimsy=false" }, "codex");
+    expect(flags.filter((f) => f === "tui.whimsy=false")).toHaveLength(1);
+  });
+
+  it("reconciles a persisted snapshot against the current choice, idempotently", () => {
+    const stale = ["--no-alt-screen", "--model", "gpt-5.5"];
+    const withOff = reconcileDecorationFlags(stale, "codex", false);
+    expect(withOff).toEqual([...stale, ...OFF]);
+    // Already correct → untouched, position preserved.
+    expect(reconcileDecorationFlags(withOff, "codex", false)).toEqual(withOff);
+    // User later keeps the effects → the token pair is removed as a unit.
+    expect(reconcileDecorationFlags(withOff, "codex", true)).toEqual(stale);
+    expect(reconcileDecorationFlags(stale, "codex", true)).toEqual(stale);
+    // The pair is matched as a sequence, not as loose tokens.
+    const split = ["-c", "model=x", "tui.whimsy=false"];
+    expect(reconcileDecorationFlags(split, "codex", false)).toEqual([...split, ...OFF]);
+    // Duplicates converge: two copies become one (first position kept) or none.
+    const doubled = [...OFF, "--verbose", ...OFF];
+    expect(reconcileDecorationFlags(doubled, "codex", false)).toEqual([...OFF, "--verbose"]);
+    expect(reconcileDecorationFlags(doubled, "codex", true)).toEqual(["--verbose"]);
+  });
+
+  it("does not double the pair when a preset's args already carry it", () => {
+    const flags = buildAgentLaunchFlags({}, "codex", { presetArgs: [...OFF, "--verbose"] });
+    expect(flags.filter((f) => f === "tui.whimsy=false")).toHaveLength(1);
+    // And a later opt-in removes the preset's copy as well as the generated one.
+    const kept = buildAgentLaunchFlags({ decorativeEffects: true }, "codex", {
+      presetArgs: [...OFF, "--verbose"],
+    });
+    expect(kept).not.toContain("tui.whimsy=false");
   });
 });

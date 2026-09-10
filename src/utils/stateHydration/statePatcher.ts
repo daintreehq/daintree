@@ -23,9 +23,11 @@ import {
   buildLaunchCommandFromFlags,
   mintAssignedSessionId,
   reconcileBypassFlags,
+  reconcileDecorationFlags,
   reconcileInlineModeFlag,
   resolveEffectiveBypass,
   resolveEffectiveInlineMode,
+  resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 // Re-exported rather than defined here: main counts the agent panels a project
@@ -574,10 +576,14 @@ export function buildArgsForRespawn(
     // not carry a stale flag forward once the global switch or per-agent choice
     // is flipped. Applied together so restart/restore/resume replay clean flags.
     const reconcileFlags = (base: string[]): string[] =>
-      reconcileInlineModeFlag(
-        reconcileBypassFlags(base, agentId, effectiveBypass, dangerousArgs),
+      reconcileDecorationFlags(
+        reconcileInlineModeFlag(
+          reconcileBypassFlags(base, agentId, effectiveBypass, dangerousArgs),
+          agentId,
+          effectiveInline
+        ),
         agentId,
-        effectiveInline
+        resolveKeepDecorations(effectiveEntry)
       );
     // Reconcile only the flags actually captured: this drives the stored
     // snapshot and the from-flags rebuild, so it must NOT synthesize a flag set

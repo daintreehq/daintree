@@ -70,6 +70,13 @@ export interface AgentSettingsEntry {
   /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
   shareClipboardDirectory?: boolean;
   /**
+   * Keep the CLI's purely decorative effects (registry
+   * `capabilities.decorations`). Absent/`false` injects the agent's `offArgs`
+   * on every spawn, restart and resume; `true` leaves the CLI to its own
+   * default. Agent-level only — presets do not override it.
+   */
+  decorativeEffects?: boolean;
+  /**
    * Agent-level default preset ID (persists across worktrees). Used as the
    * fallback when a worktree has no scoped override. Set from Settings →
    * Presets; the toolbar dropdown writes to `worktreePresets` instead so
@@ -362,6 +369,61 @@ export function reconcileInlineModeFlag(
   return reconciled;
 }
 
+/** Whether the user keeps the agent's decorative effects (default: no). */
+export function resolveKeepDecorations(entry: AgentSettingsEntry): boolean {
+  return entry.decorativeEffects === true;
+}
+
+function findTokenSequence(flags: readonly string[], sequence: readonly string[]): number {
+  if (sequence.length === 0) return -1;
+  for (let i = 0; i + sequence.length <= flags.length; i += 1) {
+    let matched = true;
+    for (let j = 0; j < sequence.length; j += 1) {
+      if (flags[i + j] !== sequence[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return i;
+  }
+  return -1;
+}
+
+/**
+ * Reconciles a persisted `agentLaunchFlags` snapshot against the current
+ * `decorativeEffects` decision — the decorations analog of
+ * {@link reconcileInlineModeFlag}. The registry `offArgs` are a multi-token
+ * sequence, so they are matched and removed as a unit: an already-correct
+ * snapshot is returned untouched (position preserved), a stale one loses the
+ * tokens, and a snapshot that predates the capability gains them at the end.
+ * Agents declaring no decorations are left alone.
+ */
+export function reconcileDecorationFlags(
+  flags: readonly string[],
+  agentId: string,
+  keepDecorations: boolean
+): string[] {
+  const offArgs = getEffectiveAgentConfig(agentId)?.capabilities?.decorations?.offArgs;
+  if (!offArgs?.length) return [...flags];
+  // Every occurrence is removed, not just the first: a preset's args can carry
+  // the pair alongside the generated one, and reconciliation has to converge
+  // on exactly one copy (or none) whatever the snapshot arrived with.
+  const stripped: string[] = [];
+  let firstAt = -1;
+  for (let i = 0; i < flags.length;) {
+    if (findTokenSequence(flags.slice(i, i + offArgs.length), offArgs) === 0) {
+      if (firstAt === -1) firstAt = stripped.length;
+      i += offArgs.length;
+      continue;
+    }
+    stripped.push(flags[i]!);
+    i += 1;
+  }
+  if (keepDecorations) return stripped;
+  if (firstAt === -1) return [...stripped, ...offArgs];
+  return [...stripped.slice(0, firstAt), ...offArgs, ...stripped.slice(firstAt)];
+}
+
 /**
  * Resolves the effective permission-bypass decision for a launch from the
  * (already preset-merged) effective entry's tri-state mode:
@@ -516,6 +578,20 @@ export function generateAgentFlags(
     if (trimmed) {
       flags.push(...trimmed.split(/\s+/));
     }
+  }
+
+  // Decorative-effect opt-out (e.g. Codex's composer sparkles): the registry
+  // args ride every launch unless the user keeps the effects. Custom flags
+  // that already carry the exact tokens are left as the single copy.
+  const decorations = agentId
+    ? getEffectiveAgentConfig(agentId)?.capabilities?.decorations
+    : undefined;
+  if (
+    decorations &&
+    !resolveKeepDecorations(entry) &&
+    findTokenSequence(flags, decorations.offArgs) === -1
+  ) {
+    flags.push(...decorations.offArgs);
   }
 
   // Inject --include-directories for Gemini clipboard image access
@@ -890,7 +966,9 @@ export function buildAgentLaunchFlags(
   });
   flags.push(...settingsFlags);
 
-  return flags;
+  // generateAgentFlags dedupes the decorations pair against its own output
+  // only; a preset's args (pushed above) can carry it too. Converge on one.
+  return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry));
 }
 
 /**

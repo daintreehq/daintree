@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { buildResumeCommand } from "@shared/types";
+import { reconcileResumeLaunchFlags } from "@/services/agentResume";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { logWarn, logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -173,7 +174,11 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
       setHeldElsewhere((prev) => new Set(prev).add(session.id));
       return;
     }
-    const command = buildResumeCommand("codex", session.id, agentLaunchFlags);
+    const command = buildResumeCommand(
+      "codex",
+      session.id,
+      reconcileResumeLaunchFlags({ agentId: "codex", agentLaunchFlags })
+    );
     if (!command) return;
     setIsOpen(false);
     try {

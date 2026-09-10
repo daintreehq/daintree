@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { IdentityWatcher, type IdentityWatcherDelegate } from "../IdentityWatcher.js";
+import {
+  FOREGROUND_PROBE_FOLLOW_UP_MS,
+  FOREGROUND_PROBE_KEEPWARM_MS,
+  IdentityWatcher,
+  type IdentityWatcherDelegate,
+} from "../IdentityWatcher.js";
 import type { ProcessDetector } from "../../ProcessDetector.js";
 import { INITIAL_FOREGROUND_SENTINEL } from "../ForegroundProcessGroupProbe.js";
 
@@ -1622,6 +1627,114 @@ describe("IdentityWatcher", () => {
       await vi.advanceTimersByTimeAsync(600);
 
       expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+  });
+
+  describe("observeOutput foreground probe", () => {
+    it("rations prompt-less reads to one per keep-warm window and always reads on a prompt", () => {
+      const { delegate, state } = createFakeDelegate({ detectedAgentId: "codex" });
+      const probe = vi.spyOn(delegate, "readForegroundProcessGroupSnapshot");
+      const watcher = new IdentityWatcher(delegate);
+
+      // A Codex composer-sparkle frame: continuous output with no prompt in
+      // it. The probe behind this read is a `ps` spawn on a 500 ms cache, so
+      // reading it per chunk would spawn twice a second for as long as the
+      // animation runs.
+      const sparkleFrame =
+        "\x1b[12;33H\x1b[38;2;105;105;105;48;2;30;30;30m⠁" +
+        "\x1b[12;35H\x1b[38;2;109;109;109;48;2;30;30;30m⢀" +
+        "\x1b[12;50H\x1b[38;2;38;38;38;48;2;30;30;30m⠐";
+      // The first prompt-less chunk reads once: the probe has not resolved
+      // yet, so it gets the warm-up sentinel and starts a refresh...
+      state.foreground = INITIAL_FOREGROUND_SENTINEL;
+      watcher.observeOutput(sparkleFrame);
+      expect(probe).toHaveBeenCalledTimes(1);
+      // ...the ~15 fps chunks inside the follow-up delay do not read...
+      for (let i = 0; i < 5; i++) {
+        vi.advanceTimersByTime(66);
+        watcher.observeOutput(sparkleFrame);
+      }
+      expect(probe).toHaveBeenCalledTimes(1);
+      // ...one follow-up read consumes the refreshed reading (this is what
+      // latches `sawForegroundSnapshot`)...
+      state.foreground = { shellPgid: 123, foregroundPgid: 456 };
+      vi.advanceTimersByTime(FOREGROUND_PROBE_FOLLOW_UP_MS);
+      watcher.observeOutput(sparkleFrame);
+      expect(probe).toHaveBeenCalledTimes(2);
+      // ...and nothing more for the rest of the keep-warm window.
+      for (let i = 0; i < 30; i++) {
+        vi.advanceTimersByTime(66);
+        watcher.observeOutput(sparkleFrame);
+      }
+      expect(probe).toHaveBeenCalledTimes(2);
+
+      // A returned shell prompt is the one thing the probe exists to judge,
+      // so it reads regardless of the window.
+      watcher.observeOutput("runner@host:/repo$ ");
+      expect(probe).toHaveBeenCalledTimes(3);
+
+      // Past the window a prompt-less chunk keeps the cache warm again.
+      vi.advanceTimersByTime(FOREGROUND_PROBE_KEEPWARM_MS + 1);
+      watcher.observeOutput(sparkleFrame);
+      expect(probe).toHaveBeenCalledTimes(4);
+      watcher.dispose();
+    });
+
+    it("re-judges a returned prompt on a real snapshot when its read came back stale", () => {
+      const clear = vi.fn();
+      const { delegate, state } = createFakeDelegate({
+        detectedAgentId: "codex",
+        processDetector: { clearShellCommandEvidence: clear } as unknown as ProcessDetector,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      // Latch the probe as working, then let its cache go stale (null read).
+      state.foreground = { shellPgid: 123, foregroundPgid: 456 };
+      watcher.observeOutput("some output");
+      state.foreground = null;
+      vi.advanceTimersByTime(FOREGROUND_PROBE_KEEPWARM_MS + 1);
+
+      // The prompt lands on a stale cache: a latched watcher fails closed, so
+      // nothing is demoted yet — but a recheck is armed.
+      state.visibleLines = ["Codex exited", "runner@host:/repo$ "];
+      state.cursorLine = "runner@host:/repo$ ";
+      watcher.observeOutput("runner@host:/repo$ ");
+      expect(clear).not.toHaveBeenCalled();
+
+      // The refresh the read triggered lands; the recheck sees the shell in
+      // the foreground and demotes.
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      vi.advanceTimersByTime(FOREGROUND_PROBE_FOLLOW_UP_MS);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("drops the recheck when the agent has repainted over the prompt in the meantime", () => {
+      const clear = vi.fn();
+      const { delegate, state } = createFakeDelegate({
+        detectedAgentId: "codex",
+        processDetector: { clearShellCommandEvidence: clear } as unknown as ProcessDetector,
+      });
+      const watcher = new IdentityWatcher(delegate);
+      state.foreground = { shellPgid: 123, foregroundPgid: 456 };
+      watcher.observeOutput("some output");
+      state.foreground = null;
+      vi.advanceTimersByTime(FOREGROUND_PROBE_KEEPWARM_MS + 1);
+
+      state.visibleLines = ["runner@host:/repo$ "];
+      state.cursorLine = "runner@host:/repo$ ";
+      watcher.observeOutput("runner@host:/repo$ ");
+      expect(clear).not.toHaveBeenCalled();
+
+      // A TUI redraw replaces the prompt before the recheck fires: the chunk
+      // that carried it is stale evidence and must not demote.
+      state.visibleLines = ["› Ask Codex to do anything"];
+      state.cursorLine = "› ";
+      state.recentOutput = "› Ask Codex to do anything";
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      vi.advanceTimersByTime(FOREGROUND_PROBE_FOLLOW_UP_MS);
+      expect(clear).not.toHaveBeenCalled();
       watcher.dispose();
     });
   });

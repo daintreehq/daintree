@@ -86,6 +86,16 @@ export const config: AgentConfig = {
     blockMouseReporting: true,
     resizeStrategy: "settled",
     inlineModeFlag: "--no-alt-screen",
+    // 0.154 added an ambient particle field behind the composer (`[tui]
+    // whimsy`), animating at ~15 fps whether or not the agent is working. A
+    // `-c` override is a global option, so it also lands ahead of `resume`.
+    // `--disable` cannot do this: it only toggles `features.*` entries.
+    decorations: {
+      offArgs: ["-c", "tui.whimsy=false"],
+      label: "Composer sparkles",
+      description:
+        "Codex's ambient animation behind the prompt. Off keeps idle panes from repainting continuously.",
+    },
     supportsBracketedPaste: true,
     softNewlineSequence: "\n",
     ignoredInputSequences: ["\n", "\x1b\r"],

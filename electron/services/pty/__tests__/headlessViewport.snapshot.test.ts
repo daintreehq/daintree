@@ -367,3 +367,59 @@ describe("ViewportSnapshotCache (PERF-035)", () => {
     }
   });
 });
+
+describe("particle density gate", () => {
+  // A one-dot braille glyph in Codex's achromatic sparkle grey.
+  const grey = (row: number, col: number, glyph: string) =>
+    `\x1b[${row};${col}H\x1b[38;2;105;105;105;48;2;30;30;30m${glyph}\x1b[0m`;
+  const field = (glyph: string) =>
+    [
+      [2, 10],
+      [2, 30],
+      [3, 5],
+      [3, 44],
+      [4, 20],
+      [5, 50],
+    ]
+      .map(([r, c]) => grey(r, c, glyph))
+      .join("");
+
+  it("keeps a lone grey one-dot glyph as content", async () => {
+    const term = createTerminal(60, 8);
+    await write(term, grey(4, 5, "⠁"));
+    const before = readVisibleActivitySnapshot(term, 8)!;
+    await write(term, grey(4, 5, "⠂"));
+    const after = readVisibleActivitySnapshot(term, 8)!;
+    expect(measureVisibleContentDelta(before, after).changed).toBe(true);
+    term.dispose();
+  });
+
+  it("drops a shimmering particle field", async () => {
+    const term = createTerminal(60, 8);
+    await write(term, field("⠁"));
+    const before = readVisibleActivitySnapshot(term, 8)!;
+    await write(term, field("⠂"));
+    const after = readVisibleActivitySnapshot(term, 8)!;
+    expect(measureVisibleContentDelta(before, after).changed).toBe(false);
+    term.dispose();
+  });
+
+  it("rebuilds cached rows when the field thins out to a lone glyph", async () => {
+    // The cache keys reusable rows on the viewport-wide decision. When the
+    // field disappears, the surviving glyph's row must be re-extracted with
+    // the gate open, not served from a copy built with it closed.
+    const term = createTerminal(60, 8);
+    const cache = new ViewportSnapshotCache();
+    cache.attach(term);
+    await write(term, field("⠁"));
+    cache.read(term, 8);
+
+    await write(term, "\x1b[2;1H\x1b[K\x1b[3;1H\x1b[K\x1b[5;1H\x1b[K" + grey(4, 20, "⠁"));
+    const lone = cache.read(term, 8)!;
+    await write(term, grey(4, 20, "⠂"));
+    const ticked = cache.read(term, 8)!;
+    expect(measureVisibleContentDelta(lone, ticked).changed).toBe(true);
+    cache.detach();
+    term.dispose();
+  });
+});

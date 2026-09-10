@@ -2,7 +2,9 @@ import {
   buildResumeCommand,
   buildResumeLatestCommand,
   reconcileBypassFlags,
+  reconcileDecorationFlags,
   reconcileInlineModeFlag,
+  resolveKeepDecorations,
   resolveEffectiveBypass,
   resolveEffectiveInlineMode,
 } from "@shared/types/agentSettings";
@@ -41,15 +43,19 @@ export function reconcileResumeLaunchFlags(session: {
   );
   // Pass [] when no flags were captured so a global-on still injects the token
   // for a supported agent (each reconcile no-ops for agents without one).
-  return reconcileInlineModeFlag(
-    reconcileBypassFlags(
-      session.agentLaunchFlags ?? [],
+  return reconcileDecorationFlags(
+    reconcileInlineModeFlag(
+      reconcileBypassFlags(
+        session.agentLaunchFlags ?? [],
+        session.agentId,
+        effectiveBypass,
+        entry.dangerousArgs as string | undefined
+      ),
       session.agentId,
-      effectiveBypass,
-      entry.dangerousArgs as string | undefined
+      effectiveInline
     ),
     session.agentId,
-    effectiveInline
+    resolveKeepDecorations(entry)
   );
 }
 
