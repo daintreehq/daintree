@@ -154,13 +154,17 @@ describe("which surfaces a live native engine cannot lose (#12364)", () => {
     // The floor is only as good as this prediction. Each case asks, then does what
     // eviction does, on a fresh engine — so a change to `detach` the query did not follow
     // fails here instead of in somebody's lost conversation.
+    //
+    // Each case also carries its own expected answer, because prediction and teardown
+    // share one rule: agreement alone would pass if that rule were wrong for both.
     const cases = [
-      { surfaces: [10], lose: 10 },
-      { surfaces: [10, 11], lose: 10 },
-      { surfaces: [10, 11], lose: 11 },
-      { surfaces: [10, 11, 12], lose: 12 },
+      { surfaces: [10], lose: 10, ends: true },
+      { surfaces: [10, 11], lose: 10, ends: true },
+      { surfaces: [10, 11], lose: 11, ends: false },
+      { surfaces: [10, 11, 12], lose: 10, ends: true },
+      { surfaces: [10, 11, 12], lose: 12, ends: false },
     ];
-    for (const { surfaces, lose } of cases) {
+    for (const { surfaces, lose, ends } of cases) {
       hosts.length = 0;
       const service = new AssistantHostService();
       for (const [index, webContentsId] of surfaces.entries()) {
@@ -170,10 +174,11 @@ describe("which surfaces a live native engine cannot lose (#12364)", () => {
       const predicted = service.wouldEndLiveEngine(lose);
       service.stopByWebContents(lose);
 
-      expect({ surfaces, lose, ended: hosts[0]?.disposed }).toEqual({
+      expect({ surfaces, lose, predicted, ended: hosts[0]?.disposed }).toEqual({
         surfaces,
         lose,
-        ended: predicted,
+        predicted: ends,
+        ended: ends,
       });
     }
   });
@@ -251,6 +256,21 @@ describe("which surfaces a live native engine cannot lose (#12364)", () => {
 
     expect(service.wouldEndLiveEngine(10)).toBe(false);
     expect(service.wouldEndLiveEngine(20)).toBe(true);
+  });
+
+  it("keeps a view that started two lanes protected until both engines have ended", async () => {
+    // One view, two engines. An answer taken from the first session that names the view
+    // would release it the moment that lane exits, with the other still running.
+    const service = new AssistantHostService();
+    await startSurface(service, 10, 1, 0);
+    await startSurface(service, 10, 1, 1);
+    expect(hosts).toHaveLength(2);
+
+    hosts[0]!.exited = true;
+    expect(service.wouldEndLiveEngine(10)).toBe(true);
+
+    hosts[1]!.exited = true;
+    expect(service.wouldEndLiveEngine(10)).toBe(false);
   });
 
   it("says the control plane left when it did, not that the last surface did", async () => {
