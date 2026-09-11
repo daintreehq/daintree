@@ -1507,6 +1507,9 @@ const assistantStoreCreator: StateCreator<AssistantStore> = (set, get) => ({
             lastActivityAt: null,
             pendingQuestion: null,
             awaitingLocalCommand: false,
+            // Nothing is left of a conversation this panel was continuing, so nothing is left
+            // for Stop or a restart to ask about (#12365).
+            resumed: false,
             // A gap belongs to a transcript. Cleared with it, or the panel keeps
             // reporting frames missing from a conversation nobody can read.
             droppedFrames: 0,

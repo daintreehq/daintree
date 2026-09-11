@@ -78,11 +78,17 @@ interface LiveSession {
   /** The lane this engine occupies. `(projectId, slot)` is its identity. */
   slot: number;
   /**
-   * Whether this session may keep the lane's recorded conversation (#12365). False for a
-   * start from a view that is not the workspace it named, and once the conversation has
-   * been discarded — a late turn from an engine on its way out must not bring it back.
+   * Whether this session may keep the lane's recorded conversation (#12365): false while
+   * only a view that is not the workspace it named has used it. The workspace's own view
+   * joining makes it true.
    */
   recordable: boolean;
+  /**
+   * The lane's conversation was discarded while this engine was still up. It never records
+   * again and is never joined — a late turn, or a start landing before the asker's detach,
+   * must not carry on a conversation Stop ended.
+   */
+  discarded: boolean;
   /** Whether it has written the lane's record. See `recordConversation`. */
   recorded: boolean;
   /** Conversation activity seen before `host:ready`, recorded once readiness lands. */
@@ -457,7 +463,15 @@ export class AssistantHostService {
       // still in flight on this very panel, or from another window sharing the engine. It
       // displaces the running engine instead, and tells the other surfaces on it that the
       // session ended, because a displaced engine's own exit reaches only its starter.
-      if (!fresh) return this.attach(existing, opts, elapsedMs());
+      //
+      // Nor does anything join an engine whose conversation was discarded: the asker's
+      // detach can still be on its way when the lane is armed again.
+      if (!fresh && !existing.discarded) {
+        // The workspace's own view joining an engine a foreign view started makes it the
+        // lane's conversation from here on.
+        if (recordable) existing.recordable = true;
+        return this.attach(existing, opts, elapsedMs());
+      }
       for (const webContentsId of [...existing.subscribers.keys()]) {
         if (webContentsId === opts.webContentsId) continue;
         this.deliver(webContentsId, CHANNELS.ASSISTANT_HOST_EXIT, {
@@ -739,6 +753,7 @@ export class AssistantHostService {
       projectId: opts.projectId,
       slot,
       recordable,
+      discarded: false,
       recorded: false,
       activeBeforeReady: false,
       host,
@@ -883,7 +898,6 @@ export class AssistantHostService {
     // one engine diverge on the first message either of them sends, one showing a
     // question with no answer and the other an answer with no question.
     session.host.recordPrompt(command.text);
-    this.recordConversation(session.sessionId);
     for (const webContentsId of [...session.subscribers.keys()]) {
       if (webContentsId === fromWebContentsId) continue;
       this.deliver(webContentsId, CHANNELS.ASSISTANT_HOST_PEER_PROMPT, {
@@ -1007,6 +1021,15 @@ export class AssistantHostService {
         webContentsId,
         strandedSubscribers: session.subscribers.size,
       });
+      // Told here rather than by `onExit`: `stop` deregisters the session first, so the
+      // process's own exit would reach only the surface that started it — the one leaving.
+      for (const remaining of [...session.subscribers.keys()]) {
+        this.deliver(remaining, CHANNELS.ASSISTANT_HOST_EXIT, {
+          sessionId: session.sessionId,
+          code: null,
+          signal: null,
+        });
+      }
     } else {
       logger.info("last surface left; stopping the engine", {
         sessionId: session.sessionId,
@@ -1172,8 +1195,8 @@ export class AssistantHostService {
    * Refused while another surface is still watching the lane's engine: that surface is
    * still having the conversation — the asker leaving ends only its own attachment — and
    * forgetting it under them would lose it to their next eviction. Otherwise the running
-   * engine is barred from recording again, because the asker's detach is still on its way
-   * and a turn landing before it must not undo the discard.
+   * engine is marked discarded, because the asker's detach is still on its way, and neither
+   * a turn nor a start landing before it may carry the conversation on.
    *
    * Resolves to whether the record was forgotten.
    */
@@ -1188,7 +1211,7 @@ export class AssistantHostService {
       if (shared) return false;
       const store = getNativeAssistantResumeStore();
       await store.load();
-      if (live) live.recordable = false;
+      if (live) live.discarded = true;
       await store.clear(slotKey);
       return true;
     });
@@ -1210,15 +1233,16 @@ export class AssistantHostService {
    * once a lane has been continued even once; continuing from it opens an empty
    * conversation without an error anywhere.
    *
-   * Written at the session's first sign of conversation — a prompt, a turn, a wake's phase
-   * — rather than at readiness, so a lane nobody spoke in leaves nothing behind, and a view
+   * Written when the engine first reports conversation — a turn, a wake's phase — rather
+   * than at readiness or on a prompt it may yet refuse, so a lane nobody spoke in leaves
+   * nothing behind, and a view
    * coming back cold neither reopens its panel nor restores a tab for a conversation that
    * never happened. Written again once the record is a day old, so a conversation in
    * steady use never ages out as abandoned.
    */
   private recordConversation(sessionId: string): void {
     const session = this.bySession.get(sessionId);
-    if (!session?.recordable) return;
+    if (!session?.recordable || session.discarded) return;
     const ready = session.host.getReadyEvent();
     if (!ready) {
       session.activeBeforeReady = true;
@@ -1240,7 +1264,7 @@ export class AssistantHostService {
    * is still standing: a lost view sends no parting report.
    */
   private rememberPanelState(session: LiveSession): void {
-    if (!session.recordable) return;
+    if (!session.recordable || session.discarded) return;
     const store = getNativeAssistantResumeStore();
     const slotKey = assistantSlotKey(session.projectId, session.slot);
     if (!store.get(slotKey)) return;
