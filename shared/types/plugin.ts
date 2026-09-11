@@ -2283,29 +2283,6 @@ export interface PluginFsStat {
 }
 
 /**
- * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
- *
- * Every path argument is resolved against the plugin's declared
- * `scopes.fs.allowedPaths` and realpath-contained to one of those roots before
- * any I/O — a traversal (`..`) or a symlink that escapes a root is rejected,
- * mirroring the `plugin://` protocol handler's discipline. This is the runtime
- * enforcement of `scopes.fs.allowedPaths` (previously advisory-only).
- *
- * Reads are gated on `fs:project-read` / `fs:user-data-read`; writes on
- * `fs:project-write` / `fs:user-data-write`. A plugin missing the relevant
- * capability is rejected with a `PERMISSION_REQUIRED:` prefix (the same prefix
- * `useHostChannel` discriminates on); a path outside every allowed root is
- * rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are recorded in the plugin
- * audit trail.
- *
- * Unlike the global `files.read` IPC, {@link readFile} carries NO 500KB / binary
- * cap — it is a deliberate plugin API, not the size-limited preview path.
- *
- * NOT revoke-guarded: a plugin reads/writes from timers and subscription
- * callbacks long after `activate()`. Liveness is plugin membership — once the
- * plugin unloads every method rejects and any active {@link watch} is torn down.
- */
-/**
  * Options for the checked write path of {@link PluginFsApi.writeFile}
  * (#12323). Passing any options object selects the checked path.
  */
@@ -2345,6 +2322,29 @@ export interface PluginFsRevisionMismatchError extends Error {
   currentRevision: string;
 }
 
+/**
+ * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
+ *
+ * Every path argument is resolved against the plugin's declared
+ * `scopes.fs.allowedPaths` and realpath-contained to one of those roots before
+ * any I/O — a traversal (`..`) or a symlink that escapes a root is rejected,
+ * mirroring the `plugin://` protocol handler's discipline. This is the runtime
+ * enforcement of `scopes.fs.allowedPaths` (previously advisory-only).
+ *
+ * Reads are gated on `fs:project-read` / `fs:user-data-read`; writes on
+ * `fs:project-write` / `fs:user-data-write`. A plugin missing the relevant
+ * capability is rejected with a `PERMISSION_REQUIRED:` prefix (the same prefix
+ * `useHostChannel` discriminates on); a path outside every allowed root is
+ * rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are recorded in the plugin
+ * audit trail.
+ *
+ * Unlike the global `files.read` IPC, {@link readFile} carries NO 500KB / binary
+ * cap — it is a deliberate plugin API, not the size-limited preview path.
+ *
+ * NOT revoke-guarded: a plugin reads/writes from timers and subscription
+ * callbacks long after `activate()`. Liveness is plugin membership — once the
+ * plugin unloads every method rejects and any active {@link watch} is torn down.
+ */
 export interface PluginFsApi {
   /**
    * Read a file as UTF-8 text. Resolves the contained absolute path; rejects on

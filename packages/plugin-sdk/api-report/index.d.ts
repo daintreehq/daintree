@@ -3212,6 +3212,27 @@ interface PluginFsStat {
     mtimeMs: number;
 }
 /**
+ * Options for the checked write path of {@link PluginFsApi.writeFile}
+ * (#12323). Passing any options object selects the checked path.
+ */
+interface PluginFsWriteOptions {
+    /**
+     * The revision the caller last read — the sha256 hex of the file's bytes,
+     * as returned by an earlier write or computed by the caller from
+     * {@link PluginFsApi.readFileBytes}. The write is refused with
+     * `REVISION_MISMATCH` when the file's current bytes hash differently; the
+     * error carries the current revision so the caller can enter a conflict
+     * state without a second read. `null` means the file must not exist yet
+     * (a create-new write, refused with `TARGET_EXISTS` otherwise). Omit it to
+     * write atomically without a freshness check.
+     */
+    expectedRevision?: string | null;
+}
+interface PluginFsWriteResult {
+    /** sha256 hex of the bytes written — the caller's next `expectedRevision`. */
+    revision: string;
+}
+/**
  * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
  *
  * Every path argument is resolved against the plugin's declared
@@ -3234,27 +3255,6 @@ interface PluginFsStat {
  * callbacks long after `activate()`. Liveness is plugin membership — once the
  * plugin unloads every method rejects and any active {@link watch} is torn down.
  */
-/**
- * Options for the checked write path of {@link PluginFsApi.writeFile}
- * (#12323). Passing any options object selects the checked path.
- */
-interface PluginFsWriteOptions {
-    /**
-     * The revision the caller last read — the sha256 hex of the file's bytes,
-     * as returned by an earlier write or computed by the caller from
-     * {@link PluginFsApi.readFileBytes}. The write is refused with
-     * `REVISION_MISMATCH` when the file's current bytes hash differently; the
-     * error carries the current revision so the caller can enter a conflict
-     * state without a second read. `null` means the file must not exist yet
-     * (a create-new write, refused with `TARGET_EXISTS` otherwise). Omit it to
-     * write atomically without a freshness check.
-     */
-    expectedRevision?: string | null;
-}
-interface PluginFsWriteResult {
-    /** sha256 hex of the bytes written — the caller's next `expectedRevision`. */
-    revision: string;
-}
 interface PluginFsApi {
     /**
      * Read a file as UTF-8 text. Resolves the contained absolute path; rejects on
