@@ -111,7 +111,7 @@ await host.dispatch("agent.launch", {
 });
 ```
 
-Once loaded, your own commands are also actions, and the action manifest is the MCP tool surface, so an agent running in the project can call them back. A plugin's commands are its agent-facing API for free.
+Once loaded, your own commands are also actions — but not MCP tools. The MCP tool lists are fixed per tier and name only Daintree's built-in actions, so an agent cannot call a plugin command back. To give agents an API, serve it from an [agent MCP endpoint](./agent-extensions.md#agent-mcp-endpoints).
 
 ## Run a command
 

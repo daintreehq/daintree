@@ -35,6 +35,8 @@ import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
+import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
+import type * as PluginServiceModule from "./PluginService.js";
 import { setMcpServerServiceRef } from "../window/serviceRefs.js";
 import type {
   PendingRequest,
@@ -49,6 +51,21 @@ import type {
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
 import { wireMcpServerToConnectivityRegistry } from "./connectivity/index.js";
+
+// PluginService is loaded lazily, like every other main-side caller: it pulls in
+// the whole plugin host, and only a request on the plugin MCP route needs it.
+type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
+let pluginServicePromise: Promise<PluginServiceSingleton> | null = null;
+function loadPluginService(): Promise<PluginServiceSingleton> {
+  pluginServicePromise ??= import("./PluginService.js").then(
+    (m) => m.pluginService,
+    (err: unknown) => {
+      pluginServicePromise = null;
+      throw err;
+    }
+  );
+  return pluginServicePromise;
+}
 
 // Re-export types for backward compatibility with existing importers.
 export type { HelpTokenValidator } from "./mcp-server/shared.js";
@@ -263,6 +280,15 @@ export class McpServerService {
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
       setConfig: (patch) => this.persistConfig(patch),
     });
+
+    this.httpLifecycle.setPluginRouteHandler(
+      createPluginMcpRoute({
+        isPluginLoaded: async (pluginInstanceId) =>
+          (await loadPluginService()).hasPlugin(pluginInstanceId),
+        activatePlugin: async (pluginInstanceId) =>
+          (await loadPluginService()).activatePlugin(pluginInstanceId),
+      })
+    );
 
     // Wire the live turn-outcome alert push now that both collaborators exist
     // (#10018). The service classifies `agent-stuck` / `reasoning-loop` and

@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   AgentContributionSchema,
   AgentDetectionConfigSchema,
+  AgentMcpContributionSchema,
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
@@ -90,6 +91,7 @@ const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
+const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -114,6 +116,7 @@ const SWEPT_SCHEMAS = {
   processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
   recipes: RecipeContributionSchema,
+  agentMcp: AgentMcpContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
@@ -146,6 +149,7 @@ const TOP_LEVEL_GROUPS = [
   "processTools",
   "settings",
   "recipes",
+  "agentMcp",
   "surfaces",
 ] as const;
 
@@ -189,6 +193,7 @@ type FieldConsumerCoverage = {
   processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
+  agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
@@ -752,6 +757,28 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SCHEMA, symbol: "SettingDefinitionSchema transform (→ type 'secret')" },
       ],
       note: "Normalized into type: 'secret' by the schema; also read directly by the form.",
+    },
+  },
+  agentMcp: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
+      note: "Keys per-project enablement, the grant, and the endpoint's route path.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
+      note: "Shown in the per-project enablement UI.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
+      note: "Shown beneath the endpoint name in the per-project enablement UI.",
+    },
+    mode: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
+      note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
     },
   },
   recipes: {

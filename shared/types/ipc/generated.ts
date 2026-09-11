@@ -1074,6 +1074,14 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "plugin-agent-mcp:list-project-endpoints": {
+    args: [];
+    result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
+  };
+  "plugin-agent-mcp:set-project-endpoint-enabled": {
+    args: [payload: { pluginInstanceId: string; endpointId: string; enabled: boolean }];
+    result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
+  };
   "plugin-capability:acknowledge-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
     result: void;

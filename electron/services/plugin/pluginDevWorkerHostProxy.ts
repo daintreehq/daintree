@@ -21,6 +21,7 @@ import type {
   PluginIdentity,
   PluginIpcContext,
   PluginIpcHandler,
+  PluginMcpToolDefinition,
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
@@ -58,14 +59,18 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
+import { abortErrorFor } from "./pluginAbortError.js";
+import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type {
   PluginHostCallMethod,
   PluginHostNotifyMethod,
   PluginHostToWorkerMessage,
   PluginWorkerSubscriptionKind,
   PluginWorkerToHostMessage,
+  RegisterMcpToolsParams,
 } from "../../../shared/types/pluginDevWorker.js";
 
 type Post = (message: PluginWorkerToHostMessage) => void;
@@ -87,6 +92,12 @@ interface PendingCall {
 interface RegisteredHandler {
   handler: PluginIpcHandler | PluginTypedIpcHandler<unknown, unknown>;
   schema?: PluginChannelSchema<unknown, unknown>;
+}
+
+/** One tool of a bound roster, captured at registration like the host captures it. */
+interface RegisteredMcpTool {
+  definition: PluginMcpToolDefinition;
+  execute: PluginMcpToolDefinition["execute"];
 }
 
 /**
@@ -113,6 +124,12 @@ export class PluginDevWorkerHostProxy {
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
+  /** Bound `agentMcp` rosters, keyed by endpoint id. The map object per roster
+   * is its identity: a disposer only unbinds the roster it was handed for. */
+  private readonly mcpRosters = new Map<string, Map<string, RegisteredMcpTool>>();
+  /** Signals handed to in-flight `mcp-tool` executes, keyed by invoke requestId,
+   * so a main-side `invoke-cancel` reaches the plugin's `execute`. */
+  private readonly mcpInvokeAborts = new Map<string, AbortController>();
   /**
    * Manifest command handlers (#12274), keyed by the file URL of the module
    * main resolved. Holds the in-flight IMPORT promise, not the settled handler,
@@ -152,6 +169,9 @@ export class PluginDevWorkerHostProxy {
     this.ipcHandlers.clear();
     this.subscriptions.clear();
     this.fileDecorationProviders.clear();
+    this.mcpRosters.clear();
+    for (const controller of this.mcpInvokeAborts.values()) controller.abort();
+    this.mcpInvokeAborts.clear();
     this.commandModules.clear();
   }
 
@@ -168,8 +188,19 @@ export class PluginDevWorkerHostProxy {
         return true;
       }
       case "invoke":
-        void this.handleInvoke(msg);
+        if (msg.kind === "mcp-tool") void this.handleMcpToolInvoke(msg);
+        else void this.handleInvoke(msg);
         return true;
+      case "invoke-cancel": {
+        // Released here rather than when `execute` settles: a tool that ignores
+        // its signal may never settle, and its entry must not outlive the call.
+        // The invoke still holds the controller, so it still sees the abort and
+        // posts nothing. A no-op once the execute settled.
+        const controller = this.mcpInvokeAborts.get(msg.requestId);
+        this.mcpInvokeAborts.delete(msg.requestId);
+        controller?.abort();
+        return true;
+      }
       case "subscription-event": {
         const cb = this.subscriptions.get(msg.subscriptionId);
         if (cb) {
@@ -191,8 +222,75 @@ export class PluginDevWorkerHostProxy {
     }
   }
 
+  /**
+   * Run one `agentMcp` tool. Separate from {@link handleInvoke} because it is the
+   * one kind main can cancel: the plugin's `execute` gets a signal aborted by a
+   * matching `invoke-cancel`, and once that has happened nothing is posted back —
+   * main settled the caller when it cancelled and would drop the result anyway.
+   */
+  private async handleMcpToolInvoke(
+    msg: Extract<PluginHostToWorkerMessage, { type: "invoke"; kind: "mcp-tool" }>
+  ): Promise<void> {
+    const controller = new AbortController();
+    this.mcpInvokeAborts.set(msg.requestId, controller);
+    const settle = (
+      outcome: { ok: true; result: unknown } | { ok: false; error: string }
+    ): void => {
+      if (controller.signal.aborted || this.disposed) return;
+      try {
+        this.post({ type: "invoke-result", requestId: msg.requestId, ...outcome });
+      } catch (err) {
+        // A post that fails anyway (the port closing mid-send) must still try
+        // to settle main's pending call, as an error.
+        this.post({
+          type: "invoke-result",
+          requestId: msg.requestId,
+          ok: false,
+          error: formatErrorMessage(err, "tool result could not be sent"),
+        });
+      }
+    };
+    try {
+      const tool = this.mcpRosters.get(msg.endpointId)?.get(msg.toolName);
+      if (!tool) {
+        throw new Error(
+          `No MCP tool "${msg.toolName}" registered for endpoint "${msg.endpointId}"`
+        );
+      }
+      // Re-frozen on arrival for the same reason as panel-lifecycle events: the
+      // port hands back a mutable copy of what main froze.
+      const caller = Object.freeze({ ...msg.caller });
+      const result: unknown = await Reflect.apply(tool.execute, tool.definition, [
+        msg.args,
+        caller,
+        controller.signal,
+      ]);
+      // Serialized here, in the plugin's process, and sent as one string. The
+      // agent receives JSON either way, so `toJSON` behaves as the author wrote
+      // it; and a graph that only explodes when serialized (shared references
+      // fan out) costs this worker its budget rather than stalling main.
+      const json = JSON.stringify(result === undefined ? null : result);
+      if (json === undefined) {
+        throw new Error("the tool returned a value that cannot be serialized to JSON");
+      }
+      const bytes = Buffer.byteLength(json, "utf8");
+      if (bytes > AGENT_MCP_MAX_RESULT_BYTES) {
+        throw new Error(
+          `the tool result is ${bytes} bytes, over the ${AGENT_MCP_MAX_RESULT_BYTES}-byte limit for plugin tool results`
+        );
+      }
+      settle({ ok: true, result: json });
+    } catch (err) {
+      settle({ ok: false, error: formatErrorMessage(err, "tool call failed") });
+    } finally {
+      if (this.mcpInvokeAborts.get(msg.requestId) === controller) {
+        this.mcpInvokeAborts.delete(msg.requestId);
+      }
+    }
+  }
+
   private async handleInvoke(
-    msg: Extract<PluginHostToWorkerMessage, { type: "invoke" }>
+    msg: Exclude<Extract<PluginHostToWorkerMessage, { type: "invoke" }>, { kind: "mcp-tool" }>
   ): Promise<void> {
     try {
       if (msg.kind === "action") {
@@ -351,7 +449,7 @@ export class PluginDevWorkerHostProxy {
     }
     // An already-aborted signal rejects before anything crosses the port.
     if (signal?.aborted) {
-      return Promise.reject(abortError(signal));
+      return Promise.reject(abortErrorFor(signal));
     }
     const requestId = `c${this.nextId++}`;
     return new Promise<T>((resolve, reject) => {
@@ -388,7 +486,7 @@ export class PluginDevWorkerHostProxy {
             resolve(grace.value as T);
             return;
           }
-          reject(abortError(signal));
+          reject(abortErrorFor(signal));
         };
         signal.addEventListener("abort", onAbort, { once: true });
       }
@@ -700,6 +798,58 @@ export class PluginDevWorkerHostProxy {
           this.notify("unregisterFileDecorationProvider", { providerId });
         };
         return Promise.resolve(dispose);
+      },
+      mcp: {
+        registerTools: (endpointId, tools) => {
+          this.assertActivationOpen("mcp.registerTools");
+          if (typeof endpointId !== "string" || endpointId.length === 0) {
+            throw new Error(
+              `Plugin "${this.pluginId}" mcp.registerTools: endpointId must be a non-empty string`
+            );
+          }
+          // The same validator the host runs, so a roster mistake throws here at
+          // the call site. The host re-runs it on what arrives (the worker is the
+          // untrusted side) and alone checks `mcp:expose` and the declared
+          // endpoint — the manifest lives in main — which surface as a
+          // `register-error` and fail activation by name.
+          let descriptors: ReturnType<typeof validateAgentMcpTools>;
+          try {
+            descriptors = validateAgentMcpTools(tools);
+          } catch (err) {
+            throw new Error(
+              `Plugin "${this.pluginId}" mcp.registerTools("${endpointId}"): ${formatErrorMessage(err, "invalid tool roster")}`,
+              { cause: err }
+            );
+          }
+          const roster = new Map<string, RegisteredMcpTool>();
+          const wire: RegisterMcpToolsParams["tools"] = {};
+          for (const descriptor of descriptors) {
+            const definition = tools[descriptor.name];
+            roster.set(descriptor.name, { definition, execute: definition.execute });
+            // Descriptor fields only: `execute` stays here, and the validated
+            // copies are plain JSON, so nothing uncloneable reaches the port.
+            wire[descriptor.name] = {
+              description: descriptor.description,
+              inputSchema: descriptor.inputSchema,
+              ...(descriptor.outputSchema !== undefined
+                ? { outputSchema: descriptor.outputSchema }
+                : {}),
+            };
+          }
+          this.mcpRosters.set(endpointId, roster);
+          this.notify("mcp.registerTools", { endpointId, tools: wire }, `agentMcp:${endpointId}`);
+          let disposed = false;
+          const dispose = (): void => {
+            if (disposed) return;
+            disposed = true;
+            // A disposer for a roster a later call replaced must not unbind the
+            // replacement — here or, via the notify, in main.
+            if (this.mcpRosters.get(endpointId) !== roster) return;
+            this.mcpRosters.delete(endpointId);
+            this.notify("mcp.unregisterTools", { endpointId });
+          };
+          return Promise.resolve(dispose);
+        },
       },
       invalidateFileDecorations: (scope, paths) => {
         if (typeof scope !== "string" || scope.length === 0) {
@@ -1016,19 +1166,6 @@ export class PluginDevWorkerHostProxy {
     };
     return ptyHandle;
   }
-}
-
-/**
- * Normalize an aborted signal's reason into an `Error` for rejection. Node sets
- * `signal.reason` to a `DOMException` (name `AbortError`) by default, which is
- * not an `Error` instance — wrap anything non-Error so callers always get one.
- */
-function abortError(signal: AbortSignal): Error {
-  const reason: unknown = signal.reason;
-  if (reason instanceof Error) return reason;
-  const err = new Error(typeof reason === "string" ? reason : "The operation was aborted");
-  err.name = "AbortError";
-  return err;
 }
 
 /** Structural guard mirroring `isChannelSchema` from PluginChannelRegistry,

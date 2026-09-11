@@ -1,0 +1,23 @@
+{
+  "name": "acme.ledger",
+  "version": "0.1.0",
+  "scope": "project",
+  "displayName": "Household Ledger",
+  "description": "A sample agent MCP endpoint: a small tool roster that lets agents in this project read and append to a SQLite ledger the project owns.",
+  "authors": [{ "name": "Daintree", "role": "Maintainer" }],
+  "main": "dist/index.mjs",
+  "engines": {
+    "daintree": ">=0.36.1"
+  },
+  "capabilities": ["mcp:expose", "fs:project-write"],
+  "contributes": {
+    "agentMcp": [
+      {
+        "id": "data",
+        "name": "Household ledger",
+        "description": "Read and append transactions in this project's ledger database.",
+        "mode": "tools"
+      }
+    ]
+  }
+}

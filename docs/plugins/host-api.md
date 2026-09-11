@@ -123,6 +123,9 @@ interface PluginHostApi {
   ): Promise<() => void>;
   invalidateFileDecorations(scope: string, paths?: string[]): Promise<void>;
 
+  // Tools served to terminal agents — gated on the `mcp:expose` capability
+  readonly mcp: PluginMcpApi;
+
   // Panel title-chrome badge
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
 
@@ -173,7 +176,7 @@ Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-
 
 Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
 
@@ -559,6 +562,81 @@ await host.invalidateFileDecorations("worktree-diff:main", ["src/foo.ts"]);
 - `registerFileDecorationProvider` is revoke-guarded — call it during `activate()`. `descriptor.id` must match an entry in `contributes.fileDecorationProviders`; undeclared ids are rejected so the impl can't drift from the manifest's scope-routing table. At runtime the id is namespaced to `{pluginId}.{descriptor.id}`.
 - Returns a disposer that unbinds the single impl. Re-registering with the same `descriptor.id` overwrites the prior binding; the older disposer becomes inert. All bindings are removed on plugin unload.
 - `invalidateFileDecorations(scope, paths?)` signals that decorations for `scope` (optionally narrowed to `paths`) changed so any renderer showing them re-pulls. It is NOT revoke-guarded — call it from your subscription callbacks and timers throughout the plugin's lifetime. It becomes a silent no-op after unload.
+
+## `mcp.registerTools`
+
+Binds the tool roster for an endpoint declared in `contributes.agentMcp`, which Daintree then serves to agents in its terminals over MCP. Requires the `mcp:expose` capability. This is the inbound direction — for a stdio server Daintree itself connects to, see [`mcpServers`](./contribution-points.md#mcp-servers--shipped). The end-to-end walkthrough, including when an agent actually receives the endpoint, is [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints).
+
+```ts
+const dispose = await host.mcp.registerTools("ledger", {
+  list_entries: {
+    description: "List ledger entries, newest first.",
+    inputSchema: { type: "object", properties: { limit: { type: "integer" } } },
+    outputSchema: { type: "object", properties: { entries: { type: "array" } } },
+    async execute(args, caller, signal) {
+      const limit = typeof args.limit === "number" ? args.limit : 20;
+      return { entries: await readEntries(caller.projectId, limit, signal) };
+    },
+  },
+});
+```
+
+**Signature:**
+
+```ts
+interface PluginMcpApi {
+  registerTools(
+    endpointId: string,
+    tools: Record<string, PluginMcpToolDefinition>
+  ): Promise<() => void>;
+}
+
+interface PluginMcpToolDefinition {
+  description: string;
+  inputSchema: PluginMcpJsonSchema; // { type: "object", ... }
+  outputSchema?: PluginMcpJsonSchema;
+  execute(
+    args: Record<string, unknown>,
+    caller: PluginMcpCaller,
+    signal: AbortSignal
+  ): unknown | Promise<unknown>;
+}
+
+interface PluginMcpCaller {
+  readonly credentialId: string;
+  readonly projectId: string;
+  readonly terminalId: string;
+  readonly launchAgentIdHint?: string;
+}
+```
+
+All of these, plus `PluginAgentMcpContribution`, are exported from `@daintreehq/plugin-sdk`.
+
+**Rules:**
+
+- Revoke-guarded — call it during `activate()`. The tools' `execute` functions run for the plugin's whole lifetime; only binding the roster is restricted to the activation window.
+- `endpointId` must name an entry in `contributes.agentMcp`; an undeclared id is rejected, because enablement, credentials and the route are all driven by the manifest and a roster for an undeclared endpoint could never be reached.
+- The roster is validated whole and rejected whole, never trimmed: at least one and at most 8 tools; names matching `^[a-z][a-z0-9_]{0,31}$`; each description non-empty and at most 400 UTF-8 bytes; each schema a plain object with `type: "object"`, at most 8 KiB serialized. Only own keys of `tools` count. Schemas are snapshotted at registration, so mutating your schema object afterwards changes nothing an agent sees, and each tool's `execute` is captured then too.
+- Calling it again for the same `endpointId` replaces the roster; connected agents are sent `notifications/tools/list_changed`, and a call still running against the old roster is aborted. The replaced roster's disposer becomes inert.
+- Returns a disposer that unbinds this roster. Every roster is dropped when the plugin unloads.
+
+**Errors.** For a builtin, every one of these throws synchronously at the call site, like the other activation-window methods:
+
+- `PERMISSION_REQUIRED: plugin "…" mcp.registerTools requires "mcp:expose", which is not declared in manifest.capabilities` when the capability is missing. In practice the manifest gate already rejects `contributes.agentMcp` without `mcp:expose`, so this fires only for a plugin that declares no endpoint at all.
+- An undeclared-endpoint error, or a roster error naming the tool and the limit it broke.
+- A revoked-host error when called after `activate()` resolves or times out.
+
+In a worker plugin — every installed and project plugin — only the revoked-host and roster errors throw at your call site; the promise then resolves. The capability and declared-endpoint checks run afterwards in main, where the manifest lives, and a failure there fails activation with the error named. A `try`/`catch` around the `await` does not see it.
+
+**What `execute` receives.**
+
+- `args` — the arguments the agent sent. The host guarantees only that they are a JSON object; validating them against `inputSchema` is your job.
+- `caller` — frozen **provenance**, not identity. The credential was issued for one terminal launch in one project: `projectId` is that project, `terminalId` that terminal, `credentialId` a stable correlation id for the credential (never the credential itself, so it is safe to log), and `launchAgentIdHint` what the terminal was launched as. Any process that read the credential can present it, so treat `launchAgentIdHint` as a hint, not proof of what is calling. An installed plugin serves every project that enabled it from one instance, so scope its data by `caller.projectId`; a project plugin's `caller.projectId` is always its own project.
+- `signal` — aborted when the call times out (60 seconds, counted from the request, activation included), when the agent cancels, when the session closes or the credential is revoked, and when the endpoint's roster is replaced or dropped. Once it aborts the host stops waiting: the agent is answered with a tool error (or its session is closed), and your eventual result is discarded. Nothing stops an `execute` that ignores the signal — it runs on until it returns.
+
+**What the agent receives.** The return value is `JSON.stringify`-ed — `undefined` becomes `null`, and `toJSON` is honoured — and sent as the tool's text content. A worker plugin's result is serialized in the worker, before it crosses to main. A result over 256 KiB serialized, or one that cannot be serialized, becomes a tool error. With an `outputSchema`, the result must also serialize to a JSON object, which is sent as `structuredContent` as well; anything else is a tool error. A thrown error becomes a tool error carrying its message, truncated past 2,000 characters. A session may have at most 16 calls in flight; past that the agent gets a tool error asking it to retry.
+
+The mock host records rosters in `registeredMcpTools`, but it has no manifest model, so it skips the `mcp:expose` and declared-endpoint checks and leaves the roster limits to the real host.
 
 ## `setPanelBadge`
 
@@ -1033,7 +1111,7 @@ Deliberately not part of the host API:
 
 - Direct access to other plugins' state or registered handlers.
 - Access to the active user's AI-provider API keys. If a plugin needs AI calls, the user configures keys separately in settings or the plugin ships its own `secret` setting.
-- Full control of the active AI agent's runtime — driving, pausing, or resuming an agent session, and bridging a plugin's MCP tools into an agent Daintree is itself driving. Both cross the agent-config boundary (precedent #4100: never mutate user-owned agent config or session behaviour the user didn't opt into) and stay deferred. Passive observation is offered instead: [`getAgentState` / `onDidChangeAgentState`](#agent-observation) under `agent:read`. The one sanctioned write is text injection: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal. For everything else, `dispatch` into existing actions is the path.
+- Full control of the active AI agent's runtime — driving, pausing, or resuming an agent session. That crosses the agent-config boundary (precedent #4100: never mutate user-owned agent config or session behaviour the user didn't opt into) and stays deferred. Getting a plugin's tools into an agent is the one exception, and only in the sanctioned shape: [`mcp.registerTools`](#mcpregistertools) tools reach Claude Code launches through the Daintree-owned `--mcp-config` file, never through the user's own agent config, and only in projects where the user turned the endpoint on. Passive observation is offered instead of the rest: [`getAgentState` / `onDidChangeAgentState`](#agent-observation) under `agent:read`. The one sanctioned write is text injection: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal. For everything else, `dispatch` into existing actions is the path.
 - An inbound webhook listener or a host-mediated `host.fetch`. Deferred: `scopes.network.allowedUrls` is still advisory rather than a request filter, and an inbound listener widens the attack surface in a way that wants the network-enforcement question settled first. Make outbound calls from your own `main` for now, and declare `network:fetch` with a tight `scopes.network.allowedUrls`.
 - Raw Electron main-process APIs are not _passed through_ the host — but the contained, audited equivalents are: `host.process` (managed child processes, gated on `shell:exec`), `host.fs` (scope-contained filesystem), and `host.git` (worktree-scoped git). You can still `import` Node modules directly in plugin code and the host cannot intercept that, so the host-mediated surfaces are the contained, audited path — not a seal on the un-mediated one.
 - Daintree's internal event bus. Only the specific subscriptions listed above are exposed. Broad event access would tie plugins to internal shape changes we want to be free to make.

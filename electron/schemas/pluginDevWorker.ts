@@ -81,6 +81,8 @@ const HOST_NOTIFY_METHODS = {
   setPanelBadge: true,
   registerFileDecorationProvider: true,
   unregisterFileDecorationProvider: true,
+  "mcp.registerTools": true,
+  "mcp.unregisterTools": true,
   "logger.info": true,
   "logger.warn": true,
   "logger.error": true,

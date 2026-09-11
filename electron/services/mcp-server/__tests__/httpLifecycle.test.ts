@@ -34,7 +34,7 @@ vi.mock("electron", () => ({
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { HttpLifecycle } from "../httpLifecycle.js";
+import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
@@ -115,6 +115,17 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
         this.sessionContextMap.delete(sessionId);
         this.sessionOriginMap.delete(sessionId);
         this.sessionWorkspaceMap.delete(sessionId);
+        this.sessionCredentialMap.delete(sessionId);
+      },
+      // Real behaviour for the same reason as the origin predicates: a stub
+      // that always matched would make every session-binding test vacuous.
+      sessionCredentialMap: new Map<string, string>(),
+      bindSessionCredential(sessionId: string, digest: string) {
+        this.sessionCredentialMap.set(sessionId, digest);
+      },
+      isSessionCredential(sessionId: string, digest: string) {
+        const bound = this.sessionCredentialMap.get(sessionId);
+        return bound !== undefined && bound === digest;
       },
       drain: vi.fn(),
       getTier: vi.fn(() => "workbench" as const),
@@ -1577,6 +1588,65 @@ describe("HttpLifecycle", () => {
       }
     );
 
+    describe("plugin route", () => {
+      function pluginReq(headers: Record<string, string> = {}): http.IncomingMessage {
+        return {
+          method: "POST",
+          url: "/mcp/plugin/acme.ledger/data",
+          headers: { host: "127.0.0.1:45454", authorization: "Bearer test-api-key", ...headers },
+        } as unknown as http.IncomingMessage;
+      }
+      const invoke = (lc: HttpLifecycle, req: http.IncomingMessage, res: http.ServerResponse) =>
+        (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(req, res);
+
+      it("hands plugin paths to the plugin handler without consulting orchestration auth", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const handler = { handle: vi.fn(async () => {}), closeAllSessions: vi.fn() };
+        lc.setPluginRouteHandler(handler);
+        const req = pluginReq();
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, req, res);
+
+        expect(handler.handle).toHaveBeenCalledWith(req, res, expect.any(URL), 45454);
+        expect(res.writeHead).not.toHaveBeenCalled();
+        expect(deps.auditService.recordAuth401).not.toHaveBeenCalled();
+      });
+
+      it("answers 404 when no plugin handler is mounted, even for a valid orchestration bearer", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, pluginReq(), res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, expect.anything());
+      });
+
+      it("still applies the Host check before the plugin handler", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        (lc as unknown as { port: number }).port = 45454;
+        const handler = { handle: vi.fn(async () => {}), closeAllSessions: vi.fn() };
+        lc.setPluginRouteHandler(handler);
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, pluginReq({ host: "evil.example:45454" }), res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
+        expect(handler.handle).not.toHaveBeenCalled();
+      });
+    });
+
     it("returns 401 with WWW-Authenticate: Bearer realm header", async () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
@@ -1633,6 +1703,304 @@ describe("HttpLifecycle", () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
       expect(deps.auditService.recordAuth401).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("session credential binding", () => {
+    // A bearer above `external` stands in for a pane or assistant token: what
+    // matters to the gate is that a session id minted for it is worth more
+    // than the api key presenting it.
+    const API_KEY_AUTH = "Bearer test-api-key";
+    const ELEVATED_AUTH = "Bearer elevated-tok";
+
+    type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+
+    function lifecycle(deps: HttpLifecycleDeps): { lc: HttpLifecycle; handle: RequestHandler } {
+      const lc = new HttpLifecycle(deps);
+      lc.setApiKey("test-api-key");
+      lc.setHelpTokenValidator((token) => (token === "elevated-tok" ? "system" : false));
+      (lc as unknown as { port: number }).port = 45454;
+      const handle = (lc as unknown as { handleRequest: RequestHandler }).handleRequest.bind(lc);
+      return { lc, handle };
+    }
+
+    function request(
+      method: string,
+      url: string,
+      headers: Record<string, string>
+    ): http.IncomingMessage {
+      return {
+        method,
+        url,
+        headers: { host: "127.0.0.1:45454", ...headers },
+      } as unknown as http.IncomingMessage;
+    }
+
+    function recordingRes() {
+      const res = new EventEmitter() as EventEmitter & {
+        writeHead: ReturnType<typeof vi.fn>;
+        write: ReturnType<typeof vi.fn>;
+        end: ReturnType<typeof vi.fn>;
+        headersSent: boolean;
+      };
+      res.writeHead = vi.fn();
+      res.write = vi.fn(() => true);
+      res.end = vi.fn();
+      res.headersSent = false;
+      return res;
+    }
+
+    /** What the client saw: every status/header write and body, in order. */
+    function observed(res: ReturnType<typeof recordingRes>) {
+      return { head: res.writeHead.mock.calls, body: res.end.mock.calls };
+    }
+
+    /**
+     * Open a real SSE session through `handleRequest`, so the binding under
+     * test is the one the production handshake writes, not one the fixture
+     * planted.
+     */
+    async function openSseSession(deps: HttpLifecycleDeps, handle: RequestHandler, auth: string) {
+      const streamRes = recordingRes();
+      await handle(
+        request("GET", "/sse", { authorization: auth }),
+        streamRes as unknown as http.ServerResponse
+      );
+      const [sessionId] = Array.from(deps.sessionStore.sessions.keys());
+      const session = deps.sessionStore.sessions.get(sessionId!)!;
+      const handlePostMessage = vi
+        .spyOn(session.transport, "handlePostMessage")
+        .mockImplementation(async (_req, res) => {
+          res.writeHead(202);
+          res.end("Accepted");
+        });
+      return { sessionId: sessionId!, streamRes, handlePostMessage };
+    }
+
+    function liveHttpSession(deps: HttpLifecycleDeps, sessionId: string, auth: string | null) {
+      const handleRequest = vi.fn().mockResolvedValue(undefined);
+      (deps.sessionStore.httpSessions as Map<string, unknown>).set(sessionId, {
+        transport: { handleRequest },
+        idleTimer: setTimeout(() => {}, 1_000_000),
+      } as never);
+      deps.sessionStore.sessionTierMap.set(sessionId, "system");
+      if (auth !== null) {
+        deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(auth));
+      }
+      return handleRequest;
+    }
+
+    describe("SSE /messages", () => {
+      it("binds the session to its creator at handshake", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+
+        const { sessionId } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        expect(
+          deps.sessionStore.isSessionCredential(sessionId, sessionCredentialDigest(ELEVATED_AUTH))
+        ).toBe(true);
+        expect(
+          deps.sessionStore.isSessionCredential(sessionId, sessionCredentialDigest(API_KEY_AUTH))
+        ).toBe(false);
+      });
+
+      it("refuses an api-key bearer posting into an elevated session and leaves it untouched", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, handlePostMessage } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, { authorization: API_KEY_AUTH }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "text/plain" });
+        expect(res.end).toHaveBeenCalledWith("Session not found");
+        expect(handlePostMessage).not.toHaveBeenCalled();
+        expect(deps.sessionStore.resetIdleTimer).not.toHaveBeenCalled();
+        expect(deps.sessionStore.sessions.has(sessionId)).toBe(true);
+        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("system");
+        expect(
+          deps.sessionStore.isSessionCredential(sessionId, sessionCredentialDigest(ELEVATED_AUTH))
+        ).toBe(true);
+      });
+
+      it("answers a foreign bearer exactly as it answers an unknown session id", async () => {
+        // No oracle: a caller holding a leaked id must not be able to tell
+        // "live but not yours" from "does not exist".
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const foreign = recordingRes();
+        const unknown = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, { authorization: API_KEY_AUTH }),
+          foreign as unknown as http.ServerResponse
+        );
+        await handle(
+          request("POST", "/messages?sessionId=never-issued", { authorization: API_KEY_AUTH }),
+          unknown as unknown as http.ServerResponse
+        );
+
+        expect(observed(foreign)).toEqual(observed(unknown));
+      });
+
+      it("admits the creator when it varies the scheme casing and whitespace", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, handlePostMessage } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, {
+            authorization: "bearer \t elevated-tok  ",
+          }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(handlePostMessage).toHaveBeenCalledOnce();
+        expect(res.writeHead).toHaveBeenCalledWith(202);
+      });
+
+      it("refuses a live session whose binding row is missing, even for its creator", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, handlePostMessage } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        deps.sessionStore.sessionCredentialMap.delete(sessionId);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, { authorization: ELEVATED_AUTH }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "text/plain" });
+        expect(handlePostMessage).not.toHaveBeenCalled();
+      });
+
+      it("drops the binding when the stream closes", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        streamRes.emit("close");
+
+        expect(deps.sessionStore.sessions.has(sessionId)).toBe(false);
+        expect(deps.sessionStore.sessionCredentialMap.has(sessionId)).toBe(false);
+      });
+
+      it("drops the binding when the session server fails to connect", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const streamRes = recordingRes();
+        // `SSEServerTransport.start` opens the stream with `writeHead`; failing
+        // it fails `server.connect` after the handshake has already bound.
+        streamRes.writeHead.mockImplementationOnce(() => {
+          throw new Error("socket gone");
+        });
+
+        await expect(
+          handle(
+            request("GET", "/sse", { authorization: ELEVATED_AUTH }),
+            streamRes as unknown as http.ServerResponse
+          )
+        ).rejects.toThrow("socket gone");
+
+        expect(deps.sessionStore.sessions.size).toBe(0);
+        expect(deps.sessionStore.sessionCredentialMap.size).toBe(0);
+      });
+    });
+
+    describe("Streamable /mcp", () => {
+      it.each(["POST", "GET", "DELETE"])(
+        "refuses an api-key bearer's %s on an elevated session with the unknown-session 404",
+        async (method) => {
+          const deps = fakeDeps();
+          const { handle } = lifecycle(deps);
+          const handleRequest = liveHttpSession(deps, "elevated", ELEVATED_AUTH);
+          const foreign = recordingRes();
+          const unknown = recordingRes();
+
+          await handle(
+            request(method, "/mcp", { authorization: API_KEY_AUTH, "mcp-session-id": "elevated" }),
+            foreign as unknown as http.ServerResponse
+          );
+          await handle(
+            request(method, "/mcp", {
+              authorization: API_KEY_AUTH,
+              "mcp-session-id": "never-issued",
+            }),
+            unknown as unknown as http.ServerResponse
+          );
+
+          expect(foreign.writeHead).toHaveBeenCalledWith(404, {
+            "Content-Type": "application/json",
+          });
+          expect(observed(foreign)).toEqual(observed(unknown));
+          expect(handleRequest).not.toHaveBeenCalled();
+          expect(deps.sessionStore.resetHttpIdleTimer).not.toHaveBeenCalled();
+          expect(deps.sessionStore.httpSessions.has("elevated")).toBe(true);
+          expect(deps.sessionStore.sessionTierMap.get("elevated")).toBe("system");
+        }
+      );
+
+      it("checks ownership before the workspace selector, so a mismatch cannot probe liveness", async () => {
+        // The selector checks answer 400 for a live session and would
+        // otherwise distinguish it from an unknown id.
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const handleRequest = liveHttpSession(deps, "bound", API_KEY_AUTH);
+        deps.sessionStore.sessionWorkspaceMap.set("bound", WS_A);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", "/mcp", {
+            authorization: ELEVATED_AUTH,
+            "mcp-session-id": "bound",
+            "daintree-workspace-id": WS_B,
+          }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "application/json" });
+        expect(handleRequest).not.toHaveBeenCalled();
+      });
+
+      it("admits the creator when it varies the scheme casing and whitespace", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const handleRequest = liveHttpSession(deps, "elevated", ELEVATED_AUTH);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", "/mcp", {
+            authorization: "BEARER   elevated-tok\t",
+            "mcp-session-id": "elevated",
+          }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(handleRequest).toHaveBeenCalledOnce();
+        expect(res.writeHead).not.toHaveBeenCalled();
+      });
+
+      it("refuses a live session whose binding row is missing, even for its creator", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const handleRequest = liveHttpSession(deps, "unbound", null);
+        const res = recordingRes();
+
+        await handle(
+          request("DELETE", "/mcp", { authorization: ELEVATED_AUTH, "mcp-session-id": "unbound" }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "application/json" });
+        expect(handleRequest).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -2082,6 +2450,9 @@ describe("HttpLifecycle", () => {
           transport: { handleRequest: vi.fn().mockResolvedValue(undefined) },
           idleTimer: setTimeout(() => {}, 1_000_000),
         } as never);
+        // These requests carry no Authorization header, so the session is
+        // owned by the empty credential — the loopback no-key path.
+        deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(""));
         if (workspaceId) deps.sessionStore.sessionWorkspaceMap.set(sessionId, workspaceId);
       }
 

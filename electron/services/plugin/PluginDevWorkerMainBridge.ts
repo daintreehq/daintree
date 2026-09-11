@@ -15,9 +15,12 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import type {
   PluginHostApi,
   PluginIpcContext,
+  PluginMcpCaller,
+  PluginMcpToolDefinition,
   PluginProcessHandle,
   PluginDuplexProcessHandle,
   PluginPtyProcessHandle,
@@ -40,6 +43,7 @@ import type {
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
   RegisterHandlerParams,
+  RegisterMcpToolsParams,
   SettingsGetParams,
   SettingsSetParams,
   StorageGetParams,
@@ -50,6 +54,7 @@ import type {
   ShowInputBoxParams,
   ShowConfirmParams,
   UnregisterFileDecorationProviderParams,
+  UnregisterMcpToolsParams,
   FsPathParams,
   FsWriteFileParams,
   FsWatchParams,
@@ -64,6 +69,7 @@ import type {
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
+import { abortErrorFor } from "./pluginAbortError.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
@@ -88,6 +94,54 @@ function isPtyHandle(handle: PluginProcessHandle): handle is PluginPtyProcessHan
 function isWritableHandle(handle: PluginProcessHandle): handle is PluginDuplexProcessHandle {
   return typeof (handle as Partial<PluginDuplexProcessHandle>).write === "function";
 }
+
+/**
+ * The provenance an `mcp-tool` invoke carries into the worker, copied field by
+ * field. Whatever object the route hands over, only the public descriptor's
+ * fields cross the port — an extra property picked up upstream (a grant, a
+ * bearer) cannot ride along into plugin code.
+ */
+function projectMcpCaller(caller: PluginMcpCaller): PluginMcpCaller {
+  return {
+    credentialId: caller.credentialId,
+    projectId: caller.projectId,
+    terminalId: caller.terminalId,
+    ...(caller.launchAgentIdHint !== undefined
+      ? { launchAgentIdHint: caller.launchAgentIdHint }
+      : {}),
+  };
+}
+
+/**
+ * A worker tool result arrives as the JSON text the worker serialized. The size
+ * is checked before parsing, so a worker cannot make main build a value larger
+ * than the result budget; everything downstream then handles plain JSON data.
+ */
+function parseWorkerToolResult(result: unknown): unknown {
+  if (typeof result !== "string") {
+    throw new Error("plugin worker returned a tool result that is not serialized JSON");
+  }
+  const bytes = Buffer.byteLength(result, "utf8");
+  if (bytes > AGENT_MCP_MAX_RESULT_BYTES) {
+    throw new Error(
+      `the tool result is ${bytes} bytes, over the ${AGENT_MCP_MAX_RESULT_BYTES}-byte limit for plugin tool results`
+    );
+  }
+  return JSON.parse(result) as unknown;
+}
+
+type InvokeTarget =
+  | { kind: "action"; namespacedId: string; args: unknown }
+  | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
+  | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
+  | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
+  | {
+      kind: "mcp-tool";
+      endpointId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+      caller: PluginMcpCaller;
+    };
 
 export interface PluginDevWorkerMainBridgeDeps {
   pluginId: string;
@@ -193,6 +247,10 @@ export class PluginDevWorkerMainBridge {
    * host, keyed by provider id. Torn down on reload and dispose so a reloaded
    * generation re-registers cleanly. */
   private readonly providerDisposers = new Map<string, () => void>();
+  /** Disposers for the `agentMcp` rosters the worker bound, keyed by endpoint id.
+   * Retired with the generation like providers: the roster's `execute`s live in
+   * the outgoing worker, and the replacement re-registers its own on activate. */
+  private readonly mcpRosterDisposers = new Map<string, () => void>();
   /** Live handles for processes the worker spawned via `host.process.spawn`,
    * keyed by the host-assigned handle id. The worker addresses `kill` /
    * `restart` / `onExit` / `onCrash` by id; all are killed when a generation is
@@ -320,9 +378,12 @@ export class PluginDevWorkerMainBridge {
     this.hostCallAborts.clear();
   }
 
-  /** Tear down every provider the worker registered on the real host. */
+  /** Tear down every provider and MCP roster the worker registered on the real host. */
   private disposeProviders(): void {
-    for (const dispose of this.providerDisposers.values()) {
+    for (const dispose of [
+      ...this.providerDisposers.values(),
+      ...this.mcpRosterDisposers.values(),
+    ]) {
       try {
         dispose();
       } catch {
@@ -330,6 +391,7 @@ export class PluginDevWorkerMainBridge {
       }
     }
     this.providerDisposers.clear();
+    this.mcpRosterDisposers.clear();
   }
 
   /** Kill every process the worker spawned (the worker is going away — a fresh
@@ -1079,6 +1141,90 @@ export class PluginDevWorkerMainBridge {
         }
         return;
       }
+      case "mcp.registerTools": {
+        const p = params as Partial<RegisterMcpToolsParams> | null | undefined;
+        if (
+          !p ||
+          typeof p !== "object" ||
+          typeof p.endpointId !== "string" ||
+          !p.tools ||
+          typeof p.tools !== "object"
+        ) {
+          throw new Error("mcp.registerTools: malformed roster");
+        }
+        const endpointId = p.endpointId;
+        const wire = p.tools as Record<string, unknown>;
+        const generation = this.reloadGeneration;
+        // Null prototype: the names are worker-chosen, and one spelled
+        // `__proto__` must land as an own key for the host to reject by name
+        // rather than silently re-parent this object.
+        const tools = Object.create(null) as Record<string, PluginMcpToolDefinition>;
+        for (const toolName of Object.keys(wire)) {
+          const entry = wire[toolName];
+          if (!entry || typeof entry !== "object") {
+            throw new Error(`mcp.registerTools: tool "${toolName}" is malformed`);
+          }
+          const { description, inputSchema, outputSchema } = entry as Partial<
+            RegisterMcpToolsParams["tools"][string]
+          >;
+          // Descriptor fields are handed to the host as the worker sent them —
+          // the host's roster validation is the one check, for both paths.
+          tools[toolName] = {
+            description: description as string,
+            inputSchema: inputSchema as PluginMcpToolDefinition["inputSchema"],
+            ...(outputSchema !== undefined ? { outputSchema } : {}),
+            execute: (args, caller, signal) => {
+              // Fenced to the generation that registered it. Retirement unbinds
+              // the roster, but a caller that looked it up just before can still
+              // call in, and relaying that to the replacement — booting, its
+              // proxy not built yet — would be dropped and hang until the
+              // caller's own deadline.
+              if (generation !== this.reloadGeneration) {
+                return Promise.reject(
+                  new Error(
+                    `Plugin "${this.pluginId}" worker restarted before tool "${toolName}" could run`
+                  )
+                );
+              }
+              return this.invoke(
+                { kind: "mcp-tool", endpointId, toolName, args, caller },
+                signal
+              ).then(parseWorkerToolResult);
+            },
+          };
+        }
+        const dispose = await this.host.mcp.registerTools(endpointId, tools);
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return;
+        }
+        // Replace, then release the prior disposer: the host registry swaps the
+        // roster atomically and makes the superseded disposer inert, so an agent
+        // never sees the endpoint drop out between the two rosters.
+        const prior = this.mcpRosterDisposers.get(endpointId);
+        this.mcpRosterDisposers.set(endpointId, dispose);
+        if (prior) {
+          try {
+            prior();
+          } catch {
+            // best-effort
+          }
+        }
+        return;
+      }
+      case "mcp.unregisterTools": {
+        const { endpointId } = params as UnregisterMcpToolsParams;
+        const dispose = this.mcpRosterDisposers.get(endpointId);
+        if (dispose) {
+          this.mcpRosterDisposers.delete(endpointId);
+          dispose();
+        }
+        return;
+      }
       case "logger.info":
       case "logger.warn":
       case "logger.error": {
@@ -1239,21 +1385,61 @@ export class PluginDevWorkerMainBridge {
     return this.invoke({ kind: "command", namespacedId, resolvedPath, args });
   }
 
-  private invoke(
-    target:
-      | { kind: "action"; namespacedId: string; args: unknown }
-      | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
-      | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
-      | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
-  ): Promise<unknown> {
+  /**
+   * Run a worker-held callback and settle with its `invoke-result`.
+   *
+   * `signal` is the caller's own budget — this method still has no timeout of
+   * its own (see {@link onWorkerExit}). Aborting settles the caller at once with
+   * the signal's reason, drops the pending entry so a late `invoke-result` finds
+   * nothing to deliver to, and posts `invoke-cancel` so the worker can abort the
+   * signal it handed the plugin. Request ids come from a per-bridge counter that
+   * never restarts, so a cancelled id is never reused by a later invoke.
+   */
+  private invoke(target: InvokeTarget, signal?: AbortSignal): Promise<unknown> {
     if (this.disposed || !this.workerHost.isReady()) {
       return Promise.reject(new Error(`Plugin "${this.pluginId}" dev worker is not running`));
     }
+    if (signal?.aborted) return Promise.reject(abortErrorFor(signal));
     const requestId = `i${this.invokeSeq++}`;
     return new Promise<unknown>((resolve, reject) => {
-      this.pendingInvokes.set(requestId, { resolve, reject });
+      let onAbort: (() => void) | undefined;
+      const detach = (): void => {
+        if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+      };
+      this.pendingInvokes.set(requestId, {
+        resolve: (value) => {
+          detach();
+          resolve(value);
+        },
+        reject: (error) => {
+          detach();
+          reject(error);
+        },
+      });
+      if (signal) {
+        onAbort = (): void => {
+          // Only while still pending: a result, crash or dispose that already
+          // claimed the entry has settled the caller, and the worker has nothing
+          // left to cancel.
+          if (!this.pendingInvokes.delete(requestId)) return;
+          detach();
+          this.workerHost.send({ type: "invoke-cancel", requestId });
+          reject(abortErrorFor(signal));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
       let sent: boolean;
-      if (target.kind === "action") {
+      if (target.kind === "mcp-tool") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "mcp-tool",
+          endpointId: target.endpointId,
+          toolName: target.toolName,
+          args: target.args,
+          caller: projectMcpCaller(target.caller),
+        });
+      } else if (target.kind === "action") {
         sent = this.workerHost.send({
           type: "invoke",
           requestId,
@@ -1291,6 +1477,7 @@ export class PluginDevWorkerMainBridge {
       }
       if (!sent) {
         this.pendingInvokes.delete(requestId);
+        detach();
         reject(new Error(`Plugin "${this.pluginId}" dev worker is not running`));
       }
     });

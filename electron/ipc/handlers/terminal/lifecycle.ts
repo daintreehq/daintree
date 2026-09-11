@@ -29,6 +29,7 @@ import {
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { withTimeout } from "../../../utils/withTimeout.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -52,6 +53,13 @@ import {
   substituteSettingsTemplates,
 } from "../../../services/settingsTemplateResolver.js";
 import type * as PluginServiceModule from "../../../services/PluginService.js";
+import { listDeclaredAgentMcpEndpoints } from "../../../services/pluginAgentMcp/declaredEndpoints.js";
+import {
+  isAgentMcpEndpointEnabled,
+  listEnabledAgentMcpEndpoints,
+} from "../../../services/pluginAgentMcp/projectEnablement.js";
+import type { DeclaredAgentMcpEndpoint } from "../../../services/pluginAgentMcp/types.js";
+import { isProjectWorkspaceId } from "../../../../shared/utils/workspaceIds.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 
@@ -150,7 +158,8 @@ function wireAssistantPaneResolvers(mcpServerService: McpServerSingleton): void 
 
 // Same lazy-import discipline as the MCP service above: PluginService pulls in
 // the whole plugin host (~thousands of lines), and only plugin-agent launches
-// that actually embed a `${settings:*}` template need it — so keep it off the
+// that actually embed a `${settings:*}` template, or Claude launches in a
+// project with a plugin MCP endpoint turned on, need it — so keep it off the
 // eager spawn path and load on first such launch.
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
 let cachedPluginService: PluginServiceSingleton | null = null;
@@ -185,6 +194,56 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
+
+// The plugin MCP endpoints a Claude launch in this project should be handed:
+// enabled by the user for this project AND declared by a plugin instance that
+// is running and may serve it. Enablement is read first because it is a plain
+// store read, and an empty answer — every project that never turned a plugin
+// endpoint on — keeps the launch off the lazy PluginService load entirely.
+const PLUGIN_INIT_WAIT_MS = 5000;
+
+async function resolveEnabledPluginMcpEndpoints(
+  projectId: string
+): Promise<DeclaredAgentMcpEndpoint[]> {
+  if (!isProjectWorkspaceId(projectId)) return [];
+  if (listEnabledAgentMcpEndpoints(projectId).length === 0) return [];
+  const pluginService = await getPluginService();
+  // PluginService initialises as a deferred task after first-interactive, so
+  // panes restored at startup would otherwise see no loaded plugins. Bounded so
+  // a slow init (blocklist fetch, activation) degrades to a launch without
+  // plugin tools instead of a hung pane.
+  try {
+    await withTimeout(
+      pluginService.waitForInit(),
+      PLUGIN_INIT_WAIT_MS,
+      "PluginService init did not settle"
+    );
+  } catch {
+    console.warn(
+      `[TerminalSpawn] Plugin service not ready after ${PLUGIN_INIT_WAIT_MS}ms; launching without plugin MCP endpoints`
+    );
+    return [];
+  }
+  return listDeclaredAgentMcpEndpoints(pluginService.listPlugins(), projectId, (instanceId) =>
+    pluginService.hasPlugin(instanceId)
+  ).filter((endpoint) =>
+    isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId)
+  );
+}
+
+// Re-checked synchronously as each grant is minted: the endpoints above were
+// resolved before the launch's awaits, and a plugin unloaded or an endpoint
+// switched off in between would otherwise get a grant its revocation sweep has
+// already run past. `cachedPluginService` is always set by then — the endpoint
+// list could not have been non-empty without loading it.
+function isPluginMcpEndpointStillEligible(
+  projectId: string
+): (endpoint: { pluginInstanceId: string; endpointId: string }) => boolean {
+  return (endpoint) =>
+    cachedPluginService !== null &&
+    cachedPluginService.hasPlugin(endpoint.pluginInstanceId) &&
+    isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId);
+}
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -668,10 +727,22 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // Mints a per-pane bearer token, writes a managed --mcp-config JSON under
       // userData, and injects the flag into the command + the token into env.
       // Token is revoked and the file deleted on PTY exit (see registerTerminalEventHandlers).
+      //
+      // The same file carries one entry per plugin MCP endpoint the user enabled
+      // for this project, each with a grant minted for this launch alone. Those
+      // are independent of the Daintree tier: a project with Daintree MCP "off"
+      // still gets its plugin endpoints, in a file with no Daintree entry and no
+      // pane token. The grants are keyed by this terminal id, so every path that
+      // revokes the pane config (PTY exit, sync and async spawn failure, a
+      // re-prepare on restart) revokes them too. Every await — settings, the
+      // PluginService load, server readiness — happens before
+      // `preparePaneConfig` mints anything, per the binding rule above.
+      let preparedForThisLaunch = false;
       try {
         const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
         const tier = resolveDaintreeMcpTier(projSettings);
-        if (tier !== "off") {
+        const pluginEndpoints = await resolveEnabledPluginMcpEndpoints(resolvedProject.id);
+        if (tier !== "off" || pluginEndpoints.length > 0) {
           const mcpServerService = await getMcpServerService();
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
           if (!ready) {
@@ -681,16 +752,44 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           }
           const port = mcpServerService.currentPort;
           if (ready && port) {
-            const { configPath, token } = await mcpPaneConfigService.preparePaneConfig({
+            const prepared = await mcpPaneConfigService.preparePaneConfig({
               paneId: id,
               port,
               tier,
+              ...(pluginEndpoints.length > 0
+                ? {
+                    plugin: {
+                      projectId: resolvedProject.id,
+                      endpoints: pluginEndpoints,
+                      launchAgentIdHint: launchAgentId,
+                      isEligible: isPluginMcpEndpointStillEligible(resolvedProject.id),
+                    },
+                  }
+                : {}),
             });
-            safeCommand = `${safeCommand} --mcp-config ${quoteCommandArg(configPath, quotingShell)}`;
-            spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: token };
+            if (prepared) {
+              preparedForThisLaunch = true;
+              safeCommand = `${safeCommand} --mcp-config ${quoteCommandArg(prepared.configPath, quotingShell)}`;
+              if (prepared.token !== null) {
+                spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
+              }
+            }
           }
         }
       } catch (mcpErr) {
+        // `preparePaneConfig` rolls back its own failures. What is left is a
+        // config it finished that this launch then failed to hand over: the
+        // terminal opens without MCP, so revoke it rather than leave its grants
+        // and token live until the PTY exits. Nothing else is touched — a
+        // failure before preparation must not reach a previous launch that
+        // still holds this id.
+        if (preparedForThisLaunch) {
+          try {
+            await mcpPaneConfigService.revokePaneConfig(id);
+          } catch {
+            // best-effort cleanup
+          }
+        }
         console.error(
           "[TerminalSpawn] Failed to prepare Daintree MCP config; continuing without MCP injection:",
           mcpErr

@@ -1732,7 +1732,7 @@ type PluginPanelBadge = {
 };
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
 type ContextMenuLocation = "worktree" | "terminal" | "file";
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
 interface MenuItemContribution {
@@ -2020,6 +2020,68 @@ interface McpServerContribution {
     command: string;
     args?: string[];
     env?: Record<string, string>;
+}
+/**
+ * One `contributes.agentMcp` entry: an MCP tools endpoint the plugin serves to
+ * agents running in Daintree's terminals — the inbound direction, unlike
+ * {@link McpServerContribution}, where Daintree is the client.
+ *
+ * The host owns everything but the tools: the transport (a plugin-only path on
+ * the existing loopback listener), the per-terminal credential, the project
+ * binding and revocation. The plugin supplies the tool roster at activation via
+ * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
+ * an endpoint reaches no agent until the user enables it for a project.
+ */
+interface PluginAgentMcpContribution {
+    id: string;
+    /** Shown in the per-project enablement UI. Agents never see it; their server key derives from the ids. */
+    name: string;
+    description?: string;
+    /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
+    mode: "tools";
+}
+/**
+ * Who a tool call came from, as far as the host can say. Provenance, not
+ * identity: the grant was issued for a launch in this terminal and project, but
+ * any process that read the credential can present it. `launchAgentIdHint` is
+ * what the terminal was launched as — never proof of what is calling.
+ */
+interface PluginMcpCaller {
+    /** Stable correlation id for the credential. Never the credential itself. */
+    readonly credentialId: string;
+    readonly projectId: string;
+    readonly terminalId: string;
+    readonly launchAgentIdHint?: string;
+}
+/** A JSON Schema object describing a tool's arguments or result. Must be `type: "object"`. */
+type PluginMcpJsonSchema = {
+    type: "object";
+} & Record<string, unknown>;
+/**
+ * One tool on an `agentMcp` endpoint. `execute` receives the arguments the
+ * agent sent (validated only as a JSON object — checking them against
+ * `inputSchema` is the plugin's job), the caller's provenance, and a signal
+ * aborted when the call is cancelled, times out, or the plugin unloads. The
+ * return value must be JSON-serializable; it reaches the agent as the tool
+ * result. A thrown error becomes a tool error carrying its message.
+ */
+interface PluginMcpToolDefinition {
+    description: string;
+    inputSchema: PluginMcpJsonSchema;
+    outputSchema?: PluginMcpJsonSchema;
+    execute(args: Record<string, unknown>, caller: PluginMcpCaller, signal: AbortSignal): unknown | Promise<unknown>;
+}
+/** Host API for serving `contributes.agentMcp` endpoints. Requires `mcp:expose`. */
+interface PluginMcpApi {
+    /**
+     * Bind the tool roster for an endpoint declared in `contributes.agentMcp`,
+     * keyed by tool name. An undeclared endpoint id, a roster over
+     * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, or a tool breaking the name,
+     * description or schema limits is rejected whole. Calling it again for the
+     * same endpoint replaces the roster. Returns a disposer; every roster is
+     * dropped when the plugin unloads. Must be called during `activate()`.
+     */
+    registerTools(endpointId: string, tools: Record<string, PluginMcpToolDefinition>): Promise<() => void>;
 }
 /**
  * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
@@ -2314,6 +2376,12 @@ interface PluginManifest {
         commands: PluginActionContribution[];
         views: ViewContribution[];
         mcpServers: McpServerContribution[];
+        /**
+         * MCP tools endpoints this plugin serves to terminal agents. Requires the
+         * `mcp:expose` capability. Optional in the type but always materialized by
+         * the manifest schema's `.default([])`, for the same reason as `surfaces`.
+         */
+        agentMcp?: PluginAgentMcpContribution[];
         /**
          * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
          * surfaced to agents via the built-in MCP server's `skills.search` /
@@ -3711,6 +3779,20 @@ interface PluginActivationApi {
      *   is revoked and the subscription is rejected.
      */
     onDidWake(callback: (event: PluginSystemWakeEvent) => void): Promise<() => void>;
+    /**
+     * Serve the tool rosters of the endpoints declared in `contributes.agentMcp`
+     * to agents running in Daintree's terminals. Gated on the `mcp:expose`
+     * capability. See {@link PluginMcpApi}.
+     *
+     * `registerTools` is revoke-guarded — call it during `activate()`. The tools'
+     * `execute` functions run for the plugin's whole lifetime; only binding the
+     * roster is restricted to the activation window.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` from `registerTools` if the plugin
+     *   did not declare the `mcp:expose` capability, and a revoked-host error if
+     *   it is called after activation resolves or times out.
+     */
+    readonly mcp: PluginMcpApi;
 }
 /**
  * The full host surface handed to a plugin's `activate()`. Extends
@@ -4261,4 +4343,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

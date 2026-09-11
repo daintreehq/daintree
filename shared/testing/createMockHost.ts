@@ -37,6 +37,7 @@ import type {
   PluginIdentity,
   PluginInputBoxOptions,
   PluginIpcHandler,
+  PluginMcpToolDefinition,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
   PluginProcessApi,
@@ -123,6 +124,16 @@ export interface RegisteredFileDecorationProviderRecord {
   impl: FileDecorationProviderImpl;
 }
 
+/**
+ * A roster bound through `host.mcp.registerTools`. `tools` is the plugin's own
+ * roster, `execute` functions included, so a test can call a tool directly with
+ * a caller and signal of its choosing.
+ */
+export interface RegisteredMcpToolsRecord {
+  endpointId: string;
+  tools: Record<string, PluginMcpToolDefinition>;
+}
+
 export interface InvalidationRecord {
   scope: string;
   paths: string[] | undefined;
@@ -172,6 +183,8 @@ export interface MockHostState {
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
+  /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
+  readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
   readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
@@ -529,6 +542,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
+  const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
   const showQuickPickCalls: ShowQuickPickRecord[] = [];
@@ -1130,6 +1144,41 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    mcp: {
+      registerTools(endpointId, tools) {
+        // Structural checks only. The mock has no manifest model (#9878), so the
+        // `mcp:expose` and declared-endpoint gates are skipped, and the roster
+        // budget (tool count, name grammar, description and schema sizes) is
+        // enforced by the real host rather than duplicated here. Re-registering
+        // an endpoint replaces its roster; a replaced roster's disposer is inert.
+        if (typeof endpointId !== "string" || endpointId.length === 0) {
+          throw new Error("mcp.registerTools: endpointId must be a non-empty string");
+        }
+        if (!tools || typeof tools !== "object") {
+          throw new Error("mcp.registerTools: tools must be an object keyed by tool name");
+        }
+        for (const [name, tool] of Object.entries(tools)) {
+          if (!tool || typeof tool !== "object" || typeof tool.execute !== "function") {
+            throw new Error(`mcp.registerTools: tool "${name}" must provide an execute() function`);
+          }
+        }
+        const record: RegisteredMcpToolsRecord = { endpointId, tools };
+        const existing = registeredMcpTools.findIndex((r) => r.endpointId === endpointId);
+        if (existing >= 0) {
+          registeredMcpTools[existing] = record;
+        } else {
+          registeredMcpTools.push(record);
+        }
+        let disposed = false;
+        const dispose = () => {
+          if (disposed) return;
+          disposed = true;
+          const i = registeredMcpTools.indexOf(record);
+          if (i >= 0) registeredMcpTools.splice(i, 1);
+        };
+        return Promise.resolve(dispose);
+      },
+    },
     invalidateFileDecorations(scope, paths) {
       // Mirror production's non-empty-scope guard (#10617): reject (not throw),
       // matching the host's Promise contract. The declared-scope gate production
@@ -1489,6 +1538,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     sentToActiveAgentCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
+    registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,
     showQuickPickCalls,

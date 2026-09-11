@@ -7,6 +7,7 @@ import {
   isPrivateOrLoopbackHostname,
 } from "./pluginIdentifiers.js";
 import {
+  AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   BUILT_IN_PLUGIN_CAPABILITIES,
   PLUGIN_CATEGORY_IDS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
@@ -292,6 +293,31 @@ export const McpServerContributionSchema = z
     command: z.string().min(1),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.agentMcp` manifest entry — an MCP tools endpoint the plugin
+ * serves to terminal agents. Declarative only: the tool roster arrives at
+ * activation through `host.mcp.registerTools`, so the manifest carries nothing
+ * an agent sees beyond the name. Strict so a stray field (a `url`, a `command`)
+ * is rejected rather than read as a transport the host will not honour.
+ */
+export const AgentMcpContributionSchema = z
+  .object({
+    // `.` and `..` pass the id grammar but are dot-segments in the endpoint's
+    // URL path, which URL parsing removes — the endpoint would be unreachable.
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(SAFE_ID_PATTERN)
+      .refine((id) => id !== "." && id !== "..", {
+        message: 'agentMcp id cannot be "." or ".."',
+      }),
+    name: z.string().min(1).max(80),
+    description: z.string().min(1).max(400).optional(),
+    mode: z.literal("tools"),
   })
   .strict();
 
@@ -1182,6 +1208,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   processTools: 100,
   settings: 200,
   recipes: 50,
+  agentMcp: AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
 } as const;
 
 /**
@@ -1279,7 +1306,7 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
   ],
   [
     "mcpServers",
-    "contributed MCP servers are reachable through the app-global plugin-MCP surface, where an external agent session carries no project binding to check the contribution against.",
+    "contributed MCP servers run under one app-wide supervisor whose tools Daintree and its in-app Assistant call with no project binding to check the contribution against. To serve tools to this project's agents, declare contributes.agentMcp instead.",
   ],
 ] as const satisfies ReadonlyArray<readonly [string, string]>;
 
@@ -1524,6 +1551,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(RecipeContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.recipes)
               .default([]),
+            agentMcp: z
+              .array(AgentMcpContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.agentMcp)
+              .default([]),
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
@@ -1545,6 +1576,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             processTools: [],
             settings: [],
             recipes: [],
+            agentMcp: [],
             surfaces: {},
           })
       ),
@@ -1668,6 +1700,24 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           message:
             'contributes.agents requires the "agent:register" capability to be declared in capabilities.',
           params: { errorCode: "agent_register_capability_required" },
+        });
+      }
+
+      // An agent-facing tools endpoint is a new way for a plugin's data to reach
+      // agents, so it is disclosed at install like any other capability. Unlike
+      // `mcpServers` it is allowed under `scope: "project"`: every credential for
+      // it is minted per terminal and bound to one project, so the surface has
+      // the project axis those registries lack.
+      if (
+        manifest.contributes.agentMcp.length > 0 &&
+        !manifest.capabilities.includes("mcp:expose")
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "agentMcp"],
+          message:
+            'contributes.agentMcp requires the "mcp:expose" capability to be declared in capabilities.',
+          params: { errorCode: "mcp_expose_capability_required" },
         });
       }
 
@@ -1829,6 +1879,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("agents", manifest.contributes.agents);
       reportDuplicateIds("settings", manifest.contributes.settings);
       reportDuplicateIds("recipes", manifest.contributes.recipes);
+      reportDuplicateIds("agentMcp", manifest.contributes.agentMcp);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles

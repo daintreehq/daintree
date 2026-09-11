@@ -17,7 +17,52 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { McpPaneConfigService } from "../McpPaneConfigService.js";
+// `hooks` run one per write, in order, before it lands — a hook that waits
+// holds that write open, one that throws fails it.
+const writeControl = vi.hoisted(() => ({
+  error: null as Error | null,
+  hooks: [] as Array<() => Promise<void>>,
+}));
+
+vi.mock("../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/fs.js")>();
+  return {
+    ...actual,
+    resilientAtomicWriteFile: async (
+      ...args: Parameters<typeof actual.resilientAtomicWriteFile>
+    ) => {
+      const hook = writeControl.hooks.shift();
+      if (hook) await hook();
+      if (writeControl.error) throw writeControl.error;
+      return actual.resilientAtomicWriteFile(...args);
+    },
+  };
+});
+
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (err: Error) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+import { McpPaneConfigService, pluginServerKeysFor } from "../McpPaneConfigService.js";
+import { PluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
+import { pluginMcpRoutePath } from "../pluginAgentMcp/types.js";
+import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
+import { createHash } from "node:crypto";
+
+const PROJECT_A = "a".repeat(64);
+const PROJECT_B = "b".repeat(64);
+
+function bearerOf(entry: { headers: { Authorization: string } }): string {
+  const match = /^Bearer (.+)$/.exec(entry.headers.Authorization);
+  if (!match) throw new Error(`Not a bearer header: ${entry.headers.Authorization}`);
+  return match[1];
+}
 
 describe("McpPaneConfigService", () => {
   let service: McpPaneConfigService;
@@ -28,6 +73,8 @@ describe("McpPaneConfigService", () => {
   });
 
   afterEach(async () => {
+    writeControl.error = null;
+    writeControl.hooks.length = 0;
     await service.revokeAll();
     await fs.rm(testUserData, { recursive: true, force: true });
   });
@@ -309,5 +356,410 @@ describe("McpPaneConfigService", () => {
     expect(service.isValidPaneToken(b.token)).toBe(false);
     await expect(fs.stat(a.configPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(b.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  describe("plugin MCP endpoints", () => {
+    let grants: PluginMcpGrantRegistry;
+
+    beforeEach(() => {
+      grants = new PluginMcpGrantRegistry();
+      service = new McpPaneConfigService(grants);
+    });
+
+    const ledger = { pluginInstanceId: "acme.ledger", endpointId: "data" };
+
+    async function readServers(configPath: string) {
+      const parsed = JSON.parse(await fs.readFile(configPath, "utf-8"));
+      return parsed.mcpServers as Record<
+        string,
+        { type: string; url: string; headers: { Authorization: string } }
+      >;
+    }
+
+    it('tier "off" writes only plugin entries and registers no pane token', async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-off",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger], launchAgentIdHint: "claude" },
+      });
+
+      expect(prepared).not.toBeNull();
+      expect(prepared!.token).toBeNull();
+      const servers = await readServers(prepared!.configPath);
+      expect(Object.keys(servers)).toEqual(prepared!.pluginServerKeys);
+      expect(servers.daintree).toBeUndefined();
+
+      const [grant] = grants.listForTerminal("pane-plugin-off");
+      expect(grant.projectId).toBe(PROJECT_A);
+      expect(grant.launchAgentIdHint).toBe("claude");
+      // Nothing about the plugin grant is valid on the orchestration surface.
+      expect(service.isValidPaneToken(bearerOf(Object.values(servers)[0]))).toBe(false);
+    });
+
+    it("a non-off tier keeps the Daintree entry and pane token, with the plugin entries alongside", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-wb",
+        port: 45454,
+        tier: "workbench",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+
+      const servers = await readServers(prepared!.configPath);
+      expect(servers.daintree.headers.Authorization).toBe(`Bearer ${prepared!.token}`);
+      expect(service.getTierForToken(prepared!.token!)).toBe("workbench");
+      expect(prepared!.pluginServerKeys).toHaveLength(1);
+      expect(prepared!.pluginServerKeys[0]).not.toBe("daintree");
+      expect(Object.keys(servers).sort()).toEqual(
+        ["daintree", ...prepared!.pluginServerKeys].sort()
+      );
+    });
+
+    it("writes a Streamable HTTP entry at the endpoint's route with a literal bearer the registry accepts", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-entry",
+        port: 45460,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+
+      const entry = (await readServers(prepared!.configPath))[prepared!.pluginServerKeys[0]];
+      expect(entry.type).toBe("http");
+      expect(entry.url).toBe(`http://127.0.0.1:45460${pluginMcpRoutePath("acme.ledger", "data")}`);
+      expect(entry.headers.Authorization).not.toContain("${");
+      const grant = grants.authenticate(bearerOf(entry));
+      expect(grant).toMatchObject({
+        pluginInstanceId: "acme.ledger",
+        endpointId: "data",
+        projectId: PROJECT_A,
+        terminalId: "pane-plugin-entry",
+      });
+    });
+
+    it("writes the plugin-only file with mode 0600 on POSIX", async () => {
+      if (process.platform === "win32") return;
+
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-mode",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      const stat = await fs.stat(prepared!.configPath);
+      expect(stat.mode & 0o777).toBe(0o600);
+    });
+
+    it("skips an endpoint the registry refuses and returns null when nothing is left to write", async () => {
+      const foreign = {
+        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_B, "acme.ledger"),
+        endpointId: "data",
+      };
+
+      const skipped = await service.preparePaneConfig({
+        paneId: "pane-plugin-foreign",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [foreign] },
+      });
+      expect(skipped).toBeNull();
+      await expect(
+        fs.stat(path.join(testUserData, "mcp-pane-configs", "pane-plugin-foreign.json"))
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
+      const mixed = await service.preparePaneConfig({
+        paneId: "pane-plugin-mixed",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [foreign, ledger] },
+      });
+      expect(mixed!.pluginServerKeys).toHaveLength(1);
+      expect(grants.listForTerminal("pane-plugin-mixed").map((g) => g.pluginInstanceId)).toEqual([
+        "acme.ledger",
+      ]);
+    });
+
+    it("revokePaneConfig revokes the pane's grants", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-revoke",
+        port: 45454,
+        tier: "action",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      const bearer = bearerOf(
+        (await readServers(prepared!.configPath))[prepared!.pluginServerKeys[0]]
+      );
+
+      await service.revokePaneConfig("pane-plugin-revoke");
+
+      expect(grants.authenticate(bearer)).toBeNull();
+      expect(grants.listForTerminal("pane-plugin-revoke")).toEqual([]);
+    });
+
+    it("revokePaneConfig revokes a terminal's grants even when the pane has no record", async () => {
+      grants.issue({
+        pluginInstanceId: "acme.ledger",
+        endpointId: "data",
+        projectId: PROJECT_A,
+        terminalId: "pane-without-record",
+      });
+
+      await service.revokePaneConfig("pane-without-record");
+
+      expect(grants.listForTerminal("pane-without-record")).toEqual([]);
+    });
+
+    it("re-preparing the same pane revokes the previous launch's grants", async () => {
+      const first = await service.preparePaneConfig({
+        paneId: "pane-plugin-restart",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      const firstBearer = bearerOf(
+        (await readServers(first!.configPath))[first!.pluginServerKeys[0]]
+      );
+
+      await service.preparePaneConfig({
+        paneId: "pane-plugin-restart",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+
+      expect(grants.authenticate(firstBearer)).toBeNull();
+      expect(grants.listForTerminal("pane-plugin-restart")).toHaveLength(1);
+    });
+
+    it("revokeAll revokes every grant it minted", async () => {
+      await service.preparePaneConfig({
+        paneId: "pane-plugin-all-a",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      await service.preparePaneConfig({
+        paneId: "pane-plugin-all-b",
+        port: 45454,
+        tier: "system",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+
+      await service.revokeAll();
+
+      expect(grants.listForTerminal("pane-plugin-all-a")).toEqual([]);
+      expect(grants.listForTerminal("pane-plugin-all-b")).toEqual([]);
+    });
+
+    it("revokes the grants it minted when the file cannot be written", async () => {
+      writeControl.error = new Error("disk full");
+      await expect(
+        service.preparePaneConfig({
+          paneId: "pane-plugin-blocked",
+          port: 45454,
+          tier: "off",
+          plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        })
+      ).rejects.toThrow("disk full");
+
+      expect(grants.listForTerminal("pane-plugin-blocked")).toEqual([]);
+    });
+
+    it("fails a preparation revoked mid-write instead of handing over dead bearers", async () => {
+      const gate = deferred();
+      let writeStarted = false;
+      writeControl.hooks.push(async () => {
+        writeStarted = true;
+        await gate.promise;
+      });
+
+      const pending = service.preparePaneConfig({
+        paneId: "pane-plugin-late-exit",
+        port: 45454,
+        tier: "action",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      await vi.waitFor(() => expect(writeStarted).toBe(true));
+      // The previous launch's exit lands while the file is being written.
+      await service.revokePaneConfig("pane-plugin-late-exit");
+      gate.resolve();
+
+      await expect(pending).rejects.toThrow(/revoked while preparing/);
+      expect(grants.listForTerminal("pane-plugin-late-exit")).toEqual([]);
+      await expect(
+        fs.stat(path.join(testUserData, "mcp-pane-configs", "pane-plugin-late-exit.json"))
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("a Daintree-only preparation revoked mid-write still goes ahead", async () => {
+      const gate = deferred();
+      let writeStarted = false;
+      writeControl.hooks.push(async () => {
+        writeStarted = true;
+        await gate.promise;
+      });
+
+      const pending = service.preparePaneConfig({
+        paneId: "pane-late-exit-daintree",
+        port: 45454,
+        tier: "action",
+      });
+      await vi.waitFor(() => expect(writeStarted).toBe(true));
+      await service.revokePaneConfig("pane-late-exit-daintree");
+      gate.resolve();
+
+      const prepared = await pending;
+      expect(service.isValidPaneToken(prepared.token)).toBe(true);
+      await expect(fs.stat(prepared.configPath)).resolves.toBeDefined();
+    });
+
+    it("runs overlapping preparations for one pane in order, so the newer file wins", async () => {
+      const olderGate = deferred();
+      let olderWriteStarted = false;
+      writeControl.hooks.push(async () => {
+        olderWriteStarted = true;
+        await olderGate.promise;
+      });
+
+      const older = service.preparePaneConfig({
+        paneId: "pane-plugin-overlap",
+        port: 45454,
+        tier: "action",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      await vi.waitFor(() => expect(olderWriteStarted).toBe(true));
+      const newerPending = service.preparePaneConfig({
+        paneId: "pane-plugin-overlap",
+        port: 45454,
+        tier: "action",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+
+      // The older one finishes its write after the newer was requested; the
+      // newer then revokes it and writes last.
+      olderGate.resolve();
+      const olderPrepared = await older;
+      const olderBearer = bearerOf(
+        (await readServers(olderPrepared!.configPath))[olderPrepared!.pluginServerKeys[0]]
+      );
+      const newer = await newerPending;
+      const newerBearer = bearerOf(
+        (await readServers(newer!.configPath))[newer!.pluginServerKeys[0]]
+      );
+
+      expect(newerBearer).not.toBe(olderBearer);
+      expect(grants.authenticate(olderBearer)).toBeNull();
+      expect(grants.authenticate(newerBearer)).not.toBeNull();
+      expect(service.isValidPaneToken(olderPrepared!.token!)).toBe(false);
+      expect(service.isValidPaneToken(newer!.token!)).toBe(true);
+    });
+
+    it("re-checks eligibility as each grant is minted", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-ineligible",
+        port: 45454,
+        tier: "action",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger], isEligible: () => false },
+      });
+
+      expect(prepared!.pluginServerKeys).toEqual([]);
+      expect(grants.listForTerminal("pane-plugin-ineligible")).toEqual([]);
+    });
+
+    it('still rejects tier "off" with no plugin endpoints', async () => {
+      await expect(
+        service.preparePaneConfig({
+          paneId: "pane-plugin-empty",
+          port: 45454,
+          tier: "off",
+          plugin: { projectId: PROJECT_A, endpoints: [] },
+        })
+      ).rejects.toThrow(/should not be called with tier "off"/);
+    });
+  });
+
+  describe("pluginServerKeysFor", () => {
+    const KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+    it("derives a key from the manifest id and endpoint, restricted to safe characters", () => {
+      const [key] = pluginServerKeysFor([{ pluginInstanceId: "acme.ledger", endpointId: "d.v2" }]);
+      expect(key).toMatch(KEY_PATTERN);
+      expect(key).toContain("acme_ledger");
+      expect(key).toContain("d_v2");
+      expect(key).not.toBe("daintree");
+    });
+
+    it("leaves room for a 32-character tool name inside Claude's 64-character limit", () => {
+      const keys = pluginServerKeysFor([
+        { pluginInstanceId: "acme.an-extremely-long-plugin-manifest-name", endpointId: "data" },
+        { pluginInstanceId: "acme.ledger", endpointId: "data" },
+      ]);
+      const longestTool = "t".repeat(32);
+      for (const key of keys) {
+        expect(`mcp__${key}__${longestTool}`.length).toBeLessThanOrEqual(64);
+      }
+    });
+
+    it("keeps a project plugin's key free of its 64-hex project id", () => {
+      const [key] = pluginServerKeysFor([
+        {
+          pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
+          endpointId: "data",
+        },
+      ]);
+      expect(key).not.toContain(PROJECT_A);
+      expect(key).toContain("acme_ledger");
+    });
+
+    it("disambiguates endpoints that sanitise to the same key, independent of order", () => {
+      const installed = { pluginInstanceId: "acme.ledger", endpointId: "data" };
+      const project = {
+        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
+        endpointId: "data",
+      };
+      const folded = { pluginInstanceId: "acme_ledger", endpointId: "data" };
+
+      const keys = pluginServerKeysFor([installed, project, folded]);
+      expect(new Set(keys).size).toBe(3);
+      for (const key of keys) expect(key).toMatch(KEY_PATTERN);
+
+      const reversed = pluginServerKeysFor([folded, project, installed]);
+      expect(reversed).toEqual([...keys].reverse());
+    });
+
+    it("stays order-independent when a hashed key lands on another endpoint's plain key", () => {
+      const installed = { pluginInstanceId: "acme.ledger", endpointId: "data" };
+      const project = {
+        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
+        endpointId: "data",
+      };
+      // An endpoint whose plain key is exactly the installed copy's hashed key.
+      const hash = createHash("sha256")
+        .update(`acme.ledger\0data`, "utf8")
+        .digest("hex")
+        .slice(0, 8);
+      const lookalike = { pluginInstanceId: "acme.ledger", endpointId: `data-${hash}` };
+
+      const keys = pluginServerKeysFor([installed, project, lookalike]);
+      expect(new Set(keys).size).toBe(3);
+      expect(pluginServerKeysFor([lookalike, project, installed])).toEqual([...keys].reverse());
+      expect(pluginServerKeysFor([project, lookalike, installed])).toEqual([
+        keys[1],
+        keys[2],
+        keys[0],
+      ]);
+    });
+
+    it("bounds the key length for long ids without losing uniqueness", () => {
+      const longId = `com.example.${"very-long-plugin-name-".repeat(4)}`;
+      const keys = pluginServerKeysFor([
+        { pluginInstanceId: `${longId}a`, endpointId: "data" },
+        { pluginInstanceId: `${longId}b`, endpointId: "data" },
+      ]);
+      expect(new Set(keys).size).toBe(2);
+      for (const key of keys) {
+        expect(key).toMatch(KEY_PATTERN);
+        expect(key.length).toBeLessThanOrEqual(48);
+      }
+    });
   });
 });
