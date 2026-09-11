@@ -155,13 +155,13 @@ export interface PanelHeaderProps {
   // preview never paints the same surface as actual selection.
   isFleetPreviewed?: boolean;
 
-  // Slots for kind-specific content
+  // Slots for kind-specific content. Neither renders inside the window
+  // controls (#12374): `headerContent` is variable-width metadata that follows
+  // the title and clips before it can reach them, and `headerStatus` is
+  // transient status in a fixed box reserved just ahead of them — so nothing
+  // appearing or disappearing can move close or maximize.
   headerContent?: ReactNode;
-  // Where the kind-specific slot renders within the right-hand control cluster.
-  // "trailing" (default) keeps it all the way right — past the close button —
-  // which is where the terminal Activity Indicator belongs. "leading" tucks it
-  // ahead of the overflow menu, used by Dev Preview's command dropdown.
-  headerContentPlacement?: "leading" | "trailing";
+  headerStatus?: ReactNode;
   headerActions?: ReactNode;
 
   // Tab support
@@ -210,7 +210,7 @@ function PanelHeaderComponent({
   isFleetFollower = false,
   isFleetPreviewed = false,
   headerContent,
-  headerContentPlacement = "trailing",
+  headerStatus,
   headerActions,
   tabs,
   groupId,
@@ -692,254 +692,274 @@ function PanelHeaderComponent({
       )}
       onDoubleClick={handleHeaderDoubleClick}
     >
-      {/* Tab bar - shown when there are multiple tabs */}
-      {hasTabs && tabs ? (
-        canReorderTabs ? (
-          <DndContext
-            sensors={tabSensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleTabDragStart}
-            onDragEnd={handleTabDragEnd}
-            onDragCancel={handleTabDragCancel}
-            modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
-            autoScroll={tabAutoScroll}
-            accessibility={{ announcements: tabAnnouncements }}
-          >
-            <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-              <PanelTabList
-                layoutGroupId={`panel-tabs-dnd-${id}`}
-                tabs={tabs}
-                tabListRef={setTabListEl}
-                onKeyDown={handleTabListKeyDown}
-                onAddTab={onAddTab}
-                addTabTooltipContent={addTabTooltipContent}
-                overflowTrigger={overflowTrigger}
-                renderTab={(tab) => (
-                  <SortableTabButton
-                    key={tab.id}
-                    id={tab.id}
-                    title={tab.title}
-                    fullTitle={tab.fullTitle}
-                    chrome={tab.chrome}
-                    kind={tab.kind}
-                    agentState={tab.agentState}
-                    isActive={tab.isActive}
-                    presetColor={tab.presetColor}
-                    isUsingFallback={tab.isUsingFallback}
-                    fallbackTooltip={tab.fallbackTooltip}
-                    hasDangerousFlags={tab.hasDangerousFlags}
-                    onClick={() => onTabClick?.(tab.id)}
-                    onClose={() => onTabClose?.(tab.id)}
-                    onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
-                  />
-                )}
-              />
-            </SortableContext>
-          </DndContext>
+      {/* The only region that absorbs width changes: title or tabs, then
+          kind-specific metadata. The status box and controls after it never
+          shrink, so their position depends on the header width alone. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2 self-stretch">
+        {/* Tab bar - shown when there are multiple tabs */}
+        {hasTabs && tabs ? (
+          canReorderTabs ? (
+            <DndContext
+              sensors={tabSensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleTabDragStart}
+              onDragEnd={handleTabDragEnd}
+              onDragCancel={handleTabDragCancel}
+              modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+              autoScroll={tabAutoScroll}
+              accessibility={{ announcements: tabAnnouncements }}
+            >
+              <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
+                <PanelTabList
+                  layoutGroupId={`panel-tabs-dnd-${id}`}
+                  tabs={tabs}
+                  tabListRef={setTabListEl}
+                  onKeyDown={handleTabListKeyDown}
+                  onAddTab={onAddTab}
+                  addTabTooltipContent={addTabTooltipContent}
+                  overflowTrigger={overflowTrigger}
+                  renderTab={(tab) => (
+                    <SortableTabButton
+                      key={tab.id}
+                      id={tab.id}
+                      title={tab.title}
+                      fullTitle={tab.fullTitle}
+                      chrome={tab.chrome}
+                      kind={tab.kind}
+                      agentState={tab.agentState}
+                      isActive={tab.isActive}
+                      presetColor={tab.presetColor}
+                      isUsingFallback={tab.isUsingFallback}
+                      fallbackTooltip={tab.fallbackTooltip}
+                      hasDangerousFlags={tab.hasDangerousFlags}
+                      onClick={() => onTabClick?.(tab.id)}
+                      onClose={() => onTabClose?.(tab.id)}
+                      onRename={
+                        onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
+                      }
+                    />
+                  )}
+                />
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <PanelTabList
+              layoutGroupId={`panel-tabs-static-${id}`}
+              tabs={tabs}
+              tabListRef={setTabListEl}
+              onKeyDown={handleTabListKeyDown}
+              onAddTab={onAddTab}
+              addTabTooltipContent={addTabTooltipContent}
+              overflowTrigger={overflowTrigger}
+              renderTab={(tab) => (
+                <TabButton
+                  key={tab.id}
+                  id={tab.id}
+                  title={tab.title}
+                  fullTitle={tab.fullTitle}
+                  chrome={tab.chrome}
+                  kind={tab.kind}
+                  agentState={tab.agentState}
+                  isActive={tab.isActive}
+                  presetColor={tab.presetColor}
+                  isUsingFallback={tab.isUsingFallback}
+                  fallbackTooltip={tab.fallbackTooltip}
+                  hasDangerousFlags={tab.hasDangerousFlags}
+                  onClick={() => onTabClick?.(tab.id)}
+                  onClose={() => onTabClose?.(tab.id)}
+                  onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
+                />
+              )}
+            />
+          )
         ) : (
-          <PanelTabList
-            layoutGroupId={`panel-tabs-static-${id}`}
-            tabs={tabs}
-            tabListRef={setTabListEl}
-            onKeyDown={handleTabListKeyDown}
-            onAddTab={onAddTab}
-            addTabTooltipContent={addTabTooltipContent}
-            overflowTrigger={overflowTrigger}
-            renderTab={(tab) => (
-              <TabButton
-                key={tab.id}
-                id={tab.id}
-                title={tab.title}
-                fullTitle={tab.fullTitle}
-                chrome={tab.chrome}
-                kind={tab.kind}
-                agentState={tab.agentState}
-                isActive={tab.isActive}
-                presetColor={tab.presetColor}
-                isUsingFallback={tab.isUsingFallback}
-                fallbackTooltip={tab.fallbackTooltip}
-                hasDangerousFlags={tab.hasDangerousFlags}
-                onClick={() => onTabClick?.(tab.id)}
-                onClose={() => onTabClose?.(tab.id)}
-                onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
-              />
-            )}
-          />
-        )
-      ) : (
-        <div className="flex items-center gap-2 min-w-0">
-          {/* The pane you are working in wears its agent's real brand colour;
+          <div className="flex items-center gap-2 min-w-0">
+            {/* The pane you are working in wears its agent's real brand colour;
               the ones you are not sit a step back. `data-brand-active` goes on
               the glyph's own wrapper rather than the header so it cannot leak
               onto the tab strip, where selection is each tab's to signal. */}
-          <span
-            data-brand-active={isFocused || isSelected || undefined}
-            className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-text-primary"
-          >
-            <TerminalIcon
-              kind={kind}
-              chrome={chrome}
-              className="w-3.5 h-3.5"
-              brandColor={presetColor ?? chrome.color}
-            />
-          </span>
+            <span
+              data-brand-active={isFocused || isSelected || undefined}
+              className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-text-primary"
+            >
+              <TerminalIcon
+                kind={kind}
+                chrome={chrome}
+                className="w-3.5 h-3.5"
+                brandColor={presetColor ?? chrome.color}
+              />
+            </span>
 
-          {isEditingTitle ? (
-            // [data-no-dnd] opts the rename field out of the header drag
-            // surface: without it, drag-selecting the title text travels past
-            // DRAG_ACTIVATION_DISTANCE and picks the panel up instead.
-            <input
-              data-no-dnd
-              ref={titleInputRef}
-              type="text"
-              value={editingValue}
-              onChange={(e) => onEditingValueChange(e.target.value)}
-              onKeyDown={onTitleInputKeyDown}
-              onBlur={onTitleSave}
-              className="text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-text-primary select-text transition-colors focus:outline-hidden"
-              aria-label={getAriaLabel()}
-            />
-          ) : (
-            <div className="flex items-center gap-2 min-w-0">
+            {isEditingTitle ? (
+              // [data-no-dnd] opts the rename field out of the header drag
+              // surface: without it, drag-selecting the title text travels past
+              // DRAG_ACTIVATION_DISTANCE and picks the panel up instead.
+              <input
+                data-no-dnd
+                ref={titleInputRef}
+                type="text"
+                value={editingValue}
+                onChange={(e) => onEditingValueChange(e.target.value)}
+                onKeyDown={onTitleInputKeyDown}
+                onBlur={onTitleSave}
+                className="text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-text-primary select-text transition-colors focus:outline-hidden"
+                aria-label={getAriaLabel()}
+              />
+            ) : (
+              <div className="flex items-center gap-2 min-w-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className={cn(
+                        "text-xs font-medium font-sans select-none transition-colors block truncate min-w-0 min-h-6 leading-6",
+                        isFocused || isSelected ? "text-text-primary" : "text-text-secondary",
+                        onTitleChange && "cursor-text hover:text-text-primary",
+                        isPinged &&
+                          !isMaximized &&
+                          (wasJustSelected ? "animate-eco-title-select" : "animate-eco-title")
+                      )}
+                      onDoubleClick={onTitleDoubleClick}
+                      onKeyDown={onTitleKeyDown}
+                      tabIndex={onTitleChange ? 0 : undefined}
+                      role={onTitleChange ? "button" : undefined}
+                      aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
+                      data-fleet-gesture-passthrough=""
+                    >
+                      {displayTitle}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {onTitleChange ? `${title} — Double-click to edit` : title}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            )}
+
+            {hasDangerousFlags && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    className={cn(
-                      "text-xs font-medium font-sans select-none transition-colors block truncate min-w-0 min-h-6 leading-6",
-                      isFocused || isSelected ? "text-text-primary" : "text-text-secondary",
-                      onTitleChange && "cursor-text hover:text-text-primary",
-                      isPinged &&
-                        !isMaximized &&
-                        (wasJustSelected ? "animate-eco-title-select" : "animate-eco-title")
-                    )}
-                    onDoubleClick={onTitleDoubleClick}
-                    onKeyDown={onTitleKeyDown}
-                    tabIndex={onTitleChange ? 0 : undefined}
-                    role={onTitleChange ? "button" : undefined}
-                    aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
-                    data-fleet-gesture-passthrough=""
-                  >
-                    {displayTitle}
-                  </span>
+                    className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
+                    aria-label="Launched with dangerous permissions"
+                  />
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {onTitleChange ? `${title} — Double-click to edit` : title}
+                  Launched with dangerous permissions — agent can modify files without prompting
                 </TooltipContent>
               </Tooltip>
-            </div>
-          )}
+            )}
 
-          {hasDangerousFlags && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
-                  aria-label="Launched with dangerous permissions"
-                />
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                Launched with dangerous permissions — agent can modify files without prompting
-              </TooltipContent>
-            </Tooltip>
-          )}
+            {isFleetFailed && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismissFleetFailure(id);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    aria-label="Last fleet broadcast failed on this terminal — click to acknowledge"
+                    data-testid="panel-fleet-failure-dot"
+                    className="status-mark w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
+                  broadcast" from the command palette to resend.
+                </TooltipContent>
+              </Tooltip>
+            )}
 
-          {isFleetFailed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    dismissFleetFailure(id);
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  aria-label="Last fleet broadcast failed on this terminal — click to acknowledge"
-                  data-testid="panel-fleet-failure-dot"
-                  className="status-mark w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
-                />
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
-                broadcast" from the command palette to resend.
-              </TooltipContent>
-            </Tooltip>
-          )}
+            {chrome.isAgent && isArmed && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="status"
+                    aria-label="Armed for fleet broadcast"
+                    data-testid="panel-armed-broadcast-indicator"
+                    className="shrink-0 text-category-amber-text"
+                  >
+                    <RadioTower className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Armed for fleet broadcast</TooltipContent>
+              </Tooltip>
+            )}
 
-          {chrome.isAgent && isArmed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  role="status"
-                  aria-label="Armed for fleet broadcast"
-                  data-testid="panel-armed-broadcast-indicator"
-                  className="shrink-0 text-category-amber-text"
-                >
-                  <RadioTower className="h-3.5 w-3.5" aria-hidden="true" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Armed for fleet broadcast</TooltipContent>
-            </Tooltip>
-          )}
+            {/* Watch status indicator — non-interactive, shown when actively watching */}
+            {showWatchButton && isWatched && (
+              <span
+                role="status"
+                aria-label="Watching — waiting for agent completion"
+                className="text-accent-primary cursor-default"
+              >
+                <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
+              </span>
+            )}
 
-          {/* Watch status indicator — non-interactive, shown when actively watching */}
-          {showWatchButton && isWatched && (
-            <span
-              role="status"
-              aria-label="Watching — waiting for agent completion"
-              className="text-accent-primary cursor-default"
-            >
-              <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
-            </span>
-          )}
+            {/* Live plugin-contributed badges (host.setPanelBadge) for this panel */}
+            <PluginPanelBadges panelId={id} />
 
-          {/* Live plugin-contributed badges (host.setPanelBadge) for this panel */}
-          <PluginPanelBadges panelId={id} />
+            {/* Add tab button for single panels */}
+            {onAddTab && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddTab();
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                    aria-label="Duplicate panel as new tab"
+                    aria-keyshortcuts={duplicateAriaShortcut}
+                    type="button"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
+                </TooltipContent>
+              </Tooltip>
+            )}
 
-          {/* Add tab button for single panels */}
-          {onAddTab && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAddTab();
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
-                  aria-label="Duplicate panel as new tab"
-                  aria-keyshortcuts={duplicateAriaShortcut}
-                  type="button"
-                >
-                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          )}
+            {/* Worktree branch badge — shown when multiple worktrees are active */}
+            {worktreeBranch && worktreeAccentColor && (
+              <span
+                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium leading-none select-none max-w-[120px]"
+                style={
+                  {
+                    color: worktreeAccentColor,
+                    backgroundColor: "color-mix(in oklab, var(--worktree-color) 12%, transparent)",
+                    "--worktree-color": worktreeAccentColor,
+                  } as React.CSSProperties
+                }
+                aria-label={`Branch: ${worktreeBranch}`}
+              >
+                <span className="truncate">{worktreeBranch}</span>
+              </span>
+            )}
 
-          {/* Worktree branch badge — shown when multiple worktrees are active */}
-          {worktreeBranch && worktreeAccentColor && (
-            <span
-              className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium leading-none select-none max-w-[120px]"
-              style={
-                {
-                  color: worktreeAccentColor,
-                  backgroundColor: "color-mix(in oklab, var(--worktree-color) 12%, transparent)",
-                  "--worktree-color": worktreeAccentColor,
-                } as React.CSSProperties
-              }
-              aria-label={`Branch: ${worktreeBranch}`}
-            >
-              <span className="truncate">{worktreeBranch}</span>
-            </span>
-          )}
-
-          {/* Process runs somewhere other than the worktree this panel is filed
+            {/* Process runs somewhere other than the worktree this panel is filed
               under, by the user's own choice (#11840). */}
-        </div>
-      )}
+          </div>
+        )}
+
+        {headerContent != null && (
+          // Keeps its full width until it would take more than half the region,
+          // then clips from the telemetry end instead of squeezing the title to
+          // nothing. px-1 keeps edge items' focus rings inside the clip; -mr-1
+          // gives that padding back so the spacing to the controls is unchanged.
+          <div
+            data-testid="panel-header-content"
+            className="-mr-1 ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 self-stretch overflow-hidden whitespace-nowrap px-1"
+          >
+            {headerContent}
+          </div>
+        )}
+      </div>
 
       {/* Centered Zen Mode indicator (only visible when maximized) */}
       {isMaximized && activeCount > 0 && (
@@ -976,10 +996,21 @@ function PanelHeaderComponent({
         </div>
       )}
 
-      <div className="flex items-center gap-1.5">
-        {/* Kind-specific header content slot (leading placement) */}
-        {headerContentPlacement === "leading" && headerContent}
+      {headerStatus != null && (
+        // Reserved whether or not a status is showing: the box never changes
+        // size, so a status coming or going cannot move the controls.
+        <div
+          data-testid="panel-header-status"
+          className="ml-1.5 flex h-5 w-5 shrink-0 items-center justify-center"
+        >
+          {headerStatus}
+        </div>
+      )}
 
+      <div
+        data-testid="panel-header-controls"
+        className="ml-1.5 flex shrink-0 items-center gap-1.5"
+      >
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <DropdownMenu
@@ -1279,10 +1310,6 @@ function PanelHeaderComponent({
             </div>
           </TooltipContent>
         </Tooltip>
-
-        {/* Kind-specific header content slot (trailing placement) — stays all
-            the way right, past the close button, for the Activity Indicator */}
-        {headerContentPlacement === "trailing" && headerContent}
       </div>
       {isFleetPreviewed ? (
         <span

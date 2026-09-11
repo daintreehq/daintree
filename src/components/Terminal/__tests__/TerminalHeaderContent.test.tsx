@@ -741,58 +741,12 @@ describe("TerminalHeaderContent — elapsed-state-duration suffix", () => {
   });
 });
 
-describe("TerminalHeaderContent — paused / suspended tooltips", () => {
-  it("paused tooltip shows two-tier copy and omits the action instruction", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const pausedTooltip = tooltips.find((el) => el.textContent?.includes("Buffer overflow"));
-    expect(pausedTooltip).toBeTruthy();
-    const text = pausedTooltip!.textContent!;
-    expect(text).toContain("Buffer overflow");
-    expect(text).toContain("Output paused to prevent data loss.");
-    expect(text).not.toMatch(/right-click/i);
-    expect(text).not.toMatch(/Force Resume/i);
-
-    const stack = pausedTooltip!.querySelector(".flex.flex-col.gap-0\\.5");
-    expect(stack).toBeTruthy();
-    const primary = stack!.querySelector(".font-medium");
-    expect(primary).toBeTruthy();
-    expect(primary!.textContent).toBe("Buffer overflow");
-  });
-
-  // FUTURE_SAB: `suspended` is a skeleton value with no production producer
-  // (#9900). This test exercises the forward-looking UI; the badge never
-  // renders in production. When the SAB transport path is revived, the
-  // tooltip body should be reviewed for accuracy.
-  it("suspended tooltip shows two-tier copy with stative title (FUTURE_SAB; #9900)", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" flowStatus="suspended" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const suspendedTooltip = tooltips.find((el) => el.textContent?.includes("Output suspended"));
-    expect(suspendedTooltip).toBeTruthy();
-    const text = suspendedTooltip!.textContent!;
-    expect(text).toContain("Output suspended");
-    expect(text).toContain("Streaming stalled.");
-    expect(text).toContain("Recovers automatically on focus.");
-
-    const stack = suspendedTooltip!.querySelector(".flex.flex-col.gap-0\\.5");
-    expect(stack).toBeTruthy();
-    const primary = stack!.querySelector(".font-medium");
-    expect(primary).toBeTruthy();
-    expect(primary!.textContent).toBe("Output suspended");
-  });
-});
-
 // #9204 — per-pane state badges must silence their implicit live region so the
 // global announcer (mounted once in App.tsx) is the single source of polite
 // announcements. `role="status"` carries an implicit `aria-live="polite"` per
 // ARIA spec, so simply removing the explicit attribute is insufficient — each
-// badge must opt out with `aria-live="off"`.
+// badge must opt out with `aria-live="off"`. Flow and submit status render in
+// TerminalStatusSlot (#12374), which carries the same coverage.
 describe("TerminalHeaderContent — per-pane badges silence implicit live region (#9204)", () => {
   it("exit-code badge sets aria-live='off'", () => {
     mockTerminal = { id: "t1" };
@@ -807,38 +761,6 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     const badge = container.querySelector('[role="status"][aria-live="off"]');
     expect(badge).toBeTruthy();
     expect(badge!.textContent).toContain("queued");
-  });
-
-  it("paused-backpressure badge sets aria-live='off'", () => {
-    mockTerminal = { id: "t1" };
-    const { container } = render(
-      <TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />
-    );
-    const badge = container.querySelector('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    expect(badge!.textContent).toContain("Paused");
-  });
-
-  // #12375 — the governor pauses every terminal on a host at once, so its pause
-  // shows once on the toolbar rather than as an identical pill on every pane.
-  it("renders no pane pill for a resource-governor pause", () => {
-    mockTerminal = { id: "t1" };
-    const { container } = render(
-      <TerminalHeaderContent id="t1" flowStatus="paused-resource-governor" />
-    );
-    const text = container.textContent ?? "";
-    expect(text).not.toContain("Paused");
-    expect(text).not.toMatch(/memory/i);
-  });
-
-  // FUTURE_SAB: see Suspended pill (#9900). The badge never renders in
-  // production; this test locks in the future aria semantics.
-  it("suspended badge sets aria-live='off' (FUTURE_SAB; #9900)", () => {
-    mockTerminal = { id: "t1" };
-    const { container } = render(<TerminalHeaderContent id="t1" flowStatus="suspended" />);
-    const badge = container.querySelector('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    expect(badge!.textContent).toContain("Suspended");
   });
 
   it("hibernated badge sets aria-live='off'", () => {
@@ -857,7 +779,6 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
         isExited={true}
         exitCode={1}
         queueCount={3}
-        flowStatus="paused-backpressure"
         isHibernated={true}
       />
     );
@@ -866,10 +787,10 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
 });
 
 // #9814 — chip row vocabulary calibration. The agent-state chip leads, the
-// three flow pills are demoted off `status-warning/15` to neutral overlay
-// (per docs/architecture/resource-governance.md#173), the hibernated pill is
-// `rounded-full` + `border-dashed` to separate its silhouette from the three
-// flow pills, and the resource sparkline trails as ambient telemetry.
+// hibernated pill is `rounded-full` + `border-dashed` so its silhouette reads
+// apart from the other metadata chips, and the resource sparkline trails as
+// ambient telemetry. Transient flow status left this row for
+// TerminalStatusSlot's reserved box in #12374.
 describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
   it("agent-state chip is the first role=status badge in DOM order", () => {
     mockTerminal = { id: "t1" };
@@ -879,7 +800,6 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
         agentState="working"
         isExited={true}
         exitCode={1}
-        flowStatus="paused-backpressure"
         queueCount={2}
       />
     );
@@ -888,26 +808,6 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     const first = badges[0]!;
     expect(first.getAttribute("aria-label")).toMatch(/^Agent state:/);
   });
-
-  // FUTURE_SAB: `suspended` is a skeleton value (#9900). The test
-  // exercises the chip-row vocabulary for both flow pills; the suspended
-  // case never renders in production. `paused-resource-governor` has no
-  // pane pill at all (#12375).
-  it.each(["paused-backpressure", "suspended"] as const)(
-    // FUTURE_SAB: see above.
-    "%s flow pill is rendered with neutral overlay, not status-warning",
-    (status) => {
-      mockTerminal = { id: "t1" };
-      const { container } = render(<TerminalHeaderContent id="t1" flowStatus={status} />);
-      const badge = container.querySelector<HTMLElement>('[role="status"][aria-live="off"]');
-      expect(badge).toBeTruthy();
-      const className = badge!.getAttribute("class") ?? "";
-      expect(className).not.toContain("status-warning");
-      expect(className).not.toContain("status-error");
-      expect(className).toContain("bg-overlay-soft");
-      expect(className).toContain("border-divider");
-    }
-  );
 
   it("hibernated badge keeps its testid and aria semantics, with rounded-full + dashed border", () => {
     mockTerminal = { id: "t1" };
@@ -920,19 +820,7 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     expect(className).toContain("border-dashed");
   });
 
-  it("flow pills lack the hibernated silhouette (exclusivity)", () => {
-    mockTerminal = { id: "t1" };
-    const { container } = render(
-      <TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />
-    );
-    const badge = container.querySelector<HTMLElement>('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    const className = badge!.getAttribute("class") ?? "";
-    expect(className).not.toContain("border-dashed");
-    expect(className).not.toContain("rounded-full");
-  });
-
-  it("combined render: agent leads, sparkline does not lead, hibernated renders after paused-backpressure", () => {
+  it("combined render: agent leads, and telemetry trails the ambient hibernated cue", () => {
     mockTerminal = { id: "t1", isInputLocked: true };
     mockResourceEnabled = true;
     mockResourceState = {
@@ -948,7 +836,6 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
         agentState="working"
         isExited={true}
         exitCode={1}
-        flowStatus="paused-backpressure"
         isHibernated={true}
         queueCount={2}
       />
@@ -963,15 +850,11 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     // first status — it has been demoted behind the macro pane-state chip.
     const firstStatus = allStatuses[0]!;
     expect(firstStatus.textContent ?? "").not.toMatch(/%/);
-    // Hibernated (by data-testid) renders after paused-backpressure in DOM order.
     const hibernated = screen.getByTestId("terminal-hibernated-badge");
-    const pausedBadge = Array.from(
-      container.querySelectorAll<HTMLElement>('[role="status"][aria-live="off"]')
-    ).find((el) => (el.textContent ?? "").includes("Paused"));
-    expect(pausedBadge).toBeTruthy();
-    // pausedBadge precedes hibernated; check via direct DOM-tree comparison.
+    const resource = allStatuses.find((el) => /%/.test(el.textContent ?? ""));
+    expect(resource).toBeTruthy();
     expect(
-      pausedBadge!.compareDocumentPosition(hibernated) & Node.DOCUMENT_POSITION_FOLLOWING
+      hibernated.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pause, Hourglass, Lock, CheckCircle2, Moon } from "lucide-react";
-import type { AgentState, PanelKind, AgentStateChangeTrigger, TerminalFlowStatus } from "@/types";
+import { Lock, CheckCircle2, Moon } from "lucide-react";
+import type { AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -25,13 +25,6 @@ import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-
-// FUTURE_SAB: the `flowStatus` prop is widened to `TerminalFlowStatus` (not
-// `PersistableFlowStatus`) so the Suspended pill below remains type-safe
-// while `suspended` is a skeleton value with no production producer (#9900).
-// Callers in practice only pass `PersistableFlowStatus` values; the wider
-// type is purely so the future-sab branch is reachable. When the SAB
-// transport path is revived, restore the narrow prop type.
 
 function ElapsedTime({ startedAt, now }: { startedAt: number; now: number }) {
   return <> · {formatElapsedDuration(now - startedAt)}</>;
@@ -58,13 +51,6 @@ export interface TerminalHeaderContentProps {
   isExited?: boolean;
   exitCode?: number | null;
   queueCount?: number;
-  flowStatus?: TerminalFlowStatus;
-  /**
-   * Submit-lane state for this terminal (#11875). Only `"slow"` renders here —
-   * it is the Tier-1 ambient half of the signal. `"stalled"`/`"failed"` escalate
-   * to `TerminalSubmitStatusBanner` in the pane, which owns the recovery action.
-   */
-  submitStatus?: "slow" | "stalled" | "failed";
   /**
    * True when the agent transitioned to `completed` and the worktree's
    * changed-file count is zero. Drives the "Finished, no changes" pill
@@ -113,8 +99,6 @@ export function TerminalHeaderContent({
   isExited = false,
   exitCode = null,
   queueCount = 0,
-  flowStatus,
-  submitStatus,
   completedWithNoChanges = false,
   isHibernated = false,
 }: TerminalHeaderContentProps) {
@@ -173,7 +157,6 @@ export function TerminalHeaderContent({
     waitingReason,
     sessionCost,
     sessionTokens,
-    heldDurationMs,
   } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
@@ -187,7 +170,6 @@ export function TerminalHeaderContent({
         waitingReason: pty?.waitingReason,
         sessionCost: pty?.sessionCost,
         sessionTokens: pty?.sessionTokens,
-        heldDurationMs: pty?.heldDurationMs,
       };
     })
   );
@@ -378,109 +360,11 @@ export function TerminalHeaderContent({
         </span>
       )}
 
-      {/* Prompt-still-sending badge — Tier-1 ambient (#11875). Self-clearing:
-          the submit reports `settled` when it finally lands. Deliberately no
-          action here — the original Enter is still armed, so any "send again"
-          affordance would double-submit. If it stops progressing entirely the
-          pane escalates to a banner and this pill gives way to it. */}
-      {submitStatus === "slow" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Hourglass className="w-3 h-3" aria-hidden="true" />
-              Prompt still sending
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Still sending</span>
-              <span>Later prompts stay queued so they can&apos;t merge into this one.</span>
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Paused-backpressure badge — Tier-1 ambient (auto-recovering).
-          Demoted off `status-warning/15` per docs/architecture/resource-governance.md#173;
-          distinct from the other two flow pills by its `Pause` icon. */}
-      {flowStatus === "paused-backpressure" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Pause className="w-3 h-3" aria-hidden="true" />
-              Paused
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Buffer overflow</span>
-              <span>Output paused to prevent data loss.</span>
-              {heldDurationMs != null && heldDurationMs > 0 && (
-                <span className="text-text-secondary tabular-nums">
-                  Paused for {formatElapsedDuration(heldDurationMs)}
-                </span>
-              )}
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* No pill for `paused-resource-governor`: the governor pauses every
-          terminal on its host at once, so that pause shows once for the whole
-          app on the toolbar's HostMemoryPauseIndicator (#12375). */}
-
-      {/* FUTURE_SAB: Suspended badge — Tier-1 ambient. The `suspended` flowStatus
-          is only emitted by the SharedArrayBuffer transport path in the PTY host
-          (`BackpressureManager.suspendVisualStream`, see
-          `electron/pty-host/backpressure.ts:277`). That path is unreachable in
-          production — SharedArrayBuffer is not supported in Electron
-          UtilityProcess (PR #7724, issue #7653). The badge is kept as a
-          forward-looking skeleton for a potential Worker-thread migration
-          that could revive the SAB zero-copy data path. Mirror of the
-          // FUTURE_SAB: annotation in the producer. When the SAB transport
-          is revived, this branch is reachable again; until then it never
-          renders in production. See issue #9900. Distinguished by its
-          `Hourglass` icon (time-based wait, recovers on focus). */}
-      {flowStatus === "suspended" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Hourglass className="w-3 h-3" aria-hidden="true" />
-              Suspended
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Output suspended</span>
-              <span>Streaming stalled. Recovers automatically on focus.</span>
-              {heldDurationMs != null && heldDurationMs > 0 && (
-                <span className="text-text-secondary tabular-nums">
-                  Paused for {formatElapsedDuration(heldDurationMs)}
-                </span>
-              )}
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
       {/* Hibernated badge — ambient cue that the pane's renderer is asleep.
-          Rounded-full + dashed border separates its silhouette from the three
-          transient flow pills (which stay `rounded` + solid border) without
-          escalating weight. Renders after Paused/Suspended so higher-urgency
-          flow-control states lead visually when both apply. The PTY survives;
-          focus wakes it. */}
+          Rounded-full + dashed border keeps its silhouette apart from the
+          other metadata chips without escalating weight. Transient flow and
+          submit status live in TerminalStatusSlot's reserved box instead
+          (#12374). The PTY survives; focus wakes it. */}
       {isHibernated && (
         <Tooltip>
           <TooltipTrigger asChild>

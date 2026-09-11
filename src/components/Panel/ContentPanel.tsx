@@ -12,6 +12,7 @@ import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
 import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
+import { TerminalStatusSlot } from "@/components/Terminal/TerminalStatusSlot";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import type { PanelKind, AgentState, PersistableFlowStatus } from "@/types";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
@@ -63,7 +64,6 @@ export interface ContentPanelProps extends BasePanelProps {
 
   // Slots
   headerContent?: ReactNode;
-  headerContentPlacement?: "leading" | "trailing";
   headerActions?: ReactNode;
   toolbar?: ReactNode;
 
@@ -209,7 +209,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     showRestoreControl,
     children,
     headerContent,
-    headerContentPlacement,
     headerActions,
     toolbar,
     className,
@@ -444,8 +443,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isExited={isExited}
           exitCode={exitCode}
           queueCount={queueCount}
-          flowStatus={flowStatus}
-          submitStatus={submitStatus}
           completedWithNoChanges={completedWithNoChanges}
           isHibernated={isHibernated}
         />
@@ -463,11 +460,17 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isExited,
     exitCode,
     queueCount,
-    flowStatus,
-    submitStatus,
     completedWithNoChanges,
     isHibernated,
   ]);
+
+  // Transient status gets its own reserved box ahead of the window controls
+  // rather than joining the metadata above (#12374). Same gate as the
+  // auto-constructed terminal content, so a custom header never inherits it.
+  const resolvedHeaderStatus = useMemo(() => {
+    if (headerContent !== undefined || kind !== "terminal") return undefined;
+    return <TerminalStatusSlot id={id} flowStatus={flowStatus} submitStatus={submitStatus} />;
+  }, [headerContent, kind, id, flowStatus, submitStatus]);
 
   const handleTitleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -658,7 +661,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isFleetFollower={isFleetFollower}
           isFleetPreviewed={isFleetPreviewed}
           headerContent={resolvedHeaderContent}
-          headerContentPlacement={headerContentPlacement}
+          headerStatus={resolvedHeaderStatus}
           headerActions={headerActions}
           tabs={tabs}
           groupId={groupId}

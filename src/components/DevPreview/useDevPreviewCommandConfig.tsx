@@ -160,7 +160,7 @@ export function useDevPreviewCommandConfig({
               <button
                 type="button"
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-text-secondary hover:text-text-primary transition-colors max-w-[180px]"
+                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-text-secondary hover:text-text-primary transition-colors min-w-0 max-w-[180px]"
                 aria-label="Switch dev script"
               >
                 <span className="min-w-0 text-xs truncate">{headerLabel}</span>
