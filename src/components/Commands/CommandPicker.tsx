@@ -190,9 +190,14 @@ export function CommandPicker({
               disabled={!cmd.enabled}
               className={cn(
                 "relative w-full flex flex-col gap-0.5 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
+                // The selection bar is a pseudo-element background, which
+                // forced-colors drops — leaving the selected row identical to
+                // every other. It claims a Highlight border there instead, and
+                // the resting row drops to zero border WIDTH, since a
+                // transparent border is still painted in that mode.
                 isSelected
-                  ? "bg-overlay-soft border-overlay text-text-primary before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-['']"
-                  : "border-transparent text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
+                  ? "bg-overlay-soft border-overlay text-text-primary before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-[''] forced-colors:border-[Highlight] forced-colors:border-2"
+                  : "border-transparent text-text-secondary hover:bg-overlay-subtle hover:text-text-primary forced-colors:border-0",
                 !cmd.enabled && "opacity-50 cursor-not-allowed"
               )}
               onClick={() => {
