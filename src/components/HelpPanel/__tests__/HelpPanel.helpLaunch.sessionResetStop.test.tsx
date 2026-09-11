@@ -1720,4 +1720,47 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     expect(queryByTestId("confirm-dialog")).toBe(null);
     expect(assistantHost().discardResume).not.toHaveBeenCalled();
   });
+
+  it("reads again which lanes hold a conversation each time the workspace comes back", async () => {
+    nativeMode();
+    Object.assign(helpPanelState, { ensureSlot: vi.fn() });
+    const listResumable = assistantHost().listResumable!;
+    const { container, rerender, getByTestId } = render(<HelpPanel width={380} />);
+    await act(async () => {});
+
+    // Away and back in the same renderer. The lane stores are released on the way out, so
+    // only main's answer, read again on return, says lane 0 has something to lose.
+    projectStoreState.currentProject = { id: "proj-2", path: "/other" };
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
+    listResumable.mockResolvedValue([{ slot: 0, panelWasOpen: false }]);
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
+
+    fireEvent.click(queryStopItem(container)!);
+    expect(listResumable).toHaveBeenLastCalledWith("proj-1");
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+  });
+
+  it("stops counting a restored lane as saved once it has adopted a session", async () => {
+    nativeMode();
+    Object.assign(helpPanelState, { ensureSlot: vi.fn() });
+    assistantHost().listResumable!.mockResolvedValue([{ slot: 0, panelWasOpen: false }]);
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    await act(async () => {});
+
+    // It adopted a new, empty session: another window replaced the conversation meanwhile.
+    act(() => {
+      assistantStoreForSlot(0).getState().reset("ses_replacement");
+    });
+    act(() => {
+      fireEvent.click(queryStopItem(container)!);
+    });
+
+    expect(queryByTestId("confirm-dialog")).toBe(null);
+    expect(assistantHost().discardResume).toHaveBeenCalledWith("proj-1", 0);
+  });
 });
