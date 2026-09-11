@@ -428,10 +428,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
 
-  // Auto-construct TerminalHeaderContent for PTY-backed terminals if headerContent not provided
+  // Auto-construct the terminal header for PTY-backed terminals when no custom
+  // headerContent is provided. One gate covers both the metadata and the status
+  // box, so a custom header never inherits either.
+  const isAutoTerminalHeader = headerContent === undefined && kind === "terminal";
   const resolvedHeaderContent = useMemo(() => {
     if (headerContent !== undefined) return headerContent;
-    if (kind === "terminal") {
+    if (isAutoTerminalHeader) {
       return (
         <TerminalHeaderContent
           id={id}
@@ -451,6 +454,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     return null;
   }, [
     headerContent,
+    isAutoTerminalHeader,
     kind,
     id,
     headerAgentState,
@@ -465,12 +469,14 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   ]);
 
   // Transient status gets its own reserved box ahead of the window controls
-  // rather than joining the metadata above (#12374). Same gate as the
-  // auto-constructed terminal content, so a custom header never inherits it.
-  const resolvedHeaderStatus = useMemo(() => {
-    if (headerContent !== undefined || kind !== "terminal") return undefined;
-    return <TerminalStatusSlot id={id} flowStatus={flowStatus} submitStatus={submitStatus} />;
-  }, [headerContent, kind, id, flowStatus, submitStatus]);
+  // rather than joining the metadata above (#12374).
+  const resolvedHeaderStatus = useMemo(
+    () =>
+      isAutoTerminalHeader ? (
+        <TerminalStatusSlot id={id} flowStatus={flowStatus} submitStatus={submitStatus} />
+      ) : undefined,
+    [isAutoTerminalHeader, id, flowStatus, submitStatus]
+  );
 
   const handleTitleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
