@@ -59,7 +59,16 @@ function readProcessMemoryKb(proc: Electron.ProcessMetric): number {
 /**
  * Whether destroying `entry` would kill a running Daintree Assistant (#11157).
  *
- * Three conditions, all load-bearing:
+ * A native engine (#12364) is asked about first, and separately. It is a child
+ * process of main that never binds a PTY, so the PTY backends below are empty
+ * for it — and that empty list used to return false before anything else was
+ * consulted, putting the engine's view in the ordinary pool. Destroying the
+ * view runs `stopByWebContents`; `wouldEndNativeAssistant` answers whether that
+ * would end a live engine, from the service that makes the decision, so it
+ * names only the view whose loss stops one (its sole surface, or the surface
+ * its control plane is pinned to).
+ *
+ * A PTY-backed assistant needs three conditions, all load-bearing:
  *
  * 1. HelpSessionService has an unrevoked session for the project with a spawned
  *    PTY bound to it.
@@ -85,10 +94,10 @@ function hasLiveAssistantBackend(
   projectId: string,
   entry: ViewEntry
 ): boolean {
-  const backends = host.assistantBackendsForProject?.(projectId) ?? [];
-  if (backends.length === 0) return false;
   const wc = entry.view.webContents;
   if (wc.isDestroyed()) return false;
+  if (host.wouldEndNativeAssistant?.(wc.id) === true) return true;
+  const backends = host.assistantBackendsForProject?.(projectId) ?? [];
   // All three conditions must hold for the SAME lane (#12108): a dead lane
   // must not borrow a live sibling's liveness, and a lane pinned to another
   // window must not protect this view. Checking them per backend rather than
@@ -362,7 +371,8 @@ export function evictStaleViews(
   // `onViewEvicted` → `revokeByWebContentsId` → `gracefulKill`, which kills the
   // assistant's whole PTY process tree, so every sub-agent and background shell
   // it spawned dies with no completion record. Only the transcript's resume id
-  // survives. An ordinary grid terminal has no such coupling — its PTY lives in
+  // survives. A native engine dies the same way through `stopByWebContents`,
+  // taking its conversation with it (#12364). An ordinary grid terminal has no such coupling — its PTY lives in
   // the pty-host and reconnects on switch-back — which is why the floor is
   // scoped to assistant backends and not to `hasActiveAgent()` at large, whose
   // views are safe to evict and whose projects would otherwise pin the cache
@@ -377,13 +387,16 @@ export function evictStaleViews(
   // never a `<webview>` guest and never appears in `app.getAppMetrics()`, so
   // the `gracefulKill` that follows the teardown recovers nothing this pass can
   // measure. Admitting the view bought no memory the ordinary tiers could not,
-  // and cost the user every running sub-agent.
+  // and cost the user every running sub-agent. The native engine is no
+  // different: a plain `child_process` of main, which `app.getAppMetrics()`
+  // does not list either.
   //
-  // Cache growth stays bounded by construction: only the single `webContentsId`
-  // a live session pinned is protected, HelpSessionService enforces one backend
-  // per project, and another window's view of the same project remains an
-  // ordinary candidate. The ceiling is the number of assistants actually
-  // running — reported below so the over-cap cache is attributable.
+  // Cache growth stays bounded by construction: only the single view a live
+  // session pinned is protected — for a native engine, the one whose loss would
+  // end it — there is at most one backend per lane, and another window's view
+  // of the same project remains an ordinary candidate. The ceiling is the number
+  // of assistants actually running — reported below so the over-cap cache is
+  // attributable.
   //
   // A view backing a live-but-idle MCP session binding sits between the two
   // (#11790): evicting it breaks the binding with no recovery path, so it
