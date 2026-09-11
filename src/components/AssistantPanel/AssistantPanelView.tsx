@@ -34,6 +34,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useProjectStore } from "@/store";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { AssistantBootSplash } from "./AssistantBootSplash";
+import { AssistantLink } from "./AssistantLink";
 import { AssistantQuestionCard } from "./AssistantQuestionCard";
 import { AssistantOperationsDeck } from "./AssistantOperationsDeck";
 import { AssistantTimerStatusBar } from "./AssistantTimerStatusBar";
@@ -61,6 +62,7 @@ import { buildAssistantPalette } from "./palette";
  * Module-level so it is referentially stable across renders.
  */
 const noopCancelTimer = () => {};
+const ASSISTANT_DOCS_URL = "https://daintree.org/docs/daintree-assistant";
 
 export interface AssistantPanelViewProps {
   state: AssistantSessionState;
@@ -1489,37 +1491,17 @@ export function AssistantPanelView({
                   <DaintreeIcon aria-hidden="true" className="size-3.5 shrink-0" />
                   <p className="font-medium">Put agents to work</p>
                 </div>
+                {/* A description and a pointer, nothing else. The starter prompts this
+                    replaced were three more rows of chrome in a rail that is already
+                    carrying a masthead; they read as a menu and taught nothing the
+                    sentence above them did not. */}
                 <p className="mt-3 text-[var(--assistant-fg-secondary)]">
-                  Plan the work. Launch visible agents. Keep watch on the results.
+                  The assistant plans changes with you, launches agents in their own terminals, and
+                  reports back on what they did. Ask in plain language, or type <kbd>/</kbd> for
+                  commands.
                 </p>
-                <div className="mt-5 flex flex-col gap-1" aria-label="Start a request">
-                  {(
-                    [
-                      ["Plan a change", "Help me plan a change to this project"],
-                      [
-                        "Check the agents",
-                        "Check the agents in this project and tell me what needs attention",
-                      ],
-                      [
-                        "Review the worktrees",
-                        "Review this project's worktrees and summarize the work in progress",
-                      ],
-                    ] as const
-                  ).map(([label, prompt]) => (
-                    <button
-                      key={label}
-                      type="button"
-                      disabled={!live}
-                      className="assistant-starter assistant-text-control"
-                      onClick={() => fillComposer(prompt)}
-                    >
-                      <ChevronRight aria-hidden="true" className="size-3.5 shrink-0" />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-5 assistant-text-sm text-[var(--assistant-fg-secondary)]">
-                  Type <kbd>/</kbd> for commands. Agents make the edits; you stay in control.
+                <p className="mt-3 text-[var(--assistant-fg-secondary)]">
+                  <AssistantLink href={ASSISTANT_DOCS_URL}>Read the guide</AssistantLink>
                 </p>
               </div>
             )

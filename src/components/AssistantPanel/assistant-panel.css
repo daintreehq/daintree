@@ -178,19 +178,6 @@
   margin: 1.45em 0 0;
 }
 
-/* On the gutter axis like everything else, with the chevron in the same two-cell column
-   the echoed prompt uses. The old 0.5em box indented the label to x=39 and made three
-   commands read as three cards. */
-.assistant-starter {
-  display: flex;
-  align-items: center;
-  gap: var(--assistant-mark-gap);
-  margin-inline: calc(-1 * var(--assistant-gutter));
-  padding: 0.15em var(--assistant-gutter);
-  width: calc(100% + 2 * var(--assistant-gutter));
-  text-align: left;
-}
-
 /* The expanded calls hang under a left rule — the continuous vertical track a terminal
    uses for nested output, and the treatment the collapsed header above now defers to
    rather than competing with it by drawing a box of its own.
@@ -250,8 +237,7 @@
 
 /* Any row that opens with a glyph and continues with words. Used where the row has no
    class of its own worth naming — the notices, the auto-approve banner, the welcome
-   heading — so that they land on the same text axis as the prompt, the starters, the
-   tool summary and the live status line. */
+   heading — so that they land on the same text axis as the prompt, the tool summary and the live status line. */
 .assistant-mark-row {
   gap: var(--assistant-mark-gap);
 }

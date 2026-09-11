@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -63,29 +63,19 @@ function panel(state = emptyState, onRetractedDraftConsumed = vi.fn()) {
 }
 
 describe("assistant composer drafts", () => {
-  it.each([
-    ["Plan a change", "Help me plan a change to this project"],
-    ["Check the agents", "Check the agents in this project and tell me what needs attention"],
-    ["Review the worktrees", "Review this project's worktrees and summarize the work in progress"],
-  ])("fills and focuses the mounted editor from %s", async (label, prompt) => {
-    const input = useTerminalInputStore.getState();
-    input.setDraftInput("assistant-session-b", "Other session", project.id);
-    input.setDraftInput(composerId, "Other project", "project-b");
-    const { getByRole } = render(panel());
-    const editor = getByRole("textbox");
+  it("welcomes with a description and a guide link, not starter prompts", () => {
+    const { getByRole, queryByRole } = render(panel());
 
-    fireEvent.click(getByRole("button", { name: label }));
-
-    await waitFor(() => {
-      expect(editor.textContent).toBe(prompt);
-      expect(document.activeElement).toBe(editor);
-    });
-    expect(input.getDraftInput(composerId, project.id)).toBe(prompt);
-    expect(input.getDraftInput("assistant-session-b", project.id)).toBe("Other session");
-    expect(input.getDraftInput(composerId, "project-b")).toBe("Other project");
+    const guide = getByRole("link", { name: "Read the guide" });
+    expect(guide.getAttribute("href")).toBe("https://daintree.org/docs/daintree-assistant");
+    expect(guide.getAttribute("target")).toBe("_blank");
+    expect(queryByRole("button", { name: "Plan a change" })).toBeNull();
   });
 
   it("restores a retracted follow-up into the mounted editor", async () => {
+    const input = useTerminalInputStore.getState();
+    input.setDraftInput("assistant-session-b", "Other session", project.id);
+    input.setDraftInput(composerId, "Other project", "project-b");
     const consumed = vi.fn();
     const { getByRole, rerender } = render(panel(emptyState, consumed));
     const editor = getByRole("textbox");
@@ -97,5 +87,8 @@ describe("assistant composer drafts", () => {
       expect(document.activeElement).toBe(editor);
     });
     expect(consumed).toHaveBeenCalledOnce();
+    expect(input.getDraftInput(composerId, project.id)).toBe("Use the existing worktree");
+    expect(input.getDraftInput("assistant-session-b", project.id)).toBe("Other session");
+    expect(input.getDraftInput(composerId, "project-b")).toBe("Other project");
   });
 });
