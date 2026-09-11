@@ -6,12 +6,18 @@ export const config: AgentConfig = {
   name: "Claude",
   command: "claude",
   // Anthropic's native installer places the symlink at ~/.local/bin/claude
-  // on macOS/Linux and a versioned binary under ~/.local/share/claude.
-  // Windows native installer places the binary under
-  // %LOCALAPPDATA%\claude-code\bin\claude.exe. Detect both so users who
-  // install via the native installer are not mis-reported as "missing"
-  // when ~/.local/bin isn't inherited by the Electron process PATH.
-  nativePaths: ["~/.local/bin/claude", "%LOCALAPPDATA%\\claude-code\\bin\\claude.exe"],
+  // on macOS/Linux (with a versioned binary under ~/.local/share/claude) and
+  // the binary at %USERPROFILE%\.local\bin\claude.exe on Windows. The first
+  // entry covers both: `~` is the user profile on Windows and the probe
+  // appends executable extensions there. WinGet links claude.exe into its
+  // user-scope or machine-scope Links directory instead. Probing these keeps
+  // users from being reported "missing" when none of them is on the Electron
+  // process PATH.
+  nativePaths: [
+    "~/.local/bin/claude",
+    "%LOCALAPPDATA%\\Microsoft\\WinGet\\Links\\claude.exe",
+    "%ProgramFiles%\\WinGet\\Links\\claude.exe",
+  ],
   npmGlobalPackage: "@anthropic-ai/claude-code",
   color: "#CC785C",
   iconId: "claude",

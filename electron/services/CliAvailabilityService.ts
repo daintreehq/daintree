@@ -20,6 +20,9 @@ import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("main:CliAvailabilityService");
 
 interface ProbeSuccess {
   status: "found";
@@ -57,6 +60,8 @@ interface AgentCheckOutcome {
 
 const SECURITY_ERROR_CODES = new Set(["EACCES", "EPERM"]);
 
+const CHECK_TIMED_OUT_MESSAGE = "The most recent check didn't finish in time.";
+
 const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
   [".cmd", 0],
   [".exe", 1],
@@ -65,6 +70,8 @@ const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
   [".ps1", 4],
   ["", 5],
 ]);
+
+const WINDOWS_APPENDED_EXTENSIONS = [".cmd", ".exe", ".bat", ".com"];
 
 /**
  * Synthesise probe paths for PyPI-distributed agents. Modern Python tool
@@ -137,6 +144,19 @@ function windowsExecutablePriority(candidatePath: string): number {
   return WINDOWS_EXECUTABLE_PRIORITY.get(pathWin32.extname(candidatePath).toLowerCase()) ?? 6;
 }
 
+/**
+ * `fs.access(X_OK)` is only an existence check on Windows, and the launcher
+ * runs `resolvedPath` verbatim through PowerShell, so an extensionless file
+ * there proves nothing launchable. Probe the executable variants instead, but
+ * leave a path that already names a launchable extension alone so
+ * `goose.exe` never turns into `goose.exe.cmd`.
+ */
+function windowsLaunchCandidates(filePath: string): string[] {
+  const extension = pathWin32.extname(filePath).toLowerCase();
+  if (extension && WINDOWS_EXECUTABLE_PRIORITY.has(extension)) return [filePath];
+  return WINDOWS_APPENDED_EXTENSIONS.map((appended) => `${filePath}${appended}`);
+}
+
 export class CliAvailabilityService {
   private static readonly CHECK_TIMEOUT_MS = 10_000;
   private static readonly AUTH_CHECK_TIMEOUT_MS = 3_000;
@@ -166,64 +186,69 @@ export class CliAvailabilityService {
 
         const entries = Object.entries(getEffectiveRegistry());
 
-        const checksPromise = Promise.allSettled(
+        // Outcomes are recorded as each agent settles, so an agent that
+        // outlives the batch budget can't take the ones that already answered
+        // down with it.
+        const settled = new Map<string, AgentCheckOutcome>();
+        const checksPromise = Promise.all(
           entries.map(async ([id, config]) => {
-            const outcome = await this.checkAgent(config);
-            return [id, outcome] as [string, AgentCheckOutcome];
+            try {
+              settled.set(id, await this.checkAgent(config));
+            } catch (error) {
+              logger.error("Agent CLI check failed", error, { agentId: id });
+              settled.set(id, {
+                state: "missing",
+                detail: { state: "missing", resolvedPath: null, via: null },
+              });
+            }
           })
         );
 
         let timeoutHandle: NodeJS.Timeout | undefined;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutHandle = setTimeout(
-            () => reject(new Error("CLI availability check timed out")),
-            CliAvailabilityService.CHECK_TIMEOUT_MS
-          );
+        const timeoutPromise = new Promise<void>((resolve) => {
+          timeoutHandle = setTimeout(() => resolve(), CliAvailabilityService.CHECK_TIMEOUT_MS);
         });
 
-        let outcomeEntries: [string, AgentCheckOutcome][];
         try {
-          const results = await Promise.race([checksPromise, timeoutPromise]);
-          outcomeEntries = results.map((result, index) => {
-            if (result.status === "fulfilled") {
-              return result.value;
-            } else {
-              console.warn(
-                `[CliAvailabilityService] Check failed for ${entries[index][0]}:`,
-                result.reason
-              );
-              return [
-                entries[index][0],
-                {
-                  state: "missing" as AgentAvailabilityState,
-                  detail: {
-                    state: "missing" as AgentAvailabilityState,
-                    resolvedPath: null,
-                    via: null,
-                  },
-                },
-              ];
-            }
-          });
-        } catch (error) {
-          // eslint-disable-next-line no-restricted-syntax -- diagnostic console.warn passes the raw error if not an Error; not a user-visible string.
-          console.warn("[CliAvailabilityService]", error instanceof Error ? error.message : error);
-          outcomeEntries = entries.map(([id]) => [
-            id,
-            {
-              state: "missing" as AgentAvailabilityState,
-              detail: {
-                state: "missing" as AgentAvailabilityState,
-                resolvedPath: null,
-                via: null,
-              },
-            },
-          ]);
+          await Promise.race([checksPromise, timeoutPromise]);
         } finally {
           if (timeoutHandle) {
             clearTimeout(timeoutHandle);
           }
         }
+
+        const pendingAgentIds: string[] = [];
+        const outcomeEntries = entries.map(([id]): [string, AgentCheckOutcome] => {
+          const outcome = settled.get(id);
+          if (outcome) return [id, outcome];
+          pendingAgentIds.push(id);
+          // Running out of time says nothing about whether the binary is still
+          // there, so reuse what the last published check reported and flag
+          // that it wasn't re-confirmed — unless that detail already carries
+          // its own diagnostic, which stays the more useful thing to show.
+          const previous = this.details?.[id];
+          if (previous) {
+            return [
+              id,
+              {
+                state: previous.state,
+                detail: { ...previous, message: previous.message ?? CHECK_TIMED_OUT_MESSAGE },
+              },
+            ];
+          }
+          return [
+            id,
+            {
+              state: "missing",
+              detail: {
+                state: "missing",
+                resolvedPath: null,
+                via: null,
+                message: CHECK_TIMED_OUT_MESSAGE,
+              },
+            },
+          ];
+        });
 
         const availability: CliAvailability = Object.fromEntries(
           outcomeEntries.map(([id, outcome]) => [id, outcome.state])
@@ -235,6 +260,14 @@ export class CliAvailabilityService {
         if (this.checkId === currentCheckId) {
           this.availability = availability;
           this.details = details;
+          // Only a published check warns: a superseded one (the setup wizard
+          // re-checks every 3s) would otherwise report results nobody sees.
+          if (pendingAgentIds.length > 0) {
+            logger.warn("CLI availability check timed out", {
+              timeoutMs: CliAvailabilityService.CHECK_TIMEOUT_MS,
+              pendingAgentIds,
+            });
+          }
           this.notifyDuplicateInstalls(outcomeEntries, entries);
         }
 
@@ -312,7 +345,7 @@ export class CliAvailabilityService {
     // found nothing), classify as `unauthenticated` — the binary exists but
     // will require login on first launch. The CLI handles auth at runtime.
     const authConfirmed = config.authCheck
-      ? await this.checkAuth(config.name, config.authCheck)
+      ? await this.checkAuth(config.id, config.authCheck)
       : undefined;
 
     const state: AgentAvailabilityState = authConfirmed === false ? "unauthenticated" : "ready";
@@ -334,7 +367,7 @@ export class CliAvailabilityService {
     };
   }
 
-  private async checkAuth(agentName: string, authCheck: AgentAuthCheck): Promise<boolean> {
+  private async checkAuth(agentId: string, authCheck: AgentAuthCheck): Promise<boolean> {
     // Shared flag so the checkPromise knows the timeoutPromise already won
     // the race. Without this, a slow fs.access can later resolve/reject and
     // emit a misleading "auth discovery: no credential found" log for an
@@ -400,11 +433,9 @@ export class CliAvailabilityService {
       }
 
       if (!timedOut) {
-        console.log(
-          `[CliAvailabilityService] ${agentName}: binary found, auth discovery: no credential found (checked: ${
-            checkedPaths.join(", ") || "none"
-          })`
-        );
+        // Debug, not info: the setup wizard re-checks every 3s, and at info
+        // this repeats into daintree.log's crash-context tail.
+        logger.debug("Auth discovery found no credential", { agentId, checkedPaths });
       }
       return false;
     })();
@@ -423,6 +454,8 @@ export class CliAvailabilityService {
    *    `missing`).
    * 2. Absolute paths declared in `AgentConfig.nativePaths` — covers native
    *    installer locations not on Electron's PATH (e.g. `~/.local/bin/claude`).
+   *    On Windows an entry without a launchable extension is probed with
+   *    `.cmd`/`.exe`/`.bat`/`.com` appended.
    * 3. npm global bin shim at `$(npm config get prefix)/bin/<cmd>` (POSIX) or
    *    `<prefix>\<cmd>.cmd` (Windows). Only fires when
    *    `AgentConfig.npmGlobalPackage` is set. Positively confirms the binary
@@ -449,14 +482,13 @@ export class CliAvailabilityService {
     // Plugin-contributed agents (#10560) resolve a `./`-relative manifest command
     // to an absolute path at registration. Such a command has path separators and
     // would be rejected by VALID_COMMAND_RE below, so probe the file directly
-    // instead — `probeNativePaths` checks existence + executability (X_OK).
+    // instead — `probeNativePaths` checks existence + executability (X_OK),
+    // trying launchable extensions on Windows.
     if (isAbsolute(command)) {
       return this.probeNativePaths([command]);
     }
     if (!CliAvailabilityService.VALID_COMMAND_RE.test(command)) {
-      console.warn(
-        `[CliAvailabilityService] Command "${command}" contains invalid characters, rejecting`
-      );
+      logger.warn("Rejected agent command with invalid characters", { command });
       return { status: "missing" };
     }
 
@@ -515,7 +547,7 @@ export class CliAvailabilityService {
 
     const commandCandidates =
       process.platform === "win32"
-        ? [`${command}.cmd`, `${command}.exe`, `${command}.bat`, `${command}.com`, command]
+        ? [...WINDOWS_APPENDED_EXTENSIONS.map((extension) => `${command}${extension}`), command]
         : [command];
 
     for (const dir of pathPrefix.split(delimiter).filter(Boolean)) {
@@ -629,27 +661,31 @@ export class CliAvailabilityService {
 
   private async probeNativePaths(paths: string[]): Promise<ProbeResult> {
     const home = homedir();
+    const isWindows = process.platform === "win32";
     for (const raw of paths) {
       const expanded = this.expandPath(raw, home);
       if (!expanded) continue;
-      try {
-        await access(expanded, constants.X_OK);
-        return { status: "found", path: expanded, via: "native" };
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException | undefined)?.code;
-        if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
-          // File exists but cannot be executed — classify as blocked and
-          // stop probing remaining native paths. Trying other paths would
-          // likely hit the same policy.
-          return {
-            status: "blocked",
-            reason: code === "EACCES" ? "permissions" : "security",
-            path: expanded,
-            via: "native",
-            message: `${expanded} exists but execution failed with ${code} — check file permissions or security software allowlist`,
-          };
+      const candidates = isWindows ? windowsLaunchCandidates(expanded) : [expanded];
+      for (const candidate of candidates) {
+        try {
+          await access(candidate, constants.X_OK);
+          return { status: "found", path: candidate, via: "native" };
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException | undefined)?.code;
+          if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
+            // File exists but cannot be executed — classify as blocked and
+            // stop probing remaining native paths. Trying other paths would
+            // likely hit the same policy.
+            return {
+              status: "blocked",
+              reason: code === "EACCES" ? "permissions" : "security",
+              path: candidate,
+              via: "native",
+              message: `${candidate} exists but execution failed with ${code} — check file permissions or security software allowlist`,
+            };
+          }
+          // ENOENT (or any other error) — try the next candidate.
         }
-        // ENOENT (or any other error) — try the next candidate.
       }
     }
     return { status: "missing" };
@@ -782,7 +818,7 @@ export class CliAvailabilityService {
       expanded = expandWindowsEnvVars(expanded);
       // On Windows, skip entries that still contain unexpanded %VAR% tokens
       // (env var not set) to avoid probing a literal path like
-      // "%LOCALAPPDATA%\claude-code\bin\claude.exe".
+      // "%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe".
       if (expanded.includes("%")) return null;
     } else if (input.includes("\\")) {
       // Windows-only candidates should not be probed on Unix. Inspect the
@@ -835,10 +871,7 @@ export class CliAvailabilityService {
           message: `Active: ${active}. Also found: ${alsoFound}. Pick one install method and remove the others so the most up-to-date version launches.`,
         });
       } catch (err) {
-        console.warn(
-          `[CliAvailabilityService] Failed to broadcast duplicate-install toast for ${agentId}:`,
-          err
-        );
+        logger.error("Failed to broadcast duplicate-install toast", err, { agentId });
         continue;
       }
 
@@ -850,10 +883,7 @@ export class CliAvailabilityService {
       try {
         store.set("orchestrationMilestones", milestones);
       } catch (err) {
-        console.warn(
-          "[CliAvailabilityService] Failed to persist duplicate-install milestone:",
-          err
-        );
+        logger.error("Failed to persist duplicate-install milestone", err);
       }
     }
   }
