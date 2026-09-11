@@ -1000,8 +1000,16 @@ describe("ProjectViewManager — eviction safety", () => {
   // here, because an empty backend list is exactly what used to decide the
   // answer before the engine was ever asked about.
   describe("live native assistant engines (#12364)", () => {
-    function makeManager(cachedProjectViews: number, onViewEvicted?: (id: number) => void) {
-      return new ProjectViewManager(win as never, {
+    let managers: ProjectViewManager[] = [];
+
+    function makeManager(
+      cachedProjectViews: number,
+      hooks: {
+        onViewEvicted?: (id: number) => void;
+        wouldEndNativeAssistant?: (id: number) => boolean;
+      } = {}
+    ) {
+      const mgr = new ProjectViewManager(win as never, {
         dirname: "/test",
         paintGateTimeoutMs: 0,
         paintGateHardTimeoutMs: 0,
@@ -1010,10 +1018,19 @@ describe("ProjectViewManager — eviction safety", () => {
         cachedProjectViews,
         assistantBackendsForProject,
         isTerminalLive,
-        wouldEndNativeAssistant,
-        onViewEvicted,
+        wouldEndNativeAssistant: hooks.wouldEndNativeAssistant ?? wouldEndNativeAssistant,
+        onViewEvicted: hooks.onViewEvicted,
       });
+      managers.push(mgr);
+      return mgr;
     }
+
+    afterEach(() => {
+      // Each manager starts a randomly-phased memory sampler; a tick left running
+      // could write into the shared logInfo mock during a later test.
+      for (const mgr of managers) mgr.dispose();
+      managers = [];
+    });
 
     const evictedProjectIds = () =>
       vi
@@ -1040,7 +1057,7 @@ describe("ProjectViewManager — eviction safety", () => {
       // false and the engine's view — the LRU one — was reclaimed like any other.
       // No agent-state seed either: an engine waiting on its user is still an engine.
       const onViewEvicted = vi.fn();
-      const managerWithLimit = makeManager(2, onViewEvicted);
+      const managerWithLimit = makeManager(2, { onViewEvicted });
       const wcA = registerA(managerWithLimit);
 
       await managerWithLimit.switchTo("proj-b", "/path/b");
@@ -1135,7 +1152,8 @@ describe("ProjectViewManager — eviction safety", () => {
     });
 
     it("keeps a native engine's view through the forced tier-2 reclaim (#11477)", async () => {
-      const managerWithLimit = makeManager(3);
+      const onViewEvicted = vi.fn();
+      const managerWithLimit = makeManager(3, { onViewEvicted });
       const wcA = registerA(managerWithLimit);
 
       await managerWithLimit.switchTo("proj-b", "/path/b");
@@ -1144,6 +1162,7 @@ describe("ProjectViewManager — eviction safety", () => {
       await flushImmediates();
 
       nativeEngineViews.add(wcA.id);
+      const wcB = webContentsOf(managerWithLimit, "proj-b");
 
       managerWithLimit.reclaimCachedViewsUnderPressure();
 
@@ -1155,6 +1174,8 @@ describe("ProjectViewManager — eviction safety", () => {
       ).toEqual(["proj-a", "proj-c"]);
       expect(evictedProjectIds()).toEqual(["proj-b"]);
       expect(wcA.close).not.toHaveBeenCalled();
+      expect(onViewEvicted).toHaveBeenCalledWith(wcB.id);
+      expect(onViewEvicted).not.toHaveBeenCalledWith(wcA.id);
       expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
         "projectview.eviction-skipped",
         expect.objectContaining({
@@ -1164,6 +1185,26 @@ describe("ProjectViewManager — eviction safety", () => {
           protectedProjectIds: ["proj-a"],
         })
       );
+    });
+
+    it("never asks about, or keeps, a view whose renderer is already gone", async () => {
+      // The service can still name a dead surface until something reaps it. Asking
+      // before the destroyed guard would pin a dead entry over the cap indefinitely.
+      const asked = vi.fn(wouldEndNativeAssistant);
+      const managerWithLimit = makeManager(2, { wouldEndNativeAssistant: asked });
+      const wcA = registerA(managerWithLimit);
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      nativeEngineViews.add(wcA.id);
+      wcA.isDestroyed.mockReturnValue(true);
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).not.toContain("proj-a");
+      expect(evictedProjectIds()).toContain("proj-a");
+      expect(asked).not.toHaveBeenCalledWith(wcA.id);
     });
   });
 
