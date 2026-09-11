@@ -35,6 +35,7 @@ import type {
   AgentSessionRecord,
   AgentSessionRetentionDays,
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
+import type { HostMemoryPauseSnapshot } from "../../../../shared/types/pty-host.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import {
@@ -1134,6 +1135,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     ptyClient.manualRestart();
   };
 
+  // Main's cached reading — never a host round-trip, which a host under memory
+  // pressure is the worst placed to answer.
+  const handleTerminalGetHostMemoryPause = async (): Promise<HostMemoryPauseSnapshot> =>
+    ptyClient.getHostMemoryPause();
+
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
     return listAgentSessions(
@@ -1410,6 +1416,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       trash: op(CHANNELS.TERMINAL_TRASH, handleTerminalTrash),
       restore: op(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore),
       restartService: op(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService),
+      getHostMemoryPause: op(
+        CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE,
+        handleTerminalGetHostMemoryPause
+      ),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
       agentSessionGetRetention: op(

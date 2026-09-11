@@ -1786,6 +1786,10 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string];
     result: import("./terminal.js").BackendTerminalInfo[];
   };
+  "terminal:get-host-memory-pause": {
+    args: [];
+    result: import("../pty-host.js").HostMemoryPauseSnapshot;
+  };
   "terminal:get-info": {
     args: [id: string];
     result: import("./terminal.js").TerminalInfoPayload;

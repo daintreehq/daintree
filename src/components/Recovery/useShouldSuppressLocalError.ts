@@ -42,6 +42,9 @@ const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
   "watchdog-disabled": true,
   "safe-mode": true,
   "restore-confirmation": true,
+  // Advisory: a memory pause slows output but the backend stays connected, so
+  // a pane's spawn/reconnect errors are still worth acting on.
+  "host-memory-stall": false,
   // Advisory: the backend is connected and a pane's own spawn/reconnect errors
   // stay actionable — a missing Git doesn't make them un-fixable.
   "missing-prerequisite": false,

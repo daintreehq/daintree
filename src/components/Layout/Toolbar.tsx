@@ -142,6 +142,8 @@ import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
 import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
+import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
+import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
@@ -620,6 +622,9 @@ export function Toolbar({
   const branchName = activeWorktree?.branch;
   const watcherDegraded = useWorktreeStore((state) => state.watcherDegraded);
   const topologyWatcherDark = useWorktreeStore((state) => state.topologyWatcherDark);
+  // Read here as well as in the indicator, so its arrival or departure re-renders
+  // the toolbar and the roving tab-stop sync below sees the item list change.
+  const hostMemoryPauseVisible = useHostMemoryPauseStore((state) => state.visible);
 
   // Per-item state for the overflow menu, so evicted buttons keep the signal
   // they carry on the visible toolbar (issue #9821). Reads mirror the
@@ -987,7 +992,14 @@ export function Toolbar({
   useLayoutEffect(() => {
     const items = getToolbarItems();
     if (items.length === 0) return;
-    const clamped = Math.min(activeToolbarIndexRef.current, items.length - 1);
+    // An item that comes and goes ahead of the focused one — the host memory
+    // pause indicator (#12375) — shifts every index after it, so follow the
+    // element that holds focus rather than the index it used to have.
+    const focusedIndex = items.findIndex((el) => el === document.activeElement);
+    const clamped =
+      focusedIndex !== -1
+        ? focusedIndex
+        : Math.min(activeToolbarIndexRef.current, items.length - 1);
     activeToolbarIndexRef.current = clamped;
     syncToolbarTabStops(items, clamped);
 
@@ -2517,6 +2529,15 @@ export function Toolbar({
               <div className="app-no-drag">
                 {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
               </div>
+
+              {/* Fixed chrome outside the measured button row: it exists only
+                  while a terminal host has output paused for memory (#12375),
+                  so there is nothing to pin, hide, or overflow. */}
+              {hostMemoryPauseVisible && (
+                <div className="app-no-drag shrink-0">
+                  <HostMemoryPauseIndicator />
+                </div>
+              )}
 
               <div className={toolbarDividerClass} />
 

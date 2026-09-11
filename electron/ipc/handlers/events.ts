@@ -50,6 +50,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:backend-crashed": "external",
   "terminal:backend-recovering": "external",
   "terminal:backend-ready": "external",
+  "terminal:host-memory-pause": "external",
   "watchdog:disabled": "external",
   "watchdog:active": "external",
 

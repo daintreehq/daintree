@@ -10,8 +10,10 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
+import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 
 function resetStores() {
+  useHostMemoryPauseStore.setState({ snapshot: null, visible: false });
   usePanelStore.setState({
     backendStatus: "connected",
     lastCrashType: null,
@@ -284,6 +286,20 @@ describe("useShouldSuppressLocalError", () => {
 
       act(() => {
         useRosettaBannerStore.setState({ visible: true });
+      });
+      expect(result.current).toBe(false);
+    });
+
+    it("does not suppress backend-dependent banners when a host memory pause stalls", () => {
+      // A memory pause slows output, but the backend stays connected (#12375).
+      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
+      expect(result.current).toBe(false);
+
+      act(() => {
+        useHostMemoryPauseStore.setState({
+          snapshot: { active: true, paused: true, stalled: true },
+          visible: true,
+        });
       });
       expect(result.current).toBe(false);
     });

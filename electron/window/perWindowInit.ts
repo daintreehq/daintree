@@ -20,6 +20,7 @@ import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import type { HostMemoryPauseSnapshot } from "../../shared/types/pty-host.js";
 import { isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
@@ -305,6 +306,24 @@ export async function initPerWindowServices(
       void ptyClient!.trimState(SCROLLBACK_BACKGROUND, "all").catch(() => {
         /* non-critical */
       });
+    });
+    // The memory pause reaches the UI once, app-wide, never per pane (#12375).
+    // Sent on every change, the release included, to each window's active view;
+    // a cached view pulls the snapshot when it's revealed.
+    ptyClient.on("host-memory-pause-changed", (snapshot: HostMemoryPauseSnapshot) => {
+      if (!windowRegistry) return;
+      for (const wCtx of windowRegistry.all()) {
+        const w = wCtx.browserWindow;
+        if (w.isDestroyed()) continue;
+        try {
+          sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
+            name: "terminal:host-memory-pause",
+            payload: snapshot,
+          });
+        } catch {
+          /* non-critical */
+        }
+      }
     });
     ptyClient.setPortRefreshCallback((windowId) => {
       // Called with no windowId on a full host restart (refresh every window)

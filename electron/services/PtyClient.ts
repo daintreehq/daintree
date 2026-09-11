@@ -82,6 +82,7 @@ import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
 import { HostSignalAggregator, type HostMemoryWarningPayload } from "./pty/HostSignalAggregator.js";
+import { HostMemoryPauseTracker } from "./pty/HostMemoryPauseTracker.js";
 import { ShardPlacementRouter } from "./pty/ShardPlacementRouter.js";
 import { PtyShard } from "./pty/PtyShard.js";
 import {
@@ -102,6 +103,7 @@ import type {
   CrashType,
   SpawnResult,
   FlowControlSnapshot,
+  HostMemoryPauseSnapshot,
   HostThrottlePayload,
   MemoryRollup,
   GracefulKillResult,
@@ -339,6 +341,12 @@ export class PtyClient extends EventEmitter {
   // fabric ORs the per-shard booleans and only forwards aggregate transitions.
   private readonly signalAggregator = new HostSignalAggregator({
     emit: (event, payload) => this.emit(event, payload),
+  });
+  // The same per-shard transitions read as pressure episodes, for the UI's one
+  // app-wide memory-pause indicator (#12375). Fed ahead of the aggregator,
+  // which drops every transition that leaves its OR unchanged.
+  private readonly memoryPauseTracker = new HostMemoryPauseTracker({
+    onChange: (snapshot) => this.emit("host-memory-pause-changed", snapshot),
   });
   /** Mirrors the system-sleep watchdog pause so shards created mid-sleep stay quiet. */
   private healthChecksPaused = false;
@@ -680,10 +688,12 @@ export class PtyClient extends EventEmitter {
   }
 
   private emitAggregatedThrottle(shard: PtyShard, payload: HostThrottlePayload): boolean {
+    this.memoryPauseTracker.recordThrottle(shard.key, payload);
     return this.signalAggregator.recordThrottle(shard.key, payload);
   }
 
   private emitAggregatedMemoryWarning(shard: PtyShard, payload: HostMemoryWarningPayload): boolean {
+    this.memoryPauseTracker.recordMemoryWarning(shard.key, payload.isWarning);
     return this.signalAggregator.recordMemoryWarning(shard.key, payload);
   }
 
@@ -717,6 +727,12 @@ export class PtyClient extends EventEmitter {
    */
   private dropShardSignals(shardKey: string): void {
     this.signalAggregator.dropShard(shardKey);
+    this.memoryPauseTracker.dropShard(shardKey);
+  }
+
+  /** The terminal hosts' memory pause as last published to the UI (#12375). */
+  getHostMemoryPause(): HostMemoryPauseSnapshot {
+    return this.memoryPauseTracker.getSnapshot();
   }
 
   /**
@@ -2693,6 +2709,7 @@ export class PtyClient extends EventEmitter {
     this.projectShardOverrides.clear();
     this.windowPortShard.clear();
     this.signalAggregator.clear();
+    this.memoryPauseTracker.dispose();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");
