@@ -826,9 +826,11 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         set({ restoreWorktreeId: id });
         persistActiveWorktree(id);
       }
+      // `selectionSource`, not `source`: the main-process log sink stamps
+      // `source: "Renderer"` over every renderer context.
       logDebug("[WorktreeStore] selectWorktree", {
         outcome: "already-active",
-        source,
+        selectionSource: source,
         id,
         confirmedRestore,
       });
@@ -843,7 +845,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // shows up only as its symptoms (#12370).
     logDebug("[WorktreeStore] selectWorktree", {
       outcome: "switched",
-      source,
+      selectionSource: source,
       from: previousId,
       to: id,
       focusedPanelId: options?.focusedPanelId,

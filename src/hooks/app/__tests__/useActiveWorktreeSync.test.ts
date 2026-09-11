@@ -3,7 +3,11 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useActiveWorktreeSync } from "../useActiveWorktreeSync";
-import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
+import {
+  RENDERER_ACTIVATION_ORIGIN,
+  markHostActivationApplied,
+  _resetHostAppliedActivationForTesting,
+} from "@/store/worktreeActivationOrigin";
 
 const mocks = vi.hoisted(() => ({
   useWorktrees: vi.fn(),
@@ -191,23 +195,77 @@ describe("useActiveWorktreeSync defaultTerminalCwd", () => {
 });
 
 describe("useActiveWorktreeSync host sync", () => {
+  const otherWorktree = {
+    id: "wt-2",
+    name: "other",
+    path: "/repo-worktrees/other",
+    isMainWorktree: false,
+  };
+  const request = () => vi.mocked(window.electron.worktreePort.request);
+
   beforeEach(() => {
-    vi.mocked(window.electron.worktreePort.request).mockClear();
+    request().mockClear();
+    _resetHostAppliedActivationForTesting();
     mocks.selectionState.activeWorktreeId = worktree.id;
     mocks.selectionState.deletedWorktrees = new Map();
     mocks.projectState.currentProject = { id: "p1", path: "/repo" };
     mocks.scratchState.currentScratch = null;
     mocks.homeDir.homeDir = "/home/user";
-    mocks.useWorktrees.mockReturnValue({ worktrees: [worktree], isInitialized: true });
+    mocks.useWorktrees.mockReturnValue({
+      worktrees: [worktree, otherWorktree],
+      isInitialized: true,
+    });
   });
 
   it("tags its set-active request with this view's origin so the host's echo is recognisable (#12370)", () => {
     renderHook(() => useActiveWorktreeSync());
 
-    expect(window.electron.worktreePort.request).toHaveBeenCalledTimes(1);
-    expect(window.electron.worktreePort.request).toHaveBeenCalledWith("set-active", {
+    expect(request()).toHaveBeenCalledTimes(1);
+    expect(request()).toHaveBeenCalledWith("set-active", {
       worktreeId: worktree.id,
       origin: RENDERER_ACTIVATION_ORIGIN,
     });
+  });
+
+  it("does not answer a selection the host itself pushed, then sends the next local one as usual", () => {
+    markHostActivationApplied(worktree.id);
+    const { rerender } = renderHook(() => useActiveWorktreeSync());
+    expect(request()).not.toHaveBeenCalled();
+
+    mocks.selectionState.activeWorktreeId = otherWorktree.id;
+    rerender();
+    expect(request()).toHaveBeenCalledTimes(1);
+    expect(request()).toHaveBeenLastCalledWith(
+      "set-active",
+      expect.objectContaining({ worktreeId: otherWorktree.id })
+    );
+
+    // The mark was single-shot: coming back to the same id is ours to send.
+    mocks.selectionState.activeWorktreeId = worktree.id;
+    rerender();
+    expect(request()).toHaveBeenCalledTimes(2);
+    expect(request()).toHaveBeenLastCalledWith(
+      "set-active",
+      expect.objectContaining({ worktreeId: worktree.id })
+    );
+  });
+
+  it("clears a stale host mark on the next selection change instead of swallowing a later local pick", () => {
+    // The host pushed wt-2, but the user picked wt-1 before the effect ran.
+    markHostActivationApplied(otherWorktree.id);
+    const { rerender } = renderHook(() => useActiveWorktreeSync());
+    expect(request()).toHaveBeenCalledTimes(1);
+    expect(request()).toHaveBeenLastCalledWith(
+      "set-active",
+      expect.objectContaining({ worktreeId: worktree.id })
+    );
+
+    mocks.selectionState.activeWorktreeId = otherWorktree.id;
+    rerender();
+    expect(request()).toHaveBeenCalledTimes(2);
+    expect(request()).toHaveBeenLastCalledWith(
+      "set-active",
+      expect.objectContaining({ worktreeId: otherWorktree.id })
+    );
   });
 });

@@ -151,63 +151,93 @@ export function initStoreOrchestrator(): () => void {
   //     a breaker: two `focusedId` writers that disagree would otherwise
   //     ping-pong the whole workspace through here at whatever cadence they
   //     run, and focus-sourced switches leave no trace in persisted state
-  //     (#12370). One breaker per orchestrator lifetime — the subscription
-  //     that owns it is disposed with the rest.
+  //     (#12370). One breaker per orchestrator lifetime, disposed with the
+  //     subscriptions.
+  //
+  //     While held, focus can sit on a terminal in a worktree that is not
+  //     active — hidden by the terminal policy — and nothing rewrites
+  //     `focusedId` just because time passed, so re-activating that same
+  //     panel is invisible to the subscription. The release timer re-runs the
+  //     promotion for whatever is focused once the hold lapses, so a burst of
+  //     deliberate cross-worktree navigation costs a short stall, not a stuck
+  //     grid.
   const focusFollowBreaker = createFocusFollowBreaker();
+  let focusFollowLive = true;
+  let focusFollowReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearFocusFollowReleaseTimer = () => {
+    if (focusFollowReleaseTimer !== null) clearTimeout(focusFollowReleaseTimer);
+    focusFollowReleaseTimer = null;
+  };
+  const armFocusFollowRelease = () => {
+    clearFocusFollowReleaseTimer();
+    focusFollowReleaseTimer = setTimeout(() => {
+      focusFollowReleaseTimer = null;
+      // Guarded in the callback: a timer the event loop already picked up
+      // survives the clearTimeout in dispose.
+      if (!focusFollowLive) return;
+      const focusedId = usePanelStore.getState().focusedId;
+      if (focusedId) followFocusedWorktree(focusedId);
+    }, focusFollowBreaker.holdRemainingMs() + 1);
+  };
+  function followFocusedWorktree(focusedId: string): void {
+    const terminal = usePanelStore.getState().panelsById[focusedId];
+    if (!terminal?.worktreeId) return;
+    const worktreeState = useWorktreeSelectionStore.getState();
+    const from = worktreeState.activeWorktreeId;
+    const to = terminal.worktreeId;
+    if (to === from) return;
+
+    // Recorded before the switch so a synchronous nested promotion sees the
+    // updated count. The stack is captured inside Zustand's synchronous
+    // dispatch, so the frames above this listener are the writer that moved
+    // focus — the thing an incident log needs.
+    const outcome = focusFollowBreaker.record({
+      from,
+      to,
+      panelId: focusedId,
+      stack: new Error().stack,
+    });
+    if (outcome === "tripped") {
+      logWarn("[StoreOrchestrator] focus-follow oscillation detected — breaker tripped", {
+        from,
+        to,
+        panelId: focusedId,
+        promotions: focusFollowBreaker.snapshot().history,
+      });
+      armFocusFollowRelease();
+      return;
+    }
+    if (outcome === "suppressed") {
+      logDebug("[StoreOrchestrator] focus promotion suppressed by breaker", {
+        from,
+        to,
+        panelId: focusedId,
+        suppressedCount: focusFollowBreaker.snapshot().suppressedCount,
+      });
+      armFocusFollowRelease();
+      return;
+    }
+    if (outcome === "recovered") {
+      logInfo("[StoreOrchestrator] focus-follow breaker released", {
+        suppressedCount: focusFollowBreaker.snapshot().suppressedCount,
+      });
+    }
+    // Focus promotion is incidental, not a deliberate selection: mark it so
+    // it doesn't become the persisted restore target (#9512).
+    worktreeState.selectWorktree(to, { source: "focus", focusedPanelId: focusedId });
+  }
+  disposables.add(
+    toDisposable(() => {
+      focusFollowLive = false;
+      clearFocusFollowReleaseTimer();
+    })
+  );
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
         (state) => state.focusedId,
         (focusedId) => {
-          if (!focusedId) return;
-          const panelState = usePanelStore.getState();
-          // A nested write during listener dispatch can leave this callback
-          // describing a focus that has already moved on. Promoting on it
-          // would make this subscription the second writer of a ping-pong.
-          if (panelState.focusedId !== focusedId) return;
-          const terminal = panelState.panelsById[focusedId];
-          if (!terminal?.worktreeId) return;
-          const worktreeState = useWorktreeSelectionStore.getState();
-          const from = worktreeState.activeWorktreeId;
-          const to = terminal.worktreeId;
-          if (to === from) return;
-
-          // Recorded before the switch so a synchronous nested promotion sees
-          // the updated count. The stack is captured inside Zustand's
-          // synchronous dispatch, so the frames above this listener are the
-          // writer that moved focus — the thing an incident log needs.
-          const outcome = focusFollowBreaker.record({
-            from,
-            to,
-            panelId: focusedId,
-            stack: new Error().stack,
-          });
-          if (outcome === "tripped") {
-            logWarn("[StoreOrchestrator] focus-follow oscillation detected — breaker tripped", {
-              from,
-              to,
-              panelId: focusedId,
-              promotions: focusFollowBreaker.snapshot().history,
-            });
-            return;
-          }
-          if (outcome === "suppressed") {
-            logDebug("[StoreOrchestrator] focus promotion suppressed by breaker", {
-              from,
-              to,
-              panelId: focusedId,
-              suppressedCount: focusFollowBreaker.snapshot().suppressedCount,
-            });
-            return;
-          }
-          if (outcome === "recovered") {
-            logInfo("[StoreOrchestrator] focus-follow breaker released", {
-              suppressedCount: focusFollowBreaker.snapshot().suppressedCount,
-            });
-          }
-          // Focus promotion is incidental, not a deliberate selection: mark it
-          // so it doesn't become the persisted restore target (#9512).
-          worktreeState.selectWorktree(to, { source: "focus", focusedPanelId: focusedId });
+          if (focusedId) followFocusedWorktree(focusedId);
         }
       )
     )

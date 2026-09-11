@@ -31,7 +31,10 @@ import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { logDebug } from "@/utils/logger";
-import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
+import {
+  RENDERER_ACTIVATION_ORIGIN,
+  markHostActivationApplied,
+} from "@/store/worktreeActivationOrigin";
 
 // How long the topology watcher may stay dark before we escalate from the
 // Tier-1 ambient pip to a Tier-3 low-priority inbox notification (#9908). The
@@ -697,6 +700,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           to: event.worktreeId,
           ...version,
         });
+        // The host is the author of this selection; the sync hook must not
+        // send it back as a `set-active` of our own.
+        markHostActivationApplied(event.worktreeId);
         selectionStore.setPendingWorktree(event.worktreeId);
         selectionStore.selectWorktree(event.worktreeId);
         if (store.getState().worktrees.has(event.worktreeId)) {

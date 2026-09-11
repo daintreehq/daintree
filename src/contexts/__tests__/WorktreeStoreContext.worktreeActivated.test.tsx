@@ -5,7 +5,11 @@ import { useContext } from "react";
 
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
+import {
+  RENDERER_ACTIVATION_ORIGIN,
+  consumeHostAppliedActivation,
+  _resetHostAppliedActivationForTesting,
+} from "@/store/worktreeActivationOrigin";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
@@ -37,6 +41,7 @@ function setCurrentProject(path: string | null): void {
 
 beforeEach(() => {
   listeners.clear();
+  _resetHostAppliedActivationForTesting();
   setCurrentProject("/repo/proj");
   // Reset the selection store so per-test state doesn't leak.
   useWorktreeSelectionStore.setState({
@@ -331,6 +336,29 @@ describe("WorktreeStoreProvider worktree-activated origin and version gates (#12
     expect(after.activeWorktreeId).toBe("wt-b");
     expect(after.restoreWorktreeId).toBe("wt-b");
     expect(after.pendingWorktreeId).toBeNull();
+    // Nothing was applied, so there is nothing for the sync hook to withhold.
+    expect(consumeHostAppliedActivation("wt-a")).toBe(false);
+  });
+
+  it("marks a host-pushed selection so the sync hook does not answer it with a set-active", async () => {
+    await renderWithWorktrees(["wt-a", "wt-b"]);
+    act(() => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b" });
+    });
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-a",
+        epoch: "test",
+        seq: 3,
+      });
+    });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
+    // With two windows on one project, echoing the host's own activation back
+    // is the next hop of a loop: each view applies the other's and re-sends.
+    expect(consumeHostAppliedActivation("wt-a")).toBe(true);
   });
 
   it("still applies an activation carrying some other origin", async () => {

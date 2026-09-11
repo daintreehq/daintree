@@ -5,7 +5,10 @@ import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
-import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
+import {
+  RENDERER_ACTIVATION_ORIGIN,
+  consumeHostAppliedActivation,
+} from "@/store/worktreeActivationOrigin";
 
 export function useActiveWorktreeSync() {
   const { worktrees, isInitialized } = useWorktrees();
@@ -75,6 +78,14 @@ export function useActiveWorktreeSync() {
 
     if (!projectId || !selectedWorktreeId) {
       lastSyncedActiveRef.current = { projectId, worktreeId: null };
+      return;
+    }
+
+    // A selection the host pushed to us (auto-switch, another window) is
+    // already the host's active id — answering with a `set-active` would only
+    // start another round of activations for every attached view (#12370).
+    if (consumeHostAppliedActivation(selectedWorktreeId)) {
+      lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
       return;
     }
 

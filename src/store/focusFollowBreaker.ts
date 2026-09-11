@@ -7,8 +7,10 @@
  * terminal policy and repaints the grid — and because the switches are
  * focus-sourced they leave no trace in persisted state. The seed writer is
  * not known, so the guard is rate-based rather than a re-entrancy flag: a
- * burst of cross-worktree promotions inside a short window is a fault, not a
- * state to keep serving.
+ * burst of promotions back onto worktrees the window already passed through
+ * (A→B→A, or A→B→C→A) is a fault, not a state to keep serving. A one-way tour
+ * across many worktrees — cycling agents with the keyboard — never revisits
+ * and never counts.
  *
  * Pure and clock-injected; no timers. Once tripped, every further attempt
  * extends the hold, so a sustained oscillator keeps the breaker open and it
@@ -24,12 +26,14 @@ export interface FocusPromotion {
 
 export interface RecordedFocusPromotion extends FocusPromotion {
   at: number;
+  /** The destination was already an end of a hop inside the window. */
+  revisit: boolean;
 }
 
 export type FocusFollowOutcome = "allow" | "recovered" | "tripped" | "suppressed";
 
 export interface FocusFollowBreakerOptions {
-  /** Promotions inside `windowMs` that trip the breaker; the Nth is blocked. */
+  /** Revisits inside `windowMs` that trip the breaker; the Nth is blocked. */
   threshold?: number;
   windowMs?: number;
   /** Quiet period with no attempts before promotions are served again. */
@@ -39,6 +43,8 @@ export interface FocusFollowBreakerOptions {
 
 export interface FocusFollowBreaker {
   record: (promotion: FocusPromotion) => FocusFollowOutcome;
+  /** Milliseconds until the hold lapses on its own; 0 when not held. */
+  holdRemainingMs: () => number;
   snapshot: () => {
     tripped: boolean;
     history: readonly RecordedFocusPromotion[];
@@ -65,9 +71,11 @@ export function createFocusFollowBreaker(
   // construction (fake timers) is honoured.
   const now = options.now ?? (() => Date.now());
 
-  // Never longer than `threshold`: recording stops at the trip and the window
-  // is cleared on release. The ring exists to show the A→B→A pattern and the
-  // writer stacks in the trip warning, not to keep an audit trail.
+  // Every promotion inside the window, revisit or not — a later hop needs
+  // the earlier ones to recognise a return, and the trip warning shows the
+  // whole pattern with the writer stacks. Bounded well above the trip point
+  // so a pathological tour cannot grow it; cleared on release.
+  const maxHistory = threshold * 2;
   const history: RecordedFocusPromotion[] = [];
   let holdUntil: number | null = null;
   let suppressedCount = 0;
@@ -87,14 +95,21 @@ export function createFocusFollowBreaker(
       }
 
       while (history.length > 0 && at - history[0]!.at > windowMs) history.shift();
-      history.push({ ...promotion, at });
+      const revisit = history.some((p) => p.to === promotion.to || p.from === promotion.to);
+      history.push({ ...promotion, at, revisit });
+      if (history.length > maxHistory) history.shift();
 
-      if (history.length >= threshold) {
+      let revisits = 0;
+      for (const p of history) if (p.revisit) revisits++;
+      if (revisits >= threshold) {
         holdUntil = at + cooldownMs;
         suppressedCount = 0;
         return "tripped";
       }
       return recovered ? "recovered" : "allow";
+    },
+    holdRemainingMs() {
+      return holdUntil === null ? 0 : Math.max(0, holdUntil - now());
     },
     snapshot() {
       return { tripped: holdUntil !== null, history: [...history], suppressedCount };
