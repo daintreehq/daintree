@@ -13,6 +13,7 @@ import { useIsDragging } from "@/components/DragDrop";
 import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
 import { TerminalStatusSlot } from "@/components/Terminal/TerminalStatusSlot";
+import { TerminalAgentIndicator } from "@/components/Terminal/TerminalAgentIndicator";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import type { PanelKind, AgentState, PersistableFlowStatus } from "@/types";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
@@ -440,7 +441,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           id={id}
           kind={kind}
           agentState={headerAgentState}
-          activity={activity}
           activityStatus={activityStatus}
           lastCommand={lastCommand}
           isExited={isExited}
@@ -458,7 +458,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     kind,
     id,
     headerAgentState,
-    activity,
     activityStatus,
     lastCommand,
     isExited,
@@ -468,15 +467,44 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isHibernated,
   ]);
 
+  // A mixed tab group keeps both trailing boxes (empty, `null`) while a
+  // non-terminal tab is active, so switching tabs cannot move the controls.
+  const reservesTerminalSlots =
+    isAutoTerminalHeader || (tabs?.some((tab) => panelKindHasPty(tab.kind)) ?? false);
+
   // Transient status gets its own reserved box ahead of the window controls
   // rather than joining the metadata above (#12374).
-  const resolvedHeaderStatus = useMemo(
-    () =>
-      isAutoTerminalHeader ? (
-        <TerminalStatusSlot id={id} flowStatus={flowStatus} submitStatus={submitStatus} />
-      ) : undefined,
-    [isAutoTerminalHeader, id, flowStatus, submitStatus]
-  );
+  const resolvedHeaderStatus = useMemo(() => {
+    if (isAutoTerminalHeader) {
+      return <TerminalStatusSlot id={id} flowStatus={flowStatus} submitStatus={submitStatus} />;
+    }
+    return reservesTerminalSlots ? null : undefined;
+  }, [isAutoTerminalHeader, reservesTerminalSlots, id, flowStatus, submitStatus]);
+
+  // The agent state glyph goes to PanelHeader's far-right box, past the close
+  // button, and is never folded into the metadata row.
+  const resolvedAgentIndicator = useMemo(() => {
+    if (isAutoTerminalHeader) {
+      return (
+        <TerminalAgentIndicator
+          id={id}
+          agentState={headerAgentState}
+          activity={activity}
+          isExited={isExited}
+          exitCode={exitCode}
+        />
+      );
+    }
+    return reservesTerminalSlots ? null : undefined;
+  }, [
+    isAutoTerminalHeader,
+    reservesTerminalSlots,
+    id,
+    headerAgentState,
+    activity,
+    isExited,
+    exitCode,
+  ]);
 
   const handleTitleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -668,6 +696,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isFleetPreviewed={isFleetPreviewed}
           headerContent={resolvedHeaderContent}
           headerStatus={resolvedHeaderStatus}
+          agentIndicator={resolvedAgentIndicator}
           headerActions={headerActions}
           tabs={tabs}
           groupId={groupId}

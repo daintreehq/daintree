@@ -7,6 +7,10 @@
  * controls at the same coordinates and size, never change the terminal grid,
  * and a click on the original close coordinate must still close the pane.
  *
+ * The one thing past close is the agent state glyph, in a box PanelHeader
+ * reserves whether or not it is showing — so it never moves the controls and
+ * never moves itself.
+ *
  * Flow holds and submit status are delivered over their production IPC
  * channels from the main process, so the renderer path under test is the one
  * that ships.
@@ -43,6 +47,9 @@ type TerminalGeometry = {
 };
 
 const STATUS_SLOT = '[data-testid="panel-header-status"]';
+// The agent glyph's box, past close. Always present on a terminal pane; its
+// position is part of the same guarantee.
+const AGENT_SLOT = '[data-testid="panel-header-agent-indicator"]';
 const STATUS_GLYPH = `${STATUS_SLOT} [role="status"]`;
 const HEADER_CONTENT = '[data-testid="panel-header-content"]';
 const HEADER = "[data-pane-chrome]";
@@ -265,6 +272,10 @@ async function runStatusSteps(page: Page, panel: Locator, terminalId: string): P
   const geometry = await waitForConvergedGeometry(page, terminalId);
   const baseline = await measureControls(panel);
   const slot = await boxOf(panel.locator(STATUS_SLOT), "Status slot");
+  const agentSlot = await boxOf(panel.locator(AGENT_SLOT), "Agent slot");
+  expect(agentSlot.x, "agent slot sits past close").toBeGreaterThanOrEqual(
+    baseline.close.x + baseline.close.width
+  );
 
   for (const step of STATUS_STEPS) {
     await step.apply(terminalId);
@@ -281,6 +292,11 @@ async function runStatusSteps(page: Page, panel: Locator, terminalId: string): P
       await boxOf(panel.locator(STATUS_SLOT), "Status slot"),
       slot,
       `status slot after ${step.label}`
+    );
+    expectSameBox(
+      await boxOf(panel.locator(AGENT_SLOT), "Agent slot"),
+      agentSlot,
+      `agent slot after ${step.label}`
     );
     await expectGeometryUnchanged(page, terminalId, geometry, step.label);
   }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { TerminalHeaderContent } from "../TerminalHeaderContent";
 
 vi.mock("react-dom", async () => {
@@ -35,45 +35,6 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => (
     <span data-testid="tooltip-content">{children}</span>
   ),
-}));
-
-vi.mock("@/components/Worktree/terminalStateConfig", () => {
-  const mockIcon = (props: React.SVGProps<SVGSVGElement>) => (
-    <svg data-testid="state-icon" {...props} />
-  );
-  const STATE_ICONS: Record<string, typeof mockIcon> = {
-    working: mockIcon,
-    waiting: mockIcon,
-    directing: mockIcon,
-    idle: mockIcon,
-    completed: mockIcon,
-  };
-  const STATE_COLORS: Record<string, string> = {
-    working: "text-working",
-    waiting: "text-waiting",
-    directing: "text-directing",
-    idle: "text-idle",
-    completed: "text-completed",
-  };
-  const STATE_LABELS: Record<string, string> = {
-    working: "working",
-    waiting: "waiting",
-    directing: "directing",
-    idle: "idle",
-    completed: "done",
-  };
-  return {
-    STATE_ICONS,
-    STATE_COLORS,
-    STATE_LABELS,
-    getEffectiveStateIcon: (state: string) => STATE_ICONS[state] ?? mockIcon,
-    getEffectiveStateColor: (state: string) => STATE_COLORS[state] ?? "text-unknown",
-    getEffectiveStateLabel: (state: string) => STATE_LABELS[state] ?? state,
-  };
-});
-
-vi.mock("@/store/errorStore", () => ({
-  useErrorStore: (selector: (s: Record<string, unknown>) => unknown) => selector({ errors: [] }),
 }));
 
 let mockResourceEnabled = false;
@@ -128,94 +89,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("TerminalHeaderContent — agent state chip tooltip", () => {
-  it("shows headline, state, trigger, confidence, and relative time", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "output",
-      stateChangeConfidence: 0.85,
-      lastStateChange: new Date("2026-03-19T11:59:30Z").getTime(),
-    };
-
-    render(
-      <TerminalHeaderContent
-        id="t1"
-        agentState="working"
-        activity={{ headline: "Installing deps", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Installing deps"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("State: working");
-    expect(agentTooltip!.textContent).toContain("Output");
-    expect(agentTooltip!.textContent).toContain("(85%)");
-    expect(agentTooltip!.textContent).toContain("Since:");
-  });
-
-  it("names the waiting reason in the tooltip state line and chip aria-label when classified", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "heuristic",
-      stateChangeConfidence: 1,
-      waitingReason: "approval",
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
-
-    const chip = screen.getByRole("status", { name: "Agent state: waiting (approval)" });
-    expect(chip).toBeTruthy();
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: waiting"));
-    expect(agentTooltip!.textContent).toContain("State: waiting (approval)");
-  });
-
-  it("keeps the plain waiting label for the prompt fallback (no overclaiming)", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "heuristic",
-      stateChangeConfidence: 1,
-      waitingReason: "prompt",
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
-
-    const chip = screen.getByRole("status", { name: "Agent state: waiting" });
-    expect(chip).toBeTruthy();
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: waiting"));
-    expect(agentTooltip!.textContent).not.toContain("(prompt)");
-  });
-
-  it("ignores a stale waiting reason once the agent is no longer waiting", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "output",
-      stateChangeConfidence: 1,
-      waitingReason: "approval",
-    };
+describe("TerminalHeaderContent — settled-agent trace", () => {
+  it("renders no agent glyph in the row: PanelHeader owns it past the close button", () => {
+    mockTerminal = { id: "t1", stateChangeTrigger: "output", stateChangeConfidence: 1 };
 
     render(<TerminalHeaderContent id="t1" agentState="working" />);
 
-    const chip = screen.getByRole("status", { name: "Agent state: working" });
-    expect(chip).toBeTruthy();
-  });
-
-  it("shows AI classification trigger label", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "ai-classification",
-      stateChangeConfidence: 0.95,
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent waiting"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("AI classification");
-    expect(agentTooltip!.textContent).toContain("(95%)");
+    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
   });
 
   it("shows exit code when exited", () => {
@@ -227,117 +107,29 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     expect(badge.textContent).toContain("[exit 1]");
   });
 
-  it("omits missing fields gracefully", () => {
+  it("shows exit code 0 correctly", () => {
     mockTerminal = { id: "t1" };
 
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
+    render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={0} />);
 
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    const text = agentTooltip!.textContent!;
-    expect(text).toContain("State: working");
-    expect(text).not.toContain("undefined");
-    expect(text).not.toContain("·");
-    expect(text).not.toContain("Since:");
-    expect(text).not.toContain("Exit code:");
-    expect(text).not.toContain("%");
+    const badge = screen.getByRole("status");
+    expect(badge.textContent).toContain("[exit 0]");
   });
 
-  it("hides confidence when exactly 1.0", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "output",
-      stateChangeConfidence: 1.0,
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).not.toContain("%");
-  });
-
-  it("shows elapsed time when startedAt is present", () => {
-    mockTerminal = {
-      id: "t1",
-      isInputLocked: false,
-      startedAt: new Date("2026-03-19T09:46:00Z").getTime(),
-    };
-
-    render(
-      <TerminalHeaderContent
-        id="t1"
-        kind="agent"
-        agentState="working"
-        activity={{ headline: "Installing deps", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Installing deps"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("·");
-    expect(agentTooltip!.textContent).toContain("2h 14m");
-  });
-
-  it("omits elapsed time when startedAt is undefined", () => {
-    mockTerminal = { id: "t1", isInputLocked: false };
-
-    render(
-      <TerminalHeaderContent
-        id="t1"
-        kind="agent"
-        agentState="working"
-        activity={{ headline: "Building project", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Building project"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).not.toContain("· ");
-  });
-
-  it("updates elapsed time after timer interval", () => {
-    const base = new Date("2026-03-19T11:59:15Z").getTime();
-
-    mockTerminal = {
-      id: "t1",
-      isInputLocked: false,
-      startedAt: base,
-    };
-
-    render(<TerminalHeaderContent id="t1" kind="agent" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("45s");
-
-    act(() => {
-      vi.advanceTimersByTime(30_000);
-    });
-
-    expect(agentTooltip!.textContent).toContain("1m");
-    expect(agentTooltip!.textContent).not.toContain("45s");
-  });
-
-  it("renders no chip when idle", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" agentState="idle" />);
-
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
-  });
-
-  it("renders no chip when completed", () => {
-    mockTerminal = { id: "t1" };
+  it("renders the cost readout for a settled agent with a session cost", () => {
+    mockTerminal = { id: "t1", sessionCost: 0.42, sessionTokens: 12_000 };
 
     render(<TerminalHeaderContent id="t1" agentState="completed" />);
 
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
+    expect(screen.getByText(/\$0\.42/).textContent).toContain("12");
+  });
+
+  it("renders no cost readout while the agent is still working", () => {
+    mockTerminal = { id: "t1", sessionCost: 0.42 };
+
+    render(<TerminalHeaderContent id="t1" agentState="working" />);
+
+    expect(screen.queryByText(/\$0\.42/)).toBeNull();
   });
 
   it("renders 'Finished, no changes' pill when completed with no file changes", () => {
@@ -358,79 +150,12 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     expect(screen.queryByRole("status", { name: /no file changes/i })).toBeNull();
   });
 
-  it("omits 'Finished, no changes' pill when sessionCost is present (regular cost chip wins)", () => {
+  it("omits 'Finished, no changes' pill when sessionCost is present (cost readout wins)", () => {
     mockTerminal = { id: "t1", sessionCost: 0.42 };
 
     render(<TerminalHeaderContent id="t1" agentState="completed" completedWithNoChanges={true} />);
 
     expect(screen.queryByRole("status", { name: /no file changes/i })).toBeNull();
-  });
-
-  it("falls back to Agent {state} when no headline", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" agentState="directing" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent directing"));
-    expect(agentTooltip).toBeTruthy();
-  });
-
-  it("shows exit code 0 correctly", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={0} />);
-
-    const badge = screen.getByRole("status");
-    expect(badge.textContent).toContain("[exit 0]");
-  });
-
-  it("does not show stalled state for working agent past 60 seconds", () => {
-    mockTerminal = {
-      id: "t1",
-      lastStateChange: new Date("2026-03-19T11:58:00Z").getTime(), // 2 minutes ago
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const chip = screen.getByRole("status", { name: /agent state/i });
-    expect(chip).toBeTruthy();
-    expect(chip.getAttribute("aria-label")).toBe("Agent state: working");
-
-    const icon = chip.querySelector("[data-testid='state-icon']");
-    expect(icon).toBeTruthy();
-    expect(icon!.getAttribute("class")).toContain("animate-spin-slow");
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("State: working");
-    expect(agentTooltip!.textContent).not.toContain("stalled");
-
-    // Advance past 90s to ensure no timer-driven stall detection kicks in
-    act(() => {
-      vi.advanceTimersByTime(90_000);
-    });
-
-    expect(chip.getAttribute("aria-label")).toBe("Agent state: working");
-    expect(icon!.getAttribute("class")).toContain("animate-spin-slow");
-    expect(agentTooltip!.textContent).toContain("State: working");
-    expect(agentTooltip!.textContent).not.toContain("stalled");
-  });
-
-  it("shows 0% confidence when stateChangeConfidence is 0", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "heuristic",
-      stateChangeConfidence: 0,
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("(0%)");
   });
 });
 
@@ -715,41 +440,6 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
   });
 });
 
-describe("TerminalHeaderContent — elapsed-state-duration suffix", () => {
-  it("omits the duration suffix at exactly 10 seconds since last state change", () => {
-    const lastChange = new Date("2026-03-19T11:59:50Z").getTime();
-    mockTerminal = { id: "t1", lastStateChange: lastChange };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.querySelector(".motion-safe\\:animate-in")).toBeNull();
-  });
-
-  it("renders the duration suffix in an animated span past the 10-second threshold", () => {
-    const lastChange = new Date("2026-03-19T11:59:30Z").getTime();
-    mockTerminal = { id: "t1", lastStateChange: lastChange };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
-    expect(agentTooltip).toBeTruthy();
-
-    const animatedSpan = agentTooltip!.querySelector(".motion-safe\\:animate-in");
-    expect(animatedSpan).toBeTruthy();
-    const cls = animatedSpan!.getAttribute("class")!;
-    expect(cls).toContain("motion-safe:animate-in");
-    expect(cls).toContain("motion-safe:fade-in");
-    expect(cls).toContain("motion-safe:duration-150");
-    expect(cls).not.toMatch(/\bopacity-/);
-    expect(animatedSpan!.textContent).toContain("·");
-    expect(animatedSpan!.textContent).toContain("30s");
-  });
-});
-
 // #9204 — per-pane state badges must silence their implicit live region so the
 // global announcer (mounted once in App.tsx) is the single source of polite
 // announcements. `role="status"` carries an implicit `aria-live="polite"` per
@@ -795,13 +485,14 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
   });
 });
 
-// #9814 — chip row vocabulary calibration. The agent-state chip leads, the
-// hibernated pill is `rounded-full` + `border-dashed` so its silhouette reads
-// apart from the other metadata chips, and the resource sparkline trails as
-// ambient telemetry. Transient flow status left this row for
-// TerminalStatusSlot's reserved box in #12374.
+// #9814 — chip row vocabulary calibration. The agent glyph is not in this row
+// at all (PanelHeader keeps it past the close button), the hibernated pill is
+// `rounded-full` + `border-dashed` so its silhouette reads apart from the other
+// metadata chips, and the resource sparkline trails as ambient telemetry.
+// Transient flow status left this row for TerminalStatusSlot's reserved box in
+// #12374.
 describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
-  it("agent-state chip is the first role=status badge in DOM order", () => {
+  it("keeps the agent glyph out of the row entirely", () => {
     mockTerminal = { id: "t1" };
     const { container } = render(
       <TerminalHeaderContent
@@ -814,8 +505,9 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     );
     const badges = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]'));
     expect(badges.length).toBeGreaterThan(0);
-    const first = badges[0]!;
-    expect(first.getAttribute("aria-label")).toMatch(/^Agent state:/);
+    expect(badges.some((el) => /^Agent state:/.test(el.getAttribute("aria-label") ?? ""))).toBe(
+      false
+    );
   });
 
   it("hibernated badge keeps its testid and aria semantics, with rounded-full + dashed border", () => {
@@ -856,7 +548,7 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     ).toBeTruthy();
   });
 
-  it("combined render: agent leads, and telemetry trails the ambient hibernated cue", () => {
+  it("combined render: telemetry trails the ambient hibernated cue", () => {
     mockTerminal = { id: "t1", isInputLocked: true };
     mockResourceEnabled = true;
     mockResourceState = {
@@ -877,13 +569,8 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
       />
     );
     const allStatuses = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]'));
-    const agentIndex = allStatuses.findIndex((el) =>
-      (el.getAttribute("aria-label") ?? "").startsWith("Agent state:")
-    );
-    // Agent chip is the first status in DOM order.
-    expect(agentIndex).toBe(0);
     // The resource sparkline (text contains CPU%/memory signature) is NOT the
-    // first status — it has been demoted behind the macro pane-state chip.
+    // first status — it trails the pane-local exit badge.
     const firstStatus = allStatuses[0]!;
     expect(firstStatus.textContent ?? "").not.toMatch(/%/);
     const hibernated = screen.getByTestId("terminal-hibernated-badge");

@@ -159,10 +159,19 @@ export interface PanelHeaderProps {
   // controls (#12374): `headerContent` is variable-width metadata that follows
   // the title and clips before it can reach them, and `headerStatus` is
   // transient status in a fixed box reserved just ahead of them — so nothing
-  // appearing or disappearing can move close or maximize.
+  // appearing or disappearing can move close or maximize. For the two boxed
+  // slots `undefined` means no box at all and `null` means an empty box, so a
+  // mixed tab group can keep its boxes while a non-terminal tab is active.
   headerContent?: ReactNode;
   headerStatus?: ReactNode;
   headerActions?: ReactNode;
+
+  // The agent state glyph. It is the single most important signal in the app
+  // and a deliberate special case: it renders all the way right, PAST the close
+  // button, in a fixed box reserved whenever the slot is wired. It NEVER MOVES —
+  // not for a status, not for metadata, not for anything else that comes and
+  // goes — and nothing else is ever placed after the close button.
+  agentIndicator?: ReactNode;
 
   // Tab support
   tabs?: TabInfo[];
@@ -212,6 +221,7 @@ function PanelHeaderComponent({
   headerContent,
   headerStatus,
   headerActions,
+  agentIndicator,
   tabs,
   groupId,
   onTabClick,
@@ -996,7 +1006,7 @@ function PanelHeaderComponent({
         </div>
       )}
 
-      {headerStatus != null && (
+      {headerStatus !== undefined && (
         // Reserved whether or not a status is showing: the box never changes
         // size, so a status coming or going cannot move the controls.
         <div
@@ -1311,6 +1321,17 @@ function PanelHeaderComponent({
           </TooltipContent>
         </Tooltip>
       </div>
+
+      {agentIndicator !== undefined && (
+        // The agent state glyph's home: the far right, past close. It never
+        // moves, and nothing else goes after it.
+        <div
+          data-testid="panel-header-agent-indicator"
+          className="ml-1.5 flex h-5 w-5 shrink-0 items-center justify-center"
+        >
+          {agentIndicator}
+        </div>
+      )}
       {isFleetPreviewed ? (
         <span
           key={previewEnterGen}

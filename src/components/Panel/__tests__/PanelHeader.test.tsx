@@ -328,6 +328,101 @@ describe("PanelHeader", () => {
     });
   });
 
+  // The agent state glyph is the one thing that sits PAST the close button.
+  // It is the most important signal in the app and it never moves: the box is
+  // reserved whether or not the glyph is showing, nothing else is ever placed
+  // after close, and no status or metadata change touches it.
+  describe("agent indicator placement", () => {
+    function FakeIndicator({ state }: { state: string | null }) {
+      return state ? <span role="status" aria-label={`Agent state: ${state}`} /> : null;
+    }
+
+    const tabGroup = [
+      {
+        id: "test-panel",
+        title: "Tab 1",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: true,
+      },
+      {
+        id: "t2",
+        title: "Tab 2",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: false,
+      },
+    ];
+
+    const layouts: Array<[string, Partial<PanelHeaderProps>]> = [
+      ["a single panel", {}],
+      ["a tab group", { tabs: tabGroup, onTabClick: vi.fn() }],
+    ];
+
+    it.each(layouts)("renders the agent glyph after the close button in %s", (_layout, extra) => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            ...extra,
+            onToggleMaximize: vi.fn(),
+            headerContent: <span data-testid="custom-header-content" />,
+            headerStatus: <span role="status" aria-label="Output paused" />,
+            agentIndicator: <FakeIndicator state="working" />,
+          })}
+        />
+      );
+      const close = screen.getByTestId("panel-close");
+      const box = screen.getByTestId("panel-header-agent-indicator");
+      const glyph = screen.getByRole("status", { name: "Agent state: working" });
+      expect(box.contains(glyph)).toBe(true);
+      expect(screen.getByTestId("panel-header-controls").contains(box)).toBe(false);
+      expect(close.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // The box is the controls' immediate neighbour and the last thing in
+      // flow: nothing else is ever laid out after close.
+      expect(screen.getByTestId("panel-header-controls").nextElementSibling).toBe(box);
+      expect(box.nextElementSibling).toBeNull();
+    });
+
+    it("keeps the glyph's box mounted and the controls untouched while it comes and goes", () => {
+      const header = (state: string | null, active: boolean) => (
+        <PanelHeader
+          {...makeProps({
+            onToggleMaximize: vi.fn(),
+            headerContent: <span>metadata</span>,
+            headerStatus: active ? <span role="status" aria-label="Output paused" /> : null,
+            agentIndicator: <FakeIndicator state={state} />,
+          })}
+        />
+      );
+
+      const { rerender } = render(header(null, false));
+      const box = screen.getByTestId("panel-header-agent-indicator");
+      const controlsMarkup = screen.getByTestId("panel-header-controls").innerHTML;
+      expect(box.childElementCount).toBe(0);
+
+      rerender(header("working", true));
+      expect(screen.getByTestId("panel-header-agent-indicator")).toBe(box);
+      expect(box.querySelector('[role="status"]')).not.toBeNull();
+      expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controlsMarkup);
+
+      rerender(header(null, false));
+      expect(screen.getByTestId("panel-header-agent-indicator")).toBe(box);
+      expect(box.childElementCount).toBe(0);
+      expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controlsMarkup);
+    });
+
+    it("reserves no glyph box for a header without an agent indicator", () => {
+      render(<PanelHeader {...makeProps({ headerContent: <span /> })} />);
+      expect(screen.queryByTestId("panel-header-agent-indicator")).toBeNull();
+    });
+
+    it("keeps empty boxes for null slots, so a mixed tab group never drops them", () => {
+      render(<PanelHeader {...makeProps({ headerStatus: null, agentIndicator: null })} />);
+      expect(screen.getByTestId("panel-header-status").childElementCount).toBe(0);
+      expect(screen.getByTestId("panel-header-agent-indicator").childElementCount).toBe(0);
+    });
+  });
+
   describe("overflow menu items", () => {
     const findMenuButton = (menu: HTMLElement, label: string) =>
       Array.from(menu.querySelectorAll("button")).find((btn) => btn.textContent?.trim() === label);

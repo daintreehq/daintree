@@ -9,6 +9,8 @@ export { TerminalIcon } from "./TerminalIcon";
 export type { TerminalIconProps } from "./TerminalIcon";
 export { TerminalHeaderContent } from "./TerminalHeaderContent";
 export type { TerminalHeaderContentProps } from "./TerminalHeaderContent";
+export { TerminalAgentIndicator } from "./TerminalAgentIndicator";
+export type { TerminalAgentIndicatorProps } from "./TerminalAgentIndicator";
 export { InlineStatusBanner } from "./InlineStatusBanner";
 export type { InlineStatusBannerProps, BannerAction } from "./InlineStatusBanner";
 export { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";

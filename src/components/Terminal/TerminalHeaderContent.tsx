@@ -1,51 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Lock, CheckCircle2, Moon } from "lucide-react";
-import type { AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
+import type { AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
-  getEffectiveStateLabel,
-} from "@/components/Worktree/terminalStateConfig";
-import type { ActivityState } from "./TerminalPane";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
-import {
-  actionableWaitingReason,
-  WAITING_REASON_BADGE_LABEL,
-} from "@shared/utils/waitingReasonDisplay";
 import { useShallow } from "zustand/react/shallow";
-import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTokenCount } from "@/utils/formatTokenCount";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
-import { useErrorStore } from "@/store/errorStore";
-import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-
-function ElapsedTime({ startedAt, now }: { startedAt: number; now: number }) {
-  return <> · {formatElapsedDuration(now - startedAt)}</>;
-}
-
-const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
-  input: "Input",
-  output: "Output",
-  heuristic: "Heuristic",
-  "ai-classification": "AI classification",
-  timeout: "Timeout",
-  exit: "Exit",
-  activity: "Activity",
-  title: "Title",
-};
 
 export interface TerminalHeaderContentProps {
   id: string;
   kind?: PanelKind;
   agentState?: AgentState;
-  activity?: ActivityState | null;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   lastCommand?: string;
   isExited?: boolean;
@@ -93,7 +63,6 @@ export function TerminalHeaderContent({
   id,
   kind,
   agentState,
-  activity,
   activityStatus,
   lastCommand,
   isExited = false,
@@ -148,65 +117,46 @@ export function TerminalHeaderContent({
     });
   }, [resourceState, showResource]);
 
-  const {
-    isInputLocked,
-    startedAt,
-    lastStateChange,
-    stateChangeTrigger,
-    stateChangeConfidence,
-    waitingReason,
-    sessionCost,
-    sessionTokens,
-  } = usePanelStore(
+  const { isInputLocked, sessionCost, sessionTokens } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
       const pty = t && isPtyPanel(t) ? t : undefined;
       return {
         isInputLocked: pty?.isInputLocked ?? false,
-        startedAt: pty?.startedAt,
-        lastStateChange: pty?.lastStateChange,
-        stateChangeTrigger: pty?.stateChangeTrigger,
-        stateChangeConfidence: pty?.stateChangeConfidence,
-        waitingReason: pty?.waitingReason,
         sessionCost: pty?.sessionCost,
         sessionTokens: pty?.sessionTokens,
       };
     })
   );
 
-  const errorCount = useErrorStore(
-    useCallback(
-      (s) => s.errors.filter((e) => e.context?.terminalId === id && !e.dismissed).length,
-      [id]
-    )
-  );
-
-  // Shared visibility-aware ticker — drives the elapsed-duration displays
-  // that update at minute granularity. The tick value itself is unused;
-  // its identity changes ~every 30 s, which is what re-derives `now`.
-  useGlobalMinuteTicker();
-  const now = Date.now();
-
-  const showStateDuration =
-    (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
-    lastStateChange != null &&
-    lastStateChange > 0 &&
-    now - lastStateChange > 10_000;
-
   // Show command pill only for plain terminals (not agent terminals)
   const isPlainTerminal = kind == null || kind === "terminal";
   const showCommandPill =
     isPlainTerminal && !agentState && activityStatus === "working" && !!lastCommand;
 
-  const renderAgentStateChip = () => {
-    if (!agentState || agentState === "idle") {
-      return null;
+  // The agent state glyph itself is not here: PanelHeader keeps it in its own
+  // reserved box past the close button (TerminalAgentIndicator). This row only
+  // carries the settled agent's trace — a cost readout, or a quiet "finished,
+  // no changes" pill when there is no cost to show.
+  const renderSettledPill = () => {
+    if (agentState !== "completed" && agentState !== "exited") return null;
+
+    if (sessionCost != null) {
+      return (
+        <span
+          className="text-2xs text-text-secondary font-mono shrink-0"
+          style={{ fontVariantNumeric: "tabular-nums" }}
+        >
+          ${sessionCost.toFixed(2)}
+          {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
+        </span>
+      );
     }
 
     // Zero-change confirmation: agent finished without touching the working
-    // tree. Show a quiet pill instead of letting the chip disappear, so the
-    // user has a clear signal that the run ended cleanly.
-    if (agentState === "completed" && sessionCost == null && completedWithNoChanges) {
+    // tree. Show a quiet pill instead of letting the glyph vanish silently, so
+    // the user has a clear signal that the run ended cleanly.
+    if (agentState === "completed" && completedWithNoChanges) {
       return (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -224,133 +174,17 @@ export function TerminalHeaderContent({
       );
     }
 
-    // Show completed/exited chip only when there's a cost to display
-    if ((agentState === "completed" || agentState === "exited") && sessionCost == null) {
-      return null;
-    }
-
-    const StateIcon = getEffectiveStateIcon(agentState);
-    if (!StateIcon) return null;
-
-    const effectiveColor = getEffectiveStateColor(agentState);
-
-    const chipStyle =
-      agentState === "working"
-        ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-        : agentState === "directing"
-          ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-          : // Settled: finished and exited share one neutral chip. Completion is
-            // not asking for anything, so it does not get a hue of its own
-            // (#12002) — and the two stay apart on the channels that survive
-            // without one, `CheckCircle2` against `ExitedCircle` in slate
-            // against secondary.
-            agentState === "completed" || agentState === "exited"
-            ? "bg-overlay-soft border-divider"
-            : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
-
-    const headline = activity?.headline?.trim() || `Agent ${agentState}`;
-    const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
-    const stateLabel = getEffectiveStateLabel(agentState);
-    // Specific reasons only — the classifier's `prompt` fallback stays a
-    // plain "waiting" so the chip never overclaims.
-    const chipWaitingReason =
-      agentState === "waiting" ? actionableWaitingReason(waitingReason) : null;
-    const chipAriaLabel = chipWaitingReason
-      ? `Agent state: ${stateLabel} (${WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})`
-      : `Agent state: ${stateLabel}`;
-
-    return (
-      <Tooltip autoDismiss={false}>
-        <TooltipTrigger asChild>
-          <div className="inline-flex items-center gap-1.5 shrink-0">
-            <div className="relative inline-flex items-center shrink-0">
-              <div
-                className={cn(
-                  "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-                  chipStyle,
-                  effectiveColor
-                )}
-                role="status"
-                aria-label={chipAriaLabel}
-              >
-                <StateIcon
-                  className={cn(
-                    "w-3 h-3",
-                    agentState === "working" && "animate-spin-slow",
-                    "motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              </div>
-              {errorCount > 0 && (
-                <span
-                  className="status-mark absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
-                  aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
-                />
-              )}
-            </div>
-            {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
-              <span
-                className="text-2xs text-text-secondary font-mono shrink-0"
-                style={{ fontVariantNumeric: "tabular-nums" }}
-              >
-                ${sessionCost.toFixed(2)}
-                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
-              </span>
-            )}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-xs">
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">
-              {headline}
-              {startedAt != null && <ElapsedTime startedAt={startedAt} now={now} />}
-            </span>
-            {isExited && exitCode != null && (
-              <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
-            )}
-            <span>
-              State: {stateLabel}
-              {chipWaitingReason && (
-                <> ({WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})</>
-              )}
-              {showStateDuration && (
-                <span className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150">
-                  {" · "}
-                  {formatElapsedDuration(now - lastStateChange!)}
-                </span>
-              )}
-              {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
-              {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
-            </span>
-            {lastStateChange != null && lastStateChange > 0 && (
-              <span className="text-text-secondary">Since: {formatTimeAgo(lastStateChange)}</span>
-            )}
-            {sessionCost != null && (
-              <span className="text-text-secondary tabular-nums">
-                Cost: ${sessionCost.toFixed(2)}
-                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
-              </span>
-            )}
-            {errorCount > 0 && (
-              <span className="text-status-error">
-                {errorCount} error{errorCount > 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-        </TooltipContent>
-      </Tooltip>
-    );
+    return null;
   };
 
   return (
     <>
-      {/* Agent state chip — the macro pane-state signal leads the row per the
-          runtime-signals tier table: macro state → pane-local error →
-          diagnostic text → ambient state → telemetry last. Transient flow and
-          submit status sit outside this row, in TerminalStatusSlot's reserved
-          box ahead of the window controls (#12374). */}
-      {renderAgentStateChip()}
+      {/* Settled-agent trace leads the row per the runtime-signals tier table:
+          macro state → pane-local error → diagnostic text → ambient state →
+          telemetry last. Transient flow and submit status sit outside this row,
+          in TerminalStatusSlot's reserved box ahead of the window controls
+          (#12374). */}
+      {renderSettledPill()}
 
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
           polite live region. The global announcer in useAccessibilityAnnouncements
