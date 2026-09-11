@@ -33,6 +33,7 @@ import { actionService } from "@/services/ActionService";
 import { logDebug } from "@/utils/logger";
 import {
   RENDERER_ACTIVATION_ORIGIN,
+  latestActivationRequest,
   markHostActivationApplied,
 } from "@/store/worktreeActivationOrigin";
 
@@ -654,6 +655,24 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // B, echoed A then B) into a loop that persists and rewrites the MRU
         // on every hop (#12370). Host-originated activations carry no origin.
         if (event.origin === RENDERER_ACTIVATION_ORIGIN) {
+          // One exception: the ack of this view's *latest* request landing
+          // after another window's activation displaced it. Two windows
+          // picking different worktrees in the same round trip would
+          // otherwise settle on different answers, with nothing left in
+          // flight to reconcile them. Re-asserting sends one more
+          // `set-active`, which every view then sees as already active.
+          const displaced =
+            event.worktreeId === latestActivationRequest() &&
+            useWorktreeSelectionStore.getState().activeWorktreeId !== event.worktreeId &&
+            store.getState().worktrees.has(event.worktreeId);
+          if (displaced) {
+            logDebug("[WorktreeStore] worktree-activated re-applied: own request displaced", {
+              worktreeId: event.worktreeId,
+              ...version,
+            });
+            useWorktreeSelectionStore.getState().selectWorktree(event.worktreeId);
+            return;
+          }
           logDebug("[WorktreeStore] worktree-activated ignored: own echo", {
             worktreeId: event.worktreeId,
             ...version,

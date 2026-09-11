@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useActiveWorktreeSync } from "../useActiveWorktreeSync";
 import {
   RENDERER_ACTIVATION_ORIGIN,
+  consumeHostAppliedActivation,
+  latestActivationRequest,
   markHostActivationApplied,
   _resetHostAppliedActivationForTesting,
 } from "@/store/worktreeActivationOrigin";
@@ -225,6 +227,18 @@ describe("useActiveWorktreeSync host sync", () => {
       worktreeId: worktree.id,
       origin: RENDERER_ACTIVATION_ORIGIN,
     });
+    // Remembered so the echo handler can tell the ack of the latest request
+    // from a superseded one.
+    expect(latestActivationRequest()).toBe(worktree.id);
+  });
+
+  it("drops a host mark when the selection clears, so it cannot swallow a later pick", () => {
+    markHostActivationApplied(worktree.id);
+    mocks.selectionState.activeWorktreeId = null;
+    renderHook(() => useActiveWorktreeSync());
+
+    expect(request()).not.toHaveBeenCalled();
+    expect(consumeHostAppliedActivation(worktree.id)).toBe(false);
   });
 
   it("does not answer a selection the host itself pushed, then sends the next local one as usual", () => {

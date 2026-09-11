@@ -1420,6 +1420,9 @@ describe("rendererStoreOrchestrator", () => {
     }
 
     afterEach(() => {
+      // Dispose the timer owner while the clock it armed against is still the
+      // fake one, so cancellation is real rather than a clock swap.
+      destroyStoreOrchestrator();
       vi.useRealTimers();
     });
 
@@ -1554,10 +1557,16 @@ describe("rendererStoreOrchestrator", () => {
       vi.useFakeTimers();
       seedTwoWorktrees();
       pingPong(9);
+      // Let the terminal-MRU persist debounce fire so the release timer is
+      // the only one left pending.
+      vi.advanceTimersByTime(1_000);
+      expect(vi.getTimerCount()).toBe(1);
 
       destroyStoreOrchestrator();
-      vi.advanceTimersByTime(3_000);
 
+      // Cancelled outright, not merely neutered by the liveness flag.
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(3_000);
       expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
       expect(logInfo).not.toHaveBeenCalled();
     });

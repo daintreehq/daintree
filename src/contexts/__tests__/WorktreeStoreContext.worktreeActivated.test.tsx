@@ -8,6 +8,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
   RENDERER_ACTIVATION_ORIGIN,
   consumeHostAppliedActivation,
+  markActivationRequested,
   _resetHostAppliedActivationForTesting,
 } from "@/store/worktreeActivationOrigin";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -321,6 +322,7 @@ describe("WorktreeStoreProvider worktree-activated origin and version gates (#12
         pendingWorktreeId: null,
       });
     });
+    markActivationRequested("wt-b");
 
     act(() => {
       emit("worktree-activated", {
@@ -338,6 +340,60 @@ describe("WorktreeStoreProvider worktree-activated origin and version gates (#12
     expect(after.pendingWorktreeId).toBeNull();
     // Nothing was applied, so there is nothing for the sync hook to withhold.
     expect(consumeHostAppliedActivation("wt-a")).toBe(false);
+  });
+
+  it("leaves a focus-promoted selection alone when its own echo is already active", async () => {
+    await renderWithWorktrees(["wt-a", "wt-b"]);
+    // wt-b became active by focus promotion (restore target still wt-a), and
+    // the sync hook sent set-active for it. Its echo must not re-select with
+    // the "user" source and pin wt-b as the restore target (#9512).
+    act(() => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b", restoreWorktreeId: "wt-a" });
+    });
+    markActivationRequested("wt-b");
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-b",
+        epoch: "test",
+        seq: 3,
+        origin: RENDERER_ACTIVATION_ORIGIN,
+      });
+    });
+
+    const after = useWorktreeSelectionStore.getState();
+    expect(after.activeWorktreeId).toBe("wt-b");
+    expect(after.restoreWorktreeId).toBe("wt-a");
+  });
+
+  it("re-asserts its latest own request when another window's activation displaced it", async () => {
+    const store = await renderWithWorktrees(["wt-a", "wt-b", "wt-c"]);
+    // This window asked for C; the other window asked for B in the same
+    // round trip. The host processed B first, so B's foreign activation
+    // landed here and was applied — then C's own echo arrives. Ignoring it
+    // would leave this window on B while the host and the other window sit
+    // on C, with nothing left in flight to reconcile them.
+    act(() => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b" });
+    });
+    markActivationRequested("wt-c");
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-c",
+        epoch: "test",
+        seq: 5,
+        origin: RENDERER_ACTIVATION_ORIGIN,
+      });
+    });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-c");
+    // Not a host-pushed selection: the sync hook must send it, so the host
+    // and the other window converge on C too.
+    expect(consumeHostAppliedActivation("wt-c")).toBe(false);
+    expect(store.getState().worktrees.has("wt-c")).toBe(true);
   });
 
   it("marks a host-pushed selection so the sync hook does not answer it with a set-active", async () => {

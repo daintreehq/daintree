@@ -31,6 +31,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
     onBroadcastResult: vi.fn().mockReturnValue(() => {}),
+    setFocusedTerminal: vi.fn(),
   },
   appClient: { setState: vi.fn().mockResolvedValue(undefined) },
   projectClient: {
@@ -73,10 +74,79 @@ vi.mock("@/services/SemanticAnalysisService", () => ({
 
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
+const { usePanelStore } = await import("../panelStore");
+const { useWorktreeSelectionStore } = await import("../worktreeStore");
 
 function setHidden(hidden: boolean): void {
   Object.defineProperty(document, "hidden", { configurable: true, value: hidden });
 }
+
+describe("rendererStoreOrchestrator — focus-follow release while hidden (#12370)", () => {
+  const panel = (id: string, worktreeId: string) => ({
+    id,
+    title: id,
+    kind: "terminal" as const,
+    cwd: "/test",
+    cols: 80,
+    rows: 24,
+    location: "grid" as const,
+    worktreeId,
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    destroyStoreOrchestrator();
+    initStoreOrchestrator();
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: { "term-1": panel("term-1", "wt-1"), "term-2": panel("term-2", "wt-2") },
+      panelIds: ["term-1", "term-2"],
+      focusedId: "term-1",
+    });
+    // Nine alternating flips: eight revisits, the ninth trips with wt-1
+    // active and focus parked on term-2.
+    for (let i = 0; i < 9; i++) {
+      usePanelStore.setState({ focusedId: i % 2 === 0 ? "term-2" : "term-1" });
+    }
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+
+  afterEach(() => {
+    destroyStoreOrchestrator();
+    vi.useRealTimers();
+    setHidden(false);
+  });
+
+  it("holds the release while the document is hidden and runs it once shown again", () => {
+    setHidden(true);
+    vi.advanceTimersByTime(2_001);
+    // Switching a workspace nobody can see would re-run the terminal policy
+    // and push a set-active for nothing.
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+    setHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
+  });
+
+  it("runs the release straight away when the document is visible", () => {
+    vi.advanceTimersByTime(2_001);
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
+  });
+
+  it("forgets a pending release on destroy", () => {
+    setHidden(true);
+    vi.advanceTimersByTime(2_001);
+    destroyStoreOrchestrator();
+
+    setHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+});
 
 describe("rendererStoreOrchestrator — MRU flush on hide (#9914)", () => {
   beforeEach(() => {

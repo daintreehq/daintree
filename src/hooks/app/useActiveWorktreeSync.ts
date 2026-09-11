@@ -7,7 +7,9 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import {
   RENDERER_ACTIVATION_ORIGIN,
+  clearHostAppliedActivation,
   consumeHostAppliedActivation,
+  markActivationRequested,
 } from "@/store/worktreeActivationOrigin";
 
 export function useActiveWorktreeSync() {
@@ -78,6 +80,7 @@ export function useActiveWorktreeSync() {
 
     if (!projectId || !selectedWorktreeId) {
       lastSyncedActiveRef.current = { projectId, worktreeId: null };
+      clearHostAppliedActivation();
       return;
     }
 
@@ -105,6 +108,7 @@ export function useActiveWorktreeSync() {
     // The selection is already applied locally; the origin tag lets the
     // `worktree-activated` echo be skipped instead of re-selecting an id this
     // view may have moved past by the time it lands (#12370).
+    markActivationRequested(selectedWorktreeId);
     window.electron.worktreePort
       .request("set-active", {
         worktreeId: selectedWorktreeId,

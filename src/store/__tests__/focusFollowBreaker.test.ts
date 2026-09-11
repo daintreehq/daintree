@@ -24,6 +24,7 @@ function makeBreaker(clock: ReturnType<typeof makeClock>) {
     threshold: 4,
     windowMs: 1_000,
     cooldownMs: 500,
+    maxCooldownMs: 1_500,
     now: clock.now,
   });
 }
@@ -64,8 +65,7 @@ describe("createFocusFollowBreaker (#12370)", () => {
       );
     }
     expect(breaker.snapshot().tripped).toBe(false);
-    // Bounded at twice the threshold so a pathological tour cannot grow it.
-    expect(breaker.snapshot().history).toHaveLength(8);
+    expect(breaker.snapshot().history).toHaveLength(12);
   });
 
   it("counts a return to either end of an earlier hop, so a three-way cycle still trips", () => {
@@ -89,6 +89,25 @@ describe("createFocusFollowBreaker (#12370)", () => {
       true,
       true,
     ]);
+  });
+
+  it("is bounded by time only, so a cycle wider than any count-based ring still trips", () => {
+    const clock = makeClock();
+    const breaker = makeBreaker(clock);
+    const width = 18;
+    const hop = (n: number) => ({
+      from: `wt-${n % width}`,
+      to: `wt-${(n + 1) % width}`,
+      panelId: `t${(n + 1) % width}`,
+    });
+
+    // The last hop of the first rotation already returns to the start
+    // worktree (it was the `from` of the first hop), and every hop after it
+    // revisits too, so the trip comes on the (width + threshold − 1)th
+    // promotion — well past any count-based ring of 2×threshold.
+    for (let n = 0; n < width + 2; n++) expect(breaker.record(hop(n))).toBe("allow");
+    expect(breaker.record(hop(width + 2))).toBe("tripped");
+    expect(breaker.snapshot().history).toHaveLength(width + 3);
   });
 
   it("forgets promotions that fall outside the window", () => {
@@ -164,13 +183,70 @@ describe("createFocusFollowBreaker (#12370)", () => {
     expect(breaker.snapshot().suppressedCount).toBe(0);
   });
 
-  it("reset clears the window, the hold, and the counters", () => {
+  it("doubles the hold when a trip follows a release inside the window, up to the ceiling", () => {
     const clock = makeClock();
     const breaker = makeBreaker(clock);
     trip(breaker);
+    expect(breaker.snapshot().holdMs).toBe(500);
+
+    // A writer that only reacts to switches goes quiet while held and
+    // restarts the moment the release promotes again: the recovery hop plus
+    // the burst re-trip immediately.
+    const retripAfterRelease = () => {
+      clock.advance(breaker.holdRemainingMs() + 1);
+      expect(breaker.record(promotion(0))).toBe("recovered");
+      for (let n = 1; n < 4; n++) expect(breaker.record(promotion(n))).toBe("allow");
+      expect(breaker.record(promotion(4))).toBe("tripped");
+    };
+
+    retripAfterRelease();
+    expect(breaker.snapshot().holdMs).toBe(1_000);
+    expect(breaker.holdRemainingMs()).toBe(1_000);
+    retripAfterRelease();
+    expect(breaker.snapshot().holdMs).toBe(1_500);
+    retripAfterRelease();
+    expect(breaker.snapshot().holdMs).toBe(1_500);
+
+    // Suppressed attempts extend by the backed-off hold, not the base one.
+    clock.advance(100);
+    expect(breaker.record(promotion(5))).toBe("suppressed");
+    expect(breaker.holdRemainingMs()).toBe(1_500);
+  });
+
+  it("goes back to the base hold once a release sticks for a full window", () => {
+    const clock = makeClock();
+    const breaker = makeBreaker(clock);
+    trip(breaker);
+    clock.advance(501);
+    expect(breaker.record(promotion(0))).toBe("recovered");
+    for (let n = 1; n < 5; n++) breaker.record(promotion(n));
+    expect(breaker.snapshot().holdMs).toBe(1_000);
+
+    // Release, then nothing for longer than the window: the writer is gone.
+    clock.advance(1_001);
+    expect(breaker.record(promotion(0))).toBe("recovered");
+    clock.advance(1_001);
+    for (let n = 1; n < 6; n++) breaker.record(promotion(n));
+    expect(breaker.snapshot().tripped).toBe(true);
+    expect(breaker.snapshot().holdMs).toBe(500);
+  });
+
+  it("reset clears the window, the hold, the backoff, and the counters", () => {
+    const clock = makeClock();
+    const breaker = makeBreaker(clock);
+    trip(breaker);
+    clock.advance(501);
+    breaker.record(promotion(0));
+    for (let n = 1; n < 5; n++) breaker.record(promotion(n));
+    expect(breaker.snapshot().holdMs).toBe(1_000);
 
     breaker.reset();
-    expect(breaker.snapshot()).toEqual({ tripped: false, history: [], suppressedCount: 0 });
+    expect(breaker.snapshot()).toEqual({
+      tripped: false,
+      holdMs: 500,
+      history: [],
+      suppressedCount: 0,
+    });
     expect(breaker.holdRemainingMs()).toBe(0);
     expect(breaker.record(promotion(0))).toBe("allow");
   });

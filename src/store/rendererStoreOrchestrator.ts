@@ -41,6 +41,7 @@ import { logDebug, logInfo, logWarn } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
 import { createFocusFollowBreaker } from "./focusFollowBreaker";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
 // snapshot captured at schedule time could be stale by the time the debounce
@@ -160,24 +161,42 @@ export function initStoreOrchestrator(): () => void {
   //     panel is invisible to the subscription. The release timer re-runs the
   //     promotion for whatever is focused once the hold lapses, so a burst of
   //     deliberate cross-worktree navigation costs a short stall, not a stuck
-  //     grid.
+  //     grid. A view nobody can see (window hidden, or the view cached by
+  //     ProjectViewManager — which keeps reporting `visible`) holds the
+  //     release until it is shown again: switching a parked workspace would
+  //     re-run the terminal policy and push a `set-active` for nothing.
   const focusFollowBreaker = createFocusFollowBreaker();
   let focusFollowLive = true;
+  let focusFollowReleasePending = false;
   let focusFollowReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   const clearFocusFollowReleaseTimer = () => {
     if (focusFollowReleaseTimer !== null) clearTimeout(focusFollowReleaseTimer);
     focusFollowReleaseTimer = null;
   };
+  const isViewUnobservable = () =>
+    (typeof document !== "undefined" && document.hidden) || isProjectViewCached();
+  const releaseFocusFollow = () => {
+    if (!focusFollowLive) return;
+    if (isViewUnobservable()) {
+      focusFollowReleasePending = true;
+      return;
+    }
+    focusFollowReleasePending = false;
+    const focusedId = usePanelStore.getState().focusedId;
+    if (focusedId) followFocusedWorktree(focusedId);
+  };
   const armFocusFollowRelease = () => {
     clearFocusFollowReleaseTimer();
+    focusFollowReleasePending = false;
     focusFollowReleaseTimer = setTimeout(() => {
       focusFollowReleaseTimer = null;
       // Guarded in the callback: a timer the event loop already picked up
       // survives the clearTimeout in dispose.
-      if (!focusFollowLive) return;
-      const focusedId = usePanelStore.getState().focusedId;
-      if (focusedId) followFocusedWorktree(focusedId);
+      releaseFocusFollow();
     }, focusFollowBreaker.holdRemainingMs() + 1);
+  };
+  const runPendingFocusFollowRelease = () => {
+    if (focusFollowReleasePending) releaseFocusFollow();
   };
   function followFocusedWorktree(focusedId: string): void {
     const terminal = usePanelStore.getState().panelsById[focusedId];
@@ -198,11 +217,13 @@ export function initStoreOrchestrator(): () => void {
       stack: new Error().stack,
     });
     if (outcome === "tripped") {
+      const { holdMs, history } = focusFollowBreaker.snapshot();
       logWarn("[StoreOrchestrator] focus-follow oscillation detected — breaker tripped", {
         from,
         to,
         panelId: focusedId,
-        promotions: focusFollowBreaker.snapshot().history,
+        holdMs,
+        promotions: history,
       });
       armFocusFollowRelease();
       return;
@@ -229,6 +250,7 @@ export function initStoreOrchestrator(): () => void {
   disposables.add(
     toDisposable(() => {
       focusFollowLive = false;
+      focusFollowReleasePending = false;
       clearFocusFollowReleaseTimer();
     })
   );
@@ -242,6 +264,24 @@ export function initStoreOrchestrator(): () => void {
       )
     )
   );
+  disposables.add(
+    toDisposable(
+      subscribeProjectViewLifecycle((phase) => {
+        if (phase === "revealed") runPendingFocusFollowRelease();
+      })
+    )
+  );
+  if (typeof document !== "undefined") {
+    const handleFocusFollowVisibility = () => {
+      if (!document.hidden) runPendingFocusFollowRelease();
+    };
+    document.addEventListener("visibilitychange", handleFocusFollowVisibility);
+    disposables.add(
+      toDisposable(() =>
+        document.removeEventListener("visibilitychange", handleFocusFollowVisibility)
+      )
+    );
+  }
 
   // 1c. Terminal MRU recording: append the newly focused terminal to the
   //     MRU list and persist it (debounced) unless suppressed. Only PTY
