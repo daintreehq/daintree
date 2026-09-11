@@ -23,19 +23,24 @@ import {
   openTerminal,
   selectSettingsScope,
 } from "../../helpers/panels";
-import {
-  getTerminalDimensions,
-  runTerminalCommand,
-  waitForTerminalText,
-} from "../../helpers/terminal";
+import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM, T_SETTLE, T_SHORT } from "../../helpers/timeouts";
 
 type Box = { x: number; y: number; width: number; height: number };
 type Controls = { close: Box; maximize: Box };
-type Grid = { cols: number; rows: number };
 type FlowStatus = "running" | "paused-backpressure" | "paused-resource-governor";
 type SubmitState = "slow" | "settled";
+
+/** The rendered grid, the grid the pane's current box would fit, and the PTY's. */
+type TerminalGeometry = {
+  cols: number;
+  rows: number;
+  proposedCols: number;
+  proposedRows: number;
+  ptyCols: number | null;
+  ptyRows: number | null;
+};
 
 const STATUS_SLOT = '[data-testid="panel-header-status"]';
 const STATUS_GLYPH = `${STATUS_SLOT} [role="status"]`;
@@ -46,6 +51,9 @@ const LONG_TITLE = `unbroken-${"x".repeat(180)}-title`;
 // The grid's column floor is 380px; go below it so the title, metadata and
 // status all compete for space.
 const NARROW_PANE_WIDTH = "360px";
+// Comfortably past the resize observer's debounce and the frame after it, so a
+// status change that did resize the pane has had time to reach the grid.
+const RESIZE_GRACE_MS = 250;
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
@@ -93,6 +101,82 @@ async function setWindowSize(width: number, height: number): Promise<void> {
   );
 }
 
+async function getTerminalGeometry(
+  page: Page,
+  terminalId: string
+): Promise<TerminalGeometry | null> {
+  return page.evaluate(async (id) => {
+    const target = window as unknown as {
+      __daintreeProposeTerminalDimensions?: (terminalId: string) => {
+        cols: number;
+        rows: number;
+        proposedCols: number;
+        proposedRows: number;
+      } | null;
+      electron?: {
+        terminal?: {
+          getInfo?: (terminalId: string) => Promise<{ ptyCols?: number; ptyRows?: number } | null>;
+        };
+      };
+    };
+    const renderer = target.__daintreeProposeTerminalDimensions?.(id) ?? null;
+    const pty = (await target.electron?.terminal?.getInfo?.(id)) ?? null;
+    if (!renderer || !pty) return null;
+    return { ...renderer, ptyCols: pty.ptyCols ?? null, ptyRows: pty.ptyRows ?? null };
+  }, terminalId);
+}
+
+function isConverged(geometry: TerminalGeometry | null): geometry is TerminalGeometry {
+  return (
+    geometry !== null &&
+    geometry.cols > 1 &&
+    geometry.rows > 1 &&
+    geometry.cols === geometry.proposedCols &&
+    geometry.rows === geometry.proposedRows &&
+    geometry.cols === geometry.ptyCols &&
+    geometry.rows === geometry.ptyRows
+  );
+}
+
+/**
+ * Two consecutive reads where the rendered grid, the grid the pane's box
+ * proposes and the PTY all agree — a fit still in flight can't set the
+ * baseline, and neither can a stale grid that merely repeats itself.
+ */
+async function waitForConvergedGeometry(page: Page, terminalId: string): Promise<TerminalGeometry> {
+  let previous: TerminalGeometry | null = null;
+  await expect
+    .poll(
+      async () => {
+        const current = await getTerminalGeometry(page, terminalId);
+        const settled =
+          isConverged(current) &&
+          previous !== null &&
+          JSON.stringify(previous) === JSON.stringify(current);
+        previous = current;
+        return settled;
+      },
+      { timeout: T_LONG, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
+  const geometry = await getTerminalGeometry(page, terminalId);
+  if (!isConverged(geometry)) throw new Error("Terminal geometry diverged after converging");
+  return geometry;
+}
+
+async function expectGeometryUnchanged(
+  page: Page,
+  terminalId: string,
+  baseline: TerminalGeometry,
+  label: string
+): Promise<void> {
+  await page.waitForTimeout(RESIZE_GRACE_MS);
+  await waitForFrames(page);
+  expect(await getTerminalGeometry(page, terminalId), `terminal grid after ${label}`).toEqual(
+    baseline
+  );
+}
+
 async function boxOf(locator: Locator, label: string): Promise<Box> {
   const box = await locator.boundingBox();
   if (!box) throw new Error(`${label} has no layout`);
@@ -104,22 +188,6 @@ async function measureControls(panel: Locator): Promise<Controls> {
     close: await boxOf(panel.locator(SEL.panel.close).first(), "Close"),
     maximize: await boxOf(panel.locator(SEL.panel.maximize).first(), "Maximize"),
   };
-}
-
-/** Two matching reads a beat apart, so a fit still in flight can't set the baseline. */
-async function waitForSettledGrid(page: Page, panel: Locator): Promise<Grid> {
-  const deadline = Date.now() + T_LONG;
-  let previous = await getTerminalDimensions(panel);
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(250);
-    await waitForFrames(page);
-    const current = await getTerminalDimensions(panel);
-    if (current && previous && current.cols === previous.cols && current.rows === previous.rows) {
-      return current;
-    }
-    previous = current;
-  }
-  throw new Error("Terminal grid did not settle");
 }
 
 function expectSameBox(actual: Box, expected: Box, label: string): void {
@@ -198,13 +266,13 @@ const STATUS_STEPS: StatusStep[] = [
   },
 ];
 
-async function runStatusSteps(page: Page, panel: Locator, statusTargetId: string): Promise<void> {
-  const grid = await waitForSettledGrid(page, panel);
+async function runStatusSteps(page: Page, panel: Locator, terminalId: string): Promise<void> {
+  const geometry = await waitForConvergedGeometry(page, terminalId);
   const baseline = await measureControls(panel);
   const slot = await boxOf(panel.locator(STATUS_SLOT), "Status slot");
 
   for (const step of STATUS_STEPS) {
-    await step.apply(statusTargetId);
+    await step.apply(terminalId);
     const glyph = panel.locator(STATUS_GLYPH);
     if (step.glyph) {
       await expect(glyph, step.label).toHaveAttribute("aria-label", step.glyph, {
@@ -219,7 +287,7 @@ async function runStatusSteps(page: Page, panel: Locator, statusTargetId: string
       slot,
       `status slot after ${step.label}`
     );
-    expect(await getTerminalDimensions(panel), `terminal grid after ${step.label}`).toEqual(grid);
+    await expectGeometryUnchanged(page, terminalId, geometry, step.label);
   }
 }
 
@@ -236,7 +304,7 @@ async function openReadyTerminal(page: Page, marker: string): Promise<string> {
   if (!id) throw new Error("New terminal panel did not appear");
   const panel = getPanelById(page, id);
   await expect(panel).toBeVisible({ timeout: T_LONG });
-  await runTerminalCommand(page, panel, `echo ${marker}`);
+  await runTerminalCommand(page, panel, `echo ${marker}`, { readyTimeout: T_LONG });
   await waitForTerminalText(panel, marker, T_LONG);
   await page.waitForTimeout(T_SETTLE);
   return id;
@@ -269,7 +337,7 @@ test.describe.serial("Pane header: window controls hold still while status chang
   test("the CPU and memory readout arriving, sparkline included, leaves the controls in place", async () => {
     const page = ctx.window;
     const panel = getPanelById(page, panelId);
-    const grid = await waitForSettledGrid(page, panel);
+    const geometry = await waitForConvergedGeometry(page, panelId);
     const baseline = await measureControls(panel);
 
     await openSettings(page);
@@ -289,7 +357,7 @@ test.describe.serial("Pane header: window controls hold still while status chang
       timeout: T_LONG * 2,
     });
     await expectControlsUnmoved(page, panel, baseline, "the resource readout and sparkline");
-    expect(await getTerminalDimensions(panel)).toEqual(grid);
+    await expectGeometryUnchanged(page, panelId, geometry, "the resource readout and sparkline");
   });
 
   test("a long title in a narrow pane keeps the controls on screen and in place", async () => {
@@ -363,7 +431,9 @@ test.describe.serial("Pane header: window controls hold still while status chang
     if (!activeId) throw new Error("Tab group has no active panel id");
     // A duplicate's tab appears before its terminal has attached and fitted;
     // prove the active tab is live before its grid becomes the baseline.
-    await runTerminalCommand(page, group, "echo HEADER_TAB_ACTIVE_READY");
+    await runTerminalCommand(page, group, "echo HEADER_TAB_ACTIVE_READY", {
+      readyTimeout: T_LONG,
+    });
     await waitForTerminalText(group, "HEADER_TAB_ACTIVE_READY", T_LONG);
 
     await runStatusSteps(page, group, activeId);

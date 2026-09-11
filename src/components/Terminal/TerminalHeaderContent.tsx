@@ -346,8 +346,10 @@ export function TerminalHeaderContent({
   return (
     <>
       {/* Agent state chip — the macro pane-state signal leads the row per the
-          runtime-signals tier table: macro state → pane-local error/flow →
-          diagnostic text → ambient state → telemetry last. */}
+          runtime-signals tier table: macro state → pane-local error →
+          diagnostic text → ambient state → telemetry last. Transient flow and
+          submit status sit outside this row, in TerminalStatusSlot's reserved
+          box ahead of the window controls (#12374). */}
       {renderAgentStateChip()}
 
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit

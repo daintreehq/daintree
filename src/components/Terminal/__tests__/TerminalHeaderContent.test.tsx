@@ -93,6 +93,14 @@ vi.mock("../TerminalResourceSparkline", () => ({
   TerminalResourceSparkline: () => <span data-testid="resource-sparkline" />,
 }));
 
+// The real chip only renders once a provider reports children over IPC.
+let mockSubagentChipVisible = false;
+
+vi.mock("../SubagentChip", () => ({
+  SubagentChip: () =>
+    mockSubagentChipVisible ? <button type="button" data-testid="subagent-chip" /> : null,
+}));
+
 let mockTerminal: Record<string, unknown> = {};
 
 vi.mock("zustand/react/shallow", () => ({
@@ -109,6 +117,7 @@ vi.mock("@/store", () => ({
 
 beforeEach(() => {
   mockTerminal = { id: "t1" };
+  mockSubagentChipVisible = false;
   mockResourceEnabled = false;
   mockResourceState = null;
   vi.useFakeTimers();
@@ -818,6 +827,33 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     const className = badge.getAttribute("class") ?? "";
     expect(className).toContain("rounded-full");
     expect(className).toContain("border-dashed");
+  });
+
+  // PanelHeader clips this row from its trailing end in a narrow pane, so order
+  // decides what survives: the subagent chip is the row's only pointer entry
+  // point and must sit ahead of the lock glyph and telemetry (#12374).
+  it("clips telemetry and the lock glyph before the subagent chip", () => {
+    mockTerminal = { id: "t1", isInputLocked: true };
+    mockSubagentChipVisible = true;
+    mockResourceEnabled = true;
+    mockResourceState = { cpuPercent: 12, memoryKb: 2048, cpuHistory: [1, 2, 3], breakdown: [] };
+    const { container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" agentState="working" queueCount={2} />
+    );
+    const subagent = screen.getByTestId("subagent-chip");
+    const lockTooltip = screen
+      .getAllByTestId("tooltip-content")
+      .find((el) => el.textContent?.includes("Input locked"));
+    const lock = lockTooltip?.parentElement?.querySelector('[role="status"]');
+    const resource = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]')).find(
+      (el) => /%/.test(el.textContent ?? "")
+    );
+    expect(lock).toBeTruthy();
+    expect(resource).toBeTruthy();
+    expect(subagent.compareDocumentPosition(lock!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      lock!.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it("combined render: agent leads, and telemetry trails the ambient hibernated cue", () => {

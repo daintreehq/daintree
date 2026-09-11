@@ -109,7 +109,7 @@ export interface TerminalStatusSlotProps {
 export function TerminalStatusSlot({ id, flowStatus, submitStatus }: TerminalStatusSlotProps) {
   const hold = toHoldStatus(flowStatus);
   const isSubmitSlow = submitStatus === "slow";
-  if (!hold && !isSubmitSlow) return null;
+  const isActive = hold !== null || isSubmitSlow;
 
   const holdDisplay = hold ? HOLD_DISPLAY[hold] : null;
   // Held output is often why a prompt has not landed yet, so the hold owns the
@@ -121,40 +121,46 @@ export function TerminalStatusSlot({ id, flowStatus, submitStatus }: TerminalSta
       : holdDisplay.label
     : "Prompt still sending";
 
+  // The glyph shows no text, so it takes focus and its tooltip stays up while
+  // focused — the tooltip is the only place a keyboard user can read the
+  // explanation. The same trigger element renders when nothing is showing, so
+  // focus sitting on it when the status clears stays put instead of dropping
+  // to the document body; idle, it has no role, no name and no tab stop.
+  //
   // aria-live="off" overrides role="status"'s implicit polite live region; the
   // global announcer owns announcements across a multi-pane fleet (#9204).
-  // The glyph shows no text, so it takes focus: Radix opens the tooltip on
-  // focus, which is the only way a keyboard user can read the explanation.
   return (
-    <Tooltip>
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <span
           className="flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-          role="status"
+          role={isActive ? "status" : undefined}
           aria-live="off"
-          aria-label={label}
-          tabIndex={0}
+          aria-label={isActive ? label : undefined}
+          tabIndex={isActive ? 0 : -1}
         >
-          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+          {isActive && <Icon className="h-3.5 w-3.5" aria-hidden="true" />}
         </span>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-xs">
-        <div className="flex flex-col gap-2">
-          {holdDisplay && (
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">{holdDisplay.title}</span>
-              <span>{holdDisplay.body}</span>
-              {holdDisplay.showsHeldDuration && <HeldDuration id={id} />}
-            </div>
-          )}
-          {isSubmitSlow && (
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Still sending</span>
-              <span>Later prompts stay queued so they can&apos;t merge into this one.</span>
-            </div>
-          )}
-        </div>
-      </TooltipContent>
+      {isActive && (
+        <TooltipContent side="bottom" className="max-w-xs">
+          <div className="flex flex-col gap-2">
+            {holdDisplay && (
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium">{holdDisplay.title}</span>
+                <span>{holdDisplay.body}</span>
+                {holdDisplay.showsHeldDuration && <HeldDuration id={id} />}
+              </div>
+            )}
+            {isSubmitSlow && (
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium">Still sending</span>
+                <span>Later prompts stay queued so they can&apos;t merge into this one.</span>
+              </div>
+            )}
+          </div>
+        </TooltipContent>
+      )}
     </Tooltip>
   );
 }

@@ -32,6 +32,16 @@ function tooltipText(): string {
   return screen.getByTestId("tooltip-content").textContent ?? "";
 }
 
+function expectIdle(container: HTMLElement): void {
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByTestId("tooltip-content")).toBeNull();
+  expect(container.querySelector("svg")).toBeNull();
+  // Nothing to explain, so nothing to reach with Tab.
+  for (const el of Array.from(container.querySelectorAll<HTMLElement>("*"))) {
+    expect(el.tabIndex).toBeLessThan(0);
+  }
+}
+
 describe("TerminalStatusSlot", () => {
   it.each([
     { flowStatus: undefined, submitStatus: undefined },
@@ -40,12 +50,12 @@ describe("TerminalStatusSlot", () => {
     { flowStatus: undefined, submitStatus: "stalled" },
     { flowStatus: undefined, submitStatus: "failed" },
   ] as const)(
-    "renders nothing for flow $flowStatus / submit $submitStatus",
+    "shows no status for flow $flowStatus / submit $submitStatus",
     ({ flowStatus, submitStatus }) => {
       const { container } = render(
         <TerminalStatusSlot id="t1" flowStatus={flowStatus} submitStatus={submitStatus} />
       );
-      expect(container.childElementCount).toBe(0);
+      expectIdle(container);
     }
   );
 
@@ -68,11 +78,28 @@ describe("TerminalStatusSlot", () => {
     expect(new Set(names).size).toBe(HOLDS.length);
   });
 
-  it("takes keyboard focus, since the tooltip is the only place its explanation is visible", () => {
+  it("is a tab stop while showing, since the tooltip is the only place its explanation is visible", () => {
     render(<TerminalStatusSlot id="t1" flowStatus="paused-resource-governor" />);
     const status = screen.getByRole("status");
+    expect(status.tabIndex).toBeGreaterThanOrEqual(0);
     status.focus();
     expect(document.activeElement).toBe(status);
+  });
+
+  it("keeps keyboard focus in place when the status clears and returns", () => {
+    const { rerender, container } = render(
+      <TerminalStatusSlot id="t1" flowStatus="paused-backpressure" />
+    );
+    const glyph = screen.getByRole("status");
+    glyph.focus();
+
+    rerender(<TerminalStatusSlot id="t1" flowStatus="running" />);
+    expect(document.activeElement).toBe(glyph);
+    expectIdle(container);
+
+    rerender(<TerminalStatusSlot id="t1" submitStatus="slow" />);
+    expect(document.activeElement).toBe(glyph);
+    expect(screen.getByRole("status")).toBe(glyph);
   });
 
   it.each(HOLDS)("%s stays off the warning and error hues", (flowStatus) => {
@@ -154,7 +181,7 @@ describe("TerminalStatusSlot", () => {
     expect(screen.getByRole("status").getAttribute("aria-label")).toBe("Prompt still sending");
 
     rerender(<TerminalStatusSlot id="t1" flowStatus="running" />);
-    expect(container.childElementCount).toBe(0);
+    expectIdle(container);
   });
 
   it("reports how long backpressure has held output", () => {
