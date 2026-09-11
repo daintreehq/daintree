@@ -101,23 +101,40 @@ const TWO_RECENTS: CopyTreeHistoryRecord[] = [
   record("r2", "src", 1478, 13.3 * 1024 * 1024, 11 * DAY, { scopePaths: ["src"] }),
 ];
 
-/** The cap, with names and metadata wide enough to find every truncation edge. */
+/**
+ * Six records for five rows: enough real runs to hit the cap, with the
+ * full-context record still in front of them so the filter is exercised at the
+ * same time as the cap. If the two ever fight, this fixture renders four rows
+ * and the count assertion says so.
+ */
 const FULL_RECENTS: CopyTreeHistoryRecord[] = [
-  record("f1", "Full context", 3970, 39 * 1024 * 1024, 45_000),
-  record("f2", "src/components/Layout", 212, 840 * 1024, 20 * MIN, {
+  record("f0", "Full context", 3970, 39 * 1024 * 1024, 45_000),
+  record("f1", "src/components/Layout", 212, 840 * 1024, 20 * MIN, {
     scopePaths: ["src/components/Layout"],
   }),
-  record("f3", "Changed files only", 17, 96 * 1024, 3 * HOUR, { modified: true }),
+  record("f2", "Changed files only", 17, 96 * 1024, 3 * HOUR, { modified: true }),
   record(
-    "f4",
+    "f3",
     "electron/services/mcp-server + shared/types/ipc as markdown",
     64,
     1.2 * 1024 * 1024,
     2 * DAY,
     { format: "markdown", scopePaths: ["electron/services/mcp-server", "shared/types/ipc"] }
   ),
-  record("f5", "*.test.ts", 486, 4.1 * 1024 * 1024, 11 * DAY, { filter: ["**/*.test.ts"] }),
+  record("f4", "*.test.ts", 486, 4.1 * 1024 * 1024, 11 * DAY, { filter: ["**/*.test.ts"] }),
+  record("f5", "docs", 88, 410 * 1024, 26 * DAY, { scopePaths: ["docs"] }),
 ];
+
+/*
+ * How many rows each fixture actually renders.
+ *
+ * The panel drops runs whose options match its own pinned action, so the
+ * full-context record at the head of both fixtures is expected NOT to appear.
+ * It stays in the fixture on purpose: it is the shape the panel was reported
+ * wrong in, and its absence from the list below the button is the fix.
+ */
+const TWO_RECENTS_ROWS = 1;
+const FULL_RECENTS_ROWS = 5;
 
 /**
  * Re-seed the renderer's history mirror. The store's own snapshot pull is
@@ -341,7 +358,7 @@ test("copy-tree dropdown review — recents panel states", async () => {
     await step("two-recents", async () => {
       await seedHistory(ctx!.app, TWO_RECENTS);
       await openPanel(page);
-      await expectRows(page, TWO_RECENTS.length);
+      await expectRows(page, TWO_RECENTS_ROWS);
       await settle(page, 700);
       await snap(page, "30-two-recents", panel(page));
       await snap(page, "31-two-recents-in-context");
@@ -351,7 +368,7 @@ test("copy-tree dropdown review — recents panel states", async () => {
     await step("full", async () => {
       await seedHistory(ctx!.app, FULL_RECENTS);
       await openPanel(page);
-      await expectRows(page, FULL_RECENTS.length);
+      await expectRows(page, FULL_RECENTS_ROWS);
       await settle(page, 700);
       await snap(page, "40-full-list", panel(page));
       await snap(page, "41-full-list-in-context");
@@ -365,7 +382,7 @@ test("copy-tree dropdown review — recents panel states", async () => {
       // any one of these alone.
       await seedHistory(ctx!.app, FULL_RECENTS);
       await openPanel(page);
-      await expectRows(page, FULL_RECENTS.length);
+      await expectRows(page, FULL_RECENTS_ROWS);
       await settle(page, 500);
       await snap(page, "50-open-focus", panel(page));
       await page.keyboard.press("Tab");
@@ -377,7 +394,7 @@ test("copy-tree dropdown review — recents panel states", async () => {
     await step("hover", async () => {
       await seedHistory(ctx!.app, FULL_RECENTS);
       await openPanel(page);
-      await expectRows(page, FULL_RECENTS.length);
+      await expectRows(page, FULL_RECENTS_ROWS);
       await settle(page, 500);
       const row = page.locator(`${PANEL} li button`).first();
       const resting = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
@@ -409,7 +426,7 @@ test("copy-tree dropdown review — recents panel states", async () => {
         // sends the remounted store back to the pull handler.
         await seedHistory(ctx!.app, FULL_RECENTS);
         await openPanel(page);
-        await expectRows(page, FULL_RECENTS.length);
+        await expectRows(page, FULL_RECENTS_ROWS);
         await settle(page, 800);
         await snap(page, `70-theme-${themeId}-full`, panel(page));
         await closePanel(page);
