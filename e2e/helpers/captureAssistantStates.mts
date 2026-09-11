@@ -196,6 +196,7 @@ async function capture(spec: Capture): Promise<AssistantSessionState> {
     pendingQuestion: s.pendingQuestion,
     awaitingLocalCommand: s.awaitingLocalCommand,
     stoppedReason: s.stoppedReason,
+    resumed: s.resumed,
     error: s.error,
     turns: s.turns,
     toolCalls: s.toolCalls,

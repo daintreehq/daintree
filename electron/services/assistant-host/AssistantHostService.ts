@@ -60,6 +60,13 @@ export interface StartSessionOptions {
    * "+ New session" is the only caller that means it.
    */
   fresh?: boolean;
+  /**
+   * Whether this start may read, clear or write the lane's recorded conversation. The IPC
+   * layer sets it false for a view that is not the workspace it names: that view can still
+   * start an engine there, but cannot continue, discard or overwrite the workspace's
+   * conversation. Defaults to true.
+   */
+  recordable?: boolean;
   windowId: number;
   /** The renderer that owns this session. Events are pinned to it. */
   webContentsId: number;
@@ -71,11 +78,15 @@ interface LiveSession {
   /** The lane this engine occupies. `(projectId, slot)` is its identity. */
   slot: number;
   /**
-   * Whether the lane's recorded conversation is this session's — see
-   * `recordConversation`. Cleared by a discard while the session runs, so an engine
-   * another window is still using records itself again on its next turn.
+   * Whether this session may keep the lane's recorded conversation (#12365). False for a
+   * start from a view that is not the workspace it named, and once the conversation has
+   * been discarded — a late turn from an engine on its way out must not bring it back.
    */
+  recordable: boolean;
+  /** Whether it has written the lane's record. See `recordConversation`. */
   recorded: boolean;
+  /** Conversation activity seen before `host:ready`, recorded once readiness lands. */
+  activeBeforeReady: boolean;
   host: AssistantHostProcess;
   /**
    * Every surface watching this session: WebContents id → its attachment.
@@ -190,6 +201,26 @@ const READY_PROGRESS_MS = 10_000;
  * the fallback — a signal — is not a bad outcome for a process being torn down anyway.
  */
 const SHUTDOWN_GRACE_MS = 2_000;
+
+/**
+ * How old a lane's record may get while its conversation is in use before it is written
+ * again. The store drops records older than two weeks when it loads, and an engine that
+ * stays up longer than that would otherwise still carry the age of its first turn.
+ */
+const RECORD_REFRESH_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Events that mean a lane is having a conversation worth continuing (#12365). A turn is
+ * the obvious one, but a wake's first phase lands before its turn opens, and an
+ * interjection folds into a turn already running. `turn:token` is left out: it only
+ * follows a `turn:start`, and it arrives many times a second.
+ */
+const CONVERSATION_EVENTS: ReadonlySet<string> = new Set([
+  "turn:start",
+  "turn:phase",
+  "turn:interjection",
+  "turn:end",
+]);
 
 /**
  * engine sessionId → the help-session id holding its MCP bearer.
@@ -416,9 +447,25 @@ export class AssistantHostService {
     // it and times out — and it must not displace the first, which is what shipped
     // before: opening a project in a second window silently tore down the conversation
     // the first window was showing.
+    const recordable = opts.recordable !== false;
+    // Only a start that may touch the lane's record can decline it.
+    const fresh = recordable && opts.fresh === true;
     const existing = this.bySlotKey.get(slotKey);
     if (existing && !existing.host.hasExited()) {
-      return this.attach(existing, opts, elapsedMs());
+      // A FRESH start does not join (#12365). "+ New session" asks for a new conversation
+      // on the lane, and joining would hand back the one it is replacing — from a start
+      // still in flight on this very panel, or from another window sharing the engine. It
+      // displaces the running engine instead, and tells the other surfaces on it that the
+      // session ended, because a displaced engine's own exit reaches only its starter.
+      if (!fresh) return this.attach(existing, opts, elapsedMs());
+      for (const webContentsId of [...existing.subscribers.keys()]) {
+        if (webContentsId === opts.webContentsId) continue;
+        this.deliver(webContentsId, CHANNELS.ASSISTANT_HOST_EXIT, {
+          sessionId: existing.sessionId,
+          code: null,
+          signal: null,
+        });
+      }
     }
 
     // Only a session belonging to THIS lane is displaced — a view re-running its
@@ -433,8 +480,9 @@ export class AssistantHostService {
     // does fail cannot hand the declined conversation to the next one.
     const resumeStore = getNativeAssistantResumeStore();
     await resumeStore.load();
-    if (opts.fresh) await resumeStore.clear(slotKey);
-    const resumeSessionId = opts.fresh ? undefined : resumeStore.get(slotKey)?.resumeSessionId;
+    if (fresh) await resumeStore.clear(slotKey);
+    const resumeSessionId =
+      recordable && !fresh ? resumeStore.get(slotKey)?.resumeSessionId : undefined;
 
     // Logged as well as thrown. The renderer surfaces this one, but a resolution failure
     // names a build step someone has to run, and the main log is where they will look for
@@ -650,7 +698,7 @@ export class AssistantHostService {
         ...(mcp?.url ? { DAINTREE_MCP_URL: mcp.url, DAINTREE_MCP_TOKEN: mcp.token } : {}),
       },
       onEvent: (event) => {
-        if (event.type === "turn:start") this.recordConversation(sessionId);
+        if (CONVERSATION_EVENTS.has(event.type)) this.recordConversation(sessionId);
         this.broadcast(sessionId, CHANNELS.ASSISTANT_HOST_EVENT, event);
       },
       onSequenceGap: (info) =>
@@ -690,7 +738,9 @@ export class AssistantHostService {
       sessionId,
       projectId: opts.projectId,
       slot,
+      recordable,
       recorded: false,
+      activeBeforeReady: false,
       host,
       provisionerWebContentsId: opts.webContentsId,
       subscribers: new Map([[opts.webContentsId, { windowId: opts.windowId, attachmentId }]]),
@@ -758,8 +808,11 @@ export class AssistantHostService {
       }
       // A continued conversation is already recorded under the id it continues. Recording
       // it again refreshes its age and clears the panel state its last loss noted, which
-      // has now done its job.
-      if (ready?.resumedSessionId) this.recordConversation(sessionId);
+      // has now done its job. So does a conversation that began before readiness did — a
+      // wake can open a turn in the moment before `host:ready` is written.
+      if (ready?.resumedSessionId || session.activeBeforeReady) {
+        this.recordConversation(sessionId);
+      }
       logger.info("engine ready", {
         sessionId,
         pid: host.getPid(),
@@ -830,6 +883,7 @@ export class AssistantHostService {
     // one engine diverge on the first message either of them sends, one showing a
     // question with no answer and the other an answer with no question.
     session.host.recordPrompt(command.text);
+    this.recordConversation(session.sessionId);
     for (const webContentsId of [...session.subscribers.keys()]) {
       if (webContentsId === fromWebContentsId) continue;
       this.deliver(webContentsId, CHANNELS.ASSISTANT_HOST_PEER_PROMPT, {
@@ -1024,6 +1078,14 @@ export class AssistantHostService {
     // ones already draining from an earlier displacement or eviction, which the session
     // maps no longer know about at all.
     await Promise.all([...this.spawnedHosts].map((host) => host.waitForExit(graceMs)));
+
+    // A conversation recorded moments before quit may still be on its way to disk. Waited
+    // for within the same budget, never beyond it: a stuck write costs one conversation its
+    // continuity, where a hung quit costs everything else its cleanup.
+    await Promise.race([
+      getNativeAssistantResumeStore().flush(),
+      new Promise((resolve) => setTimeout(resolve, graceMs).unref?.()),
+    ]);
   }
 
   /** Tears down every session without waiting. Retained for non-shutdown callers. */
@@ -1100,22 +1162,35 @@ export class AssistantHostService {
 
   /**
    * Forgets the conversation a lane would continue, so its next start is a new one
-   * (#12365) — what Stop and closing a lane's tab mean.
+   * (#12365) — what Stop and closing a lane's tab mean, asked by the surface at
+   * `webContentsId`.
    *
    * It does not end the engine; the panel's own teardown does that. It runs behind the
    * lane's queue, so a start already on its way records first and is then forgotten,
-   * rather than recording after this and bringing the conversation straight back. An
-   * engine still running on the lane — another window can be watching it — is marked
-   * unrecorded, so it records itself again if anyone goes on using it.
+   * rather than recording after this and bringing the conversation straight back.
+   *
+   * Refused while another surface is still watching the lane's engine: that surface is
+   * still having the conversation — the asker leaving ends only its own attachment — and
+   * forgetting it under them would lose it to their next eviction. Otherwise the running
+   * engine is barred from recording again, because the asker's detach is still on its way
+   * and a turn landing before it must not undo the discard.
+   *
+   * Resolves to whether the record was forgotten.
    */
-  discardResume(projectId: string, slot: number): Promise<void> {
+  discardResume(projectId: string, slot: number, webContentsId: number): Promise<boolean> {
     const slotKey = assistantSlotKey(projectId, slot);
     return this.onLane(slotKey, async () => {
+      const live = this.bySlotKey.get(slotKey);
+      const shared =
+        live !== undefined &&
+        !live.host.hasExited() &&
+        [...live.subscribers.keys()].some((id) => id !== webContentsId);
+      if (shared) return false;
       const store = getNativeAssistantResumeStore();
       await store.load();
-      const live = this.bySlotKey.get(slotKey);
-      if (live) live.recorded = false;
+      if (live) live.recordable = false;
       await store.clear(slotKey);
+      return true;
     });
   }
 
@@ -1135,19 +1210,28 @@ export class AssistantHostService {
    * once a lane has been continued even once; continuing from it opens an empty
    * conversation without an error anywhere.
    *
-   * Written on a session's first turn rather than at readiness, so a lane nobody spoke in
-   * leaves nothing behind — and a view coming back cold neither reopens its panel nor
-   * starts an engine for a conversation that never happened.
+   * Written at the session's first sign of conversation — a prompt, a turn, a wake's phase
+   * — rather than at readiness, so a lane nobody spoke in leaves nothing behind, and a view
+   * coming back cold neither reopens its panel nor restores a tab for a conversation that
+   * never happened. Written again once the record is a day old, so a conversation in
+   * steady use never ages out as abandoned.
    */
   private recordConversation(sessionId: string): void {
     const session = this.bySession.get(sessionId);
-    const ready = session?.host.getReadyEvent();
-    if (!session || !ready || session.recorded) return;
+    if (!session?.recordable) return;
+    const ready = session.host.getReadyEvent();
+    if (!ready) {
+      session.activeBeforeReady = true;
+      return;
+    }
+    const store = getNativeAssistantResumeStore();
+    const slotKey = assistantSlotKey(session.projectId, session.slot);
+    const existing = store.get(slotKey);
+    if (session.recorded && existing && Date.now() - existing.capturedAt < RECORD_REFRESH_MS) {
+      return;
+    }
     session.recorded = true;
-    void getNativeAssistantResumeStore().set(
-      assistantSlotKey(session.projectId, session.slot),
-      ready.resumedSessionId ?? session.sessionId
-    );
+    void store.set(slotKey, ready.resumedSessionId ?? session.sessionId);
   }
 
   /**
@@ -1156,6 +1240,7 @@ export class AssistantHostService {
    * is still standing: a lost view sends no parting report.
    */
   private rememberPanelState(session: LiveSession): void {
+    if (!session.recordable) return;
     const store = getNativeAssistantResumeStore();
     const slotKey = assistantSlotKey(session.projectId, session.slot);
     if (!store.get(slotKey)) return;

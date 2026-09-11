@@ -127,6 +127,11 @@ export class NativeAssistantResumeStore {
     return lanes.sort((a, b) => a.slot - b.slot);
   }
 
+  /** Resolves once every write asked for so far has landed or failed. */
+  flush(): Promise<void> {
+    return this.writeChain;
+  }
+
   private filePath(): string {
     return this.explicitFilePath ?? path.join(app.getPath("userData"), FILE_NAME);
   }
