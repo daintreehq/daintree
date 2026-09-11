@@ -74,7 +74,9 @@ const findUntouchedClaudeSessionMock = vi.hoisted(() =>
 // that omits an export throws for every consumer that reaches it.
 vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
   CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
-  resolveClaudeProjectsRoot: vi.fn(() => null),
+  CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
+  resolvePaneClaudeProjectsRoot: vi.fn(() => null),
+  __resetClaudeSessionStoreForTests: vi.fn(),
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: findUntouchedClaudeSessionMock,
   isClaudeSessionWithoutTranscript: vi.fn(async () => false),
@@ -1674,6 +1676,35 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // Canonical flag is present as a standalone token.
     expect(spawnArgs.command).toMatch(/(^|\s)--dangerously-skip-permissions(\s|$)/);
     expect(spawnArgs.command).toContain("--resume abc");
+  });
+
+  it("keeps a help launch's enrichment when an untouched session starts fresh (#12371)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "action" : false));
+    mockGetBypassPermissions.mockImplementation((token) => token === "bypass-token");
+    const session = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+    findUntouchedClaudeSessionMock.mockResolvedValueOnce(session);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: `claude --resume ${session}`,
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "bypass-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toMatch(/(^|\s)--dangerously-skip-permissions(\s|$)/);
+    expect(spawnArgs.command).toContain(`--session-id ${session}`);
+    expect(spawnArgs.command).not.toContain("--resume");
+    expect(spawnArgs.agentSessionId).toBe(session);
   });
 
   it("refuses to spawn when DAINTREE_MCP_TOKEN is present but invalid for an assistant-supported launch (#7509)", async () => {

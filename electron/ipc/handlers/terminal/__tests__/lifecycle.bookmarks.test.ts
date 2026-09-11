@@ -32,7 +32,7 @@ const m = vi.hoisted(() => ({
   renameBookmark: vi.fn(),
   deleteBookmark: vi.fn(),
   listBookmarks: vi.fn(() => []),
-  listAgentSessions: vi.fn(() => []),
+  listAgentSessions: vi.fn((): Array<{ sessionId: string; agentId: string }> => []),
   dropClaudeSessionsWithoutTranscript: vi.fn(async (records: unknown[]) => records),
   readSessionHistorySync: vi.fn<() => { sessionId: string; projectId: string | null }[]>(() => []),
   // Typed so the evicted-ledger case (mockReturnValue(undefined)) type-checks.
@@ -61,7 +61,9 @@ vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
 }));
 vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
   CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
-  resolveClaudeProjectsRoot: vi.fn(() => null),
+  CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
+  resolvePaneClaudeProjectsRoot: vi.fn(() => null),
+  __resetClaudeSessionStoreForTests: vi.fn(),
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: vi.fn().mockResolvedValue(undefined),
   isClaudeSessionWithoutTranscript: vi.fn(async () => false),
@@ -436,12 +438,14 @@ describe("bookmark mutator handlers", () => {
   it("session list returns only what survives the transcript filter", async () => {
     register();
     const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
-    const kept = { sessionId: "kept", agentId: "codex" };
-    m.dropClaudeSessionsWithoutTranscript.mockResolvedValueOnce([kept]);
+    const retrieved = [
+      { sessionId: "untouched", agentId: "claude" },
+      { sessionId: "kept", agentId: "codex" },
+    ];
+    m.listAgentSessions.mockReturnValueOnce(retrieved);
+    m.dropClaudeSessionsWithoutTranscript.mockResolvedValueOnce([retrieved[1]]);
 
-    await expect(list({}, {})).resolves.toEqual([kept]);
-    expect(m.dropClaudeSessionsWithoutTranscript).toHaveBeenLastCalledWith(
-      m.listAgentSessions.mock.results.at(-1)?.value
-    );
+    await expect(list({}, {})).resolves.toEqual([retrieved[1]]);
+    expect(m.dropClaudeSessionsWithoutTranscript).toHaveBeenLastCalledWith(retrieved);
   });
 });

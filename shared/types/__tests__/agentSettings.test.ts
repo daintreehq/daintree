@@ -1612,6 +1612,28 @@ describe("launch-time session id assignment (#11782)", () => {
       expect(relaunchResumeAsAssignedSession("", ASSIGNING)).toBeUndefined();
     });
 
+    it("reads an escaped quote as part of a double-quoted prompt", () => {
+      const prompt = `"say \\" --resume ${sessionId} \\" once"`;
+      const command = `claude --append-system-prompt ${prompt} --resume ${sessionId}`;
+      expect(relaunchResumeAsAssignedSession(command, ASSIGNING)?.command).toBe(
+        `claude --append-system-prompt ${prompt} --session-id ${sessionId}`
+      );
+      expect(
+        stripAssignedSessionIdArgs(`claude "say \\" --session-id ${sessionId} \\" ok"`, ASSIGNING)
+      ).toBe(`claude "say \\" --session-id ${sessionId} \\" ok"`);
+    });
+
+    it("declines a command that picks its conversation more than one way", () => {
+      const other = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
+      for (const command of [
+        `claude --continue --resume ${sessionId}`,
+        `claude --resume ${other} --resume ${sessionId}`,
+        `claude --session-id ${other} --resume ${sessionId}`,
+      ]) {
+        expect(relaunchResumeAsAssignedSession(command, ASSIGNING)).toBeUndefined();
+      }
+    });
+
     it("leaves agents that mint their own id alone", () => {
       const codexResume = buildResumeCommand(SCRAPING, sessionId) as string;
       expect(relaunchResumeAsAssignedSession(codexResume, SCRAPING)).toBeUndefined();

@@ -691,3 +691,53 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
     }
   });
 });
+
+describe("refreshPath shell observation (#12371)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    savedPath = process.env.PATH;
+    vi.clearAllMocks();
+    delete process.env.DAINTREE_SHELL_PROBE;
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+  });
+
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+  });
+
+  it("keeps what the login shell exports for Claude's store, and nothing else", async () => {
+    shellEnvMock.mockResolvedValue({
+      PATH: "/usr/bin:/bin",
+      CLAUDE_CONFIG_DIR: "/custom/claude",
+      UNRELATED_SECRET: "never kept",
+    });
+    const { refreshPath } = await import("../environment.js");
+    const { getShellObservedEnv } = await import("../shellEnvironmentObservation.js");
+    expect(getShellObservedEnv()).toBeUndefined();
+
+    await refreshPath();
+
+    expect(getShellObservedEnv()).toEqual({ CLAUDE_CONFIG_DIR: "/custom/claude" });
+  });
+
+  it("records an observed shell that exports no store override", async () => {
+    shellEnvMock.mockResolvedValue({ PATH: "/usr/bin:/bin" });
+    const { refreshPath } = await import("../environment.js");
+    const { getShellObservedEnv } = await import("../shellEnvironmentObservation.js");
+
+    await refreshPath();
+
+    expect(getShellObservedEnv()).toEqual({});
+  });
+
+  it("leaves the shell unobserved when shell-env fails", async () => {
+    shellEnvMock.mockRejectedValue(new Error("broken .zshrc"));
+    const { refreshPath } = await import("../environment.js");
+    const { getShellObservedEnv } = await import("../shellEnvironmentObservation.js");
+
+    await refreshPath();
+
+    expect(getShellObservedEnv()).toBeUndefined();
+  });
+});

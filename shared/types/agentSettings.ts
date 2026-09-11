@@ -1173,7 +1173,16 @@ function splitShellWords(command: string): string[] {
   for (const char of command) {
     if (quote) {
       current += char;
-      if (char === quote) quote = null;
+      // Inside double quotes a backslash still escapes the next character, so
+      // `\"` belongs to the word instead of ending it; POSIX shells and Windows
+      // argv parsing agree on that. Single quotes take everything literally.
+      if (escaped) {
+        escaped = false;
+      } else if (quote === '"' && char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
       continue;
     }
     if (escaped) {
@@ -1307,25 +1316,35 @@ export function relaunchResumeAsAssignedSession(
   const [prefix = "", suffix = ""] = (shape[slotOffset] ?? "").split(SESSION_ID_SLOT);
 
   const words = splitShellWords(command);
-  for (let i = 0; i + shape.length <= words.length; i++) {
-    if (!shape.every((token, offset) => shapeWordMatches(token, words[i + offset] ?? ""))) {
-      continue;
-    }
-    const slotWord = words[i + slotOffset] ?? "";
-    const sessionId = unquoteShellWord(
-      slotWord.slice(prefix.length, slotWord.length - suffix.length)
-    );
-    if (!ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId)) return undefined;
-    const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
-    if (!assigning?.length) return undefined;
-    words.splice(
-      i,
-      shape.length,
-      ...assigning.map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)))
-    );
-    return { sessionId, command: words.join(" ") };
+  const matchesAt = (tokens: readonly string[], at: number): boolean =>
+    tokens.length > 0 &&
+    tokens.every((token, offset) => shapeWordMatches(token, words[at + offset] ?? ""));
+
+  // One unambiguous selector or nothing. A second resume, an id already being
+  // assigned, or a resume-latest flag each mean the CLI picks the conversation
+  // some other way, and swapping one flag would leave it contradicting the rest.
+  const resumeAt = words.flatMap((_, at) => (matchesAt(shape, at) ? [at] : []));
+  const [at] = resumeAt;
+  if (at === undefined || resumeAt.length > 1) return undefined;
+  const assignShape = resume.assignSessionIdArgs?.(SESSION_ID_SLOT) ?? [];
+  const latestShape = resume.resumeLatestArgs ?? [];
+  if (words.some((_, i) => matchesAt(assignShape, i) || matchesAt(latestShape, i))) {
+    return undefined;
   }
-  return undefined;
+
+  const slotWord = words[at + slotOffset] ?? "";
+  const sessionId = unquoteShellWord(
+    slotWord.slice(prefix.length, slotWord.length - suffix.length)
+  );
+  if (!ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId)) return undefined;
+  const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
+  if (!assigning?.length) return undefined;
+  words.splice(
+    at,
+    shape.length,
+    ...assigning.map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)))
+  );
+  return { sessionId, command: words.join(" ") };
 }
 
 export interface BuildLaunchCommandFromFlagsOptions {

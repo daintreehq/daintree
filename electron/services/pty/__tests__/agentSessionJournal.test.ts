@@ -30,7 +30,9 @@ const { isClaudeSessionWithoutTranscriptMock } = vi.hoisted(() => ({
 // independent of whatever happens to be on this machine.
 vi.mock("../../claude/ClaudeSessionStore.js", () => ({
   CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
-  resolveClaudeProjectsRoot: vi.fn(() => null),
+  CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
+  resolvePaneClaudeProjectsRoot: vi.fn(() => null),
+  __resetClaudeSessionStoreForTests: vi.fn(),
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: vi.fn(async () => undefined),
   isClaudeSessionWithoutTranscript: isClaudeSessionWithoutTranscriptMock,
@@ -327,5 +329,43 @@ describe("journalAgentSession", () => {
 
     expect(written).toBe(true);
     expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
+  });
+
+  it("fails open when the ledger evicts the terminal while the lookup runs", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+    let finishLookup: (value: boolean) => void = () => {};
+    isClaudeSessionWithoutTranscriptMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishLookup = resolve;
+        })
+    );
+
+    const pending = journalAgentSessionRecord(makeRecord("sess-evicted"), {
+      terminalId: "term-1",
+      generation,
+    });
+    // The ledger tracks 256 terminals by default and pushes the oldest out.
+    for (let i = 0; i < 300; i++) ledger.recordLaunch(`other-${i}`, { launchAgentId: "claude" });
+    expect(ledger.currentGeneration("term-1")).toBeUndefined();
+    finishLookup(false);
+
+    const record = await pending;
+    expect(record?.sessionId).toBe("sess-evicted");
+    expect(recordedEvents).toEqual([{ sessionId: "sess-evicted" }]);
+  });
+
+  it("skips a Claude session with no conversation under a frozen-but-unknown generation", async () => {
+    isClaudeSessionWithoutTranscriptMock.mockResolvedValueOnce(true);
+
+    const skipped = await journalAgentSession(makeRecord("sess-empty"), {
+      terminalId: "term-evicted",
+      generation: null,
+    });
+
+    expect(skipped).toBe(false);
+    expect(await readSessionHistory(userDataDir)).toEqual([]);
+    expect(recordedEvents).toEqual([]);
   });
 });

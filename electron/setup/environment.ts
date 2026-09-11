@@ -31,6 +31,7 @@ import {
 } from "./windowsPath.js";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 import { getMaxWebGLContextCeiling } from "../utils/webglContextBudget.js";
+import { recordShellEnvironment } from "./shellEnvironmentObservation.js";
 // Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
 // the service here would evaluate its logger/telemetry/store import chain at
 // module load, before this file's body re-paths userData for dev instances.
@@ -497,6 +498,7 @@ async function runRefreshPath(): Promise<void> {
             };
             const env = await shellEnv();
             if (timedOut) return;
+            recordShellEnvironment(env);
             if (env.PATH) {
               process.env.PATH = deduplicatePath(env.PATH, false);
             }
