@@ -109,6 +109,22 @@ function newAttachmentId(): string {
   return `att_${randomBytes(6).toString("hex")}`;
 }
 
+/**
+ * Whether losing `webContentsId` ENDS `session`, rather than merely detaching one of
+ * its surfaces.
+ *
+ * Decided in one place because two callers need the same answer: `detach` acts on it,
+ * and `wouldEndLiveEngine` predicts it for view eviction (#12364). Kept apart, the
+ * eviction floor could drift from the teardown it exists to prevent — protecting a
+ * view whose loss kills nothing, or releasing one whose loss still does.
+ *
+ * Asked BEFORE the subscriber is removed, so a sole subscriber reads as the last one.
+ */
+function departureEndsSession(session: LiveSession, webContentsId: number): boolean {
+  if (!session.subscribers.has(webContentsId)) return false;
+  return session.subscribers.size === 1 || webContentsId === session.provisionerWebContentsId;
+}
+
 /** The roster id the MCP tier policy is keyed on for this surface. */
 const ASSISTANT_AGENT_ID = "daintree-assistant";
 
@@ -850,7 +866,8 @@ export class AssistantHostService {
   }
 
   /**
-   * Detaches one surface, stopping the engine when the last one leaves.
+   * Detaches one surface, stopping the engine when the last one leaves — or when the
+   * one leaving is the surface the control plane is pinned to.
    *
    * `attachmentId`, when given, must match the CURRENT attachment for that surface. A
    * panel re-running its start effect resolves the new attach before the old one's
@@ -861,9 +878,10 @@ export class AssistantHostService {
     const subscriber = session.subscribers.get(webContentsId);
     if (!subscriber) return;
     if (attachmentId !== undefined && subscriber.attachmentId !== attachmentId) return;
+    const ends = departureEndsSession(session, webContentsId);
     session.subscribers.delete(webContentsId);
 
-    if (session.subscribers.size > 0 && webContentsId !== session.provisionerWebContentsId) {
+    if (!ends) {
       logger.info("surface left the project's engine; others remain", {
         sessionId: session.sessionId,
         webContentsId,
@@ -881,11 +899,12 @@ export class AssistantHostService {
         webContentsId,
         strandedSubscribers: session.subscribers.size,
       });
+    } else {
+      logger.info("last surface left; stopping the engine", {
+        sessionId: session.sessionId,
+        webContentsId,
+      });
     }
-    logger.info("last surface left; stopping the engine", {
-      sessionId: session.sessionId,
-      webContentsId,
-    });
     this.stop(session.sessionId);
   }
 
@@ -987,7 +1006,8 @@ export class AssistantHostService {
    * Detaches a renderer from every session it was watching (destroyed view, crashed view).
    *
    * Named `stop*` for its callers, who mean "this surface is gone" — but a surface
-   * going away only ENDS the engine when no other window is still showing it.
+   * going away only ENDS the engine when it was the last one showing it, or the one
+   * holding the control plane.
    *
    * The surface is also recorded as departed, because one of its own starts may still
    * be queued behind another project's: registering it afterwards would leave a
@@ -1024,6 +1044,31 @@ export class AssistantHostService {
   /** True when `webContentsId` is one of the surfaces watching `sessionId`. */
   isOwnedBy(sessionId: string, webContentsId: number): boolean {
     return this.bySession.get(sessionId)?.subscribers.has(webContentsId) ?? false;
+  }
+
+  /**
+   * True when losing this surface would end a live engine — the question view eviction
+   * has to ask first, because destroying a view runs `stopByWebContents` (#12364).
+   *
+   * Keyed by WebContents alone, across every session, because that is how the teardown
+   * it predicts is keyed. A cached view's key is a workspace id that nothing guarantees
+   * is the project id a session was started under, so filtering by project could miss a
+   * view the teardown would still find.
+   *
+   * Live means registered and not yet exited: from before the child is even spawned,
+   * through the whole readiness wait, until the session is stopped or its child dies. A
+   * stopped session whose child is still draining does not count — it has already left
+   * routing and lost its bearer, so keeping its view would save nothing.
+   *
+   * A joining window's view does not qualify. Losing it only detaches that window, which
+   * can rejoin with a replay when its view comes back — the same shape as the PTY floor,
+   * which protects only the view a session pinned.
+   */
+  wouldEndLiveEngine(webContentsId: number): boolean {
+    for (const session of this.bySession.values()) {
+      if (!session.host.hasExited() && departureEndsSession(session, webContentsId)) return true;
+    }
+    return false;
   }
 }
 
