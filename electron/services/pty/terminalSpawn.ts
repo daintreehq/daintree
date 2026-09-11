@@ -11,7 +11,7 @@ import {
   setEnvVar,
 } from "./EnvironmentFilter.js";
 import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
-import { computePoolEnvHash } from "./ptyPoolEnvHash.js";
+import { carriesPoolStrippedEnv, computePoolEnvHash } from "./ptyPoolEnvHash.js";
 import type { PtySpawnOptions } from "./types.js";
 import {
   BufferedPtyDataHandoff,
@@ -181,12 +181,21 @@ export function acquirePtyProcess(
   // lookup handles cases where another window pre-warmed at a different cwd
   // or with different env additions — those entries simply don't match the
   // wanted key and we fall through to fresh spawn + background warm.
+  //
+  // A spawn whose intentional env carries a secret-named variable (e.g. an
+  // MCP token) is never pool-eligible: the pool strips those names from both
+  // the key and the warm shell, so a pooled hit would hand back a shell
+  // without the credential, and warming such a key only parks an idle shell
+  // no later spawn can safely reuse. Inherited process.env secrets don't
+  // count — filterEnvironment drops them on the fresh path too.
+  const isDevPreview = options.kind === "dev-preview";
   const canUsePool =
     shouldEnablePtyPool() &&
     !!ptyPool &&
     !options.shell &&
     !options.args &&
-    options.kind !== "dev-preview";
+    !isDevPreview &&
+    !carriesPoolStrippedEnv(options.env);
   const envHash = computePoolEnvHash(options.env);
   let pooled = canUsePool ? ptyPool!.acquireByKey(options.cwd, envHash, id) : null;
   // Suppress unused-parameter lint for the write-error callback; kept in the
@@ -251,7 +260,9 @@ export function acquirePtyProcess(
         ? "pool-unavailable"
         : options.shell || options.args
           ? "ineligible-custom-shell"
-          : "ineligible-dev-preview",
+          : isDevPreview
+            ? "ineligible-dev-preview"
+            : "ineligible-sensitive-env",
     });
   }
 
