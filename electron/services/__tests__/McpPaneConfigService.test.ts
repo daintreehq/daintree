@@ -18,10 +18,13 @@ vi.mock("electron", () => ({
 }));
 
 // `hooks` run one per write, in order, before it lands — a hook that waits
-// holds that write open, one that throws fails it.
+// holds that write open, one that throws fails it. `written` records each
+// write that landed, in order — the only stable view of a file a later
+// preparation for the same pane has since unlinked and rewritten.
 const writeControl = vi.hoisted(() => ({
   error: null as Error | null,
   hooks: [] as Array<() => Promise<void>>,
+  written: [] as Array<{ path: string; data: string }>,
 }));
 
 vi.mock("../../utils/fs.js", async (importOriginal) => {
@@ -34,7 +37,8 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
       const hook = writeControl.hooks.shift();
       if (hook) await hook();
       if (writeControl.error) throw writeControl.error;
-      return actual.resilientAtomicWriteFile(...args);
+      await actual.resilientAtomicWriteFile(...args);
+      writeControl.written.push({ path: String(args[0]), data: String(args[1]) });
     },
   };
 });
@@ -75,6 +79,7 @@ describe("McpPaneConfigService", () => {
   afterEach(async () => {
     writeControl.error = null;
     writeControl.hooks.length = 0;
+    writeControl.written.length = 0;
     await service.revokeAll();
     await fs.rm(testUserData, { recursive: true, force: true });
   });
@@ -635,16 +640,22 @@ describe("McpPaneConfigService", () => {
       });
 
       // The older one finishes its write after the newer was requested; the
-      // newer then revokes it and writes last.
+      // newer then revokes it and writes last. The newer starts as soon as the
+      // older settles and unlinks the shared path, so the older file is read
+      // from the recorded write, never from disk.
       olderGate.resolve();
       const olderPrepared = await older;
-      const olderBearer = bearerOf(
-        (await readServers(olderPrepared!.configPath))[olderPrepared!.pluginServerKeys[0]]
-      );
       const newer = await newerPending;
-      const newerBearer = bearerOf(
-        (await readServers(newer!.configPath))[newer!.pluginServerKeys[0]]
-      );
+
+      expect(writeControl.written.map((w) => w.path)).toEqual([
+        olderPrepared!.configPath,
+        newer!.configPath,
+      ]);
+      const olderServers = JSON.parse(writeControl.written[0].data).mcpServers;
+      const olderBearer = bearerOf(olderServers[olderPrepared!.pluginServerKeys[0]]);
+      const onDisk = await fs.readFile(newer!.configPath, "utf-8");
+      expect(onDisk).toBe(writeControl.written[1].data);
+      const newerBearer = bearerOf(JSON.parse(onDisk).mcpServers[newer!.pluginServerKeys[0]]);
 
       expect(newerBearer).not.toBe(olderBearer);
       expect(grants.authenticate(olderBearer)).toBeNull();
