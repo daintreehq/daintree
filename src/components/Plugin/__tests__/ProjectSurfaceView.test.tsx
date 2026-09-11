@@ -88,6 +88,29 @@ describe("ProjectSurfaceView", () => {
     expect(h.mounts[0]?.panelRemovedSignal).toBe(h.mounts[1]?.panelRemovedSignal);
   });
 
+  it("hosts the plugin's view in a full-height flex column", () => {
+    const { container } = render(<ProjectSurfaceView config={surfaceKind()} />);
+
+    // The content's IMMEDIATE parent, not the tree's root: this also fails if a
+    // block wrapper is introduced between the two while the root keeps its
+    // classes.
+    const host = container.querySelector('[data-testid="content"]')?.parentElement;
+
+    // jsdom computes no layout, so the contract is asserted on the classes that
+    // produce it. `PluginViewContent` fills its host with `flex-1 min-h-0`,
+    // which is inert outside a flex container — drop these and the surface
+    // collapses to the plugin's intrinsic height (#12361).
+    //
+    // Whole tokens via `classList`, never `toContain`: "flex-col" contains the
+    // substring "flex", so a substring assertion stays green after the
+    // standalone `flex` — the class that actually establishes the container —
+    // is deleted, which is the exact regression this test exists to catch.
+    expect(host?.classList.contains("flex")).toBe(true);
+    expect(host?.classList.contains("flex-col")).toBe(true);
+    expect(host?.classList.contains("h-full")).toBe(true);
+    expect(host?.classList.contains("min-h-0")).toBe(true);
+  });
+
   it("retires the old runtime when the plugin's module URL changes", () => {
     render(<ProjectSurfaceView config={surfaceKind()} />);
     const stale = h.mounts.at(-1)?.panelRemovedSignal;
