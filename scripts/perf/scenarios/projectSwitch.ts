@@ -574,8 +574,10 @@ const projectViewScenarios: PerfScenario[] = [
 
         // A healthy reading must move nothing. Without this the whole ladder
         // could be firing unconditionally and every other number here would
-        // still look correct. It follows a low reading, so a ladder that
-        // ignored the band would confirm and evict right here.
+        // still look correct. It also has to wipe the count the low reading
+        // started: a sampler that took it for another low one would confirm and
+        // take a view on the next low pass, which `pressureConfirmationMisses`
+        // reports.
         const healthyBandMisses = harness.pressurePass(HEALTHY_AVAILABLE_MB).evicted.length;
 
         pressureConfirmationMisses += harness.pressurePass(PRESSURE_SAMPLE_AVAILABLE_MB).evicted

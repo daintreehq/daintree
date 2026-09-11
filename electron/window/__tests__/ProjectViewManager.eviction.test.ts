@@ -2857,6 +2857,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
       "projectview.eviction",
       expect.objectContaining({ projectId: "proj-a", reason: "lru" })
     );
+    managerWithLimit.dispose();
   });
 
   it("falls back to normal LRU behavior when getSystemMemoryInfo throws", async () => {
@@ -2975,6 +2976,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     tickPressureCheck(pressureManager);
     expect(pressureManager.getAllViews().length).toBe(1);
     expect(onViewEvicted).toHaveBeenCalledTimes(3);
+    pressureManager.dispose();
   });
 
   it("setLowMemoryFreeThresholdMb(null) clears a previously set threshold", async () => {
@@ -3512,6 +3514,9 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       tickPressureCheck(manager);
       expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
       tickPressureCheck(manager);
+      // Checked here, before any await: a live sampler tick during the switch
+      // below would reset the count too, and hide a tick that failed to.
+      expect(manager.pressureSampleStreak).toBe(0);
 
       // Healthy while switching, so a live sampler tick can only reset the count.
       setAvailableMb(2500);
