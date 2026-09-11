@@ -521,8 +521,12 @@ export class PtyClient extends EventEmitter {
         shard.shouldResyncProjectContext = true;
         // The crashed shard's throttle/memory-warning holds are gone with the
         // process; recompute the aggregate so a sibling-free release isn't
-        // stuck behind a dead shard's stale hold.
-        this.dropShardSignals(shard.key);
+        // stuck behind a dead shard's stale hold. Only for the shard that
+        // still holds the key: a retired shard already dropped its signals,
+        // and its late exit must not erase a same-key replacement's.
+        if (this.shards.get(shard.key) === shard) {
+          this.dropShardSignals(shard.key);
+        }
       },
       onCrashClassified: (shard, { crashType, payload }) => {
         this.cleanupOrphanedPtysForShard(shard, crashType);

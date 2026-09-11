@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { HostMemoryPauseSnapshot } from "@shared/types/pty-host";
 
@@ -36,13 +36,22 @@ interface PendingPull {
   reject: (error: unknown) => void;
 }
 
+type ViewSignal = "revealed" | "warmActivated" | "cached";
+
 let pushListener: ((snapshot: HostMemoryPauseSnapshot) => void) | null = null;
-let revealListener: (() => void) | null = null;
+let viewListeners: Partial<Record<ViewSignal, () => void>> = {};
 let pulls: PendingPull[] = [];
+let hasFocus: MockInstance<() => boolean>;
 
 function push(snapshot: HostMemoryPauseSnapshot): void {
   act(() => {
     pushListener?.(snapshot);
+  });
+}
+
+function signalView(signal: ViewSignal): void {
+  act(() => {
+    viewListeners[signal]?.();
   });
 }
 
@@ -58,12 +67,22 @@ function advance(ms: number): void {
   });
 }
 
+function listenFor(signal: ViewSignal) {
+  return (callback: () => void) => {
+    viewListeners[signal] = callback;
+    return () => {
+      delete viewListeners[signal];
+    };
+  };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   pulls = [];
   pushListener = null;
-  revealListener = null;
+  viewListeners = {};
   announceMock.mockReset();
+  hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
   useHostMemoryPauseStore.setState({ snapshot: null, visible: false });
 
   clientMock.getHostMemoryPause.mockReset().mockImplementation(
@@ -83,18 +102,16 @@ beforeEach(() => {
 
   (window as unknown as { electron: unknown }).electron = {
     app: {
-      onViewRevealed: (callback: () => void) => {
-        revealListener = callback;
-        return () => {
-          revealListener = null;
-        };
-      },
+      onViewRevealed: listenFor("revealed"),
+      onViewWarmActivated: listenFor("warmActivated"),
+      onViewCached: listenFor("cached"),
     },
   };
 });
 
 afterEach(() => {
   cleanup();
+  hasFocus.mockRestore();
   vi.useRealTimers();
   delete (window as unknown as { electron?: unknown }).electron;
 });
@@ -165,6 +182,21 @@ describe("useHostMemoryPauseSync", () => {
     expect(announceMock).toHaveBeenLastCalledWith(HOST_MEMORY_PAUSE_COPY.announceEnded, "polite");
   });
 
+  it("keeps a pushed pause's gate and announcement when a reconciling pull lands inside it", async () => {
+    renderHook(() => useHostMemoryPauseSync());
+    await resolvePull(0, CLEAR);
+
+    push(PAUSED);
+    advance(UI_DOHERTY_THRESHOLD / 4);
+    signalView("revealed");
+    await resolvePull(1, PAUSED);
+
+    expect(useHostMemoryPauseStore.getState().visible).toBe(false);
+    advance(UI_DOHERTY_THRESHOLD);
+    expect(useHostMemoryPauseStore.getState().visible).toBe(true);
+    expect(announceMock).toHaveBeenCalledTimes(1);
+  });
+
   it("drops a pull that a push overtook", async () => {
     renderHook(() => useHostMemoryPauseSync());
 
@@ -174,32 +206,31 @@ describe("useHostMemoryPauseSync", () => {
     expect(useHostMemoryPauseStore.getState().snapshot).toEqual(PAUSED);
   });
 
-  it("re-pulls when a cached view is revealed, reconciling without an announcement", async () => {
-    renderHook(() => useHostMemoryPauseSync());
-    await resolvePull(0, PAUSED);
-    expect(useHostMemoryPauseStore.getState().visible).toBe(true);
-
-    act(() => {
-      revealListener?.();
-    });
-    expect(pulls).toHaveLength(2);
-    await resolvePull(1, CLEAR);
-
-    expect(useHostMemoryPauseStore.getState().visible).toBe(false);
-    expect(announceMock).not.toHaveBeenCalled();
-  });
-
   it("ignores an older pull that resolves after a newer one", async () => {
     renderHook(() => useHostMemoryPauseSync());
-    act(() => {
-      revealListener?.();
-    });
+    signalView("revealed");
 
     await resolvePull(1, PAUSED);
     await resolvePull(0, CLEAR);
 
     expect(useHostMemoryPauseStore.getState().snapshot).toEqual(PAUSED);
   });
+
+  it.each(["revealed", "warmActivated"] as const)(
+    "re-pulls on the %s view signal, reconciling without an announcement",
+    async (signal) => {
+      renderHook(() => useHostMemoryPauseSync());
+      await resolvePull(0, PAUSED);
+      expect(useHostMemoryPauseStore.getState().visible).toBe(true);
+
+      signalView(signal);
+      expect(pulls).toHaveLength(2);
+      await resolvePull(1, CLEAR);
+
+      expect(useHostMemoryPauseStore.getState().visible).toBe(false);
+      expect(announceMock).not.toHaveBeenCalled();
+    }
+  );
 
   it("re-pulls when the page becomes visible again", () => {
     renderHook(() => useHostMemoryPauseSync());
@@ -219,6 +250,36 @@ describe("useHostMemoryPauseSync", () => {
     visibility.mockRestore();
   });
 
+  it("lets a pause go unannounced when its view is cached mid-gate, then shows it silently on return", async () => {
+    renderHook(() => useHostMemoryPauseSync());
+    await resolvePull(0, CLEAR);
+
+    push(PAUSED);
+    signalView("cached");
+    advance(UI_DOHERTY_THRESHOLD * 2);
+    expect(useHostMemoryPauseStore.getState().visible).toBe(false);
+
+    signalView("revealed");
+    await resolvePull(1, PAUSED);
+
+    expect(useHostMemoryPauseStore.getState().visible).toBe(true);
+    expect(announceMock).not.toHaveBeenCalled();
+  });
+
+  it("stays silent in a view that doesn't hold focus, while still showing the pause", async () => {
+    hasFocus.mockReturnValue(false);
+    renderHook(() => useHostMemoryPauseSync());
+    await resolvePull(0, CLEAR);
+
+    push(PAUSED);
+    advance(UI_DOHERTY_THRESHOLD);
+    expect(useHostMemoryPauseStore.getState().visible).toBe(true);
+
+    push(CLEAR);
+    expect(useHostMemoryPauseStore.getState().visible).toBe(false);
+    expect(announceMock).not.toHaveBeenCalled();
+  });
+
   it("stops listening on unmount and never fires a gate left pending", async () => {
     const { unmount } = renderHook(() => useHostMemoryPauseSync());
     await resolvePull(0, CLEAR);
@@ -228,7 +289,7 @@ describe("useHostMemoryPauseSync", () => {
     advance(UI_DOHERTY_THRESHOLD * 2);
 
     expect(pushListener).toBeNull();
-    expect(revealListener).toBeNull();
+    expect(viewListeners).toEqual({});
     expect(useHostMemoryPauseStore.getState().visible).toBe(false);
     expect(announceMock).not.toHaveBeenCalled();
   });

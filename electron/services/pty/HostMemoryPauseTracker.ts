@@ -59,9 +59,10 @@ export class HostMemoryPauseTracker {
     } else {
       shard.paused = false;
       // An unforced resume means utilization fell below the governor's resume
-      // threshold: the pressure cleared. A forced one only means the pause hit
-      // its time bound, so while the host still warns the episode stays open —
-      // and at critical pressure the governor re-pauses on the very next tick.
+      // threshold: the pressure cleared. A forced one means the pause hit its
+      // time bound before it did, so while the host still warns the episode
+      // stays open — and at critical pressure the governor re-pauses on the
+      // very next tick.
       if (!payload.forced || !shard.warning) shard.episodeStartedAt = null;
     }
     this.publish();
