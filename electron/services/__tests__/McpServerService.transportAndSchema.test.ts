@@ -750,6 +750,143 @@ describe("McpServerService", () => {
     expect(parsed.id).toBeNull();
   });
 
+  it("refuses an api-key bearer reusing a pane-token Streamable session id, for POST and DELETE", async () => {
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "Read the action registry",
+          kind: "query",
+        }),
+      ],
+    });
+    await service.start(window);
+    paneTokenTiers.set("pane-token", "system");
+    const port = service.currentPort!;
+
+    const pane = await connectHttpClient(port, { Authorization: "Bearer pane-token" });
+    httpTransports.push(pane.transport);
+    const paneSessionId = pane.transport.sessionId!;
+    const httpSessions = (service as unknown as { _httpSessions: Map<string, unknown> })
+      ._httpSessions;
+    const credentials = (
+      service as unknown as { sessionStore: { sessionCredentialMap: Map<string, string> } }
+    ).sessionStore.sessionCredentialMap;
+    expect(credentials.has(paneSessionId)).toBe(true);
+
+    const foreignHeaders = {
+      Authorization: `Bearer ${service.getStatus().apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "mcp-session-id": paneSessionId,
+    };
+    const post = await requestMcp(port, {
+      method: "POST",
+      headers: foreignHeaders,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const del = await requestMcp(port, { method: "DELETE", headers: foreignHeaders });
+
+    for (const result of [post, del]) {
+      expect(result.status).toBe(404);
+      expect((JSON.parse(result.body) as { error: { message: string } }).error.message).toBe(
+        "Session not found"
+      );
+    }
+    expect(httpSessions.has(paneSessionId)).toBe(true);
+    const tools = await pane.client.listTools();
+    expect(tools.tools.map((tool) => tool.name)).toContain("actions.list");
+
+    // The creator's own DELETE still ends the session, and the binding with it.
+    await pane.transport.terminateSession();
+    await vi.waitFor(() => expect(credentials.has(paneSessionId)).toBe(false));
+    expect(httpSessions.has(paneSessionId)).toBe(false);
+  });
+
+  it("writes no session binding for a handshake the SDK refuses before initializing", async () => {
+    // The binding is written from `onsessioninitialized`, so a pre-initialize
+    // refusal must leave no row behind for an id nobody was ever given.
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    const refused = await requestMcp(service.currentPort!, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${service.getStatus().apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "no-accept", version: "1.0.0" },
+        },
+      }),
+    });
+
+    expect(refused.status).toBe(406);
+    const store = (
+      service as unknown as {
+        sessionStore: {
+          sessionCredentialMap: Map<string, string>;
+          httpSessions: Map<string, unknown>;
+        };
+      }
+    ).sessionStore;
+    expect(store.httpSessions.size).toBe(0);
+    expect(store.sessionCredentialMap.size).toBe(0);
+  });
+
+  it("requires a fresh session after api-key rotation rather than adopting the old one", async () => {
+    // Rotation leaves live transports allocated. The old key is refused
+    // outright; the new key is a different credential, so it cannot pick up a
+    // session the old key opened — the client re-initializes, as MCP clients
+    // do on a 404.
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "Read the action registry",
+          kind: "query",
+        }),
+      ],
+    });
+    await service.start(window);
+    const port = service.currentPort!;
+    const oldKey = service.getStatus().apiKey;
+    const before = await connectHttpClient(port);
+    httpTransports.push(before.transport);
+    const oldSessionId = before.transport.sessionId!;
+
+    const newKey = await service.rotateApiKey();
+    const followUp = (key: string) =>
+      requestMcp(port, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "mcp-session-id": oldSessionId,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+    expect((await followUp(oldKey)).status).toBe(401);
+    expect((await followUp(newKey)).status).toBe(404);
+
+    const after = await connectHttpClient(port);
+    httpTransports.push(after.transport);
+    expect(after.transport.sessionId).not.toBe(oldSessionId);
+    expect((await after.client.listTools()).tools.map((tool) => tool.name)).toContain(
+      "actions.list"
+    );
+  });
+
   it("returns 405 with an Allow header for unsupported methods on /mcp", async () => {
     const { window } = createMockWindow();
     await service.start(window);

@@ -199,6 +199,25 @@ function resolveUserAgent(req: http.IncomingMessage): string {
 }
 
 /**
+ * The identity a session is bound to at handshake and checked against on every
+ * follow-up.
+ *
+ * Digests the extracted token rather than the raw header because pane and help
+ * tokens are parsed with a case-insensitive scheme and trimmed whitespace
+ * (`extractBearerToken`): a client that sends `bearer  tok` on one leg and
+ * `Bearer tok` on the next is the same bearer, and `isAuthorized` accepts both.
+ * The raw header is the fallback only when no token can be extracted — the
+ * unauthenticated loopback path, where every caller presents the same empty
+ * header and is equally privileged. The two inputs are prefixed so a header
+ * can never collide with a token.
+ */
+export function sessionCredentialDigest(authHeader: string): string {
+  const token = extractBearerToken(authHeader);
+  const material = token !== null ? `token:${token}` : `raw:${authHeader}`;
+  return createHash("sha256").update(material).digest("hex");
+}
+
+/**
  * Render a dispatch outcome as a redacted, bounded result summary for the
  * audit record, so the recent-calls popover can show what each call actually
  * returned. Gate outcomes (unauthorized / dedup / collision / rate-limit)
@@ -545,11 +564,16 @@ export class HttpLifecycle {
   /**
    * Record (or refresh) the bearer behind an authenticated session handshake.
    * Called once per new session — not per request — because only handshake
-   * requests carry the `Authorization` header through this path. Only
-   * `external`-tier bearers are tracked: the "External clients" row is for
-   * third-party MCP clients (Claude Code, Cursor, scripts), never the
-   * Daintree Assistant's own help-session or in-pane agent tokens — surfacing
-   * those would let the user disconnect their own assistant.
+   * requests carry the `Authorization` header through this path. Every tier
+   * is tracked; non-`external` bearers (help-session and in-pane agent tokens)
+   * are flagged `isHelpSession` so they stay out of the "External clients" row
+   * — surfacing those would let the user disconnect their own assistant — while
+   * still being resolvable for eager teardown (#9151) and listed in the
+   * "Daintree Assistant connections" row (#10036).
+   *
+   * This register is an inventory, not an authorization record: a disconnect
+   * clears it. Which bearer may use a session is recorded separately, in
+   * `SessionStore.sessionCredentialMap`.
    *
    * The hash of the full header is the stable per-token identity; `userAgent`
    * and `lastActiveAt` refresh on every (re)connect. `requestsSinceLaunch`
@@ -1205,6 +1229,7 @@ export class HttpLifecycle {
         this.headerString(req.headers["user-agent"]),
         "sse"
       );
+      this.deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(authHeader));
       this.touchBearer(authHeader, resolveUserAgent(req), sessionId, tier);
 
       const pin = this.resolveSessionPin(authHeader);
@@ -1298,8 +1323,17 @@ export class HttpLifecycle {
         return;
       }
 
+      // Only the bearer that opened the stream may post into it. Any other
+      // valid bearer gets the same 404 an unknown id does, so the response
+      // never confirms that a guessed or leaked id is live. The ownership
+      // check runs whether or not the id resolved, so both answers do the
+      // same work.
       const session = this.deps.sessionStore.sessions.get(sid);
-      if (session) {
+      const owned = this.deps.sessionStore.isSessionCredential(
+        sid,
+        sessionCredentialDigest(authHeader)
+      );
+      if (session && owned) {
         this.deps.sessionStore.resetIdleTimer(sid);
         this.markBearerActive(sid);
         await session.transport.handlePostMessage(req, res);
@@ -1332,8 +1366,18 @@ export class HttpLifecycle {
     const sessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
     if (sessionId !== undefined && sessionId !== "") {
+      // Ownership before anything that could tell the caller the session
+      // exists — the selector checks below answer differently for a live
+      // session, so they must never run for a bearer that did not create it.
+      // DELETE is covered too: terminating someone else's session is the
+      // cheapest thing a leaked id would otherwise buy. Evaluated for unknown
+      // ids too, so both answers do the same work.
       const session = this.deps.sessionStore.httpSessions.get(sessionId);
-      if (!session) {
+      const owned = this.deps.sessionStore.isSessionCredential(
+        sessionId,
+        sessionCredentialDigest(req.headers.authorization ?? "")
+      );
+      if (!session || !owned) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
@@ -1441,6 +1485,12 @@ export class HttpLifecycle {
       allowedHosts,
       allowedOrigins,
       onsessioninitialized: (initializedSessionId) => {
+        // Bound before the session is filed in `httpSessions`, so there is no
+        // instant at which the id is addressable without an owner on record.
+        this.deps.sessionStore.bindSessionCredential(
+          initializedSessionId,
+          sessionCredentialDigest(authHeader)
+        );
         const idleTimer = this.deps.sessionStore.createHttpIdleTimer(initializedSessionId);
         this.deps.sessionStore.httpSessions.set(initializedSessionId, {
           transport,

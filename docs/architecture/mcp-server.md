@@ -161,6 +161,8 @@ Every request passes `isAuthorized(authHeader, apiKeyBearerHash, helpTokenValida
 
 A failed `isAuthorized` returns `401` with `WWW-Authenticate: Bearer realm="Daintree MCP"`, records the global authentication-failure count, and does not attribute the rejection to a claimed session id. An unauthenticated caller has not established ownership and must not be able to revoke another session. Duplicate security headers are rejected with `400` before authorization or session resolution.
 
+**Session binding.** Passing `isAuthorized` proves the bearer is valid somewhere, not that it owns the session id it names. Every follow-up — SSE `POST /messages?sessionId=` and Streamable `/mcp` with `mcp-session-id`, `DELETE` included — must present the same credential that opened the session, checked against `SessionStore.sessionCredentialMap` before any other session-dependent answer. A different valid bearer, or a session with no binding row, gets the exact `404 Session not found` an unknown id gets, so a leaked pane or help session id cannot be used to borrow that session's tier, pins, grants, or owned resources, nor to confirm the id is live. The binding is separate from `bearerRegister`, which is a settings-UI inventory that a disconnect clears. A consequence: after `rotateApiKey`, a client that swaps in the new key must open a new session — its old session id answers 404, which MCP clients treat as a cue to re-initialize.
+
 **Network trust boundary.** Before auth, `handleRequest` rejects any request whose `Host` is not `127.0.0.1:<port>`/`localhost:<port>` (`403`), and rejects a mismatched `Origin` (`403`). The SSE and Streamable transports additionally enable `enableDnsRebindingProtection` with explicit allowlists. The server binds `127.0.0.1` only.
 
 ### Tier resolution
@@ -233,7 +235,7 @@ How `danger` interacts with tier gating:
 A session is created on transport open: SSE sessions live in `SessionStore.sessions`, Streamable-HTTP in `SessionStore.httpSessions`. At handshake `httpLifecycle`:
 
 1. Resolves and records the tier (`sessionTierMap`) and the **origin** (`sessionOriginMap`).
-2. Registers client metadata + the bearer in `bearerRegister` (`touchBearer`).
+2. Registers client metadata + the bearer in `bearerRegister` (`touchBearer`), and binds the session to the credential that created it (`sessionCredentialMap`, a digest of the extracted token so scheme casing and whitespace don't matter).
 3. Pins the WebContents (`sessionWebContentsMap`) and `ActionContext` (`sessionContextMap`) for help bearers, or records a **workspace binding** (`sessionWorkspaceMap`) for an external bearer that sent a selector.
 4. Builds the per-session `SessionServerDeps` and calls `createSessionServer`.
 5. Arms an idle timer (`MCP_SSE_IDLE_TIMEOUT_MS`, 30 min).
@@ -249,7 +251,7 @@ Every session records an explicit `origin` — `"help" | "assistant-pane" | "ext
 - **Routing** reads `sessionWorkspaceMap` first, then `sessionWebContentsMap`, then falls back to focus order.
 - **Authorization** (`issueGrant`, `setSessionTier`), **notifications** (the five `wc.send` closures in `buildSessionServerDeps`) and **inventory** (`listExternalActiveClients`) read `origin` via `SessionStore.isRendererOwnedOrigin`.
 
-`getOrigin` defaults to `"external"` — the least-privileged answer — so a session whose handshake never recorded one, or one already half torn down, can never be mistaken for an assistant surface. `clearSessionBinding` drops route, context, origin and workspace together; every teardown path calls it rather than deleting maps individually.
+`getOrigin` defaults to `"external"` — the least-privileged answer — so a session whose handshake never recorded one, or one already half torn down, can never be mistaken for an assistant surface. `clearSessionBinding` drops route, context, origin, workspace and credential binding together; every teardown path calls it rather than deleting maps individually.
 
 Getting this wrong is not theoretical. `issueGrant` has no rank floor (`setSessionTier` is saved by `external` sitting top of the rank order); its only other check is `minimumPermittingTier(toolId) !== null`, and the call gate honours a grant over failed tier membership. A bound external session reaching that surface could hold a grant for a tool outside `MCP_EXTERNAL_TIER_TOOLS` entirely.
 

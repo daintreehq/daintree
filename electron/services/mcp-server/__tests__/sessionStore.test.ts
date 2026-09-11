@@ -1615,3 +1615,94 @@ describe("SessionStore.hasLiveWorkspaceBinding (#11790)", () => {
     }
   });
 });
+
+describe("SessionStore session credential binding", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    // Fake before the store exists so `GrantCache`'s sweep and every fixture's
+    // idle timer are on the fake clock, and nothing real outlives the suite.
+    vi.useFakeTimers();
+    setAwakeTime(0);
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.drain();
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("admits only the digest the session was bound to", () => {
+    store.bindSessionCredential("s", "digest-owner");
+
+    expect(store.isSessionCredential("s", "digest-owner")).toBe(true);
+    expect(store.isSessionCredential("s", "digest-other")).toBe(false);
+    // A prefix of the right digest is still the wrong digest — the length
+    // mismatch must refuse rather than throw out of timingSafeEqual.
+    expect(store.isSessionCredential("s", "digest")).toBe(false);
+  });
+
+  it("refuses a session with no binding row, whatever digest is presented", () => {
+    // Fail closed: a live transport without an owner on record is half torn
+    // down or never went through a handshake, and neither is ours to hand out.
+    store.httpSessions.set("unbound", fakeHttpSession());
+
+    expect(store.isSessionCredential("unbound", "")).toBe(false);
+    expect(store.isSessionCredential("unbound", "anything")).toBe(false);
+  });
+
+  it("clearSessionBinding drops the credential row", () => {
+    store.bindSessionCredential("s", "digest-owner");
+
+    store.clearSessionBinding("s");
+
+    expect(store.sessionCredentialMap.has("s")).toBe(false);
+    expect(store.isSessionCredential("s", "digest-owner")).toBe(false);
+  });
+
+  it("revokeSession drops the revoked session's row and leaves other sessions bound", () => {
+    store.sessions.set("revoked", fakeSseSession());
+    store.bindSessionCredential("revoked", "digest-a");
+    store.httpSessions.set("survivor", fakeHttpSession());
+    store.bindSessionCredential("survivor", "digest-b");
+
+    expect(store.revokeSession("revoked")).toBe(true);
+
+    expect(store.sessionCredentialMap.has("revoked")).toBe(false);
+    expect(store.isSessionCredential("survivor", "digest-b")).toBe(true);
+  });
+
+  it("drain drops every row", () => {
+    store.sessions.set("a", fakeSseSession());
+    store.bindSessionCredential("a", "digest-a");
+    store.httpSessions.set("b", fakeHttpSession());
+    store.bindSessionCredential("b", "digest-b");
+
+    store.drain();
+
+    expect(store.sessionCredentialMap.size).toBe(0);
+  });
+
+  it.each([
+    ["SSE", "sse" as const],
+    ["HTTP", "http" as const],
+  ])("%s idle expiry drops the row", (_label, kind) => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+    if (kind === "sse") {
+      const session = fakeSseSession();
+      store.sessions.set("idle", session);
+      session.idleTimer = store.createIdleTimer("idle");
+    } else {
+      const session = fakeHttpSession();
+      store.httpSessions.set("idle", session);
+      session.idleTimer = store.createHttpIdleTimer("idle");
+    }
+    store.bindSessionCredential("idle", "digest-idle");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+    expect(store.sessions.has("idle") || store.httpSessions.has("idle")).toBe(false);
+    expect(store.sessionCredentialMap.has("idle")).toBe(false);
+  });
+});
