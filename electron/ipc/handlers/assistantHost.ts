@@ -4,6 +4,7 @@ import { assistantHostService } from "../../services/assistant-host/AssistantHos
 import { parseAssistantHostCommand } from "../../schemas/ipc.js";
 import { isValidAssistantSlot } from "../../../shared/config/assistantSlots.js";
 import { createLogger } from "../../utils/logger.js";
+import { getProjectIdFromSenderUrl } from "../senderIdentity.js";
 import type { IpcContext } from "../types.js";
 import type {
   AssistantHostResumableLane,
@@ -12,6 +13,21 @@ import type {
 } from "../../../shared/types/ipc/assistantHostIpc.js";
 
 const logger = createLogger("main:ipc:assistantHost");
+
+/**
+ * The workspace the calling view belongs to.
+ *
+ * The registry's binding first, and the startup renderer's `?projectId=` only while that
+ * binding does not exist yet: main loads the restored view before it registers it, and a
+ * panel coming back cold asks for its lanes inside that gap — refusing it there would
+ * leave every restored conversation behind. A bound view is never overridden by its URL,
+ * and no answer at all stays an identity rather than a wildcard.
+ */
+function callerWorkspaceId(ctx: IpcContext): string | null {
+  if (ctx.projectId) return ctx.projectId;
+  const sender = ctx.event?.sender;
+  return sender ? getProjectIdFromSenderUrl(sender) : null;
+}
 
 /**
  * Whether the calling view IS the workspace it names.
@@ -25,7 +41,7 @@ function callerOwnsWorkspace(
   operation: string
 ): projectId is string {
   if (typeof projectId !== "string" || !projectId) return false;
-  if (ctx.projectId === projectId) return true;
+  if (callerWorkspaceId(ctx) === projectId) return true;
   logger.warn(`${operation}: projectId mismatch — refusing a cross-workspace call`, {
     requested: projectId,
     fromView: ctx.projectId,
@@ -82,6 +98,10 @@ export const assistantHostNamespace = defineIpcNamespace({
           // Strictly `true`: anything else continues the lane's conversation, which is
           // the default a malformed payload should fall back to rather than discarding it.
           fresh: payload.fresh === true,
+          // A view that is not the workspace it names may still start an engine there, as
+          // it always could — but it may not continue, discard or overwrite that
+          // workspace's conversation (#12365).
+          recordable: callerWorkspaceId(ctx) === payload.projectId,
           // BOTH identities come from the IPC CONTEXT, never the payload. A renderer
           // must not be able to nominate which view an assistant session — and
           // therefore its approval prompts — gets delivered to.
@@ -168,8 +188,11 @@ export const assistantHostNamespace = defineIpcNamespace({
       async (ctx, projectId: string, slot: number): Promise<{ discarded: boolean }> => {
         if (!callerOwnsWorkspace(ctx, projectId, "discardResume")) return { discarded: false };
         if (!isValidAssistantSlot(slot)) return { discarded: false };
-        await assistantHostService.discardResume(projectId, slot);
-        return { discarded: true };
+        // The asking surface, from the context: a discard is refused while another surface
+        // is still watching the lane's engine, and only main can tell the two apart.
+        return {
+          discarded: await assistantHostService.discardResume(projectId, slot, ctx.webContentsId),
+        };
       },
       { withContext: true }
     ),

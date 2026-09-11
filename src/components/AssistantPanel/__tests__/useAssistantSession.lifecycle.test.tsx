@@ -427,4 +427,24 @@ describe("useAssistantSession — which conversation a start continues (#12365)"
     expect(state.resumed).toBe(false);
     expect(state.notices).toEqual([]);
   });
+
+  it("does not read a lane's nonce going back to zero as a restart", async () => {
+    // Closing a lane drops its nonce while the slot's panel can stay mounted. That reset,
+    // carried into whichever workspace the slot next starts in, must not throw away THAT
+    // workspace's conversation.
+    const { rerender } = renderHook((props: Props) => useAssistantSession(props), {
+      initialProps: { ...OPTS, restartNonce: 2 },
+    });
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+
+    rerender({ ...OPTS, enabled: false, restartNonce: 0 });
+    rerender({ ...OPTS, projectId: "proj-2", cwd: "/other", restartNonce: 0 });
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    expect(start.mock.calls[1]![0]).not.toHaveProperty("fresh");
+
+    // A genuine restart after it still starts fresh.
+    rerender({ ...OPTS, projectId: "proj-2", cwd: "/other", restartNonce: 1 });
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(3));
+    expect(start.mock.calls[2]![0]).toMatchObject({ fresh: true });
+  });
 });

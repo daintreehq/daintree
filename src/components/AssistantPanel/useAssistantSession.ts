@@ -352,11 +352,14 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       return;
     }
 
-    // A newer nonce is "+ New session", the one start that must not continue the lane's
+    // A RISING nonce is "+ New session", the one start that must not continue the lane's
     // recorded conversation. Anything else re-running this effect — a remount, a moved
-    // folder, the lane armed again — picks it back up (#12365). Consumed only here, so a
-    // bump made while the lane was disabled still starts fresh when it next runs.
-    const fresh = restartNonce !== startedNonceRef.current;
+    // folder, the lane armed again — picks it back up (#12365). Rising, not merely
+    // different: closing a lane resets its nonce to zero while this hook can stay mounted
+    // for the slot, and reading that reset as a restart would wipe the conversation of
+    // whichever workspace the slot next starts in. Consumed only here, so a bump made
+    // while the lane was disabled still starts fresh when it next runs.
+    const fresh = restartNonce > startedNonceRef.current;
     startedNonceRef.current = restartNonce;
 
     const state = store.getState();

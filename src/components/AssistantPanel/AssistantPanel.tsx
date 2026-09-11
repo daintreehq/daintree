@@ -147,6 +147,7 @@ export function AssistantPanel({
       awaitingLocalCommand: s.awaitingLocalCommand,
       autoApprove: s.autoApprove,
       stoppedReason: s.stoppedReason,
+      resumed: s.resumed,
       error: s.error,
       turns: s.turns,
       toolCalls: s.toolCalls,
