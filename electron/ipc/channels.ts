@@ -1164,6 +1164,12 @@ export const CHANNELS = {
   // #11790 refused to grant it automatically.
   WORKSPACE_RESIDENCY_GET: "workspace-residency:get",
   WORKSPACE_RESIDENCY_SET: "workspace-residency:set",
+
+  // Per-project consent for plugin agent tools (`contributes.agentMcp`).
+  // Renderer-only by design: an action here would be on the MCP tool surface,
+  // and an agent must never be able to grant itself a plugin's tools.
+  PLUGIN_AGENT_MCP_LIST_PROJECT_ENDPOINTS: "plugin-agent-mcp:list-project-endpoints",
+  PLUGIN_AGENT_MCP_SET_PROJECT_ENDPOINT_ENABLED: "plugin-agent-mcp:set-project-endpoint-enabled",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

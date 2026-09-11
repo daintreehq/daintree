@@ -647,6 +647,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["plugin:validate-manifest"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-manifest"]["result"]>;
   };
+  pluginAgentMcp: {
+    listProjectEndpoints(
+      ...args: IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["result"]>;
+    setProjectEndpointEnabled(
+      ...args: IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["result"]>;
+  };
   pluginCapability: {
     acknowledgeConsent(
       ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
