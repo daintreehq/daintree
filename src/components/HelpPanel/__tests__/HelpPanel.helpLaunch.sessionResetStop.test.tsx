@@ -11,6 +11,8 @@ const {
   mockProvisionSession,
   mockRevokeSession,
   mockTakePendingHibernation,
+  mockListResumable,
+  mockDiscardResume,
   mockGetAssistantSupportedAgentIds,
   mockGetHelpAssistantSettings,
   mockGetAgentVersion,
@@ -38,6 +40,8 @@ const {
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
+  mockListResumable: vi.fn().mockResolvedValue([]),
+  mockDiscardResume: vi.fn().mockResolvedValue({ discarded: true }),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
@@ -556,6 +560,10 @@ function resetState() {
   mockRevokeSession.mockResolvedValue(undefined);
   mockTakePendingHibernation.mockReset();
   mockTakePendingHibernation.mockResolvedValue(null);
+  mockListResumable.mockReset();
+  mockListResumable.mockResolvedValue([]);
+  mockDiscardResume.mockReset();
+  mockDiscardResume.mockResolvedValue({ discarded: true });
   mockGetAssistantSupportedAgentIds.mockReset();
   mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
   mockGetHelpAssistantSettings.mockReset();
@@ -629,8 +637,8 @@ beforeEach(() => {
           start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
           send: vi.fn().mockResolvedValue({ delivered: true }),
           stop: vi.fn().mockResolvedValue({ stopped: true }),
-          listResumable: vi.fn().mockResolvedValue([]),
-          discardResume: vi.fn().mockResolvedValue({ discarded: true }),
+          listResumable: mockListResumable,
+          discardResume: mockDiscardResume,
           onEvent: vi.fn(() => () => {}),
           onPeerPrompt: () => () => {},
           onSequenceGap: vi.fn(() => () => {}),
@@ -1562,17 +1570,11 @@ describe("HelpPanel — the native assistant's destructive controls", () => {
  * closing a lane ask main to.
  */
 describe("HelpPanel — native lanes and the conversations main keeps for them (#12365)", () => {
-  type HostMock = Record<string, ReturnType<typeof vi.fn>>;
-
   function nativeMode() {
     projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
     helpPanelState.preferredAgentId = null;
-  }
-
-  function assistantHost(): HostMock {
-    return (window as unknown as { electron: { assistantHost: HostMock } }).electron.assistantHost;
   }
 
   function queryStopItem(container: HTMLElement): HTMLButtonElement | null {
@@ -1593,7 +1595,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     helpPanelState.isOpen = false;
     const ensureSlot = vi.fn();
     Object.assign(helpPanelState, { ensureSlot });
-    assistantHost().listResumable!.mockResolvedValue([
+    mockListResumable.mockResolvedValue([
       { slot: 0, panelWasOpen: false },
       { slot: 2, panelWasOpen: true },
     ]);
@@ -1602,7 +1604,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
       render(<HelpPanel width={380} />);
     });
 
-    expect(assistantHost().listResumable).toHaveBeenCalledWith("proj-1");
+    expect(mockListResumable).toHaveBeenCalledWith("proj-1");
     expect(ensureSlot.mock.calls).toEqual([[0], [2]]);
     // Onto the conversation, not whichever lane a cold view happens to come up on.
     expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(2);
@@ -1614,7 +1616,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     helpPanelState.isOpen = false;
     const ensureSlot = vi.fn();
     Object.assign(helpPanelState, { ensureSlot });
-    assistantHost().listResumable!.mockResolvedValue([{ slot: 1, panelWasOpen: false }]);
+    mockListResumable.mockResolvedValue([{ slot: 1, panelWasOpen: false }]);
 
     await act(async () => {
       render(<HelpPanel width={380} />);
@@ -1632,7 +1634,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     await act(async () => {
       render(<HelpPanel width={380} />);
     });
-    expect(assistantHost().listResumable).not.toHaveBeenCalled();
+    expect(mockListResumable).not.toHaveBeenCalled();
   });
 
   it("forgets the lane's conversation when it is stopped", () => {
@@ -1641,7 +1643,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     act(() => {
       fireEvent.click(queryStopItem(container)!);
     });
-    expect(assistantHost().discardResume).toHaveBeenCalledWith("proj-1", 0);
+    expect(mockDiscardResume).toHaveBeenCalledWith("proj-1", 0);
   });
 
   it("forgets a closed lane's conversation, and no other lane's", () => {
@@ -1654,7 +1656,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     act(() => {
       fireEvent.click(close!);
     });
-    expect(assistantHost().discardResume.mock.calls).toEqual([["proj-1", 1]]);
+    expect(mockDiscardResume.mock.calls).toEqual([["proj-1", 1]]);
   });
 
   it("asks before Stop discards a conversation the lane picked back up but cannot show", () => {
@@ -1673,7 +1675,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     fireEvent.click(queryStopItem(container)!);
     // An empty transcript, and a whole conversation in the assistant's context.
     expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
-    expect(assistantHost().discardResume).not.toHaveBeenCalled();
+    expect(mockDiscardResume).not.toHaveBeenCalled();
   });
 
   it("asks before closing a restored lane that has not started yet", async () => {
@@ -1684,7 +1686,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
       }
     });
     Object.assign(helpPanelState, { ensureSlot });
-    assistantHost().listResumable!.mockResolvedValue([{ slot: 1, panelWasOpen: false }]);
+    mockListResumable.mockResolvedValue([{ slot: 1, panelWasOpen: false }]);
 
     const { container, rerender, getByTestId } = render(<HelpPanel width={380} />);
     await act(async () => {});
@@ -1699,7 +1701,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     });
     // Its store is empty until it starts, but main is holding a conversation for it.
     expect(getByTestId("dialog-title").textContent).toBe("Close Session 2?");
-    expect(assistantHost().discardResume).not.toHaveBeenCalled();
+    expect(mockDiscardResume).not.toHaveBeenCalled();
   });
 
   it("drops an open confirmation when the workspace changes under it", () => {
@@ -1717,13 +1719,13 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
 
     // Confirmed now, Stop would forget proj-2's conversation — which nobody was asked about.
     expect(queryByTestId("confirm-dialog")).toBe(null);
-    expect(assistantHost().discardResume).not.toHaveBeenCalled();
+    expect(mockDiscardResume).not.toHaveBeenCalled();
   });
 
   it("reads again which lanes hold a conversation each time the workspace comes back", async () => {
     nativeMode();
     Object.assign(helpPanelState, { ensureSlot: vi.fn() });
-    const listResumable = assistantHost().listResumable!;
+    const listResumable = mockListResumable;
     const { container, rerender, getByTestId } = render(<HelpPanel width={380} />);
     await act(async () => {});
 
@@ -1747,7 +1749,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
   it("stops counting a restored lane as saved once it has adopted a session", async () => {
     nativeMode();
     Object.assign(helpPanelState, { ensureSlot: vi.fn() });
-    assistantHost().listResumable!.mockResolvedValue([{ slot: 0, panelWasOpen: false }]);
+    mockListResumable.mockResolvedValue([{ slot: 0, panelWasOpen: false }]);
     const { container, queryByTestId } = render(<HelpPanel width={380} />);
     await act(async () => {});
 
@@ -1760,6 +1762,6 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     });
 
     expect(queryByTestId("confirm-dialog")).toBe(null);
-    expect(assistantHost().discardResume).toHaveBeenCalledWith("proj-1", 0);
+    expect(mockDiscardResume).toHaveBeenCalledWith("proj-1", 0);
   });
 });
