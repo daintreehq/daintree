@@ -123,14 +123,17 @@ export function TerminalStatusSlot({ id, flowStatus, submitStatus }: TerminalSta
 
   // aria-live="off" overrides role="status"'s implicit polite live region; the
   // global announcer owns announcements across a multi-pane fleet (#9204).
+  // The glyph shows no text, so it takes focus: Radix opens the tooltip on
+  // focus, which is the only way a keyboard user can read the explanation.
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className="flex h-5 w-5 items-center justify-center text-text-secondary"
+          className="flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           role="status"
           aria-live="off"
           aria-label={label}
+          tabIndex={0}
         >
           <Icon className="h-3.5 w-3.5" aria-hidden="true" />
         </span>

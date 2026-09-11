@@ -419,6 +419,24 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
+      {/* Subagent count — self-gating, renders nothing unless this terminal's
+          agent actually spawned children. The row's only pointer entry point,
+          so it sits ahead of the ambient glyph and telemetry that a narrow
+          pane's header clips first (#12374). */}
+      <SubagentChip terminalId={id} />
+
+      {/* Input locked indicator — bare ambient glyph. */}
+      {isInputLocked && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
+              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
+        </Tooltip>
+      )}
+
       {/* Resource monitoring badge — ambient telemetry, last. The severity
           hysteresis (escalation 3 polls / de-escalation 5 polls) encodes a
           semantic timing and is intentionally NOT normalized to a motion tier. */}
@@ -475,22 +493,6 @@ export function TerminalHeaderContent({
           </TooltipContent>
         </Tooltip>
       )}
-
-      {/* Input locked indicator — bare ambient glyph. */}
-      {isInputLocked && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
-              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Subagent count — self-gating, renders nothing unless this terminal's
-          agent actually spawned children. */}
-      <SubagentChip terminalId={id} />
     </>
   );
 }

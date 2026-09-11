@@ -13,11 +13,11 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
-let mockTerminal: Record<string, unknown> = {};
+let mockTerminal: { id: string } & Record<string, unknown> = { id: "t1" };
 
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ panelsById: { [mockTerminal.id as string]: mockTerminal } }),
+    selector({ panelsById: { [mockTerminal.id]: mockTerminal } }),
 }));
 
 beforeEach(() => {
@@ -68,10 +68,34 @@ describe("TerminalStatusSlot", () => {
     expect(new Set(names).size).toBe(HOLDS.length);
   });
 
+  it("takes keyboard focus, since the tooltip is the only place its explanation is visible", () => {
+    render(<TerminalStatusSlot id="t1" flowStatus="paused-resource-governor" />);
+    const status = screen.getByRole("status");
+    status.focus();
+    expect(document.activeElement).toBe(status);
+  });
+
   it.each(HOLDS)("%s stays off the warning and error hues", (flowStatus) => {
     render(<TerminalStatusSlot id="t1" flowStatus={flowStatus} />);
     const className = screen.getByRole("status").getAttribute("class") ?? "";
     expect(className).not.toMatch(/status-(warning|error)/);
+  });
+
+  // Flow holds are Tier-1 ambient and recover on their own. An instruction here
+  // would point at force-resume, which drops every hold on the host at once.
+  it.each(HOLDS)("%s explains the hold without instructing an action", (flowStatus) => {
+    render(<TerminalStatusSlot id="t1" flowStatus={flowStatus} submitStatus="slow" />);
+    expect(tooltipText()).not.toMatch(/right-click|force resume/i);
+  });
+
+  it("tells the user a memory-pressure pause recovers without them", () => {
+    render(<TerminalStatusSlot id="t1" flowStatus="paused-resource-governor" />);
+    expect(tooltipText()).toMatch(/recovers automatically/i);
+  });
+
+  it("tells the user a suspended stream recovers on focus (FUTURE_SAB; #9900)", () => {
+    render(<TerminalStatusSlot id="t1" flowStatus="suspended" />);
+    expect(tooltipText()).toMatch(/recovers automatically on focus/i);
   });
 
   // #9204 — role="status" carries an implicit polite live region; the global

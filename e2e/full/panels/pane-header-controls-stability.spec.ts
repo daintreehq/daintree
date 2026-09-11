@@ -33,6 +33,7 @@ import { T_LONG, T_MEDIUM, T_SETTLE, T_SHORT } from "../../helpers/timeouts";
 
 type Box = { x: number; y: number; width: number; height: number };
 type Controls = { close: Box; maximize: Box };
+type Grid = { cols: number; rows: number };
 type FlowStatus = "running" | "paused-backpressure" | "paused-resource-governor";
 type SubmitState = "slow" | "settled";
 
@@ -42,6 +43,9 @@ const HEADER_CONTENT = '[data-testid="panel-header-content"]';
 const HEADER = "[data-pane-chrome]";
 const SUBPIXEL_TOLERANCE = 0.5;
 const LONG_TITLE = `unbroken-${"x".repeat(180)}-title`;
+// The grid's column floor is 380px; go below it so the title, metadata and
+// status all compete for space.
+const NARROW_PANE_WIDTH = "360px";
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
@@ -100,6 +104,22 @@ async function measureControls(panel: Locator): Promise<Controls> {
     close: await boxOf(panel.locator(SEL.panel.close).first(), "Close"),
     maximize: await boxOf(panel.locator(SEL.panel.maximize).first(), "Maximize"),
   };
+}
+
+/** Two matching reads a beat apart, so a fit still in flight can't set the baseline. */
+async function waitForSettledGrid(page: Page, panel: Locator): Promise<Grid> {
+  const deadline = Date.now() + T_LONG;
+  let previous = await getTerminalDimensions(panel);
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    await waitForFrames(page);
+    const current = await getTerminalDimensions(panel);
+    if (current && previous && current.cols === previous.cols && current.rows === previous.rows) {
+      return current;
+    }
+    previous = current;
+  }
+  throw new Error("Terminal grid did not settle");
 }
 
 function expectSameBox(actual: Box, expected: Box, label: string): void {
@@ -179,10 +199,9 @@ const STATUS_STEPS: StatusStep[] = [
 ];
 
 async function runStatusSteps(page: Page, panel: Locator, statusTargetId: string): Promise<void> {
+  const grid = await waitForSettledGrid(page, panel);
   const baseline = await measureControls(panel);
   const slot = await boxOf(panel.locator(STATUS_SLOT), "Status slot");
-  const grid = await getTerminalDimensions(panel);
-  expect(grid, "terminal grid is measurable").not.toBeNull();
 
   for (const step of STATUS_STEPS) {
     await step.apply(statusTargetId);
@@ -250,8 +269,8 @@ test.describe.serial("Pane header: window controls hold still while status chang
   test("the CPU and memory readout arriving, sparkline included, leaves the controls in place", async () => {
     const page = ctx.window;
     const panel = getPanelById(page, panelId);
+    const grid = await waitForSettledGrid(page, panel);
     const baseline = await measureControls(panel);
-    const grid = await getTerminalDimensions(panel);
 
     await openSettings(page);
     await selectSettingsScope(page, "Global");
@@ -263,9 +282,10 @@ test.describe.serial("Pane header: window controls hold still while status chang
     await page.keyboard.press("Escape");
     await expect(page.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
 
-    // The sparkline only mounts from the second sample, so wait for it rather
-    // than for the first readout.
-    await expect(panel.locator(`${HEADER_CONTENT} svg polyline`)).toBeVisible({
+    // The sparkline only mounts from the second sample. Wait on its svg: an
+    // idle shell's flat CPU history draws a zero-height polyline that
+    // Playwright would report as invisible.
+    await expect(panel.locator(`${HEADER_CONTENT} svg:has(polyline)`)).toBeVisible({
       timeout: T_LONG * 2,
     });
     await expectControlsUnmoved(page, panel, baseline, "the resource readout and sparkline");
@@ -286,7 +306,12 @@ test.describe.serial("Pane header: window controls hold still while status chang
     );
     await expect(panel.locator(HEADER)).toContainText(LONG_TITLE, { timeout: T_MEDIUM });
 
+    // The window's minimum width stops a real window from getting this narrow,
+    // so cap the pane's own box as well.
     await setWindowSize(640, 720);
+    await panel.evaluate((el, width) => {
+      el.style.maxWidth = width;
+    }, NARROW_PANE_WIDTH);
     await page.waitForTimeout(T_SETTLE);
     await waitForFrames(page);
 
@@ -333,10 +358,14 @@ test.describe.serial("Pane header: window controls hold still while status chang
       .filter({ has: page.locator(SEL.panel.tabList) })
       .first();
     await expect(group.locator(SEL.panel.tab)).toHaveCount(2, { timeout: T_MEDIUM });
-    await page.waitForTimeout(T_SETTLE);
 
     const activeId = await group.getAttribute("data-panel-id");
     if (!activeId) throw new Error("Tab group has no active panel id");
+    // A duplicate's tab appears before its terminal has attached and fitted;
+    // prove the active tab is live before its grid becomes the baseline.
+    await runTerminalCommand(page, group, "echo HEADER_TAB_ACTIVE_READY");
+    await waitForTerminalText(group, "HEADER_TAB_ACTIVE_READY", T_LONG);
+
     await runStatusSteps(page, group, activeId);
   });
 });
