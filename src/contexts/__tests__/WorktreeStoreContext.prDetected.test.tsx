@@ -15,6 +15,8 @@ import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals
 import type { CIStatusState, PR } from "@shared/types/forge";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { Project } from "@shared/types/project";
+import type { PluginWorktreeLinked } from "@shared/types/plugin";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
   restoreTerminalFocusOnReveal: () => false,
@@ -282,6 +284,78 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     });
 
     expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
+  });
+
+  describe("an issue number the linked GitHub PR carries (#12381)", () => {
+    const branch = "feature/native-daintree-assistant";
+    const prUrl = "https://github.com/daintreehq/daintree/pull/12189";
+    const linked: PluginWorktreeLinked = {
+      providerId: BUILTIN_GITHUB_PROVIDER_ID,
+      pr: {
+        ref: {
+          providerId: BUILTIN_GITHUB_PROVIDER_ID,
+          owner: "daintreehq",
+          repo: "daintree",
+          number: 12189,
+          rawData: null,
+        },
+        url: prUrl,
+        state: "open",
+      },
+    };
+    // The PR service stamps its raw candidate issue number on every detection.
+    const prDetected = {
+      type: "pr-detected",
+      worktreeId: "wt-1",
+      prNumber: 12189,
+      prUrl,
+      prState: "open",
+      issueNumber: 12189,
+      branchName: branch,
+      providerId: BUILTIN_GITHUB_PROVIDER_ID,
+      linked,
+    };
+
+    it("does not restore it over the host's corrected snapshot", async () => {
+      const store = await renderProvider();
+      act(() => {
+        store
+          .getState()
+          .applyUpdate(makeWorktree("wt-1", { branch, prNumber: 12189, prUrl, linked }), nextV());
+      });
+
+      act(() => {
+        emit("pr-detected", prDetected);
+      });
+
+      const wt = store.getState().worktrees.get("wt-1");
+      expect(wt?.issueNumber).toBeUndefined();
+      expect(wt?.prNumber).toBe(12189);
+    });
+
+    it("drops it when the PR lands before any corrected snapshot", async () => {
+      const store = await renderProvider();
+      act(() => {
+        store.getState().applyUpdate(
+          makeWorktree("wt-1", {
+            branch,
+            issueNumber: 12189,
+            prNumber: undefined,
+            prUrl: undefined,
+            prState: undefined,
+            prCiStatus: undefined,
+          }),
+          nextV()
+        );
+      });
+      expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBe(12189);
+
+      act(() => {
+        emit("pr-detected", prDetected);
+      });
+
+      expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBeUndefined();
+    });
   });
 
   it("does nothing when the worktree is not in the store", async () => {

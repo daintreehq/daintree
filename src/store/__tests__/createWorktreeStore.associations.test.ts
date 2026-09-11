@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 // Host-minted versions are now `(epoch, seq)` tuples (#8403). Tests mint a
 // monotonic seq under a fixed epoch; each fresh store starts at epoch "" so
@@ -279,5 +280,97 @@ describe("createWorktreeStore — linked PR preservation (#8870)", () => {
     store.getState().applyUpdate(makeSnapshot("wt-1", { branch: "feature/x" }), nextV());
 
     expect(store.getState().worktrees.get("wt-1")?.linked).toBeNull();
+  });
+});
+
+describe("createWorktreeStore — issue number carried by the linked PR (#12381)", () => {
+  function githubPr(number: number): PluginWorktreeLinked {
+    return {
+      providerId: BUILTIN_GITHUB_PROVIDER_ID,
+      pr: {
+        ref: {
+          providerId: BUILTIN_GITHUB_PROVIDER_ID,
+          owner: "daintreehq",
+          repo: "daintree",
+          number,
+          rawData: null,
+        },
+        url: `https://github.com/daintreehq/daintree/pull/${number}`,
+        state: "open",
+      },
+    };
+  }
+
+  it("drops a parsed issue number the linked GitHub PR carries", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot(
+      [
+        makeSnapshot("wt-1", {
+          issueNumber: 12189,
+          branchDerivedTitle: "Native assistant",
+          issueLastUpdatedAt: 1_700_000_000_000,
+          linked: githubPr(12189),
+        }),
+      ],
+      nextV()
+    );
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.issueNumber).toBeUndefined();
+    expect(wt?.branchDerivedTitle).toBeUndefined();
+    expect(wt?.issueLastUpdatedAt).toBeUndefined();
+    expect(wt?.linked?.pr?.ref.number).toBe(12189);
+  });
+
+  it("drops it when an update omits linked and the stored row carries the PR", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: githubPr(12189) })], nextV());
+
+    store.getState().applyUpdate(makeSnapshot("wt-1", { issueNumber: 12189 }), nextV());
+
+    expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBeUndefined();
+  });
+
+  it("lets a manual association with the PR's number win (MANUAL_OVER_AUTO)", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot(
+        [makeSnapshot("wt-1", { issueNumber: 12189, linked: githubPr(12189) })],
+        nextV(),
+        { "wt-1": { issueNumber: 12189, issueTitle: "Chosen by hand" } }
+      );
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.issueNumber).toBe(12189);
+    expect(wt?.issueTitle).toBe("Chosen by hand");
+  });
+
+  it("keeps equal numbers on a forge that numbers merge requests separately", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot(
+      [
+        makeSnapshot("wt-1", {
+          issueNumber: 12,
+          linked: {
+            providerId: "acme.gitlab",
+            pr: {
+              ref: {
+                providerId: "acme.gitlab",
+                owner: "acme",
+                repo: "demo",
+                number: 12,
+                rawData: null,
+              },
+              url: "https://gitlab.acme.test/acme/demo/-/merge_requests/12",
+              state: "open",
+            },
+          },
+        }),
+      ],
+      nextV()
+    );
+
+    expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBe(12);
   });
 });

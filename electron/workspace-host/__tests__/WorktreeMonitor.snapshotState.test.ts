@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Worktree } from "../../../shared/types/worktree.js";
+import type { PluginWorktreeLinked } from "../../../shared/types/plugin.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 import { WorktreeRemovedError } from "../../utils/errorTypes.js";
 
 const mockGetWorktreeChangesWithStats = vi.fn();
@@ -481,6 +483,61 @@ describe("WorktreeMonitor", () => {
     monitor.clearPRInfo();
 
     expect(monitor.getSnapshot().prCiStatus).toBeUndefined();
+  });
+
+  describe("issue number carried by the linked PR (#12381)", () => {
+    const githubPr: PluginWorktreeLinked = {
+      providerId: BUILTIN_GITHUB_PROVIDER_ID,
+      pr: {
+        ref: {
+          providerId: BUILTIN_GITHUB_PROVIDER_ID,
+          owner: "daintreehq",
+          repo: "daintree",
+          number: 12189,
+          rawData: null,
+        },
+        url: "https://github.com/daintreehq/daintree/pull/12189",
+        state: "open",
+      },
+    };
+
+    it("drops the phantom issue whether the not-found or the PR lands first", () => {
+      // onIssueNotFound clears the title; onPRDetected links the PR. Their
+      // lookups settle in either order.
+      const notFoundFirst = new WorktreeMonitor(
+        TEST_WORKTREE,
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+      notFoundFirst.setIssueNumber(12189);
+      notFoundFirst.setIssueTitle(undefined);
+      notFoundFirst.setLinked(githubPr);
+
+      const prFirst = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      prFirst.setIssueNumber(12189);
+      prFirst.setLinked(githubPr);
+      prFirst.setIssueTitle(undefined);
+
+      for (const monitor of [notFoundFirst, prFirst]) {
+        const snapshot = monitor.getSnapshot();
+        expect(snapshot.issueNumber).toBeUndefined();
+        expect(snapshot.prNumber).toBe(12189);
+        // The raw parsed number stays so onIssueNotFound still matches its lookup.
+        expect(monitor.issueNumber).toBe(12189);
+      }
+    });
+
+    it("brings the parsed number back once the PR link is genuinely cleared", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setIssueNumber(12189);
+      monitor.setLinked(githubPr);
+      expect(monitor.getSnapshot().issueNumber).toBeUndefined();
+
+      monitor.clearPRInfo();
+      monitor.clearLinked();
+      expect(monitor.getSnapshot().issueNumber).toBe(12189);
+    });
   });
 
   describe("branchDerivedTitle in snapshot (#8851)", () => {
