@@ -348,16 +348,14 @@ describe("createWorktreeStore — issue number carried by the linked PR (#12381)
       );
     expect(store.getState().worktrees.get("wt-1")?.issueTitle).toBe("Stale title");
 
-    store
-      .getState()
-      .applyUpdate(
-        makeSnapshot("wt-1", {
-          issueNumber: 12189,
-          issueTitle: undefined,
-          linked: githubPr(12189),
-        }),
-        nextV()
-      );
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        issueNumber: 12189,
+        issueTitle: undefined,
+        linked: githubPr(12189),
+      }),
+      nextV()
+    );
 
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.issueNumber).toBeUndefined();
