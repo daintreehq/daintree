@@ -33,6 +33,7 @@ const m = vi.hoisted(() => ({
   deleteBookmark: vi.fn(),
   listBookmarks: vi.fn(() => []),
   listAgentSessions: vi.fn(() => []),
+  dropClaudeSessionsWithoutTranscript: vi.fn(async (records: unknown[]) => records),
   readSessionHistorySync: vi.fn<() => { sessionId: string; projectId: string | null }[]>(() => []),
   // Typed so the evicted-ledger case (mockReturnValue(undefined)) type-checks.
   currentGeneration: vi.fn<() => number | undefined>(() => 1),
@@ -57,6 +58,14 @@ vi.mock("../../../../services/pty/agentSessionJournal.js", () => ({
 }));
 vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
   getAgentSessionRetentionDays: vi.fn(() => 30),
+}));
+vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
+  CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
+  resolveClaudeProjectsRoot: vi.fn(() => null),
+  observeClaudeTranscript: vi.fn(async () => "unknown"),
+  findUntouchedClaudeSession: vi.fn().mockResolvedValue(undefined),
+  isClaudeSessionWithoutTranscript: vi.fn(async () => false),
+  dropClaudeSessionsWithoutTranscript: m.dropClaudeSessionsWithoutTranscript,
 }));
 vi.mock("../../../../services/pty/lifecycleLedger.js", () => ({
   getLifecycleLedger: () => ({
@@ -420,6 +429,19 @@ describe("bookmark mutator handlers", () => {
       expect.any(String),
       30,
       undefined
+    );
+  });
+
+  // #12371 — the list must not offer Claude sessions that have no conversation.
+  it("session list returns only what survives the transcript filter", async () => {
+    register();
+    const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
+    const kept = { sessionId: "kept", agentId: "codex" };
+    m.dropClaudeSessionsWithoutTranscript.mockResolvedValueOnce([kept]);
+
+    await expect(list({}, {})).resolves.toEqual([kept]);
+    expect(m.dropClaudeSessionsWithoutTranscript).toHaveBeenLastCalledWith(
+      m.listAgentSessions.mock.results.at(-1)?.value
     );
   });
 });

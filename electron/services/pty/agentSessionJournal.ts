@@ -1,4 +1,5 @@
 import { persistAgentSession, type AgentSessionRecord } from "./agentSessionHistory.js";
+import { isClaudeSessionWithoutTranscript } from "../claude/ClaudeSessionStore.js";
 import { getAgentSessionRetentionDays } from "./agentSessionRetention.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
 import { events } from "../events.js";
@@ -27,10 +28,18 @@ export interface JournalCloseContext {
   generation?: number | null;
 }
 
+async function hasNoClaudeConversation(record: Omit<AgentSessionRecord, "savedAt">) {
+  try {
+    return await isClaudeSessionWithoutTranscript(record);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Journal one resumable agent session, exactly once per terminal generation,
  * returning the durable record (or `null` when the write was gated out as a
- * duplicate). Single funnel for every close path — the trash-expiry capture,
+ * duplicate, or as a Claude session with no conversation to resume). Single funnel for every close path — the trash-expiry capture,
  * the IPC kill / gracefulKill, app shutdown, AND the bookmark-and-close capture
  * (#11288), which passes the same shape with a `bookmark` field set. Main is the
  * journal's only writer; the lifecycle ledger provides the idempotency key
@@ -57,6 +66,18 @@ export async function journalAgentSessionRecord(
     generation !== undefined && ledger.currentGeneration(ctx.terminalId) !== undefined
       ? generation
       : undefined;
+
+  // A Claude pane nobody typed into leaves an assigned id with no conversation
+  // behind it (#12371). Journaling it offers a resume that can never open and
+  // spends a slot of the per-worktree cap. Checked after the generation is
+  // frozen, so the wait can't pick up a respawn's, and before the ledger
+  // reservation, so a skip claims nothing. A bookmark is the user's explicit pin
+  // and is never second-guessed; a failed lookup journals as before.
+  if (!record.bookmark && (await hasNoClaudeConversation(record))) {
+    logger.debug(`Skipping journal for ${ctx.terminalId}: no Claude conversation was written`);
+    return null;
+  }
+
   if (gatedGeneration !== undefined) {
     const verdict = ledger.recordJournal(ctx.terminalId, gatedGeneration, record.sessionId);
     if (!verdict.accepted) {

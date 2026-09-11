@@ -155,7 +155,9 @@ export const config: AgentConfig = {
     // #11782: Claude Code accepts the session id up front, so we mint it at
     // launch instead of scraping it back out at teardown. `--resume` reuses
     // that same id on every later relaunch (only `--fork-session` mints a new
-    // one), which makes the id stable for the life of the conversation.
+    // one), which makes the id stable for the life of the conversation. Until
+    // the first message there is no conversation to resume, but the CLI accepts
+    // the same id again, which is how spawn restores an untouched pane (#12371).
     assignSessionIdArgs: (sessionId: string) => ["--session-id", sessionId],
   },
   env: {

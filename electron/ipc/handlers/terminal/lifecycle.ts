@@ -13,6 +13,10 @@ import type * as McpServerServiceModule from "../../../services/McpServerService
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
+import {
+  dropClaudeSessionsWithoutTranscript,
+  findUntouchedClaudeSession,
+} from "../../../services/claude/ClaudeSessionStore.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
   TerminalSpawnOptionsSchema,
@@ -33,6 +37,7 @@ import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
+  relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
 } from "../../../../shared/types/agentSettings.js";
 import {
@@ -494,6 +499,19 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
+    // An untouched Claude pane comes back as `--resume <id>` for an id Claude
+    // Code never wrote a conversation for, and the CLI exits on it (#12371).
+    // Every way a pane resumes (relaunch, restart, sleep/wake, eviction, the
+    // resume list) funnels through this spawn, so this is where to look. Awaited
+    // above the resource bindings for the same reason as the PATH refresh, and
+    // applied below to the finished command the launch carriers are built from.
+    // Enrichment too: a lookup that fails leaves the resume exactly as it was.
+    const untouchedSessionId = await findUntouchedClaudeSession(safeCommand, launchAgentId, {
+      cwd,
+      agentSessionId: validatedOptions.agentSessionId,
+      env: spawnEnv,
+    }).catch(() => undefined);
+
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
@@ -774,6 +792,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // intentionally leave `spawnShell` as the original undefined-when-unset
     // value (no `getDefaultShell()` fallback) so the PTY pool can match —
     // see `acquirePtyProcess` in `terminalSpawn.ts`.
+    let spawnAgentSessionId = validatedOptions.agentSessionId;
+    if (untouchedSessionId) {
+      const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
+      if (relaunch?.sessionId === untouchedSessionId) {
+        safeCommand = relaunch.command;
+        // A caller that only had the command still gets the id on the record, so
+        // teardown hands it back like any other assigned launch.
+        spawnAgentSessionId ??= untouchedSessionId;
+        console.info(
+          `[TerminalSpawn] Terminal ${id.slice(0, 8)} has no Claude conversation to resume; ` +
+            "starting a fresh one under its assigned session id"
+        );
+      }
+    }
+
     const commandLaunchShell = buildCommandLaunchShell(safeCommand, quotingShell);
     const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
     const spawnShell = commandLaunchShell
@@ -827,7 +860,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
-        agentSessionId: validatedOptions.agentSessionId,
+        agentSessionId: spawnAgentSessionId,
         worktreeId: spawnWorktreeId,
         agentPresetId: validatedOptions.agentPresetId,
         agentPresetColor: validatedOptions.agentPresetColor,
@@ -996,11 +1029,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
-    return listAgentSessions(
-      payload?.worktreeId,
-      app.getPath("userData"),
-      getAgentSessionRetentionDays(),
-      payload?.projectId
+    return dropClaudeSessionsWithoutTranscript(
+      listAgentSessions(
+        payload?.worktreeId,
+        app.getPath("userData"),
+        getAgentSessionRetentionDays(),
+        payload?.projectId
+      )
     );
   };
 

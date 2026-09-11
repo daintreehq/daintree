@@ -22,6 +22,21 @@ vi.mock("../../../utils/logger.js", () => ({
   }),
 }));
 
+const { isClaudeSessionWithoutTranscriptMock } = vi.hoisted(() => ({
+  isClaudeSessionWithoutTranscriptMock: vi.fn(async (_record: unknown) => false),
+}));
+
+// The real lookup reads the developer's own Claude store; keep every case here
+// independent of whatever happens to be on this machine.
+vi.mock("../../claude/ClaudeSessionStore.js", () => ({
+  CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
+  resolveClaudeProjectsRoot: vi.fn(() => null),
+  observeClaudeTranscript: vi.fn(async () => "unknown"),
+  findUntouchedClaudeSession: vi.fn(async () => undefined),
+  isClaudeSessionWithoutTranscript: isClaudeSessionWithoutTranscriptMock,
+  dropClaudeSessionsWithoutTranscript: vi.fn(async (records: unknown[]) => records),
+}));
+
 import { journalAgentSession, journalAgentSessionRecord } from "../agentSessionJournal.js";
 import { readSessionHistory } from "../agentSessionHistory.js";
 import { getLifecycleLedger, disposeLifecycleLedger } from "../lifecycleLedger.js";
@@ -47,6 +62,8 @@ describe("journalAgentSession", () => {
     userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-session-journal-"));
     process.env.DAINTREE_USER_DATA = userDataDir;
     disposeLifecycleLedger();
+    isClaudeSessionWithoutTranscriptMock.mockReset();
+    isClaudeSessionWithoutTranscriptMock.mockResolvedValue(false);
     recordedEvents = [];
     unsubscribe = events.on("agent-session:recorded", (payload) => {
       recordedEvents.push({ sessionId: payload.sessionId });
@@ -254,5 +271,61 @@ describe("journalAgentSession", () => {
 
     expect(dup).toBeNull();
     expect(recordedEvents).toEqual([]);
+  });
+
+  // #12371: an untouched Claude pane's assigned id has no conversation behind it.
+  it("skips a Claude session with no conversation without claiming the generation", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+    isClaudeSessionWithoutTranscriptMock.mockResolvedValueOnce(true);
+
+    const skipped = await journalAgentSessionRecord(makeRecord("sess-empty"), {
+      terminalId: "term-1",
+      generation,
+    });
+
+    expect(skipped).toBeNull();
+    expect(isClaudeSessionWithoutTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "sess-empty", agentId: "claude" })
+    );
+    expect(await readSessionHistory(userDataDir)).toEqual([]);
+    expect(recordedEvents).toEqual([]);
+
+    // Nothing was reserved, so the same incarnation still journals once a
+    // conversation exists.
+    const written = await journalAgentSession(makeRecord("sess-empty"), {
+      terminalId: "term-1",
+      generation,
+    });
+    expect(written).toBe(true);
+    expect(recordedEvents).toEqual([{ sessionId: "sess-empty" }]);
+  });
+
+  it("never second-guesses a bookmark, even without a conversation", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+    isClaudeSessionWithoutTranscriptMock.mockResolvedValue(true);
+
+    const record = await journalAgentSessionRecord(
+      makeRecord("sess-pin", { bookmark: { bookmarkedAt: 5, label: "Pin" } }),
+      { terminalId: "term-1", generation }
+    );
+
+    expect(record?.sessionId).toBe("sess-pin");
+    expect(isClaudeSessionWithoutTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("journals as before when the transcript lookup fails", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+    isClaudeSessionWithoutTranscriptMock.mockRejectedValueOnce(new Error("io"));
+
+    const written = await journalAgentSession(makeRecord("sess-1"), {
+      terminalId: "term-1",
+      generation,
+    });
+
+    expect(written).toBe(true);
+    expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
   });
 });

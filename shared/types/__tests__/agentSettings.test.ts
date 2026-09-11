@@ -20,6 +20,7 @@ import {
   supportsSessionIdAssignment,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
+  relaunchResumeAsAssignedSession,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
 } from "../agentSettings.js";
@@ -1564,6 +1565,59 @@ describe("launch-time session id assignment (#11782)", () => {
       const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
       expect(stripAssignedSessionIdArgs(assigned, undefined)).toBe(assigned);
       expect(stripAssignedSessionIdArgs("", ASSIGNING)).toBe("");
+    });
+  });
+
+  describe("relaunching an untouched session under its own id (#12371)", () => {
+    const sessionId = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+
+    it("turns an exact resume into an assignment of the same id", () => {
+      const resume = buildResumeCommand(ASSIGNING, sessionId, ["--verbose"]) as string;
+      expect(resume).toBe(`claude --verbose --resume ${sessionId}`);
+
+      expect(relaunchResumeAsAssignedSession(resume, ASSIGNING)).toEqual({
+        sessionId,
+        command: `claude --verbose --session-id ${sessionId}`,
+      });
+    });
+
+    it("keeps a resolved base command and the flags on both sides", () => {
+      const command = `/opt/claude/bin/claude --dangerously-skip-permissions --resume ${sessionId} --verbose`;
+      expect(relaunchResumeAsAssignedSession(command, ASSIGNING)?.command).toBe(
+        `/opt/claude/bin/claude --dangerously-skip-permissions --session-id ${sessionId} --verbose`
+      );
+    });
+
+    it("reads an id the shell escaper wrapped in quotes", () => {
+      expect(relaunchResumeAsAssignedSession(`claude --resume '${sessionId}'`, ASSIGNING)).toEqual({
+        sessionId,
+        command: `claude --session-id ${sessionId}`,
+      });
+    });
+
+    it("ignores the flag when it is only text inside a prompt", () => {
+      const command = `claude 'why does --resume ${sessionId} fail'`;
+      expect(relaunchResumeAsAssignedSession(command, ASSIGNING)).toBeUndefined();
+    });
+
+    it("refuses anything the CLI would not assign as an id", () => {
+      expect(relaunchResumeAsAssignedSession("claude --resume s-1", ASSIGNING)).toBeUndefined();
+      // A bare `--resume` opens the CLI's picker; there is no id to carry over.
+      expect(relaunchResumeAsAssignedSession("claude --resume", ASSIGNING)).toBeUndefined();
+    });
+
+    it("leaves a fresh launch alone", () => {
+      const fresh = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      expect(relaunchResumeAsAssignedSession(fresh, ASSIGNING)).toBeUndefined();
+      expect(relaunchResumeAsAssignedSession("", ASSIGNING)).toBeUndefined();
+    });
+
+    it("leaves agents that mint their own id alone", () => {
+      const codexResume = buildResumeCommand(SCRAPING, sessionId) as string;
+      expect(relaunchResumeAsAssignedSession(codexResume, SCRAPING)).toBeUndefined();
+      expect(
+        relaunchResumeAsAssignedSession(`claude --resume ${sessionId}`, undefined)
+      ).toBeUndefined();
     });
   });
 });

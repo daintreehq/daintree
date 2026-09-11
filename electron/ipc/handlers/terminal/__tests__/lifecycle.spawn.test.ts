@@ -65,6 +65,22 @@ vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
   getAgentSessionRetentionDays: vi.fn(() => 30),
 }));
 
+// The real lookup reads the developer's own Claude store; no case here should
+// depend on what happens to be on this machine.
+const findUntouchedClaudeSessionMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => Promise<string | undefined>>(async () => undefined)
+);
+// Full surface: the real session journal imports this module too, and a factory
+// that omits an export throws for every consumer that reaches it.
+vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
+  CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
+  resolveClaudeProjectsRoot: vi.fn(() => null),
+  observeClaudeTranscript: vi.fn(async () => "unknown"),
+  findUntouchedClaudeSession: findUntouchedClaudeSessionMock,
+  isClaudeSessionWithoutTranscript: vi.fn(async () => false),
+  dropClaudeSessionsWithoutTranscript: vi.fn(async (records: unknown[]) => records),
+}));
+
 type SafeParseable = {
   safeParse: (v: unknown) => { success: true; data: unknown } | { success: false; error: unknown };
 };
@@ -867,6 +883,87 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(spawnArgs.args?.join(" ")).toContain("claude --resume s-1");
     }
   );
+
+  describe("untouched Claude sessions (#12371)", () => {
+    const SESSION = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+
+    async function spawnClaude(options: Record<string, unknown>) {
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+      const handler = getSpawnHandler();
+      const os = await import("os");
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cwd: os.homedir(),
+          cols: 80,
+          rows: 24,
+          launchAgentId: "claude",
+          command: `claude --resume ${SESSION}`,
+          ...options,
+        } as unknown as Parameters<typeof handler>[1]
+      );
+      return { spawnArgs: ptyClient.spawn.mock.calls[0][1], cwd: os.homedir() };
+    }
+
+    it("starts a fresh conversation under the same id instead of a resume that can't open", async () => {
+      findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+      const { spawnArgs, cwd } = await spawnClaude({
+        shell: "/usr/bin/nu",
+        agentSessionId: SESSION,
+      });
+
+      expect(findUntouchedClaudeSessionMock).toHaveBeenCalledWith(
+        `claude --resume ${SESSION}`,
+        "claude",
+        expect.objectContaining({ cwd, agentSessionId: SESSION })
+      );
+      expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
+      expect(spawnArgs.command).not.toContain("--resume");
+      expect(spawnArgs.postSpawnInput).toBe(`${spawnArgs.command}\r`);
+      expect(spawnArgs.agentSessionId).toBe(SESSION);
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "rebuilds the shell wrapper from the swapped command",
+      async () => {
+        findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+        const { spawnArgs } = await spawnClaude({ shell: "/bin/bash", agentSessionId: SESSION });
+
+        const wrapped = spawnArgs.args?.join(" ") ?? "";
+        expect(wrapped).toContain(`--session-id ${SESSION}`);
+        expect(wrapped).not.toContain(`--resume ${SESSION}`);
+      }
+    );
+
+    it("records the assigned id for a caller that only had the command", async () => {
+      findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+      const { spawnArgs } = await spawnClaude({ shell: "/usr/bin/nu" });
+
+      expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
+      expect(spawnArgs.agentSessionId).toBe(SESSION);
+    });
+
+    it("leaves the resume untouched when the conversation exists or can't be checked", async () => {
+      const { spawnArgs } = await spawnClaude({ shell: "/usr/bin/nu", agentSessionId: SESSION });
+
+      expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+      expect(spawnArgs.command).not.toContain("--session-id");
+      expect(spawnArgs.agentSessionId).toBe(SESSION);
+    });
+
+    it("still spawns the resume when the lookup throws", async () => {
+      findUntouchedClaudeSessionMock.mockRejectedValueOnce(new Error("store unreadable"));
+
+      const { spawnArgs } = await spawnClaude({ shell: "/usr/bin/nu", agentSessionId: SESSION });
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+    });
+  });
 });
 
 describe("terminal spawn shell-injection hardening (#6065)", () => {
