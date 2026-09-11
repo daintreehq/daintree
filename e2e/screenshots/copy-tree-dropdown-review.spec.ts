@@ -266,11 +266,11 @@ async function openPanel(page: Page): Promise<void> {
  * must never report as a pass.
  */
 async function expectRows(page: Page, expected: number): Promise<void> {
-  const rows = page.locator(`${PANEL} li button`);
+  const rows = page.locator(`${PANEL} [data-copy-tree-recent]`);
   await page
     .waitForFunction(
       ({ panel, expected }) =>
-        document.querySelectorAll(`${panel} li button`).length === expected,
+        document.querySelectorAll(`${panel} [data-copy-tree-recent]`).length === expected,
       { panel: PANEL, expected },
       { timeout: T_MEDIUM }
     )
@@ -385,7 +385,11 @@ test("copy-tree dropdown review — recents panel states", async () => {
       await expectRows(page, FULL_RECENTS_ROWS);
       await settle(page, 500);
       await snap(page, "50-open-focus", panel(page));
-      await page.keyboard.press("Tab");
+      // A menu: the arrow keys walk the highlight; Tab would leave it. Two
+      // presses — the first lands on the pinned entry, the second on the
+      // first recent.
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
       await settle(page, 400);
       await snap(page, "51-focus-first-row", panel(page));
       await closePanel(page);
@@ -396,7 +400,7 @@ test("copy-tree dropdown review — recents panel states", async () => {
       await openPanel(page);
       await expectRows(page, FULL_RECENTS_ROWS);
       await settle(page, 500);
-      const row = page.locator(`${PANEL} li button`).first();
+      const row = page.locator(`${PANEL} [data-copy-tree-recent]`).first();
       const resting = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
       await row.hover();
       await settle(page, 400);
@@ -412,7 +416,22 @@ test("copy-tree dropdown review — recents panel states", async () => {
             `the rows have no rendered pointer affordance`
         );
       }
-      await snap(page, "60-row-hover", panel(page));
+      /* A clipped page screenshot, NOT `locator.screenshot()`. The element
+         path re-lays-out the node before capturing and the pointer state does
+         not survive it, so every hover shot this harness took came out
+         byte-identical to the resting one — which read as "these rows have no
+         hover treatment" to two separate reviewers, while the computed style
+         above proves the fill is applied. Clipping the page leaves the hovered
+         element untouched. */
+      await settle(page);
+      const box = await panel(page).boundingBox();
+      if (!box) throw new Error("[copytree-shots] the panel has no bounding box to clip to");
+      await page.screenshot({
+        path: path.join(OUTPUT_DIR, `60-row-hover${TAG}.png`),
+        clip: box,
+        type: "png",
+        caret: "hide",
+      });
       await closePanel(page);
     });
 
