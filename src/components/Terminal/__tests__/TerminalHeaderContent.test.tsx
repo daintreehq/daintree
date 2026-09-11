@@ -121,7 +121,8 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
 
     render(<TerminalHeaderContent id="t1" agentState="completed" />);
 
-    expect(screen.getByText(/\$0\.42/).textContent).toContain("12");
+    // Cost only: the per-terminal token count no longer rides beside it.
+    expect(screen.getByText(/\$0\.42/).textContent?.trim()).toBe("$0.42");
   });
 
   it("renders no cost readout while the agent is still working", () => {
