@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   ArrowUpCircle,
   ChevronLeft,
-  CircleSlash,
   RefreshCw,
   RotateCw,
   X,
@@ -84,9 +83,11 @@ function rowStatusFor(plugin: LoadedPluginInfo): RowStatus | null {
   if (plugin.pendingRestart === true) {
     return { label: "Restart required", icon: RotateCw, tone: "text-status-warning" };
   }
-  if (plugin.disabled === true) {
-    return { label: "Disabled", icon: CircleSlash, tone: "text-text-secondary" };
-  }
+  // No chip for a plain "disabled". The switch beside the row already states it,
+  // textually and through `aria-checked`, and a chip that appeared on toggle
+  // grew the row by a line for every built-in — the one layout shift a control
+  // acting on its own row must never cause. Status here is reserved for states
+  // the switch CANNOT express.
   return null;
 }
 
@@ -134,11 +135,16 @@ interface PluginRowProps {
  * metadata, actions, and settings live there now, so the row stays scannable
  * and never shifts layout.
  *
- * A disabled plugin stays in its category section, dimmed in place with a
- * "Disabled" badge — the dominant pattern (VS Code, JetBrains, browsers) and
- * the one that preserves spatial memory; relocation to a quarantine section
- * was the old #9554 behavior. Provenance only earns a badge when it differs
- * from the catalog's default (non-builtin sources: file / URL / catalog).
+ * A disabled plugin stays in its category section, dimmed in place with its
+ * switch off — the dominant pattern (VS Code, JetBrains, browsers) and the one
+ * that preserves spatial memory; relocation to a quarantine section was the
+ * old #9554 behavior. Provenance only earns a badge when it differs from the
+ * catalog's default (non-builtin sources: file / URL / catalog).
+ *
+ * The badge line is ALWAYS rendered, at a fixed minimum height, even when it is
+ * empty. Rows used to gain or lose that line as their state changed, so a
+ * built-in's row grew by a line the moment its own switch was flipped and shrank
+ * again on the way back. Every row is the same height in every state now.
  *
  * The row is an `<li>` in a plain list, NOT an option in a composite listbox.
  * The selection target is a `<button aria-current>` covering the info area and
@@ -237,31 +243,32 @@ function PluginRow({
               {blurb}
             </span>
           )}
-          {(status || update || !plugin.isBuiltin || plugin.devMode) && (
-            <span className="mt-1 flex items-center gap-1.5 min-w-0">
-              {status && (
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-0.5 text-3xs font-medium uppercase tracking-wide shrink-0",
-                    status.tone
-                  )}
-                >
-                  <status.icon className="w-3 h-3" aria-hidden="true" />
-                  {status.label}
-                </span>
-              )}
-              {update && (
-                <span className="inline-flex items-center gap-0.5 min-w-0 text-3xs font-medium uppercase tracking-wide text-status-warning">
-                  <ArrowUpCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{update.version}</span>
-                </span>
-              )}
-              {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
-              {!plugin.isBuiltin && (
-                <span className={cn(ROW_BADGE_CLASS, "truncate")}>{sourceLabel}</span>
-              )}
-            </span>
-          )}
+          <span
+            data-testid="plugin-row-badges"
+            className="mt-1 flex items-center gap-1.5 min-w-0 min-h-[1.125rem]"
+          >
+            {status && (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-0.5 text-3xs font-medium uppercase tracking-wide shrink-0",
+                  status.tone
+                )}
+              >
+                <status.icon className="w-3 h-3" aria-hidden="true" />
+                {status.label}
+              </span>
+            )}
+            {update && (
+              <span className="inline-flex items-center gap-0.5 min-w-0 text-3xs font-medium uppercase tracking-wide text-status-warning">
+                <ArrowUpCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                <span className="truncate">{update.version}</span>
+              </span>
+            )}
+            {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
+            {!plugin.isBuiltin && (
+              <span className={cn(ROW_BADGE_CLASS, "truncate")}>{sourceLabel}</span>
+            )}
+          </span>
         </span>
       </button>
 
