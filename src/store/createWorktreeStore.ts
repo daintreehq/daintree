@@ -2077,8 +2077,6 @@ function mergeIssueState(
 ): WorktreeSnapshot {
   let issueNumber = incoming.issueNumber;
   let issueTitle = incoming.issueTitle;
-  let branchDerivedTitle = incoming.branchDerivedTitle;
-  let issueLastUpdatedAt = incoming.issueLastUpdatedAt;
 
   if (
     existing &&
@@ -2106,8 +2104,6 @@ function mergeIssueState(
   if (issueNumberBelongsToLinkedPr(issueNumber, linked)) {
     issueNumber = undefined;
     issueTitle = undefined;
-    branchDerivedTitle = undefined;
-    issueLastUpdatedAt = undefined;
   }
 
   // MANUAL_OVER_AUTO: explicit user association wins over auto-detection.
@@ -2119,13 +2115,11 @@ function mergeIssueState(
   if (
     issueNumber === incoming.issueNumber &&
     issueTitle === incoming.issueTitle &&
-    branchDerivedTitle === incoming.branchDerivedTitle &&
-    issueLastUpdatedAt === incoming.issueLastUpdatedAt &&
     linked === incoming.linked
   ) {
     return incoming;
   }
-  return { ...incoming, issueNumber, issueTitle, branchDerivedTitle, issueLastUpdatedAt, linked };
+  return { ...incoming, issueNumber, issueTitle, linked };
 }
 
 function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {

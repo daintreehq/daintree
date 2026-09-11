@@ -310,6 +310,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
       prNumber: 12189,
       prUrl,
       prState: "open",
+      prTitle: "Native Daintree assistant",
       issueNumber: 12189,
       branchName: branch,
       providerId: BUILTIN_GITHUB_PROVIDER_ID,
@@ -323,12 +324,16 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
           .getState()
           .applyUpdate(makeWorktree("wt-1", { branch, prNumber: 12189, prUrl, linked }), nextV());
       });
+      expect(store.getState().worktrees.get("wt-1")?.prTitle).toBeUndefined();
 
       act(() => {
         emit("pr-detected", prDetected);
       });
 
       const wt = store.getState().worktrees.get("wt-1");
+      // The overlay landed…
+      expect(wt?.prTitle).toBe("Native Daintree assistant");
+      // …without bringing the phantom issue back.
       expect(wt?.issueNumber).toBeUndefined();
       expect(wt?.prNumber).toBe(12189);
     });
@@ -340,6 +345,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
           makeWorktree("wt-1", {
             branch,
             issueNumber: 12189,
+            issueTitle: "Stale title",
             prNumber: undefined,
             prUrl: undefined,
             prState: undefined,
@@ -354,7 +360,10 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         emit("pr-detected", prDetected);
       });
 
-      expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBeUndefined();
+      const wt = store.getState().worktrees.get("wt-1");
+      expect(wt?.prNumber).toBe(12189);
+      expect(wt?.issueNumber).toBeUndefined();
+      expect(wt?.issueTitle).toBeUndefined();
     });
   });
 

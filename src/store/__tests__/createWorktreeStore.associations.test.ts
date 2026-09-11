@@ -301,14 +301,14 @@ describe("createWorktreeStore — issue number carried by the linked PR (#12381)
     };
   }
 
-  it("drops a parsed issue number the linked GitHub PR carries", () => {
+  it("drops a parsed issue number and its title when the linked GitHub PR carries it", () => {
     const store = createWorktreeStore();
     store.getState().applySnapshot(
       [
         makeSnapshot("wt-1", {
           issueNumber: 12189,
+          issueTitle: "Stale title",
           branchDerivedTitle: "Native assistant",
-          issueLastUpdatedAt: 1_700_000_000_000,
           linked: githubPr(12189),
         }),
       ],
@@ -317,8 +317,8 @@ describe("createWorktreeStore — issue number carried by the linked PR (#12381)
 
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.issueNumber).toBeUndefined();
-    expect(wt?.branchDerivedTitle).toBeUndefined();
-    expect(wt?.issueLastUpdatedAt).toBeUndefined();
+    expect(wt?.issueTitle).toBeUndefined();
+    expect(wt?.branchDerivedTitle).toBe("Native assistant");
     expect(wt?.linked?.pr?.ref.number).toBe(12189);
   });
 
@@ -326,9 +326,43 @@ describe("createWorktreeStore — issue number carried by the linked PR (#12381)
     const store = createWorktreeStore();
     store.getState().applySnapshot([makeSnapshot("wt-1", { linked: githubPr(12189) })], nextV());
 
-    store.getState().applyUpdate(makeSnapshot("wt-1", { issueNumber: 12189 }), nextV());
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { branch: "feature/native-daintree-assistant", issueNumber: 12189 }),
+        nextV()
+      );
 
-    expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBeUndefined();
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.branch).toBe("feature/native-daintree-assistant");
+    expect(wt?.issueNumber).toBeUndefined();
+  });
+
+  it("clears a title the unchanged-number flicker rule would otherwise restore", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot(
+        [makeSnapshot("wt-1", { issueNumber: 12189, issueTitle: "Stale title" })],
+        nextV()
+      );
+    expect(store.getState().worktrees.get("wt-1")?.issueTitle).toBe("Stale title");
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", {
+          issueNumber: 12189,
+          issueTitle: undefined,
+          linked: githubPr(12189),
+        }),
+        nextV()
+      );
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.issueNumber).toBeUndefined();
+    expect(wt?.issueTitle).toBeUndefined();
+    expect(wt?.linked?.pr?.ref.number).toBe(12189);
   });
 
   it("lets a manual association with the PR's number win (MANUAL_OVER_AUTO)", () => {

@@ -283,24 +283,24 @@ describe("SnapshotBuilder", () => {
       };
     }
 
-    it("drops the phantom issue and keeps the PR", () => {
+    it("drops the phantom issue and its title but keeps the PR", () => {
       const snapshot = new SnapshotBuilder(
         makeHost({
           issueNumber: 12189,
           issueTitle: "Stale title",
           branchDerivedTitle: "Native daintree assistant",
-          issueLastUpdatedAt: 1_700_000_000_000,
           linked: githubPr(12189),
         })
       ).build();
 
       expect(snapshot.issueNumber).toBeUndefined();
       expect(snapshot.issueTitle).toBeUndefined();
-      expect(snapshot.branchDerivedTitle).toBeUndefined();
-      expect(snapshot.issueLastUpdatedAt).toBeUndefined();
       expect(snapshot.prNumber).toBe(12189);
       expect(snapshot.prTitle).toBe("Native Daintree assistant");
       expect(snapshot.linked?.pr?.ref.number).toBe(12189);
+      // Every issue surface already gates on the number; the branch still
+      // names the work for labels that fall back to it.
+      expect(snapshot.branchDerivedTitle).toBe("Native daintree assistant");
     });
 
     it("keeps a parsed issue with a different number beside the PR (#8851)", () => {

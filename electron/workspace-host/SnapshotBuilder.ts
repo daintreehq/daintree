@@ -151,10 +151,10 @@ export class SnapshotBuilder {
         : linkedIssue
           ? linkedIssue.title
           : this.host.issueTitle,
-      branchDerivedTitle: issueIsLinkedPr ? undefined : this.host.branchDerivedTitle,
+      branchDerivedTitle: this.host.branchDerivedTitle,
       sourcePrNumber: this.host.sourcePrNumber,
       prLastUpdatedAt: this.host.prLastUpdatedAt,
-      issueLastUpdatedAt: issueIsLinkedPr ? undefined : this.host.issueLastUpdatedAt,
+      issueLastUpdatedAt: this.host.issueLastUpdatedAt,
       worktreeChanges: this.host.worktreeChanges,
       worktreeId: this.host.id,
       timestamp: Date.now(),
