@@ -1344,11 +1344,13 @@ describe("PluginManagerView", () => {
       ]);
       renderDialog();
       await screen.findAllByText("Core GitHub");
-      // No quarantine section — disabled plugins dim in place (#9554 successor).
+      // No quarantine section — disabled plugins dim in place (#9554 successor),
+      // and the switch carries the state: a "Disabled" chip that appeared on
+      // toggle changed the row's height, so there isn't one.
       expect(pluginInSection("Forge providers", "Core GitHub")).toBeTruthy();
       expect(sectionExists("Disabled")).toBe(false);
-      const listbox = pluginList();
-      expect(within(listbox).getByText("Disabled")).toBeTruthy();
+      const toggle = screen.getByRole("switch", { name: "Enable Core GitHub" });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
     });
 
     it("renders category sections in registry order for a mixed list", async () => {
@@ -1785,6 +1787,31 @@ describe("PluginManagerView design invariants", () => {
     expect(row.getAttribute("data-selected")).toBe("true");
     expect(row.getAttribute("aria-current")).toBeNull();
     expect(PALETTE_ROW_CLASS).not.toMatch(/aria-\[current/);
+  });
+
+  it("renders the badge line in every state, so a toggle can never change a row's height", async () => {
+    // The rule is structural: the line is present whether or not it has
+    // anything to show. Before this, a built-in with nothing to badge had no
+    // line at all, so flipping its own switch grew the row and flipping it back
+    // shrank it, a layout shift caused by a control acting on its own row.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ isBuiltin: true, source: "builtin", disabled: false }),
+      makePlugin({
+        manifest: { ...makePlugin().manifest, name: "acme.off", displayName: "Off Plugin" },
+        isBuiltin: true,
+        source: "builtin",
+        disabled: true,
+      } as Parameters<typeof makePlugin>[0]),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    for (const name of ["Acme Demo", "Off Plugin"]) {
+      const badges = within(rowFor(name)).getByTestId("plugin-row-badges");
+      expect(badges).toBeTruthy();
+      // And the plain disabled state adds no chip to it.
+      expect(/disabled/i.test(badges.textContent ?? "")).toBe(false);
+    }
   });
 
   it("keeps the enable switch out of any composite widget that may not own it", async () => {
