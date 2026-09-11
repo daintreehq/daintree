@@ -1306,7 +1306,6 @@ export function FilePane({
       showRestoreControl={showRestoreControl}
       toolbar={toolbar}
       headerContent={dirtyIndicator}
-      headerContentPlacement="trailing"
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
