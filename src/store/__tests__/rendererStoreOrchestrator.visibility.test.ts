@@ -72,6 +72,26 @@ vi.mock("@/services/SemanticAnalysisService", () => ({
   semanticAnalysisService: { unregisterTerminal: vi.fn() },
 }));
 
+// A controllable stand-in for main's view-lifecycle signals: a cached view
+// keeps reporting `document.visibilityState === "visible"`, so this is the
+// only way the orchestrator can learn nobody is looking.
+type LifecyclePhase = "cached" | "active" | "revealed";
+const viewCache = vi.hoisted(() => ({
+  cached: false,
+  listeners: new Set<(phase: "cached" | "active" | "revealed") => void>(),
+}));
+vi.mock("@/lib/viewCacheState", () => ({
+  isProjectViewCached: () => viewCache.cached,
+  subscribeProjectViewLifecycle: (listener: (phase: LifecyclePhase) => void) => {
+    viewCache.listeners.add(listener);
+    return () => viewCache.listeners.delete(listener);
+  },
+  __resetProjectViewCacheStateForTests: vi.fn(),
+}));
+function emitPhase(phase: LifecyclePhase): void {
+  for (const listener of Array.from(viewCache.listeners)) listener(phase);
+}
+
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 const { usePanelStore } = await import("../panelStore");
@@ -115,6 +135,34 @@ describe("rendererStoreOrchestrator — focus-follow release while hidden (#1237
     destroyStoreOrchestrator();
     vi.useRealTimers();
     setHidden(false);
+    viewCache.cached = false;
+    viewCache.listeners.clear();
+  });
+
+  it("holds the release while the view is cached and runs it on reveal", () => {
+    viewCache.cached = true;
+    vi.advanceTimersByTime(2_001);
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+    viewCache.cached = false;
+    emitPhase("revealed");
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
+  });
+
+  it("re-arms on warm activation, so a switch rollback that never reveals still releases", () => {
+    viewCache.cached = true;
+    vi.advanceTimersByTime(2_001);
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+    viewCache.cached = false;
+    emitPhase("active");
+    // Not run on the signal itself — the view may still sit behind the
+    // anti-flash bridge — but on a fresh timer that re-checks.
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+    vi.advanceTimersByTime(1);
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
   });
 
   it("holds the release while the document is hidden and runs it once shown again", () => {

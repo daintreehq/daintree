@@ -636,6 +636,14 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // topology. They get their own high-water mark so a replayed or reordered
     // activation cannot re-select a worktree this view has moved past.
     let lastActivation: WorktreeEventVersion | null = null;
+    // This view's latest request at the moment a foreign activation was
+    // applied over it, with the selection generation right after that apply.
+    // Consumed by the own-echo branch below.
+    let displacedRequest: {
+      worktreeId: string;
+      durable: boolean;
+      generation: number;
+    } | null = null;
     cleanups.push(
       worktreePort.onEvent("worktree-activated", (data) => {
         const event = data as WorktreeActivatedEvent;
@@ -655,22 +663,34 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // B, echoed A then B) into a loop that persists and rewrites the MRU
         // on every hop (#12370). Host-originated activations carry no origin.
         if (event.origin === RENDERER_ACTIVATION_ORIGIN) {
-          // One exception: the ack of this view's *latest* request landing
-          // after another window's activation displaced it. Two windows
-          // picking different worktrees in the same round trip would
-          // otherwise settle on different answers, with nothing left in
-          // flight to reconcile them. Re-asserting sends one more
-          // `set-active`, which every view then sees as already active.
-          const displaced =
-            event.worktreeId === latestActivationRequest() &&
-            useWorktreeSelectionStore.getState().activeWorktreeId !== event.worktreeId &&
-            store.getState().worktrees.has(event.worktreeId);
-          if (displaced) {
+          // One exception: the ack of this view's latest request landing
+          // after another window's activation was applied over it, with no
+          // selection of any kind since (the generation check — a local pick
+          // in between, including a ghost row that sends nothing, wins). Two
+          // windows picking different worktrees in the same round trip would
+          // otherwise settle on different answers with nothing left in
+          // flight to reconcile them. This is a catch-up to what the host
+          // already holds, never a re-send: marked host-applied so the sync
+          // hook stays quiet, and made with the source the pick had.
+          const selection = useWorktreeSelectionStore.getState();
+          const displaced = displacedRequest;
+          if (
+            displaced &&
+            displaced.worktreeId === event.worktreeId &&
+            displaced.generation === selection._policyGeneration &&
+            selection.activeWorktreeId !== event.worktreeId &&
+            store.getState().worktrees.has(event.worktreeId)
+          ) {
+            displacedRequest = null;
             logDebug("[WorktreeStore] worktree-activated re-applied: own request displaced", {
               worktreeId: event.worktreeId,
+              durable: displaced.durable,
               ...version,
             });
-            useWorktreeSelectionStore.getState().selectWorktree(event.worktreeId);
+            markHostActivationApplied(event.worktreeId);
+            selection.selectWorktree(event.worktreeId, {
+              source: displaced.durable ? "user" : "focus",
+            });
             return;
           }
           logDebug("[WorktreeStore] worktree-activated ignored: own echo", {
@@ -727,6 +747,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         if (store.getState().worktrees.has(event.worktreeId)) {
           selectionStore.applyPendingWorktreeSelection(event.worktreeId);
         }
+        const latest = latestActivationRequest();
+        displacedRequest =
+          latest && latest.worktreeId !== event.worktreeId
+            ? { ...latest, generation: useWorktreeSelectionStore.getState()._policyGeneration }
+            : null;
       })
     );
 

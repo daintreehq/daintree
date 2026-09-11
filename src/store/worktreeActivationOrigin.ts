@@ -6,18 +6,24 @@
 // own V8 context, so module scope is per view.
 export const RENDERER_ACTIVATION_ORIGIN = `renderer-${crypto.randomUUID()}`;
 
-// The last id this view asked the host for. An own echo is normally
-// redundant, but the echo of the *latest* request landing while another
-// window's activation has displaced it is the ack of this view's intent, and
-// re-asserting it is what brings both windows and the host back together.
-let latestRequestedWorktreeId: string | null = null;
-
-export function markActivationRequested(worktreeId: string): void {
-  latestRequestedWorktreeId = worktreeId;
+export interface ActivationRequest {
+  worktreeId: string;
+  /** The selection was the durable restore target when it was sent. */
+  durable: boolean;
 }
 
-export function latestActivationRequest(): string | null {
-  return latestRequestedWorktreeId;
+// The last request this view sent. An own echo is normally redundant, but
+// when another window's activation has displaced this view's latest request,
+// the echo of that request is the host telling us it holds our pick after
+// all — re-applying it locally (never re-sending) brings the views together.
+let latestRequest: ActivationRequest | null = null;
+
+export function markActivationRequested(worktreeId: string, durable: boolean): void {
+  latestRequest = { worktreeId, durable };
+}
+
+export function latestActivationRequest(): ActivationRequest | null {
+  return latestRequest;
 }
 
 // The selection the host itself just pushed, if any. The host already holds
@@ -44,5 +50,5 @@ export function clearHostAppliedActivation(): void {
 
 export function _resetHostAppliedActivationForTesting(): void {
   hostAppliedWorktreeId = null;
-  latestRequestedWorktreeId = null;
+  latestRequest = null;
 }

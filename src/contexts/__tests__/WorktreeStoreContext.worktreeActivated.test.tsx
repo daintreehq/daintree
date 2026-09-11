@@ -322,7 +322,7 @@ describe("WorktreeStoreProvider worktree-activated origin and version gates (#12
         pendingWorktreeId: null,
       });
     });
-    markActivationRequested("wt-b");
+    markActivationRequested("wt-b", true);
 
     act(() => {
       emit("worktree-activated", {
@@ -350,7 +350,7 @@ describe("WorktreeStoreProvider worktree-activated origin and version gates (#12
     act(() => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b", restoreWorktreeId: "wt-a" });
     });
-    markActivationRequested("wt-b");
+    markActivationRequested("wt-b", true);
 
     act(() => {
       emit("worktree-activated", {
@@ -367,33 +367,101 @@ describe("WorktreeStoreProvider worktree-activated origin and version gates (#12
     expect(after.restoreWorktreeId).toBe("wt-a");
   });
 
-  it("re-asserts its latest own request when another window's activation displaced it", async () => {
-    const store = await renderWithWorktrees(["wt-a", "wt-b", "wt-c"]);
+  describe("own request displaced by another window", () => {
+    function emitActivated(worktreeId: string, seq: number, origin?: string) {
+      act(() => {
+        emit("worktree-activated", {
+          type: "worktree-activated",
+          worktreeId,
+          epoch: "test",
+          seq,
+          ...(origin ? { origin } : {}),
+        });
+      });
+    }
+
     // This window asked for C; the other window asked for B in the same
     // round trip. The host processed B first, so B's foreign activation
-    // landed here and was applied — then C's own echo arrives. Ignoring it
+    // lands here and is applied — then C's own echo arrives. Ignoring it
     // would leave this window on B while the host and the other window sit
     // on C, with nothing left in flight to reconcile them.
-    act(() => {
-      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b" });
-    });
-    markActivationRequested("wt-c");
-
-    act(() => {
-      emit("worktree-activated", {
-        type: "worktree-activated",
-        worktreeId: "wt-c",
-        epoch: "test",
-        seq: 5,
-        origin: RENDERER_ACTIVATION_ORIGIN,
+    async function displaceOwnPick(durable: boolean) {
+      await renderWithWorktrees(["wt-a", "wt-b", "wt-c"]);
+      act(() => {
+        useWorktreeSelectionStore.setState({
+          activeWorktreeId: "wt-c",
+          restoreWorktreeId: durable ? "wt-c" : "wt-a",
+        });
       });
+      markActivationRequested("wt-c", durable);
+      emitActivated("wt-b", 4);
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-b");
+      expect(consumeHostAppliedActivation("wt-b")).toBe(true);
+    }
+
+    it("catches up to its displaced latest request without sending it again", async () => {
+      await displaceOwnPick(true);
+
+      emitActivated("wt-c", 5, RENDERER_ACTIVATION_ORIGIN);
+
+      const after = useWorktreeSelectionStore.getState();
+      expect(after.activeWorktreeId).toBe("wt-c");
+      expect(after.restoreWorktreeId).toBe("wt-c");
+      // The host already holds C — it just said so. A re-send would be the
+      // next hop of a two-window echo loop.
+      expect(consumeHostAppliedActivation("wt-c")).toBe(true);
     });
 
-    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-c");
-    // Not a host-pushed selection: the sync hook must send it, so the host
-    // and the other window converge on C too.
-    expect(consumeHostAppliedActivation("wt-c")).toBe(false);
-    expect(store.getState().worktrees.has("wt-c")).toBe(true);
+    it("keeps a focus-promoted pick incidental when catching up", async () => {
+      await displaceOwnPick(false);
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-b");
+
+      emitActivated("wt-c", 5, RENDERER_ACTIVATION_ORIGIN);
+
+      const after = useWorktreeSelectionStore.getState();
+      expect(after.activeWorktreeId).toBe("wt-c");
+      // Catching up with the "user" source would pin C as the restore target
+      // even though the user never chose it (#9512).
+      expect(after.restoreWorktreeId).toBe("wt-b");
+    });
+
+    it("does not catch up once anything was selected after the foreign activation", async () => {
+      await displaceOwnPick(true);
+      // A ghost row sends no set-active, so the latest request is still C —
+      // but the user's newer intent must win over C's late echo.
+      act(() => {
+        useWorktreeSelectionStore.getState().selectWorktree("wt-ghost", { source: "focus" });
+      });
+
+      emitActivated("wt-c", 5, RENDERER_ACTIVATION_ORIGIN);
+
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-ghost");
+    });
+
+    it("still catches up when a superseded own echo lands in between", async () => {
+      await displaceOwnPick(true);
+
+      // The echo of an older request of ours (X, sent before C) is ignored
+      // and must not spoil the pending catch-up.
+      emitActivated("wt-a", 5, RENDERER_ACTIVATION_ORIGIN);
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-b");
+      emitActivated("wt-c", 6, RENDERER_ACTIVATION_ORIGIN);
+
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-c");
+    });
+
+    it("ignores its own echo when nothing foreign was applied since the request", async () => {
+      await renderWithWorktrees(["wt-a", "wt-b"]);
+      // Selected B locally after C's request went out; C's echo is just late.
+      act(() => {
+        useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b" });
+      });
+      markActivationRequested("wt-a", true);
+
+      emitActivated("wt-a", 3, RENDERER_ACTIVATION_ORIGIN);
+
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-b");
+    });
   });
 
   it("marks a host-pushed selection so the sync hook does not answer it with a set-active", async () => {

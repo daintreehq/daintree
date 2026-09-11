@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   useWorktrees: vi.fn(),
   selectionState: {
     activeWorktreeId: null as string | null,
+    restoreWorktreeId: null as string | null,
     selectWorktree: vi.fn(),
     setActiveWorktree: vi.fn(),
     // Only unread today because every active id here is also a live worktree,
@@ -209,6 +210,7 @@ describe("useActiveWorktreeSync host sync", () => {
     request().mockClear();
     _resetHostAppliedActivationForTesting();
     mocks.selectionState.activeWorktreeId = worktree.id;
+    mocks.selectionState.restoreWorktreeId = null;
     mocks.selectionState.deletedWorktrees = new Map();
     mocks.projectState.currentProject = { id: "p1", path: "/repo" };
     mocks.scratchState.currentScratch = null;
@@ -228,8 +230,15 @@ describe("useActiveWorktreeSync host sync", () => {
       origin: RENDERER_ACTIVATION_ORIGIN,
     });
     // Remembered so the echo handler can tell the ack of the latest request
-    // from a superseded one.
-    expect(latestActivationRequest()).toBe(worktree.id);
+    // from a superseded one, and keep its source if it has to catch up.
+    expect(latestActivationRequest()).toEqual({ worktreeId: worktree.id, durable: false });
+  });
+
+  it("records the request as durable when the pick is the restore target", () => {
+    mocks.selectionState.restoreWorktreeId = worktree.id;
+    renderHook(() => useActiveWorktreeSync());
+
+    expect(latestActivationRequest()).toEqual({ worktreeId: worktree.id, durable: true });
   });
 
   it("drops a host mark when the selection clears, so it cannot swallow a later pick", () => {

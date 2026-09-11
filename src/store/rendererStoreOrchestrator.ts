@@ -267,7 +267,16 @@ export function initStoreOrchestrator(): () => void {
   disposables.add(
     toDisposable(
       subscribeProjectViewLifecycle((phase) => {
-        if (phase === "revealed") runPendingFocusFollowRelease();
+        if (!focusFollowReleasePending) return;
+        if (phase === "revealed") {
+          runPendingFocusFollowRelease();
+        } else if (phase === "active") {
+          // Re-attached but possibly still behind the anti-flash bridge, and
+          // a switch rollback restores a view with only this signal. Re-arm
+          // rather than run, so the release lands once the view is
+          // observable (the callback re-checks).
+          armFocusFollowRelease();
+        }
       })
     )
   );
