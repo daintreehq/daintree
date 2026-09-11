@@ -32,7 +32,8 @@ type EvictionCandidate = {
  * Consecutive sampler readings below the warning edge before a pressure pass
  * may destroy anything (#12363). At the sampler's 30s cadence, two means the
  * reading was still low half a minute later — enough to tell a dip from a trend
- * while keeping the reaction to real pressure inside a minute.
+ * while confirming real pressure inside a minute. A view the user only just left
+ * also waits out MIN_PRESSURE_EVICTION_AGE_MS on top of that.
  */
 export const PRESSURE_SAMPLES_TO_CONFIRM = 2;
 
@@ -176,14 +177,20 @@ export function backgroundRestoreCapacity(
 export function evictStaleViews(
   host: ProjectViewManager,
   reason: EvictionReason,
-  forcePressure = false
+  forcePressure = false,
+  sampledAvailableMb?: number
 ): number {
   // Override the user-configured cap when system memory is low so we can
   // reclaim Chromium renderers (~100–500 MB each) before the OS hits
   // compressed-RAM throttling. The override is per-pass — `maxCachedViews`
   // is never mutated, so once pressure subsides the user's setting takes
   // effect on the next eviction.
-  const availableMb = getAvailableMemoryMb();
+  //
+  // The sampler hands over the reading that confirmed the pass, so the pass acts
+  // on the figure it counted. A fresh read landing above the warning edge would
+  // turn its one-view gradual pass into an unbudgeted trim to the configured cap
+  // that skips the minimum age (#12363).
+  const availableMb = sampledAvailableMb ?? getAvailableMemoryMb();
   const policy = host.memoryPressurePolicy;
   const { level, targetMax } =
     policy != null && availableMb != null
@@ -667,7 +674,7 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   }
   host.pressureSampleStreak = Math.min(host.pressureSampleStreak + 1, PRESSURE_SAMPLES_TO_CONFIRM);
   if (host.pressureSampleStreak < PRESSURE_SAMPLES_TO_CONFIRM) return;
-  evictStaleViews(host, "pressure");
+  evictStaleViews(host, "pressure", false, availableMb);
 }
 
 /**

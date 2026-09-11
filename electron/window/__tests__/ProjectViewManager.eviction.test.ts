@@ -265,6 +265,9 @@ function ageViewsPastPressureFloor(mgr: ProjectViewManager): void {
  */
 function armPressureLadder(mgr: ProjectViewManager): void {
   ageViewsPastPressureFloor(mgr);
+  // From a clean count: the manager's own randomly-phased sampler is live, and
+  // may already have taken a low reading while the fixture awaited its switches.
+  mgr.pressureSampleStreak = 0;
   const before = mgr.views.size;
   mgr.maybeEvictUnderPressure();
   expect(mgr.views.size).toBe(before);
@@ -2520,6 +2523,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
   });
 
   afterEach(() => {
+    // Stops this manager's randomly-phased sampler from ticking into a later
+    // test's memory stub and the shared logInfo mock.
+    manager.dispose();
     Object.defineProperty(process, "getSystemMemoryInfo", {
       configurable: true,
       value: originalSystemMemoryInfo,
@@ -3041,8 +3047,11 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   const tickPressureCheck = (mgr: ProjectViewManager) =>
     (mgr as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
 
+  /** Every manager built here, so the randomly-phased sampler each one starts is torn down. */
+  const managers: ProjectViewManager[] = [];
+
   function makeManager(cachedProjectViews: number) {
-    return new ProjectViewManager(win as never, {
+    const mgr = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
@@ -3052,6 +3061,8 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       assistantBackendsForProject,
       isTerminalLive,
     });
+    managers.push(mgr);
+    return mgr;
   }
 
   /** Three views (proj-a, proj-b oldest-first; proj-c active). */
@@ -3080,6 +3091,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   });
 
   afterEach(() => {
+    for (const mgr of managers.splice(0)) mgr.dispose();
     Object.defineProperty(process, "getSystemMemoryInfo", {
       configurable: true,
       value: originalSystemMemoryInfo,
@@ -3477,6 +3489,41 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
 
       tickPressureCheck(manager);
       expect(manager.getAllViews().length).toBe(2);
+
+      // And from confirmed pressure, not only a pending count: recovery wipes
+      // the streak, so the next dip needs two readings of its own.
+      setAvailableMb(BAND.warningMb);
+      tickPressureCheck(manager);
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(2);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(1);
+    });
+
+    it("needs fresh confirmation once the cache has held only the active view", async () => {
+      // With nothing cached to take, a tick has no reading to count, so it
+      // cannot carry an old confirmation over to a view cached afterwards.
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      setAvailableMb(1200);
+      armPressureLadder(manager);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      tickPressureCheck(manager);
+
+      // Healthy while switching, so a live sampler tick can only reset the count.
+      setAvailableMb(2500);
+      await manager.switchTo("proj-d", "/path/d");
+      await flushImmediates();
+      ageViewsPastPressureFloor(manager);
+
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(2);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-d"]);
     });
 
     it("starts the count over when either setter re-arms the band", async () => {
@@ -3521,10 +3568,86 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
         expect.anything()
       );
 
-      // Eligible from exactly a minute unused.
-      viewOf("proj-b").lastUsed = Date.now() - MIN_PRESSURE_EVICTION_AGE_MS;
+      // The boundary, on a pinned clock: a millisecond short still defers, and
+      // exactly a minute unused is old enough.
+      const leftAt = viewOf("proj-b").lastUsed;
+      const clock = vi.spyOn(Date, "now");
+      try {
+        clock.mockReturnValue(leftAt + MIN_PRESSURE_EVICTION_AGE_MS - 1);
+        tickPressureCheck(manager);
+        expect(manager.getAllViews().length).toBe(2);
+        expect(deferredLogs().at(-1)).toEqual({
+          projectId: "proj-b",
+          reason: "pressure",
+          ageMs: MIN_PRESSURE_EVICTION_AGE_MS - 1,
+          minimumAgeMs: MIN_PRESSURE_EVICTION_AGE_MS,
+        });
+
+        clock.mockReturnValue(leftAt + MIN_PRESSURE_EVICTION_AGE_MS);
+        tickPressureCheck(manager);
+        expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it("spares the view the user just left while pressure stays confirmed", async () => {
+      // The issue's symptom end to end: a real switch stamps the outgoing view,
+      // and a confirmed ladder must not take it on the very next tick.
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      setAvailableMb(1200);
+      armPressureLadder(manager);
       tickPressureCheck(manager);
-      expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      tickPressureCheck(manager);
+
+      expect(
+        manager
+          .getAllViews()
+          .map((v) => v.projectId)
+          .sort()
+      ).toEqual(["proj-b", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      expect(deferredLogs().at(-1)).toMatchObject({ projectId: "proj-c", reason: "pressure" });
+    });
+
+    it("acts on the reading that confirmed the pass, not a second read that crossed back", async () => {
+      // Over its cap, a pass that re-read memory and landed above the edge would
+      // stop being gradual: an unbudgeted trim to the cap that skips the minimum
+      // age. The confirming reading is the one the pass has to act on.
+      const mgr = makeManager(4);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      const wcA = createMockWebContents();
+      mgr.registerInitialView(
+        { webContents: wcA, setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      for (const id of ["proj-b", "proj-c", "proj-d"]) {
+        await mgr.switchTo(id, `/path/${id}`);
+        await flushImmediates();
+      }
+      (mgr as unknown as { maxCachedViews: number }).maxCachedViews = 2;
+      ageViewsPastPressureFloor(mgr);
+
+      const readingsMb = [1200, 1200, 2500];
+      Object.defineProperty(process, "getSystemMemoryInfo", {
+        configurable: true,
+        value: () => ({
+          free: (readingsMb.shift() ?? 2500) * 1024,
+          purgeable: 0,
+          total: 8 * 1024 * 1024,
+        }),
+      });
+      tickPressureCheck(mgr);
+      tickPressureCheck(mgr);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c", "proj-d"]);
     });
 
     it("holds the pass rather than handing a young view's eviction to an older, costlier one", async () => {

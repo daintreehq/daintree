@@ -107,9 +107,9 @@ const DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS = 30_000;
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
  * call (5–50 ms per invocation) out of the budget that would risk main-thread
  * jank. Each tick also evaluates the low-memory pressure floor (see
- * `maybeEvictUnderPressure`), which acts only on consecutive low readings, so
- * pressure-eviction latency is a couple of sample periods and needs no new
- * timer.
+ * `maybeEvictUnderPressure`), which acts only on consecutive low readings and
+ * spares a view used within the last minute, so pressure-eviction latency is a
+ * few sample periods and needs no new timer.
  */
 const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 

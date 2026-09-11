@@ -684,6 +684,9 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       tick.call(manager);
       tick.call(manager);
       tick.call(manager);
+      // One more with only the bridge left to offer: aged like the rest, so its
+      // exclusion is the only thing that can spare it now.
+      tick.call(manager);
 
       // The bridge (C) and the incoming active view (D) survive; A and B go.
       expect(setup.onViewEvicted).toHaveBeenCalledWith(initialWc.id);
@@ -1178,6 +1181,24 @@ describe("ProjectViewManager — background restore", () => {
     expect(result).toEqual({ status: "deferred", reason: "capacity" });
     expect(setup.manager.views.has("proj-b")).toBe(false);
     expect(setup.manager.views.has("proj-a")).toBe(true);
+  });
+
+  it("defers under pressure on the first low reading, without the ladder's confirmation", async () => {
+    // Admission reads the same target the ladder converges on, but it gates
+    // creating a renderer rather than destroying one — so it refuses on the
+    // reading in hand instead of waiting for a second (#12363). The cap has room,
+    // so pressure is the only reason to refuse.
+    const setup = createManager({ cachedProjectViews: 3 });
+    setup.manager.setMemoryPressurePolicy({ criticalMb: 1000, warningMb: 2000 });
+    stubSystemMemoryInfo({ free: 500 * 1024, total: 8 * 1024 * 1024 });
+    try {
+      const result = await setup.manager.restoreInBackground("proj-b", "/b", { lastUsed: 1 });
+      expect(result).toEqual({ status: "deferred", reason: "pressure" });
+      expect(setup.manager.views.has("proj-b")).toBe(false);
+      expect(setup.manager.pressureSampleStreak).toBe(0);
+    } finally {
+      restoreSystemMemoryInfo();
+    }
   });
 
   it("abandons an in-flight restore when the user switches to that project", async () => {

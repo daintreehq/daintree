@@ -98,18 +98,20 @@ function darwinComponentMb(kb: unknown): number {
 }
 
 /**
- * `availableMb` is what the OS can hand back cheaply: `free`, plus on Darwin
- * `purgeable` and `fileBacked`, which Electron reports only there — Windows and
- * Linux read `free` alone.
+ * `availableMb` is free memory plus, on Darwin, what Activity Monitor calls
+ * Cached Files: `fileBacked` + `purgeable`, which Electron reports only there,
+ * so Windows and Linux read `free` alone. That is the line macOS itself draws
+ * between reclaimable memory and Memory Used (app + wired + compressed).
  *
- * `fileBacked` is the file cache, and on a large Mac it is most of the
- * reclaimable memory: a 64 GB machine with a warm cache routinely shows ~1.5 GB
- * free + purgeable beside ~24 GB of it. Leaving it out read that machine as
- * permanently short and evicted its cached views around the clock (#12363).
+ * On a large Mac the file cache is most of it: a 64 GB machine with a warm
+ * cache routinely shows ~1.5 GB free + purgeable beside ~24 GB of `fileBacked`.
+ * Leaving that out read the machine as permanently short and evicted its cached
+ * views around the clock (#12363).
  *
- * The figure errs optimistic in one place — a cache under heavy churn costs
- * more to reclaim than a clean one. Pressure Daintree causes itself still
- * reaches ProcessMemoryMonitor's own-process RSS tiers, which never read this.
+ * The figure errs optimistic in one place: `fileBacked` counts active file
+ * pages as well as idle cache, and pages under heavy churn cost more to reclaim
+ * than clean ones. Pressure Daintree causes itself still reaches
+ * ProcessMemoryMonitor's own-process RSS tiers, which never read this.
  */
 export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
   const totalMb = os.totalmem() / 1024 / 1024;
