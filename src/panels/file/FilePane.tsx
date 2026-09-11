@@ -26,6 +26,10 @@ import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeC
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
+import {
+  FILE_METADATA_RUN_CLASS,
+  FILE_METADATA_STRIP_CLASS,
+} from "@/components/FileViewer/fileMetadataStrip";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
@@ -1540,11 +1544,22 @@ export function FilePane({
                   it describes the bytes on disk, which is exactly what source
                   mode shows. Rendered mode omits it (the document is the view). */}
               {metadata && (
-                <div
-                  data-testid="file-viewer-metadata"
-                  className="px-3 py-1 border-b border-border-default text-xs text-muted-foreground font-mono shrink-0"
-                >
-                  {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                <div data-testid="file-viewer-metadata" className={FILE_METADATA_STRIP_CLASS}>
+                  {/* The same inner run as the editor's strip, gap included:
+                      matching the row height is not enough on its own — with
+                      different item spacing the byte count still slides
+                      sideways when the mode toggles. */}
+                  <span className={FILE_METADATA_RUN_CLASS}>
+                    <span className="tabular-nums">{metadata.lineCount} lines</span>
+                    <span aria-hidden="true" className="text-text-muted">
+                      ·
+                    </span>
+                    <span className="tabular-nums">{metadata.sizeLabel}</span>
+                    <span aria-hidden="true" className="text-text-muted">
+                      ·
+                    </span>
+                    <span>UTF-8</span>
+                  </span>
                 </div>
               )}
               {isMarkdown ? (

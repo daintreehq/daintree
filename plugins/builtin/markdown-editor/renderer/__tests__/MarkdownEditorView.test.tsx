@@ -127,6 +127,39 @@ describe("MarkdownEditorView (#12323)", () => {
     expect(announceMock).toHaveBeenCalledWith("Saved");
   });
 
+  it("a save from the button hands focus back to the buffer it disables itself over", async () => {
+    // The button disables on a clean save, and a disabled control loses focus.
+    // Without the hand-off a keyboard user is left on nothing.
+    await renderReady();
+    await type("\nmore");
+    const button = screen.getByTestId("markdown-editor-save") as HTMLButtonElement;
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await waitFor(() => expect(button.disabled).toBe(true));
+    expect(editorView().hasFocus).toBe(true);
+  });
+
+  it("a save started from the buffer leaves focus where it was", async () => {
+    // The inverse rule: Cmd+S from inside the document must not be answered by
+    // grabbing focus, and neither must a save the user has since walked away from.
+    await renderReady();
+    await type("\nmore");
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("markdown-editor-save"));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("markdown-editor-dirty-state").textContent).toBe("Saved")
+    );
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+
   it("Mod-s inside the editor saves and never reaches the window", async () => {
     await renderReady();
     await type("!");

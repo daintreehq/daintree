@@ -3,7 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { openSearchPanel } from "@codemirror/search";
 import type { LanguageSupport } from "@codemirror/language";
-import { AlertTriangle, ExternalLink, FileWarning, RefreshCw, Save, XCircle } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileWarning, RefreshCw, XCircle } from "lucide-react";
 import type { FileEditorViewProps } from "@/registry/fileEditorRegistry";
 import { loadMarkdownSupport } from "@/components/FileViewer/codeMirrorLanguages";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
@@ -13,8 +13,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
-import { formatBytes } from "@/lib/formatBytes";
 import { cn } from "@/lib/utils";
+import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
 import { DocumentController } from "./documentController.js";
 import { identityKey } from "../shared/protocol.js";
 import { currentText, useDocumentStateStore, type DocumentRecord } from "./documentStateStore.js";
@@ -202,7 +202,23 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     return () => window.removeEventListener("daintree:find-in-panel", handler);
   }, [props.isFocused]);
 
-  const handleSave = useCallback(() => void controller?.save(), [controller]);
+  const handleSave = useCallback(async () => {
+    if (!controller) return;
+    // A save that lands makes the document clean, which disables the button
+    // that was just pressed — and a disabled control drops its focus, so a
+    // keyboard user ends up on nothing with the buffer they were editing one
+    // blind Tab away. Hand focus back, but only when they are still where the
+    // press left them: if the save was started from the buffer (Cmd+S) or they
+    // have since moved somewhere else deliberately, taking focus would be the
+    // ruder of the two mistakes.
+    const from = document.activeElement;
+    const fromSaveButton =
+      from instanceof HTMLElement && from.dataset.testid === "markdown-editor-save";
+    const clean = await controller.save();
+    if (!clean || !fromSaveButton) return;
+    const now = document.activeElement;
+    if (now === from || now === null || now === document.body) viewRef.current?.focus();
+  }, [controller]);
   const handleLoadDisk = useCallback(async () => {
     setConfirmLoadDisk(false);
     setShowCompare(false);
@@ -311,37 +327,17 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
 
   return (
     <div className="flex min-h-full flex-col" data-testid="markdown-editor">
-      <div
-        data-testid="markdown-editor-status"
-        className="flex items-center gap-3 px-3 py-1 border-b border-border-default text-xs text-muted-foreground font-mono shrink-0"
-      >
-        <span className="truncate">
-          {lineCount} lines · {formatBytes(new TextEncoder().encode(text).byteLength)} · UTF-8
-          {base?.hasBom ? " with BOM" : ""} · {eolLabel}
-        </span>
-        {base?.mixedEol && (
-          <span className="truncate" data-testid="markdown-editor-mixed-eol">
-            Mixed line endings — saving normalises to {eolLabel}
-          </span>
-        )}
-        <span className="ml-auto flex items-center gap-2">
-          <span aria-live="polite" data-testid="markdown-editor-dirty-state">
-            {record.saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"}
-          </span>
-          <Button
-            variant="contrast"
-            size="xs"
-            onClick={handleSave}
-            disabled={!dirty || record.saving || record.conflict !== null}
-            loading={record.saving}
-            aria-label="Save file"
-            data-testid="markdown-editor-save"
-          >
-            <Save />
-            Save
-          </Button>
-        </span>
-      </div>
+      <MarkdownEditorStatusBar
+        lineCount={lineCount}
+        byteLength={new TextEncoder().encode(text).byteLength}
+        hasBom={base?.hasBom ?? false}
+        eolLabel={eolLabel}
+        mixedEol={base?.mixedEol ?? false}
+        dirty={dirty}
+        saving={record.saving}
+        saveBlocked={record.conflict !== null}
+        onSave={() => void handleSave()}
+      />
 
       {record.status === "unavailable" && (
         <InlineStatusBanner
@@ -402,7 +398,12 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           icon={XCircle}
           title="Couldn't save"
           description={record.error}
-          action={{ id: "retry-save", label: "Retry", icon: RefreshCw, onClick: handleSave }}
+          action={{
+            id: "retry-save",
+            label: "Retry",
+            icon: RefreshCw,
+            onClick: () => void handleSave(),
+          }}
         />
       )}
 
