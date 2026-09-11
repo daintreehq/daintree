@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelCloseRequest } from "@/services/terminal/optimisticPanelClose";
 
 vi.mock("@/utils/logger", () => ({
@@ -42,6 +42,14 @@ vi.mock("@/store", () => {
 
 vi.mock("@/services/terminal/optimisticPanelClose", () => ({
   requestPanelClose: requestPanelCloseMock,
+}));
+// #12323: a dirty file panel registers a close guard. Off by default so the
+// existing close paths stay exactly as they were.
+const guardState = vi.hoisted(() => ({ guarded: false, pending: false }));
+vi.mock("@/services/panelCloseGuard", () => ({
+  hasPanelCloseGuard: () => guardState.guarded,
+  isPanelClosePending: () => guardState.pending,
+  consultPanelCloseGuards: vi.fn(async () => true),
 }));
 
 import { usePanelHandlers } from "../usePanelHandlers";
@@ -188,5 +196,44 @@ describe("usePanelHandlers", () => {
     act(() => result.current.handleTitleChange("New title"));
 
     expect(updateTitleMock).toHaveBeenCalledWith("p1", "New title");
+  });
+});
+
+describe("usePanelHandlers — guarded closes (#12323)", () => {
+  beforeEach(() => {
+    guardState.guarded = true;
+    guardState.pending = false;
+    requestPanelCloseMock.mockClear();
+    getPanelGroupMock.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    guardState.guarded = false;
+  });
+
+  it("re-arms the latch when the guard cancels, and defers onAfterClose to an accepted close", () => {
+    const onAfterClose = vi.fn();
+    const { result } = renderHook(() => usePanelHandlers({ terminalId: "t1", onAfterClose }));
+    act(() => result.current.handleClose());
+    expect(onAfterClose).not.toHaveBeenCalled();
+    const first = requestPanelCloseMock.mock.calls[0]?.[0];
+    expect(first?.onOutcome).toBeTypeOf("function");
+    act(() => first?.onOutcome?.(false));
+    expect(onAfterClose).not.toHaveBeenCalled();
+
+    // The next press asks again rather than doing nothing.
+    act(() => result.current.handleClose());
+    expect(requestPanelCloseMock).toHaveBeenCalledTimes(2);
+    const second = requestPanelCloseMock.mock.calls[1]?.[0];
+    act(() => second?.onOutcome?.(true));
+    expect(onAfterClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a second press while the prompt is still open", () => {
+    const { result } = renderHook(() => usePanelHandlers({ terminalId: "t1" }));
+    act(() => result.current.handleClose());
+    guardState.pending = true;
+    act(() => result.current.handleClose());
+    expect(requestPanelCloseMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -170,14 +170,18 @@ const mockPanelTwo: MockPanel = { id: "fb-2", kind: "file-browser" };
 // the pane defers its reveal refresh while parked offscreen (#11588).
 const dockState = { activeDockTerminalId: null as string | null };
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      panelsById: { "fb-1": mockPanel, "fb-2": mockPanelTwo },
-      setFileBrowserView: setFileBrowserViewMock,
-      activeDockTerminalId: dockState.activeDockTerminalId,
+vi.mock("@/store/panelStore", () => {
+  const getState = () => ({
+    panelsById: { "fb-1": mockPanel, "fb-2": mockPanelTwo },
+    setFileBrowserView: setFileBrowserViewMock,
+    activeDockTerminalId: dockState.activeDockTerminalId,
+  });
+  return {
+    usePanelStore: Object.assign((selector: (state: unknown) => unknown) => selector(getState()), {
+      getState,
     }),
-}));
+  };
+});
 
 // #11588: returning to a cached project view. A real listener registry rather
 // than a bare stub so unsubscribe-on-unmount is observable.
@@ -3265,4 +3269,44 @@ describe("FileBrowserPane tree navigation vs the viewer", () => {
 
     expect(treeProps.cursorPath).toBe("src/other.ts");
   });
+});
+
+describe("file browser document navigation guards", () => {
+  afterEach(async () => {
+    const { useFileDocumentStore } = await import("@/store/fileDocumentStore");
+    const { __resetPanelCloseGuardsForTests } = await import("@/services/panelCloseGuard");
+    useFileDocumentStore.setState({ byPanelId: {} });
+    __resetPanelCloseGuardsForTests();
+  });
+
+  it.each(["cancel", "proceed"] as const)(
+    "respects %s before switching a dirty browser document",
+    async (verdict) => {
+      const { useFileDocumentStore } = await import("@/store/fileDocumentStore");
+      const { registerPanelCloseGuard } = await import("@/services/panelCloseGuard");
+      mockPanel.browserSelectedPath = "plan.md";
+      useFileDocumentStore.getState().setFileDocument("fb-1", {
+        identityKey: "plan",
+        fileName: "plan.md",
+        draftText: "draft",
+        dirty: true,
+        conflict: false,
+        save: async () => true,
+        discard: async () => {},
+      });
+      const guard = vi.fn(async () => verdict);
+      registerPanelCloseGuard("fb-1", guard);
+      renderPane();
+      setFileBrowserViewMock.mockClear();
+      await act(async () => {
+        treeProps.onSelect?.("src/app.ts", false);
+      });
+      expect(guard).toHaveBeenCalledOnce();
+      if (verdict === "cancel") expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      else
+        expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+          browserSelectedPath: "src/app.ts",
+        });
+    }
+  );
 });

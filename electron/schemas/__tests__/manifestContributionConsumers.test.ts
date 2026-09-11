@@ -10,6 +10,7 @@ import {
   ContextMenuContributionSchema,
   CredentialFieldSchema,
   FileDecorationContributionSchema,
+  FileEditorContributionSchema,
   ForgeProviderContributionSchema,
   getPluginManifestSchema,
   KeybindingContributionSchema,
@@ -108,6 +109,7 @@ const SWEPT_SCHEMAS = {
   skills: SkillContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
+  fileEditors: FileEditorContributionSchema,
   agents: AgentContributionSchema,
   processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
@@ -139,6 +141,7 @@ const TOP_LEVEL_GROUPS = [
   "skills",
   "forgeProviders",
   "fileDecorationProviders",
+  "fileEditors",
   "agents",
   "processTools",
   "settings",
@@ -181,6 +184,7 @@ type FieldConsumerCoverage = {
     keyof z.infer<typeof FileDecorationContributionSchema>,
     ConsumerDescriptor
   >;
+  fileEditors: Record<keyof z.infer<typeof FileEditorContributionSchema>, ConsumerDescriptor>;
   agents: Record<keyof z.infer<typeof AgentContributionSchema>, ConsumerDescriptor>;
   processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
@@ -597,6 +601,28 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "scopeMatchesPattern routing" }],
       note: "Matched to route renderer decoration pulls to the provider.",
+    },
+  },
+  fileEditors: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "registerFileEditor" }],
+      note: "Keys the renderer-side editor registration the plugin's renderer entry mirrors from its manifest.",
+    },
+    slot: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "useFileEditor" }],
+      note: "Resolved enable-aware through the builtin view registry to the component the file panel mounts for Edit mode.",
+    },
+    extensions: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "resolveFileEditor" }],
+      note: "Matched case-insensitively against the panel file's extension to decide whether Edit is offered.",
+    },
+    maxBytes: {
+      mode: "verbatim",
+      consumers: [{ file: "src/panels/file/FilePane.tsx", symbol: "availableModes (edit gate)" }],
+      note: "Upper bound on the loaded file's byte size before the panel offers Edit.",
     },
   },
   agents: {

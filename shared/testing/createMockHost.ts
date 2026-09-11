@@ -13,6 +13,7 @@ import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
+import { createHash } from "node:crypto";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
   ActionDispatchResult,
@@ -496,6 +497,21 @@ function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
   if (typeof channel !== "string") return true;
   if (!allowEmpty && channel.length === 0) return true;
   return channel.includes(":");
+}
+
+/**
+ * The revision the mock reports for a text: sha256 hex of its UTF-8 bytes,
+ * the same shape the real host returns, so a plugin can hand it straight back
+ * as `expectedRevision`.
+ */
+function mockRevision(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function fsWriteError(code: string, message: string): Error & { code: string } {
+  const error = new Error(`${code}: ${message}`) as Error & { code: string };
+  error.code = code;
+  return error;
 }
 
 export function createMockHost(options: CreateMockHostOptions = {}): PluginHostApi & MockHostState {
@@ -1290,9 +1306,35 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         // to exercise a plugin's byte path without modelling binary storage.
         return new TextEncoder().encode(v);
       },
-      async writeFile(filePath, contents) {
+      async writeFile(filePath, contents, options) {
+        // The checked-write contract (#12323), modelled just far enough for a
+        // plugin's conflict path to be exercised: `expectedRevision` compares
+        // against the stored text's revision, `null` means create-new.
+        const existing = fsFiles.get(filePath);
+        if (options !== undefined) {
+          const expected = options.expectedRevision;
+          if (expected === null && existing !== undefined) {
+            throw fsWriteError("TARGET_EXISTS", `mock fs: "${filePath}" already exists`);
+          }
+          if (typeof expected === "string") {
+            if (existing === undefined) {
+              throw fsWriteError("TARGET_UNAVAILABLE", `mock fs: "${filePath}" does not exist`);
+            }
+            const currentRevision = mockRevision(existing);
+            if (currentRevision !== expected) {
+              throw Object.assign(
+                fsWriteError(
+                  "REVISION_MISMATCH",
+                  `mock fs: "${filePath}" changed since it was read`
+                ),
+                { currentRevision }
+              );
+            }
+          }
+        }
         fsFiles.set(filePath, contents);
         fsWriteCalls.push({ path: filePath, contents });
+        return { revision: mockRevision(contents) };
       },
       async readdir(dirPath, options) {
         options?.signal?.throwIfAborted();

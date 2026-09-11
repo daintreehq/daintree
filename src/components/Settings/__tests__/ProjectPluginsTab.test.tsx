@@ -58,6 +58,7 @@ const EMPTY_CONTRIBUTES: PluginManifest["contributes"] = {
   contextMenus: [],
   forgeProviders: [],
   fileDecorationProviders: [],
+  fileEditors: [],
   agents: [],
   processTools: [],
   recipes: [],

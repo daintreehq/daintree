@@ -704,11 +704,13 @@ export type FileRenderMode = "rendered" | "source";
 /**
  * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
  * only applies to markdown and HTML files; "diff" only to files with local
- * worktree changes. Every other file is source-only. Availability is derived
- * per file at render time, so a persisted mode whose capability is gone falls
- * back to "source" rather than being rewritten.
+ * worktree changes; "edit" only to files a built-in editor plugin claims
+ * (#12323), and only in the panel — the dialog stays read-only. Every other
+ * file is source-only. Availability is derived per file at render time, so a
+ * persisted mode whose capability is gone falls back to "source" rather than
+ * being rewritten.
  */
-export type FileViewMode = FileRenderMode | "diff";
+export type FileViewMode = FileRenderMode | "diff" | "edit";
 
 /**
  * File panel — read-only viewer for a repo file in a grid cell. Markdown and

@@ -19,7 +19,30 @@ export const daintreeThemeStyles = [
   { tag: t.heading1, color: "var(--theme-syntax-keyword)", fontWeight: "bold", fontSize: "1.4em" },
   { tag: t.heading2, color: "var(--theme-syntax-keyword)", fontWeight: "bold", fontSize: "1.2em" },
   { tag: t.heading3, color: "var(--theme-syntax-keyword)", fontWeight: "bold", fontSize: "1.1em" },
+  // h4-h6 stay bold at body size: the size ramp stops at h3 so deep headings
+  // read as structure without turning the source into a poster (#12323).
+  {
+    tag: [t.heading4, t.heading5, t.heading6],
+    color: "var(--theme-syntax-keyword)",
+    fontWeight: "bold",
+  },
   { tag: t.keyword, color: "var(--theme-syntax-keyword)" },
+  // Markdown inline structure (#12323). Emphasis and strong are typographic,
+  // not coloured: the text stays body text so a paragraph full of *italics*
+  // doesn't light up. Inline code shares the string role, matching the
+  // rendered document's code styling. Thematic breaks take the punctuation
+  // role. `t.list` is deliberately absent — lezer-markdown tags the whole
+  // list-item subtree with it, so any colour would wash every list; the
+  // markers themselves arrive as processingInstruction below.
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.strong, fontWeight: "bold" },
+  { tag: t.strikethrough, textDecoration: "line-through" },
+  { tag: t.monospace, color: "var(--theme-syntax-string)" },
+  { tag: t.contentSeparator, color: "var(--theme-syntax-punctuation)" },
+  // The markup characters themselves (`#`, `**`, `>`, `[]()`, fence ticks,
+  // table pipes) read as scaffolding rather than text: the comment role is the
+  // one syntax colour every theme already tunes for "present but secondary".
+  { tag: [t.processingInstruction, t.meta], color: "var(--theme-syntax-comment)" },
   // Comments paint with the dedicated syntax-comment role so they're validated
   // against the canvas they render on (RC-8) — not activity-idle, which is a
   // chrome signal tuned for the dark terminal, not editor legibility on a light

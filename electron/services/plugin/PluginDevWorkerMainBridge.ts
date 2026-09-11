@@ -778,8 +778,11 @@ export class PluginDevWorkerMainBridge {
         return this.host.fs.readFileBytes((params as FsPathParams).path, { signal });
       case "fs.writeFile": {
         const p = params as FsWriteFileParams;
-        await this.host.fs.writeFile(p.path, p.contents);
-        return undefined;
+        // The options object is the switch between the plain and the checked
+        // write (#12323), so its presence is forwarded exactly as sent.
+        return p.options === undefined
+          ? this.host.fs.writeFile(p.path, p.contents)
+          : this.host.fs.writeFile(p.path, p.contents, p.options);
       }
       case "fs.readdir": {
         const p = params as FsPathParams;

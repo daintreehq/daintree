@@ -1,6 +1,7 @@
 import { store } from "../../store.js";
 import type { InstalledPluginRecord, PluginInstallSource } from "../../../shared/types/plugin.js";
 import { parseProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
+import { DEFAULT_DISABLED_PLUGIN_IDS } from "../../../shared/config/pluginDefaults.js";
 
 /**
  * Owns the electron-store-backed `plugins.installed` provenance record CRUD and
@@ -11,17 +12,21 @@ export class PluginInstalledRecordsStore {
   /**
    * Read disabled plugin ids (built-in and user) from the user store.
    * Defensive against missing keys (in-memory fallback during tests) and read
-   * failures — a failed read returns an empty set so all plugins activate,
-   * matching the safest startup behavior.
+   * failures. Opt-in built-ins stay disabled until an explicit enable choice
+   * is saved; absence from the legacy disabled list isn't that choice.
    */
   getDisabledIds(): Set<string> {
     try {
-      const value = store.get("plugins") as { disabled?: unknown } | undefined;
+      const value = store.get("plugins") as { disabled?: unknown; enabled?: unknown } | undefined;
       const list = Array.isArray(value?.disabled) ? value.disabled : [];
-      return new Set(list.filter((id): id is string => typeof id === "string"));
+      const enabled = Array.isArray(value?.enabled) ? value.enabled : [];
+      return new Set([
+        ...DEFAULT_DISABLED_PLUGIN_IDS.filter((id) => !enabled.includes(id)),
+        ...list.filter((id): id is string => typeof id === "string"),
+      ]);
     } catch (err) {
       console.warn("[PluginService] Failed to read disabled plugins from store:", err);
-      return new Set();
+      return new Set(DEFAULT_DISABLED_PLUGIN_IDS);
     }
   }
 
@@ -104,13 +109,27 @@ export class PluginInstalledRecordsStore {
     if (typeof enabled !== "boolean") {
       throw new Error("setEnabled: enabled must be a boolean");
     }
-    const plugins = (store.get("plugins") as { disabled?: unknown } | undefined) ?? {};
+    const plugins =
+      (store.get("plugins") as { disabled?: unknown; enabled?: unknown } | undefined) ?? {};
     const current = Array.isArray(plugins.disabled)
       ? plugins.disabled.filter((id): id is string => typeof id === "string")
       : [];
     const next = enabled
       ? current.filter((id) => id !== pluginId)
       : Array.from(new Set([...current, pluginId]));
-    store.set("plugins", { ...plugins, disabled: next } as never);
+    const explicit = Array.isArray(plugins.enabled)
+      ? plugins.enabled.filter((id): id is string => typeof id === "string")
+      : [];
+    store.set("plugins", {
+      ...plugins,
+      disabled: next,
+      ...(DEFAULT_DISABLED_PLUGIN_IDS.includes(pluginId)
+        ? {
+            enabled: enabled
+              ? Array.from(new Set([...explicit, pluginId]))
+              : explicit.filter((id) => id !== pluginId),
+          }
+        : {}),
+    } as never);
   }
 }

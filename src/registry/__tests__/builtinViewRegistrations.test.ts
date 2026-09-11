@@ -1,8 +1,8 @@
 /**
  * Keeps the two halves of the built-in view seam honest: every
- * `forgeProviders.slots` ref in a built-in plugin's manifest must have a
- * matching `registerBuiltinView` call in that plugin's renderer entry, under the
- * declaring plugin's own id.
+ * `forgeProviders.slots` ref and every `fileEditors[].slot` (#12323) in a
+ * built-in plugin's manifest must have a matching `registerBuiltinView` call in
+ * that plugin's renderer entry, under the declaring plugin's own id.
  *
  * Nothing else checks this. The main process validates `slots` for shape only —
  * it cannot see the renderer bundle the ids resolve against (see
@@ -54,16 +54,25 @@ function readSlotRefs(manifest: unknown): string[] {
   const contributes = manifest.contributes;
   if (!isRecord(contributes)) return [];
   const providers = contributes.forgeProviders;
-  if (!Array.isArray(providers)) return [];
-
-  return providers.flatMap((provider) => {
-    if (!isRecord(provider)) return [];
-    const slots = provider.slots;
-    if (!isRecord(slots)) return [];
-    return Object.values(slots).filter(
-      (ref): ref is string => typeof ref === "string" && ref !== ""
-    );
-  });
+  const forgeRefs = Array.isArray(providers)
+    ? providers.flatMap((provider) => {
+        if (!isRecord(provider)) return [];
+        const slots = provider.slots;
+        if (!isRecord(slots)) return [];
+        return Object.values(slots).filter(
+          (ref): ref is string => typeof ref === "string" && ref !== ""
+        );
+      })
+    : [];
+  const editors = contributes.fileEditors;
+  const editorRefs = Array.isArray(editors)
+    ? editors.flatMap((editor) =>
+        isRecord(editor) && typeof editor.slot === "string" && editor.slot !== ""
+          ? [editor.slot]
+          : []
+      )
+    : [];
+  return [...forgeRefs, ...editorRefs];
 }
 
 function readManifestName(manifest: unknown, fallback: string): string {
@@ -135,7 +144,7 @@ describe("built-in plugin view registrations", () => {
       const registrations = parseRegistrations(plugin.rendererSource);
       const registeredIds = registrations.map((registration) => registration.id);
 
-      it("registers a view for every forge provider slot ref", () => {
+      it("registers a view for every forge provider and file editor slot ref", () => {
         const missing = plugin.slotRefs.filter((ref) => !registeredIds.includes(ref));
         expect(missing).toEqual([]);
       });

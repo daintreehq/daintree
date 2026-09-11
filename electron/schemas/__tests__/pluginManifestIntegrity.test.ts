@@ -268,3 +268,47 @@ describe("MCP server ${settings:*} token references (#10620)", () => {
     expect(issue?.path).toEqual(["contributes", "mcpServers", 1, "args", 0]);
   });
 });
+
+describe("contributes.fileEditors (#12323)", () => {
+  function fileEditor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "markdown",
+      slot: "markdown.editor",
+      extensions: ["md", "markdown"],
+      ...overrides,
+    };
+  }
+
+  it("accepts a well-formed entry and defaults the group to empty", () => {
+    expect(manifestWith({ fileEditors: [fileEditor()] }).success).toBe(true);
+    const bare = manifestWith({});
+    expect(bare.success && bare.data.contributes.fileEditors).toEqual([]);
+  });
+
+  it("accepts an explicit byte ceiling and refuses one above the host ceiling", () => {
+    expect(manifestWith({ fileEditors: [fileEditor({ maxBytes: 2 * 1024 * 1024 })] }).success).toBe(
+      true
+    );
+    expect(manifestWith({ fileEditors: [fileEditor({ maxBytes: 0 })] }).success).toBe(false);
+    expect(
+      manifestWith({ fileEditors: [fileEditor({ maxBytes: 65 * 1024 * 1024 })] }).success
+    ).toBe(false);
+  });
+
+  it("requires bare lower-case extensions without the dot", () => {
+    expect(manifestWith({ fileEditors: [fileEditor({ extensions: [".md"] })] }).success).toBe(
+      false
+    );
+    expect(manifestWith({ fileEditors: [fileEditor({ extensions: ["MD"] })] }).success).toBe(false);
+    expect(manifestWith({ fileEditors: [fileEditor({ extensions: [] })] }).success).toBe(false);
+  });
+
+  it("is strict about unknown fields", () => {
+    expect(manifestWith({ fileEditors: [fileEditor({ component: "x" })] }).success).toBe(false);
+  });
+
+  it("rejects duplicate ids", () => {
+    const result = manifestWith({ fileEditors: [fileEditor(), fileEditor()] });
+    expect(result.success).toBe(false);
+  });
+});

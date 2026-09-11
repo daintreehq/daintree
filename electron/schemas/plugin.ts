@@ -569,6 +569,39 @@ export const FileDecorationContributionSchema = z
   .strict();
 
 /**
+ * Largest file a `contributes.fileEditors` entry may claim. Above this the
+ * renderer holds the whole document in a CodeMirror buffer plus a draft copy,
+ * so the ceiling is a memory bound, not a product limit — the built-in
+ * Markdown editor asks for 2 MiB.
+ */
+export const FILE_EDITOR_MAX_BYTES_CEILING = 64 * 1024 * 1024;
+
+/**
+ * `fileEditors` manifest entry (#12323). `slot` names the builtin view the
+ * plugin's renderer registers for the editor; `extensions` are bare lower-case
+ * suffixes. Strict so a misspelt field is a manifest error, not a silently
+ * missing Edit mode. Built-in plugins only — enforced at load, where the
+ * origin is known, not here where it isn't.
+ */
+export const FileEditorContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    slot: z.string().min(1).max(128).regex(SAFE_ID_PATTERN),
+    extensions: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(16)
+          .regex(/^[a-z0-9]+$/, "extensions are bare lower-case suffixes without the dot")
+      )
+      .min(1)
+      .max(20),
+    maxBytes: z.number().int().positive().max(FILE_EDITOR_MAX_BYTES_CEILING).optional(),
+  })
+  .strict();
+
+/**
  * One `contributes.agents` entry (#9560). `id` and `command` use the shared
  * safe-id pattern (no shell metacharacters); a contribution whose `id` collides
  * with a built-in agent is rejected by the manifest-level `superRefine`. Strict
@@ -1144,6 +1177,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   skills: 50,
   forgeProviders: 20,
   fileDecorationProviders: 50,
+  fileEditors: 10,
   agents: 50,
   processTools: 100,
   settings: 200,
@@ -1234,6 +1268,10 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
   [
     "fileDecorationProviders",
     "decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every project the app has open.",
+  ],
+  [
+    "fileEditors",
+    "the editor slot resolves through the host-bundled builtin view registry, which only a built-in plugin's renderer can register into; a project plugin has no renderer in that bundle to resolve.",
   ],
   [
     "processTools",
@@ -1466,6 +1504,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(FileDecorationContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.fileDecorationProviders)
               .default([]),
+            fileEditors: z
+              .array(FileEditorContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.fileEditors)
+              .default([]),
             agents: z
               .array(AgentContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.agents)
@@ -1498,6 +1540,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             skills: [],
             forgeProviders: [],
             fileDecorationProviders: [],
+            fileEditors: [],
             agents: [],
             processTools: [],
             settings: [],
@@ -1782,6 +1825,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("skills", manifest.contributes.skills);
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
+      reportDuplicateIds("fileEditors", manifest.contributes.fileEditors);
       reportDuplicateIds("agents", manifest.contributes.agents);
       reportDuplicateIds("settings", manifest.contributes.settings);
       reportDuplicateIds("recipes", manifest.contributes.recipes);

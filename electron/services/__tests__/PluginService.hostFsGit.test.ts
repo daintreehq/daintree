@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import path from "node:path";
@@ -797,7 +798,10 @@ describe("JIT capability consent gating (#10524)", () => {
     const bridge = vi.fn(async () => "rejected" as const);
     getPluginCapabilityConsentService().setConsentBridge(bridge);
     const host = registerWith(true);
-    await expect(host.fs.writeFile(join(allowed, "builtin.txt"), "x")).resolves.toBeUndefined();
+    // Resolves the written revision (#12323) rather than void, for every caller.
+    await expect(host.fs.writeFile(join(allowed, "builtin.txt"), "x")).resolves.toEqual({
+      revision: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     expect(bridge).not.toHaveBeenCalled();
   });
 
@@ -990,5 +994,157 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
 
     // Fails closed: the token contributes no root rather than falling back.
     await expect(host.fs.readFile(join(ambient, "a.txt"))).rejects.toThrow();
+  });
+});
+
+// #12323: the checked write. Any options object selects it; without options
+// the call is the plain write it has always been (plus a revision result).
+describe("host.fs.writeFile checked path (#12323)", () => {
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+  it("plain writes keep their behaviour and now report the written revision", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "plain.txt");
+    const result = await host.fs.writeFile(target, "hello");
+    expect(result).toEqual({ revision: sha("hello") });
+    expect(await fs.readFile(target, "utf-8")).toBe("hello");
+  });
+
+  it("writes atomically when the expected revision matches and returns the new one", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "v1");
+    const result = await host.fs.writeFile(target, "v2", { expectedRevision: sha("v1") });
+    expect(result.revision).toBe(sha("v2"));
+    expect(await fs.readFile(target, "utf-8")).toBe("v2");
+    // No temp file left beside the target.
+    const siblings = await fs.readdir(allowed);
+    expect(siblings.filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it("refuses a stale revision with REVISION_MISMATCH carrying the current revision, and writes nothing", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "on disk");
+    let caught: (Error & { code?: string; currentRevision?: string }) | null = null;
+    try {
+      await host.fs.writeFile(target, "mine", { expectedRevision: sha("what I read") });
+    } catch (error) {
+      caught = error as Error & { code?: string; currentRevision?: string };
+    }
+    expect(caught?.code).toBe("REVISION_MISMATCH");
+    expect(caught?.message.startsWith("REVISION_MISMATCH:")).toBe(true);
+    expect(caught?.currentRevision).toBe(sha("on disk"));
+    expect(await fs.readFile(target, "utf-8")).toBe("on disk");
+  });
+
+  it("serialises competing checked writers to one winner", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "base");
+    const base = sha("base");
+    const results = await Promise.allSettled([
+      host.fs.writeFile(target, "A", { expectedRevision: base }),
+      host.fs.writeFile(target, "B", { expectedRevision: base }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const loser = rejected[0] as PromiseRejectedResult;
+    expect((loser.reason as { code?: string }).code).toBe("REVISION_MISMATCH");
+    const onDisk = await fs.readFile(target, "utf-8");
+    expect(["A", "B"]).toContain(onDisk);
+    expect((fulfilled[0] as PromiseFulfilledResult<{ revision: string }>).value.revision).toBe(
+      sha(onDisk)
+    );
+  });
+
+  it("reports a missing target as TARGET_UNAVAILABLE rather than treating it as empty", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "gone.md");
+    await expect(
+      host.fs.writeFile(target, "x", { expectedRevision: sha("") })
+    ).rejects.toMatchObject({ code: "TARGET_UNAVAILABLE" });
+    await expect(fs.stat(target)).rejects.toThrow();
+  });
+
+  it("creates a new file when expectedRevision is null and refuses an existing one", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "fresh.md");
+    const result = await host.fs.writeFile(target, "new", { expectedRevision: null });
+    expect(result.revision).toBe(sha("new"));
+    await expect(
+      host.fs.writeFile(target, "again", { expectedRevision: null })
+    ).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+    expect(await fs.readFile(target, "utf-8")).toBe("new");
+  });
+
+  it("create-new refuses a directory at the target without opening it", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "dir.md");
+    await fs.mkdir(target);
+    await expect(host.fs.writeFile(target, "x", { expectedRevision: null })).rejects.toMatchObject({
+      code: "TARGET_EXISTS",
+    });
+    expect((await fs.stat(target)).isDirectory()).toBe(true);
+  });
+
+  it("an options-only write replaces atomically without reading the target", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "opaque.md");
+    await fs.writeFile(target, "v1");
+    const readSpy = vi.spyOn(fs, "readFile");
+    try {
+      const result = await host.fs.writeFile(target, "v2", {});
+      expect(result.revision).toBe(sha("v2"));
+      expect(readSpy.mock.calls.some((call) => call[0] === target)).toBe(false);
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(await fs.readFile(target, "utf-8")).toBe("v2");
+  });
+
+  it("refuses to write through a symlink on the checked path", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = join(allowed, "real.md");
+    await fs.writeFile(real, "real");
+    const link = join(allowed, "link.md");
+    await fs.symlink(real, link);
+    await expect(host.fs.writeFile(link, "x", {})).rejects.toMatchObject({
+      code: "TARGET_IS_SYMLINK",
+    });
+    expect(await fs.readFile(real, "utf-8")).toBe("real");
+  });
+
+  it("preserves the file mode across an atomic replace", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "script.md");
+    await fs.writeFile(target, "v1");
+    await fs.chmod(target, 0o640);
+    await host.fs.writeFile(target, "v2", { expectedRevision: sha("v1") });
+    const stat = await fs.stat(target);
+    expect(stat.mode & 0o777).toBe(0o640);
+  });
+
+  it("rejects a malformed expectedRevision up front", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "v1");
+    await expect(host.fs.writeFile(target, "v2", { expectedRevision: "nope" })).rejects.toThrow(
+      /expectedRevision/
+    );
+    expect(await fs.readFile(target, "utf-8")).toBe("v1");
+  });
+
+  it("audits a checked write once, like a plain one", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await host.fs.writeFile(target, "v1", {});
+    const writeAudits = appendSpy.mock.calls.filter(
+      (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
+    );
+    expect(writeAudits.length).toBe(1);
   });
 });

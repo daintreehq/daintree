@@ -49,7 +49,7 @@ const TARGETS: Target[] = [
 // like a host bug.
 const UNENCODED_RULES = [
   "A view's id must equal the id of a declared panel, and a surface's viewId must name a declared view whose panel is not a PTY panel.",
-  'Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, processTools, mcpServers and forgeProviders are refused, and "scope": "project" is required.',
+  'Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers and forgeProviders are refused, and "scope": "project" is required.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
 ];

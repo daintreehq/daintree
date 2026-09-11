@@ -41,6 +41,7 @@ function makePlugin(opts: {
         contextMenus: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        fileEditors: [],
         agents: [],
         processTools: [],
         recipes: [],

@@ -762,6 +762,38 @@ When two providers declare the **same exact scope string**, their decorations me
 
 From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
+## File editors — _Shipped (built-in only)_
+
+Declares a writable **Edit** mode alongside Source and Rendered in the host’s file browser and standalone file panel for the listed extensions. The manifest names the builtin view slot the plugin's renderer registers for the editor surface; the host resolves it enable-aware, so disabling the plugin removes Edit live and a panel persisted in `edit` mode falls back to Source without rewriting the preference. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one contributor.
+
+```json
+{
+  "contributes": {
+    "fileEditors": [
+      {
+        "id": "markdown",
+        "slot": "markdown.editor",
+        "extensions": ["md", "markdown", "mkd"],
+        "maxBytes": 2097152
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
+| `slot` | yes | The builtin view id the plugin's renderer entry registers with `registerBuiltinView`; the `builtinViewRegistrations` test keeps the two halves in step. |
+| `extensions` | yes | Bare lower-case suffixes without the dot, matched case-insensitively against the file name. Extensions the entry omits (`mdx`) are never offered. |
+| `maxBytes` | no | Largest file the editor accepts. Above it the file stays viewable and Edit is not offered. Defaults to 2 MiB; capped at 64 MiB. |
+
+**Built-in only.** The slot resolves through the builtin view registry compiled into the host bundle, which an installed plugin's renderer cannot register into, so the host refuses the contribution from any other origin at load with a recorded load error. Opening file editors to installed plugins is a separate decision.
+
+The host offers Edit inside the file browser’s existing content area and in standalone file panels (the standalone file viewer dialog stays read-only), only for a file the reader loaded as text, and only inside a project or worktree root. The editor view receives the panel's fixed identity — file, containment root, worktree and project — and publishes its document state (draft, dirty, conflict, and the Save and Discard operations) through the host's file-document store, which drives the dirty mark in the panel chrome, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close.
+
 ## Agents — _Shipped (minimal tier)_
 
 Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CLI shows up as a named, selectable agent rather than a generic shell. Requires the `agent:register` capability, which is surfaced to the user at install time.

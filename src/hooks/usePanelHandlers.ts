@@ -1,6 +1,11 @@
 import { useCallback, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import {
+  consultPanelCloseGuards,
+  hasPanelCloseGuard,
+  isPanelClosePending,
+} from "@/services/panelCloseGuard";
 import { logError } from "@/utils/logger";
 
 export interface UsePanelHandlersConfig {
@@ -58,10 +63,22 @@ export function usePanelHandlers({
         return;
       }
 
-      if (trashedRef.current) return;
+      if (trashedRef.current || isPanelClosePending(terminalId)) return;
       trashedRef.current = true;
 
       if (force) {
+        // Alt+Click skips the trash, not the unsaved-work prompt (#12323).
+        if (hasPanelCloseGuard(terminalId)) {
+          void consultPanelCloseGuards([terminalId]).then((proceed) => {
+            if (!proceed) {
+              trashedRef.current = false;
+              return;
+            }
+            removePanel(terminalId);
+            onAfterClose?.();
+          });
+          return;
+        }
         removePanel(terminalId);
         onAfterClose?.();
         return;
@@ -71,8 +88,10 @@ export function usePanelHandlers({
       // canonical trash after the removal has painted. The X button closes the
       // whole tab group, so hide every panel in it.
       const group = getPanelGroup(terminalId);
+      const hideIds = group ? [...group.panelIds] : [terminalId];
+      const guarded = hideIds.some(hasPanelCloseGuard);
       requestPanelClose({
-        hideIds: group ? [...group.panelIds] : [terminalId],
+        hideIds,
         commit: () => {
           try {
             trashPanelGroup(terminalId);
@@ -80,8 +99,20 @@ export function usePanelHandlers({
             logError("Failed to trash terminal", error);
           }
         },
+        // A guarded close reports its verdict later: a cancel re-arms the
+        // latch so the next X press asks again, and `onAfterClose` waits for
+        // an accepted close. Unguarded closes keep the synchronous shape.
+        onOutcome: guarded
+          ? (accepted) => {
+              if (!accepted) {
+                trashedRef.current = false;
+                return;
+              }
+              onAfterClose?.();
+            }
+          : undefined,
       });
-      onAfterClose?.();
+      if (!guarded) onAfterClose?.();
     },
     [
       removePanel,

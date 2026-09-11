@@ -23,6 +23,9 @@ import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
+import { useProjectStore } from "@/store/projectStore";
+import { getFileDocumentProjection, useFileDocumentFlags } from "@/store/fileDocumentStore";
+import { consultPanelCloseGuards } from "@/services/panelCloseGuard";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { flushPanelPersistence } from "@/store/slices";
@@ -85,7 +88,41 @@ export function FileBrowserPane({
   onRestore,
   showRestoreControl,
 }: FileBrowserPaneProps) {
-  const setFileBrowserView = usePanelStore((state) => state.setFileBrowserView);
+  const updateFileBrowserView = usePanelStore((state) => state.setFileBrowserView);
+  const project = useProjectStore((state) => state.currentProject);
+  const { dirty, conflict } = useFileDocumentFlags(id);
+  const navigationRequest = useRef(0);
+  const setFileBrowserView = useCallback(
+    (panelId: string, patch: Parameters<typeof updateFileBrowserView>[1]) => {
+      const current = usePanelStore.getState().panelsById[panelId];
+      const changesDocument =
+        "browserSelectedPath" in patch &&
+        current?.kind === "file-browser" &&
+        patch.browserSelectedPath !== current.browserSelectedPath;
+      if (!changesDocument) {
+        updateFileBrowserView(panelId, patch);
+        return;
+      }
+      const request = ++navigationRequest.current;
+      if (!getFileDocumentProjection(panelId)?.dirty) {
+        updateFileBrowserView(panelId, patch);
+        return;
+      }
+      void consultPanelCloseGuards([panelId]).then((proceed) => {
+        if (proceed && navigationRequest.current === request) updateFileBrowserView(panelId, patch);
+      });
+    },
+    [updateFileBrowserView]
+  );
+  const handleClose = useCallback(() => {
+    if (location !== "dialog" || !getFileDocumentProjection(id)?.dirty) {
+      onClose?.();
+      return;
+    }
+    void consultPanelCloseGuards([id]).then((proceed) => {
+      if (proceed) onClose?.();
+    });
+  }, [id, location, onClose]);
 
   // What the VIEWER column is showing. The name is historical (#11620 named the
   // persisted field); everything downstream of it — the hook's kind resolution,
@@ -1116,7 +1153,17 @@ export function FileBrowserPane({
       location={location}
       isMultiPanelGrid={isMultiPanelGrid}
       onFocus={onFocus}
-      onClose={onClose}
+      onClose={handleClose}
+      headerContent={
+        dirty ? (
+          <span
+            role="img"
+            aria-label={conflict ? "Unsaved changes, file changed on disk" : "Unsaved changes"}
+            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-text-secondary"
+          />
+        ) : undefined
+      }
+      headerContentPlacement="trailing"
       onToggleMaximize={onToggleMaximize}
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
@@ -1325,6 +1372,15 @@ export function FileBrowserPane({
           >
             <FileBrowserViewer
               panelId={id}
+              editorContext={
+                project && (source?.kind === "worktree" || basePath === project.path)
+                  ? {
+                      projectId: project.id,
+                      worktreePath: source?.kind === "worktree" ? basePath : null,
+                      isFocused: !!isFocused,
+                    }
+                  : undefined
+              }
               filePath={selectedFilePath}
               rootPath={basePath}
               fileName={selectedFileName}

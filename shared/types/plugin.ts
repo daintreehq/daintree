@@ -22,6 +22,29 @@ import type { AgentState, WaitingReason } from "./agent.js";
 import type { AgentDetectionConfig } from "../config/agentRegistry.js";
 import type { z } from "zod";
 
+/**
+ * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
+ * renderer registers an editor view for files with the listed extensions,
+ * offered by the host file panel as its writable **Edit** mode.
+ *
+ * `slot` names a builtin view id the plugin's renderer entry registers with
+ * `registerBuiltinView`; the host resolves it enable-aware, so disabling the
+ * plugin removes the mode live. Built-in plugins only in v1: the builtin view
+ * registry is compiled into the host bundle, which an installed plugin's
+ * renderer cannot reach, so the host refuses the contribution from any other
+ * origin at load.
+ */
+export interface FileEditorContribution {
+  /** Namespaced at runtime as `{pluginId}.{id}`. */
+  id: string;
+  /** Builtin view id the plugin's renderer registers for the editor surface. */
+  slot: string;
+  /** Lower-case extensions without the dot (`["md", "markdown"]`), matched case-insensitively. */
+  extensions: string[];
+  /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
+  maxBytes?: number;
+}
+
 export interface PanelContribution {
   id: string;
   name: string;
@@ -835,6 +858,14 @@ export interface PluginManifest {
     skills: SkillContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
+    /**
+     * Plugin-contributed file editors (#12323): an extra, writable mode on the
+     * host's file panel for the declared extensions. Built-in plugins only in
+     * v1 — the slot resolves through the host-bundled builtin view registry,
+     * which an installed plugin's renderer cannot reach. Empty unless the
+     * plugin ships an editor.
+     */
+    fileEditors: FileEditorContribution[];
     /**
      * Plugin-contributed launchable agents (#9560). Each entry registers an
      * {@link PluginAgentContribution} into the effective agent registry at load
@@ -2252,6 +2283,46 @@ export interface PluginFsStat {
 }
 
 /**
+ * Options for the checked write path of {@link PluginFsApi.writeFile}
+ * (#12323). Passing any options object selects the checked path.
+ */
+export interface PluginFsWriteOptions {
+  /**
+   * The revision the caller last read — the sha256 hex of the file's bytes,
+   * as returned by an earlier write or computed by the caller from
+   * {@link PluginFsApi.readFileBytes}. The write is refused with
+   * `REVISION_MISMATCH` when the file's current bytes hash differently; the
+   * error carries the current revision so the caller can enter a conflict
+   * state without a second read. `null` means the file must not exist yet
+   * (a create-new write, refused with `TARGET_EXISTS` otherwise). Omit it to
+   * write atomically without a freshness check.
+   */
+  expectedRevision?: string | null;
+}
+
+export interface PluginFsWriteResult {
+  /** sha256 hex of the bytes written — the caller's next `expectedRevision`. */
+  revision: string;
+}
+
+/**
+ * Error codes a checked {@link PluginFsApi.writeFile} rejects with, carried on
+ * the error's `code` property alongside a `message` that starts with the same
+ * token. In-process callers (built-in plugins) receive the error object
+ * intact; an error crossing the plugin worker port or the renderer bridge
+ * keeps only its message, so a caller behind either boundary should match on
+ * the message prefix.
+ */
+export type PluginFsWriteErrorCode =
+  "REVISION_MISMATCH" | "TARGET_UNAVAILABLE" | "TARGET_EXISTS" | "TARGET_IS_SYMLINK";
+
+export interface PluginFsRevisionMismatchError extends Error {
+  code: "REVISION_MISMATCH";
+  /** The revision of the bytes on disk at the moment the write was refused. */
+  currentRevision: string;
+}
+
+/**
  * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
  *
  * Every path argument is resolved against the plugin's declared
@@ -2298,8 +2369,28 @@ export interface PluginFsApi {
    * already exist within scope). Rejects on a missing write capability or an
    * out-of-scope path. Recorded in the audit trail. No cancellation signal —
    * partial-write semantics are deliberately out of scope.
+   *
+   * Without `options` this is the plain write it has always been. Passing an
+   * `options` object — even an empty one — selects the checked write
+   * (#12323): the host serialises writes per resolved path, refuses a symlink
+   * target, replaces the file atomically (sibling temp file, flush, rename,
+   * original mode preserved), and compares the file's current bytes against
+   * {@link PluginFsWriteOptions.expectedRevision} before touching it. Either
+   * path resolves the revision of the bytes actually written, so the next
+   * `expectedRevision` needs no re-read.
+   *
+   * What the checked write promises: it never clobbers a change the caller has
+   * not seen, never leaves a partial file, and serialises every host-mediated
+   * writer. What it does not promise: a lock against an uncooperative external
+   * process — a write that lands between the hash check and the rename is
+   * overwritten. The window is small, and callers that care keep their own
+   * copy of what they asked to write.
    */
-  writeFile(filePath: string, contents: string): Promise<void>;
+  writeFile(
+    filePath: string,
+    contents: string,
+    options?: PluginFsWriteOptions
+  ): Promise<PluginFsWriteResult>;
   /**
    * List a directory's immediate children. Rejects on a missing read capability
    * or an out-of-scope path.

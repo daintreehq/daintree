@@ -452,6 +452,8 @@ export interface StoreSchema {
    */
   plugins: {
     disabled: string[];
+    /** Explicit enable choices, including opt-in built-ins. Missing means no choice yet. */
+    enabled?: string[];
     /** @deprecated Merged into `disabled` by migration021 (#9284). Read-only carryover. */
     disabledBuiltins?: string[];
     /** Master switch for the plugin-action audit log. Defaults to true. */

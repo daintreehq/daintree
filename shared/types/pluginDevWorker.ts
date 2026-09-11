@@ -32,6 +32,7 @@ import type {
   PluginProcessMode,
   PluginPanelBadge,
   BuiltInPluginCapability,
+  PluginFsWriteOptions,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -456,6 +457,8 @@ export interface FsPathParams {
 export interface FsWriteFileParams {
   path: string;
   contents: string;
+  /** Present only for the checked write (#12323); its absence is the plain write. */
+  options?: PluginFsWriteOptions;
 }
 
 /** Params for `git.status` / `git.diff` / `git.add` / `git.commit` (`host-call`). */
