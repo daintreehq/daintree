@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowUpCircle, RefreshCw, Trash2 } from "lucide-react";
 import {
   getPluginCategoryMeta,
   resolvePluginCategory,
@@ -45,7 +45,7 @@ export function pluginLabel(plugin: LoadedPluginInfo): string {
 }
 
 const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
 
 /**
  * Declared capabilities in the order {@link BUILT_IN_PLUGIN_CAPABILITIES} defines
@@ -79,9 +79,14 @@ function PluginCapabilityList({
 
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-        Permissions
-      </h4>
+      {/* No "Permissions" heading here — it sat directly under a tab already
+          labelled Permissions and spent the line saying nothing. The line now
+          says what the list MEANS, which is the part a reader can't infer: this
+          is the ceiling the host enforces, not a log of what has been used. */}
+      <p className="text-2xs text-text-secondary">
+        Daintree refuses anything outside this list. Some of these still ask the first time
+        they&rsquo;re used.
+      </p>
       {plugin.pluginDanger === "confirm" && (
         <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
           <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
@@ -130,7 +135,7 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
                 {command.description}
               </div>
             )}
-            <div className="text-2xs text-daintree-text/40 mt-0.5">
+            <div className="text-2xs text-text-secondary mt-0.5">
               {command.kind === "query"
                 ? "Available to agents and automation"
                 : "Run it from the command palette"}
@@ -284,6 +289,11 @@ export function PluginDetailPane({
   // file-installed plugins and built-ins don't, so the button stays disabled
   // with an explanatory tooltip.
   const canCheckUpdate = plugin.originalUrl !== null;
+  // `updateAvailable` rides on the plugin record and reaches the renderer, but
+  // nothing in the UI read it — a plugin with a known newer version looked
+  // exactly like one that was current, and the only way to find out was to
+  // press a button whose label is "check".
+  const updateAvailable = plugin.updateAvailable;
   const updateTooltip = canCheckUpdate
     ? checkingUpdate
       ? "Checking for a new version…"
@@ -382,7 +392,7 @@ export function PluginDetailPane({
               </div>
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
-              <div className="text-2xs text-daintree-text/40 mt-1">
+              <div className="text-2xs text-text-secondary mt-1">
                 {plugin.updatedAt
                   ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
                   : `Installed ${formatRelativeTime(plugin.installedAt)}`}
@@ -441,7 +451,7 @@ export function PluginDetailPane({
                   size="icon-sm"
                   onClick={onUninstall}
                   aria-label={`Uninstall ${label}`}
-                  className="text-daintree-text/50 hover:text-status-error"
+                  className="text-text-secondary hover:text-status-error"
                 >
                   <Trash2 />
                 </Button>
@@ -451,6 +461,55 @@ export function PluginDetailPane({
           )}
         </div>
       </div>
+
+      {/* Health and lifecycle sit ABOVE the tabs, not inside Overview. A
+          failure buried under the description meant the pane opened reading as
+          if the plugin were fine, and it vanished entirely the moment the user
+          switched to Permissions or Settings. These are the reason the user
+          came here; they outrank the tab they happen to be on. */}
+      {plugin.blocklisted === true && (
+        <div className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+          <AlertCircle
+            className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
+            aria-hidden="true"
+          />
+          <p className="text-2xs text-status-danger break-words">
+            Blocked from loading: {plugin.blocklistReason ?? "flagged by the Daintree blocklist"}
+          </p>
+        </div>
+      )}
+
+      {plugin.loadError && (
+        <div
+          className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
+          role="status"
+        >
+          <AlertCircle
+            className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <p className="text-2xs font-medium text-status-danger">
+              This plugin is switched on but didn't start
+            </p>
+            <p className="text-2xs text-status-danger break-words mt-0.5 select-text">
+              {plugin.loadError.message}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {updateAvailable && (
+        <div className="mt-3 flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default">
+          <ArrowUpCircle className="w-3.5 h-3.5 text-status-warning shrink-0" aria-hidden="true" />
+          <p className="text-2xs text-text-primary min-w-0 flex-1">
+            Update available &middot; {updateAvailable.version}
+          </p>
+          <Button variant="outline" size="xs" onClick={onCheckForUpdate} disabled={checkingUpdate}>
+            Update plugin
+          </Button>
+        </div>
+      )}
 
       <div className="mt-4">
         <SettingsSubtabBar
@@ -470,31 +529,27 @@ export function PluginDetailPane({
             <p className="text-xs text-text-secondary">No description provided.</p>
           )}
 
+          {/* Where it actually came from. A "URL" badge names the KIND of
+              source while withholding the one fact that makes it checkable —
+              which host it was downloaded from. Selectable, because the useful
+              thing to do with it is paste it somewhere. */}
+          {plugin.originalUrl && (
+            <div>
+              <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">
+                Source
+              </p>
+              <p className="text-2xs text-text-secondary mt-0.5 break-all select-text font-mono">
+                {plugin.originalUrl}
+              </p>
+            </div>
+          )}
+
           {commands.length > 0 && <PluginContributedCommands commands={commands} />}
 
           {panels.length > 0 && <PluginContributedPanels panels={panels} />}
 
           {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
             <PluginContributors authors={plugin.manifest.authors} />
-          )}
-
-          {plugin.blocklisted === true && (
-            <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-              <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-2xs text-status-danger break-words">
-                Blocked from loading:{" "}
-                {plugin.blocklistReason ?? "flagged by the Daintree blocklist"}
-              </p>
-            </div>
-          )}
-
-          {plugin.loadError && (
-            <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-              <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-2xs text-status-danger break-words">
-                Failed to load: {plugin.loadError.message}
-              </p>
-            </div>
           )}
         </div>
       )}

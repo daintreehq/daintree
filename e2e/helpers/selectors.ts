@@ -445,9 +445,11 @@ export const SEL = {
     manager: '[data-testid="plugin-manager-view"]',
     back: '[aria-label="Back"]',
     close: '[aria-label="Close plugin manager"]',
-    list: '[role="listbox"][aria-label="All plugins"]',
-    option: '[role="listbox"][aria-label="All plugins"] [role="option"]',
-    filterInput: '[aria-label="Filter plugins"]',
+    // The master list is a plain list, not a composite listbox: a listbox may
+    // only own option/group, and each row carries a sibling enable switch.
+    list: '[data-testid="plugin-list"]',
+    option: '[data-testid="plugin-list"] li',
+    filterInput: '[aria-label="Search plugins"]',
     urlInput: '[aria-label="Plugin URL"]',
     tabOverview: '[role="tab"][data-tab="overview"]',
     tabSettings: '[role="tab"][data-tab="settings"]',

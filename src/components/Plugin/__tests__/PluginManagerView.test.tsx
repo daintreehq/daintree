@@ -154,7 +154,40 @@ function renderDialog() {
  * plugin selected first.
  */
 async function selectPlugin(name = "Acme Demo") {
-  fireEvent.click(await screen.findByRole("option", { name: new RegExp(name, "i") }));
+  fireEvent.click(await findPluginRowButton(name));
+}
+
+/** The master list container. A plain list now, not a composite listbox. */
+function pluginList(): HTMLElement {
+  return screen.getByTestId("plugin-list");
+}
+
+/**
+ * The selection button inside a plugin's row.
+ *
+ * Rows are `<li>` elements holding two controls — the selection button and the
+ * enable switch — so a name-based role query would be ambiguous. Scope to the
+ * row first, then take its selection button.
+ */
+function pluginRowButton(name: string): HTMLElement {
+  const row = pluginRow(name);
+  const button = row.querySelector("button");
+  if (!button) throw new Error(`No selection button in row for "${name}"`);
+  return button as HTMLElement;
+}
+
+async function findPluginRowButton(name: string): Promise<HTMLElement> {
+  await screen.findByTestId("plugin-list");
+  return waitFor(() => pluginRowButton(name));
+}
+
+/** The `<li>` row whose visible text contains `name`. */
+function pluginRow(name: string): HTMLElement {
+  const pattern = new RegExp(name, "i");
+  const rows = within(pluginList()).getAllByRole("listitem");
+  const match = rows.find((row) => pattern.test(row.textContent ?? ""));
+  if (!match) throw new Error(`No plugin row matching "${name}"`);
+  return match;
 }
 
 describe("PluginManagerView", () => {
@@ -314,7 +347,7 @@ describe("PluginManagerView", () => {
     ]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
-    expect(screen.getByText("Explore plugins")).toBeTruthy();
+    expect(screen.getByText("Installed plugins")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
@@ -323,13 +356,11 @@ describe("PluginManagerView", () => {
     renderDialog();
     await screen.findAllByText("Acme Demo");
 
-    const option = screen.getByRole("option", { name: /Acme Demo/i });
-    expect(option.getAttribute("aria-selected")).toBe("false");
+    const option = pluginRowButton("Acme Demo");
+    expect(option.getAttribute("aria-current")).toBeNull();
     fireEvent.click(option);
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
-        "true"
-      )
+      expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true")
     );
   });
 
@@ -343,18 +374,14 @@ describe("PluginManagerView", () => {
     // First click selects and fills the detail pane — Settings tab appears.
     await selectPlugin();
     expect(await screen.findByRole("tab", { name: "Settings" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
-      "true"
-    );
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
 
     // Clicking the same row again clears the selection and restores the prompt.
     await selectPlugin();
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
-        "false"
-      )
+      expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBeNull()
     );
-    expect(screen.getByText("Explore plugins")).toBeTruthy();
+    expect(screen.getByText("Installed plugins")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
@@ -391,7 +418,7 @@ describe("PluginManagerView", () => {
     // The settings form and its fields must live outside the listbox — the
     // whole point of the master-detail split (#9555) is that the list row
     // never expands inline.
-    const listbox = within(screen.getByRole("listbox"));
+    const listbox = within(pluginList());
     expect(listbox.queryByLabelText("API key")).toBeNull();
   });
 
@@ -406,10 +433,8 @@ describe("PluginManagerView", () => {
     await waitFor(() =>
       expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", false)
     );
-    expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
-      "false"
-    );
-    expect(screen.getByText("Explore plugins")).toBeTruthy();
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBeNull();
+    expect(screen.getByText("Installed plugins")).toBeTruthy();
   });
 
   it("re-hydrates settings for the newly selected plugin when switching", async () => {
@@ -572,8 +597,10 @@ describe("PluginManagerView", () => {
     renderDialog();
     await screen.findAllByText("Acme Demo");
     await selectPlugin();
-    // Load error is on the Overview tab (default) — no tab click needed.
-    expect(await screen.findByText(/Failed to load: boom/)).toBeTruthy();
+    // The failure banner sits above the tab bar now, so it shows on every tab
+    // rather than only on Overview. What must survive is the real cause.
+    expect(await screen.findByText(/boom/)).toBeTruthy();
+    expect(screen.getByText(/didn't start/)).toBeTruthy();
   });
 
   it("does not offer uninstall for a built-in plugin", async () => {
@@ -585,7 +612,7 @@ describe("PluginManagerView", () => {
     // Built-in is the catalog default, so the row shows no provenance badge
     // (only non-builtin sources earn one); the detail pane still carries the
     // full "Built-in" source badge.
-    const listbox = screen.getByRole("listbox");
+    const listbox = pluginList();
     expect(within(listbox).queryByText("Built-in")).toBeNull();
     // Uninstall lives in the detail pane now — select and confirm it's absent
     // for a built-in.
@@ -1216,9 +1243,10 @@ describe("PluginManagerView", () => {
 
   describe("grouping", () => {
     // Distinct manifest names + display names so each plugin is uniquely
-    // addressable across sections. Section headers are now role="option"
-    // aria-disabled rows inside role="presentation" wrappers (LESSON #9006 —
-    // role="group" inside role="listbox" drops under Chromium 146 + VoiceOver).
+    // addressable across sections. Each category is a <section> with a real
+    // heading over its own list — the old disabled-option headers only existed
+    // because the list was a listbox, where a role="group" label drops under
+    // Chromium 146 + VoiceOver (LESSON #9006).
     const named = (
       overrides: Partial<Omit<LoadedPluginInfo, "manifest">> & {
         manifest?: Partial<LoadedPluginInfo["manifest"]>;
@@ -1232,22 +1260,22 @@ describe("PluginManagerView", () => {
       };
     };
 
-    // Section header rows are aria-disabled options with aria-label set to the
-    // section name. Find a plugin's section by locating the section header option
-    // and the nearest listbox, then scoping within it.
+    // Each category renders as a <section> labelled by its heading, so a
+    // plugin's section is found by the heading and scoped through its ancestor.
     const pluginInSection = (sectionLabel: string, pluginName: string) => {
-      const listbox = screen.getByRole("listbox");
-      const sectionHeader = within(listbox).getByRole("option", {
-        name: sectionLabel,
+      const heading = within(pluginList()).getByRole("heading", {
+        name: new RegExp(`^${sectionLabel}\\b`),
       });
-      // The section header and its sibling rows share a role="presentation" parent.
-      const sectionContainer = sectionHeader.closest("[role='presentation']") as HTMLElement;
+      const sectionContainer = heading.closest("section") as HTMLElement;
       return within(sectionContainer).getByText(pluginName);
     };
 
     const sectionExists = (sectionLabel: string) => {
-      const listbox = screen.getByRole("listbox");
-      return within(listbox).queryByRole("option", { name: sectionLabel }) !== null;
+      return (
+        within(pluginList()).queryByRole("heading", {
+          name: new RegExp(`^${sectionLabel}\\b`),
+        }) !== null
+      );
     };
 
     it("places a plugin with a declared category in that category's section", async () => {
@@ -1288,7 +1316,7 @@ describe("PluginManagerView", () => {
       // No quarantine section — disabled plugins dim in place (#9554 successor).
       expect(pluginInSection("Forge providers", "Core GitHub")).toBeTruthy();
       expect(sectionExists("Disabled")).toBe(false);
-      const listbox = screen.getByRole("listbox");
+      const listbox = pluginList();
       expect(within(listbox).getByText("Disabled")).toBeTruthy();
     });
 
@@ -1311,15 +1339,14 @@ describe("PluginManagerView", () => {
       expect(pluginInSection("Other", "Old Thing")).toBeTruthy();
       // Each plugin lands in exactly one section (the second match per name is
       // its catalog card in the detail pane, outside the listbox).
-      const listbox = screen.getByRole("listbox");
+      const listbox = pluginList();
       expect(within(listbox).getAllByText("Core GitHub").length).toBe(1);
       expect(within(listbox).getAllByText("Acme Notes").length).toBe(1);
       expect(within(listbox).getAllByText("Old Thing").length).toBe(1);
       // Sections render in PLUGIN_CATEGORIES order with empty ones omitted.
       const sectionHeaders = within(listbox)
-        .getAllByRole("option", { hidden: true })
-        .filter((el) => el.getAttribute("aria-disabled") === "true")
-        .map((el) => el.getAttribute("aria-label"));
+        .getAllByRole("heading")
+        .map((el) => el.textContent?.replace(/\d+$/, "").trim());
       expect(sectionHeaders).toEqual(["Forge providers", "Workspace", "Other"]);
     });
 
@@ -1330,9 +1357,9 @@ describe("PluginManagerView", () => {
       ]);
       renderDialog();
       await screen.findAllByText("Alpha");
-      const listbox = screen.getByRole("listbox");
-      const sectionHeader = within(listbox).getByRole("option", { name: "Other" });
-      const sectionContainer = sectionHeader.closest("[role='presentation']") as HTMLElement;
+      const listbox = pluginList();
+      const sectionHeader = within(listbox).getByRole("heading", { name: /^Other\b/ });
+      const sectionContainer = sectionHeader.closest("section") as HTMLElement;
       const labels = within(sectionContainer)
         .getAllByText(/^(Alpha|Zebra)$/)
         .map((el) => el.textContent);
@@ -1474,8 +1501,8 @@ describe("PluginManagerView", () => {
       await waitFor(() => expect(screen.queryByText("Plugin01")).toBeNull());
       expect(screen.getAllByText("Plugin00").length).toBeGreaterThan(0);
       // When filtering, section header options are gone.
-      const listbox = screen.getByRole("listbox");
-      expect(within(listbox).queryByRole("option", { name: "Other" })).toBeNull();
+      const listbox = pluginList();
+      expect(within(listbox).queryByRole("heading", { name: /^Other\b/ })).toBeNull();
     });
 
     it("shows a zero-result state with a Clear search control", async () => {
@@ -1496,13 +1523,13 @@ describe("PluginManagerView", () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
       renderDialog();
       await screen.findByLabelText("Search plugins");
-      fireEvent.click(await screen.findByRole("option", { name: /Plugin00/ }));
+      fireEvent.click(await findPluginRowButton("Plugin00"));
       // Detail pane now shows the selected plugin's uninstall control.
       await waitFor(() => expect(screen.getByRole("button", { name: /uninstall/i })).toBeTruthy());
       const input = screen.getByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "Notepad" } });
       // Plugin00 is filtered out, so the detail pane falls back to its empty state.
-      await waitFor(() => expect(screen.getByText("Explore plugins")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("Installed plugins")).toBeTruthy());
     });
   });
 
@@ -1595,4 +1622,108 @@ describe("PluginManagerView", () => {
       expect(installMock()).not.toHaveBeenCalled();
     });
   });
+});
+
+/**
+ * Invariants from the plugin-manager design review.
+ *
+ * These assert RULES rather than the strings or classes that currently satisfy
+ * them: the copy and the glyphs are expected to keep changing, but a row that
+ * hides a failure, or spends its second line on nothing when a description is
+ * available, is a regression whatever it is wearing.
+ */
+describe("PluginManagerView design invariants", () => {
+  const rowFor = (name: string): HTMLElement => {
+    const rows = within(screen.getByTestId("plugin-list")).getAllByRole("listitem");
+    const match = rows.find((row) => (row.textContent ?? "").includes(name));
+    if (!match) throw new Error(`No row for "${name}"`);
+    return match;
+  };
+
+  it("never lets a row read as healthy when the plugin failed to load", async () => {
+    // The switch reports intent and stays on, so the ROW has to carry the fact
+    // that the plugin is not actually running — otherwise a broken plugin is
+    // indistinguishable from a working one.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ disabled: false, loadError: { message: "kaboom", at: 1 } }),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    const row = rowFor("Acme Demo");
+    const toggle = within(row).getByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    // Something in the row must name the failure.
+    expect(/fail/i.test(row.textContent ?? "")).toBe(true);
+  });
+
+  it("ranks a pending restart above a plain off, because the switch hasn't taken effect", async () => {
+    // A plugin the user switched off that is still loaded is the toggle-that-
+    // lies case: "Off" alone would claim an effect that hasn't happened.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ disabled: true, pendingRestart: true }),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    expect(/restart/i.test(rowFor("Acme Demo").textContent ?? "")).toBe(true);
+  });
+
+  it("shows an available update in the row without being asked to check", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({
+        originalUrl: "https://example.com/a.dntr",
+        updateAvailable: { version: "9.9.9", channel: "manual" },
+      }),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    // The version is the actionable part: "an update exists" without saying
+    // which one leaves the user no better off than before.
+    expect((rowFor("Acme Demo").textContent ?? "").includes("9.9.9")).toBe(true);
+  });
+
+  it("falls back to the description when a plugin declares no tagline", async () => {
+    // Only the forge built-ins set a tagline, so a row keyed solely on it is
+    // blank for nearly every third-party plugin.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({
+        manifest: {
+          ...makePlugin().manifest,
+          tagline: undefined,
+          description: "Explains itself in the list",
+        },
+      } as Parameters<typeof makePlugin>[0]),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    expect((rowFor("Acme Demo").textContent ?? "").includes("Explains itself in the list")).toBe(
+      true
+    );
+  });
+
+  it("keeps the enable switch out of any composite widget that may not own it", async () => {
+    // A `listbox` may only own `option`/`group`, so a sibling switch inside one
+    // is an ARIA content-model violation that screen readers prune or skip.
+    // Whatever the list is built from, the switch must not sit inside a
+    // listbox, and rows must not claim to be options.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    const list = screen.getByTestId("plugin-list");
+    expect(list.querySelector('[role="listbox"]')).toBeNull();
+    expect(list.querySelector('[role="option"]')).toBeNull();
+    const toggle = within(rowFor("Acme Demo")).getByRole("switch");
+    expect(toggle.closest('[role="listbox"]')).toBeNull();
+  });
+
+  // NOTE: row-shape (name and version sharing one line, long names truncating
+  // rather than wrapping) is deliberately NOT asserted here. jsdom has no
+  // layout, so every candidate assertion passed with the wrap reintroduced —
+  // a test that cannot fail is worse than no test. The screenshot harness
+  // (e2e/screenshots/plugin-manager-review.spec.ts, "hostile" step) is what
+  // actually covers it.
 });

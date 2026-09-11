@@ -60,7 +60,7 @@ describe("ProjectPluginSection load errors", () => {
 
     // Loaded and failed at once: the row keeps its active styling and gains the
     // failure signal rather than swapping to a fourth state badge.
-    const row = screen.getAllByRole("option")[1]!;
+    const row = screen.getAllByRole("listitem")[0]!;
     expect(row.textContent).toContain("Error");
     expect(row.textContent).not.toContain("Off");
     expect(row.textContent).not.toContain("Staged");
@@ -75,7 +75,7 @@ describe("ProjectPluginSection load errors", () => {
       />
     );
 
-    expect(screen.getAllByRole("option")[1]!.textContent).not.toContain("Error");
+    expect(screen.getAllByRole("listitem")[0]!.textContent).not.toContain("Error");
   });
 
   it("renders the real cause in the detail pane", () => {
@@ -131,10 +131,10 @@ describe("ProjectPluginSection", () => {
       />
     );
 
-    const options = screen.getAllByRole("option");
-    // The section header is a disabled option (LESSON #9006), then the rows.
-    expect(options).toHaveLength(3);
-    const rows = options.slice(1).map((el) => el.textContent ?? "");
+    // The header is a real heading now, so the row collection is just the rows.
+    const options = screen.getAllByRole("listitem");
+    expect(options).toHaveLength(2);
+    const rows = options.map((el) => el.textContent ?? "");
     expect(rows.every((t) => t.includes("Project"))).toBe(true);
     expect(rows[0]).toContain("Off");
     expect(rows[1]).toContain("Staged");
@@ -180,7 +180,7 @@ describe("ProjectPluginSection", () => {
       />
     );
 
-    screen.getAllByRole("option")[1]?.click();
+    screen.getAllByRole("listitem")[0]?.querySelector("button")?.click();
     expect(onSelect).toHaveBeenCalledWith(null);
   });
 });

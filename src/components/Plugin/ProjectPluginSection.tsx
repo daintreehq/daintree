@@ -56,20 +56,19 @@ function ProjectPluginRow({
   const failed = plugin.loadError !== undefined;
 
   return (
-    <div
+    <li
       className={cn(
         "relative flex items-center gap-2 rounded-[var(--radius-md)] border text-text-primary transition-colors",
         selected
-          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r-[var(--radius-sm)] before:bg-accent-primary before:content-['']"
-          : "border-transparent hover:bg-overlay-subtle"
+          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r-[var(--radius-sm)] before:bg-accent-primary before:content-[''] forced-colors:border-[Highlight] forced-colors:border-2"
+          : "border-transparent hover:bg-overlay-subtle forced-colors:border-0"
       )}
     >
       <button
         type="button"
-        role="option"
-        aria-selected={selected}
+        aria-current={selected ? "true" : undefined}
         onClick={onSelect}
-        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
       >
         <Package
           className={cn(
@@ -121,7 +120,7 @@ function ProjectPluginRow({
           </Button>
         </span>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -150,32 +149,29 @@ export function ProjectPluginSection({
   if (plugins.length === 0) return null;
 
   return (
-    <div role="presentation" className="space-y-1">
-      {/* A disabled option, not a role="group" label — group labels drop under
-          Chromium 146 + VoiceOver (LESSON #9006). Matches the category headers. */}
-      <div
-        className={SECTION_HEADER_CLASS}
-        role="option"
-        aria-disabled="true"
-        aria-selected="false"
-        aria-label="This project"
-      >
-        This project
+    <section aria-labelledby="plugin-category-this-project" className="space-y-1">
+      {/* A real heading over a real list. The old disabled-option header only
+          existed because this lived inside a listbox, where a role="group" label
+          drops under Chromium 146 + VoiceOver (LESSON #9006). */}
+      <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
+        This project{" "}
         <span className="ml-1.5 normal-case tracking-normal text-text-placeholder">
           {plugins.length}
         </span>
-      </div>
-      {plugins.map((plugin) => (
-        <ProjectPluginRow
-          key={plugin.id}
-          plugin={plugin}
-          selected={plugin.id === selectedId}
-          activating={activating.has(plugin.id)}
-          onSelect={() => onSelect(plugin.id === selectedId ? null : plugin.id)}
-          onActivate={() => void activateStaged(plugin.id)}
-        />
-      ))}
-    </div>
+      </h3>
+      <ul role="list" className="space-y-1">
+        {plugins.map((plugin) => (
+          <ProjectPluginRow
+            key={plugin.id}
+            plugin={plugin}
+            selected={plugin.id === selectedId}
+            activating={activating.has(plugin.id)}
+            onSelect={() => onSelect(plugin.id === selectedId ? null : plugin.id)}
+            onActivate={() => void activateStaged(plugin.id)}
+          />
+        ))}
+      </ul>
+    </section>
   );
 }
 

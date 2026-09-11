@@ -85,12 +85,20 @@ function matchesOperator(
   op: { key: PluginFilterOperator; value: string | null }
 ): boolean {
   switch (op.key) {
+    // Provenance and state are independent axes. These two used to AND in
+    // `!disabled`, which made `@builtin @disabled` — the obvious way to ask
+    // "which built-ins did I turn off?" — unsatisfiable, because operators
+    // AND-combine and the pair reduced to `!disabled && disabled`.
     case "builtin":
-      return plugin.isBuiltin && !plugin.disabled;
+      return plugin.isBuiltin;
     case "installed":
-      return !plugin.isBuiltin && !plugin.disabled;
+      return !plugin.isBuiltin;
+    // `enabled` means what the row's switch means. The row computes
+    // `disabled !== true && !blocklisted`, so a blocklisted plugin renders with
+    // its switch off; matching it here would have returned rows that visibly
+    // contradict the filter that found them.
     case "enabled":
-      return !plugin.disabled;
+      return plugin.disabled !== true && plugin.blocklisted !== true;
     case "disabled":
       return plugin.disabled === true;
     case "cap": {
