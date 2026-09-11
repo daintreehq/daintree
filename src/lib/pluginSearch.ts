@@ -11,13 +11,18 @@ const DESCRIPTION_WEIGHT = 0.5;
  * `@cap:<value>` and `@cat:<value>` carry a value (a capability id / a
  * category id from `PLUGIN_CATEGORY_IDS`); the boolean flags don't.
  */
-export type PluginFilterOperator = "builtin" | "installed" | "enabled" | "disabled" | "cap" | "cat";
+export type PluginFilterOperator =
+  "builtin" | "installed" | "enabled" | "disabled" | "problem" | "cap" | "cat";
 
 const KNOWN_OPERATORS: ReadonlySet<string> = new Set([
   "builtin",
   "installed",
   "enabled",
   "disabled",
+  // Anything the user would call broken: it failed to load, or the host
+  // blocked it. Both are states the user did not choose and cannot infer from
+  // the switch, which is why the manager's health summary filters through this.
+  "problem",
   "cap",
   "cat",
 ]);
@@ -101,6 +106,8 @@ function matchesOperator(
       return plugin.disabled !== true && plugin.blocklisted !== true;
     case "disabled":
       return plugin.disabled === true;
+    case "problem":
+      return plugin.loadError != null || plugin.blocklisted === true;
     case "cap": {
       if (!op.value) return false; // `@cap:` with no value matches nothing
       return (plugin.manifest.capabilities ?? []).some((c) => c.toLowerCase() === op.value);

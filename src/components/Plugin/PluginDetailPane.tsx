@@ -80,12 +80,17 @@ function PluginCapabilityList({
   return (
     <div className="space-y-2">
       {/* No "Permissions" heading here — it sat directly under a tab already
-          labelled Permissions and spent the line saying nothing. The line now
-          says what the list MEANS, which is the part a reader can't infer: this
-          is the ceiling the host enforces, not a log of what has been used. */}
+          labelled Permissions and spent the line saying nothing.
+          The wording is deliberately bounded to Daintree's OWN APIs. An earlier
+          draft said "Daintree refuses anything outside this list", which reads
+          as a sandbox guarantee this architecture does not make: plugins run in
+          an unsandboxed worker with full Node privileges, exactly as the
+          install dialog warns. The capability list is a real ceiling on
+          host-mediated calls and nothing wider. */}
       <p className="text-2xs text-text-secondary">
-        Daintree refuses anything outside this list. Some of these still ask the first time
-        they&rsquo;re used.
+        These limit what the plugin can ask Daintree to do, and some also ask you the first time
+        they&rsquo;re used. They aren&rsquo;t a sandbox — the plugin still runs with full access to
+        your machine.
       </p>
       {plugin.pluginDanger === "confirm" && (
         <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">

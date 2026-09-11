@@ -12,6 +12,7 @@ function makePlugin(overrides: {
   disabled?: boolean;
   capabilities?: PluginCapability[];
   blocklisted?: boolean;
+  loadError?: { message: string; at: number };
 }): LoadedPluginInfo {
   return {
     instanceId: overrides.name,
@@ -50,12 +51,12 @@ function makePlugin(overrides: {
     installedAt: 0,
     archiveHash: null,
     originalUrl: null,
-    loadError: null,
     disabled: overrides.disabled ?? false,
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
     blocklisted: overrides.blocklisted ?? false,
+    loadError: overrides.loadError ?? null,
   };
 }
 
@@ -177,6 +178,22 @@ describe("filterPlugins operators", () => {
       for (const name of [...enabled, ...disabled]) expect(all).toContain(name);
       expect(enabled.filter((n) => disabled.includes(n))).toEqual([]);
     }
+  });
+
+  it("@problem finds what the user would call broken, whatever the switch says", () => {
+    // The rule, not the list: a plugin the user did not switch off but which
+    // cannot run is the case the row's switch cannot express, so the filter
+    // behind the health summary has to key off runtime facts rather than the
+    // `disabled` flag.
+    const broken = [
+      makePlugin({ name: "a.failed", loadError: { message: "boom", at: 1 } }),
+      makePlugin({ name: "a.blocked", blocklisted: true }),
+      makePlugin({ name: "a.fine" }),
+      makePlugin({ name: "a.off", disabled: true }),
+    ];
+    expect(names(filterPlugins(broken, "@problem"))).toEqual(["a.failed", "a.blocked"]);
+    // Switched off on purpose is not a problem.
+    expect(names(filterPlugins(broken, "@problem"))).not.toContain("a.off");
   });
 
   it("returns all plugins for a blank query", () => {

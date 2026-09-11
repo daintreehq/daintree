@@ -1704,6 +1704,40 @@ describe("PluginManagerView design invariants", () => {
     );
   });
 
+  it("surfaces a broken plugin before the user has to scroll to find it", async () => {
+    // "Is anything broken?" is the first question the surface exists to
+    // answer. The rule is that a fault is visible from the entry state, not
+    // that any particular banner exists — so this asserts the count reaches
+    // the user, and that acting on it narrows the list to the fault.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ loadError: { message: "kaboom", at: 1 } }),
+      makePlugin({
+        manifest: { ...makePlugin().manifest, name: "acme.fine", displayName: "Fine Plugin" },
+      } as Parameters<typeof makePlugin>[0]),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    const summary = await screen.findByRole("button", { name: /needs attention/i });
+    expect(summary.textContent).toContain("1");
+
+    // Acting on it leaves only the broken plugin in the list.
+    fireEvent.click(summary);
+    await waitFor(() => {
+      const rows = within(screen.getByTestId("plugin-list")).getAllByRole("listitem");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.textContent).toContain("Acme Demo");
+    });
+  });
+
+  it("stays quiet when nothing is wrong, so a healthy install pays no chrome", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    expect(screen.queryByRole("button", { name: /needs attention/i })).toBeNull();
+  });
+
   it("keeps the enable switch out of any composite widget that may not own it", async () => {
     // A `listbox` may only own `option`/`group`, so a sibling switch inside one
     // is an ARIA content-model violation that screen readers prune or skip.

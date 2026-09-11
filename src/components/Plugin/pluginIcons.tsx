@@ -106,9 +106,9 @@ export function PluginGlyphTile({
     <span
       aria-hidden="true"
       className={cn(
-        "flex items-center justify-center shrink-0 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border/50",
+        "flex items-center justify-center shrink-0 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default/50",
         TILE_SIZE_CLASS[size],
-        dimmed ? "text-daintree-text/30" : "text-daintree-text/70",
+        dimmed ? "text-text-placeholder" : "text-text-secondary",
         className
       )}
     >
