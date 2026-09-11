@@ -361,6 +361,9 @@ test("copy-tree dropdown review — recents panel states", async () => {
     // Focus lands on the primary action when the panel opens; the ring is the
     // region's only emphasis signal, so it gets its own shot.
     await step("focus", async () => {
+      // Self-seeding, like every step: DAINTREE_SHOT_ONLY must be able to run
+      // any one of these alone.
+      await seedHistory(ctx!.app, FULL_RECENTS);
       await openPanel(page);
       await expectRows(page, FULL_RECENTS.length);
       await settle(page, 500);
@@ -372,11 +375,26 @@ test("copy-tree dropdown review — recents panel states", async () => {
     });
 
     await step("hover", async () => {
+      await seedHistory(ctx!.app, FULL_RECENTS);
       await openPanel(page);
       await expectRows(page, FULL_RECENTS.length);
       await settle(page, 500);
-      await page.locator(`${PANEL} li button`).first().hover();
+      const row = page.locator(`${PANEL} li button`).first();
+      const resting = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
+      await row.hover();
       await settle(page, 400);
+      const hovered = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
+      /* Read the computed style rather than trusting the PNG. An element
+         screenshot re-lays-out the page and can drop the pointer state before
+         the pixels are written, so a screenshot alone cannot distinguish "this
+         row has no hover treatment" from "the capture lost the hover". */
+      console.log(`[copytree-shots] row hover background: ${resting} -> ${hovered}`);
+      if (resting === hovered) {
+        throw new Error(
+          `[copytree-shots] hovering a recent row did not change its background (${resting}) — ` +
+            `the rows have no rendered pointer affordance`
+        );
+      }
       await snap(page, "60-row-hover", panel(page));
       await closePanel(page);
     });
