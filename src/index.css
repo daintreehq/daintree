@@ -2000,7 +2000,7 @@ label:focus-within .brand-mark,
 }
 
 .palette-row[aria-selected="true"]::before,
-.palette-row[aria-current="true"]::before {
+.palette-row[data-selected="true"]::before {
   opacity: 1;
 }
 
@@ -2457,7 +2457,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .palette-row[aria-selected="true"],
-  .palette-row[aria-current="true"] {
+  .palette-row[data-selected="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
   }

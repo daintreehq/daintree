@@ -188,7 +188,7 @@ function PluginRow({
   return (
     <li
       ref={innerRef}
-      aria-current={selected ? "true" : undefined}
+      data-selected={selected ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
         "flex items-center gap-2 rounded-[var(--radius-md)] text-text-primary",
@@ -393,6 +393,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     () => isQueryActive(parsePluginQuery(deferredQuery)),
     [deferredQuery]
   );
+  // The health summary hides itself the moment a query is typed. It keys off
+  // the LIVE query, not the deferred one the results use: under deferral an
+  // intermediate render can show the typed text with the summary still up.
+  const isLiveQueryActive = useMemo(() => isQueryActive(parsePluginQuery(query)), [query]);
   const filteredPlugins = useMemo(
     () => (isSearchActive ? filterPlugins(pm.plugins, deferredQuery) : pm.plugins),
     [isSearchActive, pm.plugins, deferredQuery]
@@ -411,14 +415,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     // `@problem` is the exception: the health summary counts an unreadable
     // project plugin as broken, so the filter behind that count has to be able
     // to show it, or the summary would promise rows it then hides.
+    let pool = projectPlugins;
     if (parsed.operators.length > 0) {
       const onlyProblem = parsed.operators.every((op) => op.key === "problem");
       if (!onlyProblem) return [];
-      return projectPlugins.filter(isProjectPluginBroken);
+      pool = projectPlugins.filter(isProjectPluginBroken);
     }
+    // Free text narrows whatever the operators left, exactly as it does for
+    // installed plugins — `@problem notes` used to return every broken project
+    // plugin because the operator branch returned before reading the text.
     const text = parsed.freeText.trim().toLowerCase();
-    if (text.length === 0) return projectPlugins;
-    return projectPlugins.filter(
+    if (text.length === 0) return pool;
+    return pool.filter(
       (p) =>
         p.displayName.toLowerCase().includes(text) ||
         p.id.toLowerCase().includes(text) ||
@@ -781,7 +789,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 is the one control that narrows to the trouble. It disappears
                 entirely when nothing is wrong, so a healthy install pays no
                 permanent chrome for it. */}
-            {brokenCount > 0 && !isSearchActive && (
+            {brokenCount > 0 && !isLiveQueryActive && (
               <button
                 type="button"
                 onClick={() => {

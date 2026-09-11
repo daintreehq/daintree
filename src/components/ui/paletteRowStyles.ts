@@ -46,13 +46,17 @@ export const PALETTE_ROW_CLASS = cn(
   // it holds the row's content box on the same column as the palette's other
   // families, and the `forced-colors` fallback still draws an outline there.
   //
-  // `aria-current` rides alongside `aria-selected` because a list-detail browser
-  // that is NOT a composite listbox — a plain list of rows, which is what the
-  // ARIA content model forces once a row carries its own controls — spells the
-  // same fact that way. Both attributes mean "this is the row the detail pane is
-  // showing"; the CSS half of this treatment keys off both for the same reason.
+  // `data-selected` is the opt-in for a list-detail browser that is NOT a
+  // composite listbox — a plain list of rows, which is what the ARIA content
+  // model forces once a row carries its own controls. Those rows keep
+  // `aria-current` on their focusable selection button for assistive
+  // technology and set this attribute on the row for the CSS. It is deliberately
+  // NOT keyed on `aria-current` itself: five palettes mark their committed value
+  // with `aria-current` independently of the cursor (`aria-selected`) and give
+  // it a check mark, not a competing background — widening onto `aria-current`
+  // lit both rows at once. The CSS half in `index.css` keys off the same pair.
   "aria-selected:bg-overlay-raised aria-selected:text-text-primary",
-  "aria-[current=true]:bg-overlay-raised aria-[current=true]:text-text-primary"
+  "data-[selected=true]:bg-overlay-raised data-[selected=true]:text-text-primary"
 );
 
 /**

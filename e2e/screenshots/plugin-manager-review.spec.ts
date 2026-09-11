@@ -479,6 +479,12 @@ test("plugin manager review — provenance, states, and overflow", async () => {
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
 
+  if (!existsSync(SAMPLE_PLUGINS_DIR)) {
+    throw new Error(
+      `Sample plugins missing at ${SAMPLE_PLUGINS_DIR} — run \`npm run build:e2e\` before capturing.`
+    );
+  }
+
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), "daintree-pluginmgr-fixtures-"));
   // A prefix that does NOT contain "daintree-e2e": launchApp's pre-launch
   // hygiene pkills `node_modules/electron.*daintree-e2e`, which would SIGKILL a
@@ -496,12 +502,6 @@ test("plugin manager review — provenance, states, and overflow", async () => {
     cpSync(PROJECT_PLUGIN_FIXTURE, path.join(repo.dir, ".daintree"), { recursive: true });
   }
   seedStore(userDataDir, records, repo.dir);
-
-  if (!existsSync(SAMPLE_PLUGINS_DIR)) {
-    throw new Error(
-      `Sample plugins missing at ${SAMPLE_PLUGINS_DIR} — run \`npm run build:e2e\` before capturing.`
-    );
-  }
 
   let ctx: AppContext | undefined;
   try {
@@ -708,8 +708,16 @@ test("plugin manager review — provenance, states, and overflow", async () => {
       throw new Error("plugin-manager capture produced no screenshots");
     }
   } finally {
-    if (ctx) await closeApp(ctx);
-    repo.cleanup();
+    // `closeApp` takes the ElectronApplication, not the context; passing the
+    // context made its guards swallow the error and left Electron running
+    // while the directories under it were deleted. Each cleanup is independent
+    // so one failure cannot leave the others behind.
+    if (ctx?.app) await closeApp(ctx.app).catch(() => {});
+    try {
+      repo.cleanup();
+    } catch {
+      /* best effort */
+    }
     rmSync(fixtureRoot, { recursive: true, force: true });
     rmSync(userDataDir, { recursive: true, force: true });
   }

@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginManagerView } from "../PluginManagerView";
 import { CAPABILITY_META } from "../capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
@@ -1736,6 +1737,24 @@ describe("PluginManagerView design invariants", () => {
     await screen.findAllByText("Acme Demo");
 
     expect(screen.queryByRole("button", { name: /needs attention/i })).toBeNull();
+  });
+
+  it("marks selection on the button for AT and on the row for CSS, never both on one node", async () => {
+    // `aria-current` belongs on the focusable control so a screen reader hears
+    // it once. The shared row treatment reads a data attribute on the <li>
+    // instead of `aria-current`, because five palettes set `aria-current` on
+    // their committed value independently of the cursor and must NOT light up.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+    await selectPlugin();
+
+    const row = rowFor("Acme Demo");
+    const button = row.querySelector("button")!;
+    await waitFor(() => expect(button.getAttribute("aria-current")).toBe("true"));
+    expect(row.getAttribute("data-selected")).toBe("true");
+    expect(row.getAttribute("aria-current")).toBeNull();
+    expect(PALETTE_ROW_CLASS).not.toMatch(/aria-\[current/);
   });
 
   it("keeps the enable switch out of any composite widget that may not own it", async () => {

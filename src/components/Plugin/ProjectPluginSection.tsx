@@ -58,7 +58,7 @@ function ProjectPluginRow({
 
   return (
     <li
-      aria-current={selected ? "true" : undefined}
+      data-selected={selected ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
         "flex items-center gap-2 rounded-[var(--radius-md)] text-text-primary",

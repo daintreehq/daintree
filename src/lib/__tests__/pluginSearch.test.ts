@@ -196,6 +196,15 @@ describe("filterPlugins operators", () => {
     expect(names(filterPlugins(broken, "@problem"))).not.toContain("a.off");
   });
 
+  it("@problem still narrows by free text, like every other operator", () => {
+    const broken = [
+      makePlugin({ name: "a.alpha", displayName: "Alpha", loadError: { message: "x", at: 1 } }),
+      makePlugin({ name: "a.beta", displayName: "Beta", loadError: { message: "x", at: 1 } }),
+    ];
+    expect(names(filterPlugins(broken, "@problem alpha"))).toEqual(["a.alpha"]);
+    expect(names(filterPlugins(broken, "@problem zzz"))).toEqual([]);
+  });
+
   it("returns all plugins for a blank query", () => {
     expect(names(filterPlugins(plugins, "  "))).toEqual(names(plugins));
   });

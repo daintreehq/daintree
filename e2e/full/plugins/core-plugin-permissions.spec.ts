@@ -43,7 +43,14 @@ test.describe.serial("Core: Plugin permissions tab", () => {
     const { window } = ctx;
     await openPluginManager(window);
 
-    await window.locator(SEL.plugin.option).filter({ hasText: RICH_PLUGIN_LABEL }).first().click();
+    // The row holds a selection button and an enable switch; target the button.
+    await window
+      .locator(SEL.plugin.option)
+      .filter({ hasText: RICH_PLUGIN_LABEL })
+      .first()
+      .locator("button")
+      .first()
+      .click();
 
     await window.locator(SEL.plugin.tabPermissions).click();
     await expect(window.locator(SEL.plugin.tabPermissions)).toHaveAttribute(
@@ -72,9 +79,12 @@ test.describe.serial("Core: Plugin permissions tab", () => {
     const { window } = ctx;
     await openPluginManager(window);
 
+    // The row holds a selection button and an enable switch; target the button.
     await window
       .locator(SEL.plugin.option)
       .filter({ hasText: SAMPLE_PLUGIN_LABEL })
+      .first()
+      .locator("button")
       .first()
       .click();
 

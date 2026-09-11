@@ -320,6 +320,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // mid-edit, and silently swapping in a fresh (attacker-supplied) URL is a
       // social-engineering risk. Skip the pre-fill; the user can paste it.
       if (!showUrlDialogRef.current) {
+        // The URL dialog and the uninstall confirm each render the shared
+        // error themselves, on the assumption that only one is ever open. A
+        // deep link is the one path that can open this one over the other.
+        setPendingUninstall(null);
         setUrlInput(deepLinkIntent.url);
         setShowUrlDialog(true);
       }
@@ -761,6 +765,15 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           setNotice("All plugins are up to date.");
         }
         return;
+      }
+      // Some checks failed AND some found updates: the confirmations open now,
+      // so say it here rather than dropping it. Nothing clears `notice` until
+      // the next bulk check, so it is waiting in the column when the last
+      // confirmation closes.
+      if (failed > 0) {
+        setNotice(
+          `${failed} ${failed === 1 ? "plugin" : "plugins"} couldn't be checked for updates.`
+        );
       }
       pendingQueueRef.current = rest;
       isBatchActiveRef.current = true;
