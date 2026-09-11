@@ -419,11 +419,7 @@ export class ResourceGovernor {
         // utilization also cleared the resume threshold on this tick, it's an
         // ordinary recovery — reporting it as forced would tell consumers the
         // pressure outlasted the pause when it didn't (#12375).
-        this.disengageThrottle(
-          combinedMb,
-          utilizationPercent,
-          maxPauseExceeded && !belowThreshold
-        );
+        this.disengageThrottle(combinedMb, utilizationPercent, maxPauseExceeded && !belowThreshold);
       }
     }
 

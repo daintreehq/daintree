@@ -121,20 +121,20 @@ beforeEach(() => {
       };
     });
 
-  (window as unknown as { electron: unknown }).electron = {
+  vi.stubGlobal("electron", {
     app: {
       onViewRevealed: listenFor("revealed"),
       onViewWarmActivated: listenFor("warmActivated"),
       onViewCached: listenFor("cached"),
     },
-  };
+  });
 });
 
 afterEach(() => {
   cleanup();
   hasFocus.mockRestore();
   vi.useRealTimers();
-  delete (window as unknown as { electron?: unknown }).electron;
+  vi.unstubAllGlobals();
 });
 
 describe("useHostMemoryPauseSync", () => {
