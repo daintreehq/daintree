@@ -5,6 +5,7 @@ import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
+import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
 
 export function useActiveWorktreeSync() {
   const { worktrees, isInitialized } = useWorktrees();
@@ -90,8 +91,14 @@ export function useActiveWorktreeSync() {
     }
 
     lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
+    // The selection is already applied locally; the origin tag lets the
+    // `worktree-activated` echo be skipped instead of re-selecting an id this
+    // view may have moved past by the time it lands (#12370).
     window.electron.worktreePort
-      .request("set-active", { worktreeId: selectedWorktreeId })
+      .request("set-active", {
+        worktreeId: selectedWorktreeId,
+        origin: RENDERER_ACTIVATION_ORIGIN,
+      })
       .catch(() => {
         if (
           lastSyncedActiveRef.current.projectId === projectId &&

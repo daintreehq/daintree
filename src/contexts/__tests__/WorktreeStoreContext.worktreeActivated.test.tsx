@@ -5,6 +5,7 @@ import { useContext } from "react";
 
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
@@ -130,6 +131,8 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
       emit("worktree-activated", {
         type: "worktree-activated",
         worktreeId: "wt-main",
+        epoch: "test",
+        seq: 3,
       });
     });
 
@@ -181,6 +184,8 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
       emit("worktree-activated", {
         type: "worktree-activated",
         worktreeId: "wt-main",
+        epoch: "test",
+        seq: 4,
       });
     });
 
@@ -265,6 +270,8 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
       emit("worktree-activated", {
         type: "worktree-activated",
         worktreeId: "wt-main",
+        epoch: "test",
+        seq: 2,
       });
     });
 
@@ -278,5 +285,125 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
     // already-active branch.
     expect(after.restoreWorktreeId).toBe(restoreBefore);
     expect(after.pendingWorktreeId).toBe(pendingBefore);
+  });
+});
+
+describe("WorktreeStoreProvider worktree-activated origin and version gates (#12370)", () => {
+  async function renderWithWorktrees(ids: string[]) {
+    const store = await renderProvider();
+    act(() => {
+      ids.forEach((id, i) => {
+        store
+          .getState()
+          .applyUpdate(makeWorktree(id, { isMainWorktree: i === 0, branch: `b/${id}` }), {
+            epoch: "test",
+            seq: i + 1,
+          });
+      });
+    });
+    return store;
+  }
+
+  it("ignores the echo of this view's own set-active once the view has moved on", async () => {
+    await renderWithWorktrees(["wt-a", "wt-b"]);
+    // The view selected A, then B, and sent set-active for both. B is the
+    // current selection when A's echo lands; re-applying A here is the first
+    // hop of the A/B echo loop.
+    act(() => {
+      useWorktreeSelectionStore.setState({
+        activeWorktreeId: "wt-b",
+        restoreWorktreeId: "wt-b",
+        pendingWorktreeId: null,
+      });
+    });
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-a",
+        epoch: "test",
+        seq: 3,
+        origin: RENDERER_ACTIVATION_ORIGIN,
+      });
+    });
+
+    const after = useWorktreeSelectionStore.getState();
+    expect(after.activeWorktreeId).toBe("wt-b");
+    expect(after.restoreWorktreeId).toBe("wt-b");
+    expect(after.pendingWorktreeId).toBeNull();
+  });
+
+  it("still applies an activation carrying some other origin", async () => {
+    await renderWithWorktrees(["wt-a", "wt-b"]);
+    act(() => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b" });
+    });
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-a",
+        epoch: "test",
+        seq: 3,
+        origin: "renderer-someone-else",
+      });
+    });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
+  });
+
+  it("ignores an activation older than the newest one it has seen in the same epoch", async () => {
+    await renderWithWorktrees(["wt-main", "wt-active", "wt-other"]);
+    act(() => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
+    });
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-main",
+        epoch: "test",
+        seq: 5,
+      });
+    });
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-main");
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-other",
+        epoch: "test",
+        seq: 4,
+      });
+    });
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-main");
+  });
+
+  it("accepts an activation from a new epoch regardless of its seq", async () => {
+    await renderWithWorktrees(["wt-main", "wt-active", "wt-other"]);
+    act(() => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
+    });
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-main",
+        epoch: "e1",
+        seq: 5,
+      });
+    });
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-main");
+
+    // A host restart resets the counter; its first activation must win.
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-other",
+        epoch: "e2",
+        seq: 1,
+      });
+    });
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-other");
   });
 });

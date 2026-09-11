@@ -254,6 +254,33 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
     expect(activatedDefault?.silent).toBeUndefined();
   });
 
+  it("echoes the set-active request's origin and leaves it unset for host-originated activations (#12370)", () => {
+    createAndRegisterMonitor({
+      id: pathResolve("/test/main"),
+      path: pathResolve("/test/main"),
+      isMainWorktree: true,
+    });
+    service["activeWorktreeId"] = null;
+    const activatedEvents = () =>
+      sentEvents.filter(
+        (e): e is Extract<WorkspaceHostEvent, { type: "worktree-activated" }> =>
+          e.type === "worktree-activated"
+      );
+
+    service["setActiveWorktree"]("port-1", pathResolve("/test/main"), {
+      origin: "renderer-abc123",
+    });
+    expect(activatedEvents().at(-1)?.origin).toBe("renderer-abc123");
+    // Origin is independent of the legacy silent contract.
+    expect(activatedEvents().at(-1)?.silent).toBeUndefined();
+
+    // The auto-switch paths call without options — the renderer must be able
+    // to tell those apart from its own echoes by the absence of an origin.
+    service["setActiveWorktree"]("topology-reconcile-auto-switch", pathResolve("/test/main"));
+    expect(activatedEvents()).toHaveLength(2);
+    expect(activatedEvents().at(-1)?.origin).toBeUndefined();
+  });
+
   it("rejects unknown worktree ids with success:false and does not emit worktree-activated", () => {
     createAndRegisterMonitor({
       id: pathResolve("/test/main"),

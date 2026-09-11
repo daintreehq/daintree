@@ -30,6 +30,8 @@ import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
 import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
+import { logDebug } from "@/utils/logger";
+import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
 
 // How long the topology watcher may stay dark before we escalate from the
 // Tier-1 ambient pip to a Tier-3 low-priority inbox notification (#9908). The
@@ -135,6 +137,10 @@ function overlayVersion(current: WorktreeEventVersion): WorktreeEventVersion {
 interface WorktreeActivatedEvent {
   type: "worktree-activated";
   worktreeId: string;
+  epoch: string;
+  seq: number;
+  silent?: boolean;
+  origin?: string;
 }
 
 export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
@@ -621,9 +627,36 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // Activations are stamped from the same `(epoch, seq)` counter as the
+    // topology events but never advance the store's version — they carry no
+    // topology. They get their own high-water mark so a replayed or reordered
+    // activation cannot re-select a worktree this view has moved past.
+    let lastActivation: WorktreeEventVersion | null = null;
     cleanups.push(
       worktreePort.onEvent("worktree-activated", (data) => {
         const event = data as WorktreeActivatedEvent;
+        const version = { epoch: event.epoch, seq: event.seq };
+        if (lastActivation && compareVersion(version, lastActivation) < 0) {
+          logDebug("[WorktreeStore] worktree-activated ignored: stale", {
+            worktreeId: event.worktreeId,
+            ...version,
+          });
+          return;
+        }
+        lastActivation = version;
+        // The echo of this view's own `set-active`. The selection was applied
+        // locally before the request went out, and by the time the echo lands
+        // the view may already have moved on — re-selecting it here with the
+        // default "user" source is what turns two overlapping requests (A then
+        // B, echoed A then B) into a loop that persists and rewrites the MRU
+        // on every hop (#12370). Host-originated activations carry no origin.
+        if (event.origin === RENDERER_ACTIVATION_ORIGIN) {
+          logDebug("[WorktreeStore] worktree-activated ignored: own echo", {
+            worktreeId: event.worktreeId,
+            ...version,
+          });
+          return;
+        }
         const selectionStore = useWorktreeSelectionStore.getState();
         // Skip the worktree-activated handler if the active id already
         // matches the event's id. The host's MessagePort echoes
@@ -659,6 +692,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             return;
           }
         }
+        logDebug("[WorktreeStore] worktree-activated applied", {
+          from: activeId,
+          to: event.worktreeId,
+          ...version,
+        });
         selectionStore.setPendingWorktree(event.worktreeId);
         selectionStore.selectWorktree(event.worktreeId);
         if (store.getState().worktrees.has(event.worktreeId)) {

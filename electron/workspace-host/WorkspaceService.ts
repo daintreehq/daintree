@@ -2516,7 +2516,11 @@ export class WorkspaceService {
     });
   }
 
-  setActiveWorktree(requestId: string, worktreeId: string, options?: { silent?: boolean }): void {
+  setActiveWorktree(
+    requestId: string,
+    worktreeId: string,
+    options?: { silent?: boolean; origin?: string }
+  ): void {
     // Reject unknown worktree ids with success:false. Pre-PR, an unknown id
     // would mutate `this.activeWorktreeId` to a value the renderer could not
     // resolve; the new `worktree-activated` emit would propagate that miss
@@ -2593,6 +2597,7 @@ export class WorkspaceService {
       epoch: this.epoch,
       seq: this.nextSeq(),
       silent: options?.silent,
+      origin: options?.origin,
     });
 
     this.sendEvent({ type: "set-active-result", requestId, success: true });

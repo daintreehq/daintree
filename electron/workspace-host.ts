@@ -128,7 +128,9 @@ async function handleWorktreePortRequest(
 
       case "set-active": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        workspaceService.setActiveWorktree(requestId, msg.payload.worktreeId);
+        workspaceService.setActiveWorktree(requestId, msg.payload.worktreeId, {
+          origin: msg.payload.origin,
+        });
         result = { ok: true };
         break;
       }

@@ -821,12 +821,15 @@ export type WorkspaceHostEvent =
   // that explicitly marked the activation silent (the renderer IPC path)
   // do not double-notify subscribers that the legacy
   // `CHANNELS.WORKTREE_ACTIVATED` path already suppresses.
+  // `origin` echoes the `set-active` request's origin tag, when it carried one,
+  // so a view can recognise the echo of its own selection (#12370).
   | {
       type: "worktree-activated";
       worktreeId: string;
       epoch: string;
       seq: number;
       silent?: boolean;
+      origin?: string;
     }
   // Per-worktree lifecycle setup failure surfaced to the renderer's error
   // banner. Emitted from sites that previously swallowed errors to

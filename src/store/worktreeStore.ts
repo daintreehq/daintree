@@ -11,6 +11,7 @@ import type { FleetScopeToken } from "@shared/types/worktree";
 import { useFocusStore } from "@/store/focusStore";
 import { usePanelStore } from "@/store/panelStore";
 import { logErrorWithContext } from "@/utils/errorContext";
+import { logDebug } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getFleetArmedIds, getFleetLastArmedId } from "./storeAccessors";
@@ -311,7 +312,14 @@ interface WorktreeSelectionState {
    */
   setActiveWorktree: (id: string | null, options?: { persist?: boolean }) => void;
   setFocusedWorktree: (id: string | null) => void;
-  selectWorktree: (id: string, options?: { source?: "user" | "focus" }) => void;
+  /**
+   * `focusedPanelId` is diagnostic only — the panel whose focus triggered a
+   * `"focus"`-sourced promotion, so the switch trace can name it (#12370).
+   */
+  selectWorktree: (
+    id: string,
+    options?: { source?: "user" | "focus"; focusedPanelId?: string }
+  ) => void;
   setPendingWorktree: (id: string | null) => void;
   applyPendingWorktreeSelection: (worktreeId: string) => void;
   addPendingCreation: (path: string, meta: { branch: string }) => void;
@@ -721,6 +729,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     const previousId = get().activeWorktreeId;
     const generation = get()._policyGeneration + 1;
     const switchStartedAt = Date.now();
+    logDebug("[WorktreeStore] setActiveWorktree", { from: previousId, to: id, persist });
     markRendererPerformance(PERF_MARKS.WORKTREE_SWITCH_START, {
       fromWorktreeId: previousId ?? null,
       toWorktreeId: id ?? null,
@@ -812,16 +821,33 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       // A deliberate re-selection of the already-active worktree still confirms
       // it as the durable restore target (it may have been activated only via
       // focus promotion before).
-      if (source === "user" && get().restoreWorktreeId !== id) {
+      const confirmedRestore = source === "user" && get().restoreWorktreeId !== id;
+      if (confirmedRestore) {
         set({ restoreWorktreeId: id });
         persistActiveWorktree(id);
       }
+      logDebug("[WorktreeStore] selectWorktree", {
+        outcome: "already-active",
+        source,
+        id,
+        confirmedRestore,
+      });
       return;
     }
 
     const previousId = get().activeWorktreeId;
     const generation = get()._policyGeneration + 1;
     const switchStartedAt = Date.now();
+    // Every switch is traceable with its source: focus-sourced promotions
+    // leave nothing in persisted state, so without this a focus ping-pong
+    // shows up only as its symptoms (#12370).
+    logDebug("[WorktreeStore] selectWorktree", {
+      outcome: "switched",
+      source,
+      from: previousId,
+      to: id,
+      focusedPanelId: options?.focusedPanelId,
+    });
     markRendererPerformance(PERF_MARKS.WORKTREE_SWITCH_START, {
       fromWorktreeId: previousId ?? null,
       toWorktreeId: id,

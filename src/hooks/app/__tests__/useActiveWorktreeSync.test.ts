@@ -3,6 +3,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useActiveWorktreeSync } from "../useActiveWorktreeSync";
+import { RENDERER_ACTIVATION_ORIGIN } from "@/store/worktreeActivationOrigin";
 
 const mocks = vi.hoisted(() => ({
   useWorktrees: vi.fn(),
@@ -185,6 +186,28 @@ describe("useActiveWorktreeSync defaultTerminalCwd", () => {
       rerender();
 
       expect(result.current.defaultTerminalCwd).toBe("/scratches/s1");
+    });
+  });
+});
+
+describe("useActiveWorktreeSync host sync", () => {
+  beforeEach(() => {
+    vi.mocked(window.electron.worktreePort.request).mockClear();
+    mocks.selectionState.activeWorktreeId = worktree.id;
+    mocks.selectionState.deletedWorktrees = new Map();
+    mocks.projectState.currentProject = { id: "p1", path: "/repo" };
+    mocks.scratchState.currentScratch = null;
+    mocks.homeDir.homeDir = "/home/user";
+    mocks.useWorktrees.mockReturnValue({ worktrees: [worktree], isInitialized: true });
+  });
+
+  it("tags its set-active request with this view's origin so the host's echo is recognisable (#12370)", () => {
+    renderHook(() => useActiveWorktreeSync());
+
+    expect(window.electron.worktreePort.request).toHaveBeenCalledTimes(1);
+    expect(window.electron.worktreePort.request).toHaveBeenCalledWith("set-active", {
+      worktreeId: worktree.id,
+      origin: RENDERER_ACTIVATION_ORIGIN,
     });
   });
 });
