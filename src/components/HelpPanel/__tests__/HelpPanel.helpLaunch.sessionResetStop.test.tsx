@@ -1572,8 +1572,7 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
   }
 
   function assistantHost(): HostMock {
-    return (window as unknown as { electron: { assistantHost: HostMock } }).electron
-      .assistantHost;
+    return (window as unknown as { electron: { assistantHost: HostMock } }).electron.assistantHost;
   }
 
   function queryStopItem(container: HTMLElement): HTMLButtonElement | null {

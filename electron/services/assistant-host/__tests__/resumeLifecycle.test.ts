@@ -124,9 +124,8 @@ vi.mock("../../HelpSessionService.js", () => ({
 }));
 
 const { AssistantHostService } = await import("../AssistantHostService.js");
-const { NativeAssistantResumeStore, __resetNativeAssistantResumeStoreForTests } = await import(
-  "../NativeAssistantResumeStore.js"
-);
+const { NativeAssistantResumeStore, __resetNativeAssistantResumeStoreForTests } =
+  await import("../NativeAssistantResumeStore.js");
 const { assistantSlotKey } = await import("../../../../shared/config/assistantSlots.js");
 const { CHANNELS } = await import("../../../ipc/channels.js");
 
@@ -151,8 +150,7 @@ describe("native assistant resume lifecycle", () => {
   let tmpDir: string;
   let store: InstanceType<typeof NativeAssistantResumeStore>;
 
-  const recorded = (slot = 0) =>
-    store.get(assistantSlotKey("p1", slot))?.resumeSessionId ?? null;
+  const recorded = (slot = 0) => store.get(assistantSlotKey("p1", slot))?.resumeSessionId ?? null;
 
   beforeEach(async () => {
     hosts.length = 0;
