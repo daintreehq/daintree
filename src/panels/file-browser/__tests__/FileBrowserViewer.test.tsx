@@ -1495,7 +1495,7 @@ describe("plugin-contributed editing in the file browser", () => {
 
   it("enables the plugin from GEMINI.md and mounts its Edit tab in the existing viewer", async () => {
     renderViewer("/repo/GEMINI.md", { editorContext: context });
-    const enableButton = await screen.findByRole("button", { name: "Enable Markdown editor" });
+    const enableButton = await screen.findByRole("button", { name: "Enable and edit" });
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     fireEvent.click(enableButton);
     expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
@@ -1517,7 +1517,7 @@ describe("plugin-contributed editing in the file browser", () => {
   it("keeps the reader available and offers Retry when enabling fails", async () => {
     enable.mockRejectedValue(new Error("Activation failed"));
     renderViewer("/repo/notes.md", { editorContext: context });
-    fireEvent.click(await screen.findByRole("button", { name: "Enable Markdown editor" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enable and edit" }));
     expect(await screen.findByText("Activation failed")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByTestId("plugin-editor")).toBeNull();
@@ -1528,7 +1528,7 @@ describe("plugin-contributed editing in the file browser", () => {
     async (path) => {
       renderViewer(path, { editorContext: context });
       await waitFor(() => expect(readMock).toHaveBeenCalled());
-      expect(screen.queryByRole("button", { name: "Enable Markdown editor" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Enable and edit" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     }
   );

@@ -52,7 +52,12 @@ export function FileEditorHintBar({
         // angry" rather than "that didn't work".
         icon={XCircle}
         title={`Couldn't open ${pluginName}`}
-        description={error}
+        // The banner fades a description to 80% of its severity colour, which
+        // lands the recovery instruction at ~3.4:1 — under SC 1.4.3, and at the
+        // one moment the reader actually needs to read it. The slot takes a
+        // ReactNode, so colouring the child overrides the inherited fade here
+        // without restyling the description of all 54 consumers.
+        description={<span className="text-text-secondary">{error}</span>}
         role="status"
         ariaLive="polite"
         animated={false}

@@ -125,6 +125,19 @@ describe("FileEditorHintBar", () => {
     expect(container.querySelector(".lucide-pencil")).toBe(null);
   });
 
+  it("gives the failure's recovery text its own opaque colour", () => {
+    // The shared banner fades a description to a fraction of its severity
+    // colour, which puts the one sentence explaining how to recover below the
+    // 4.5:1 floor. The rule is that the recovery text carries an explicit
+    // opaque colour of its own, whatever the banner would otherwise inherit.
+    const { container } = render(<FileEditorHintBar {...BASE} error="The plugin couldn't start" />);
+    const recovery = Array.from(container.querySelectorAll("span")).find(
+      (el) => el.textContent === "The plugin couldn't start"
+    );
+    expect(recovery).toBeTruthy();
+    expect(recovery!.className).toMatch(/\btext-text-secondary\b/);
+  });
+
   it("uses the current colour vocabulary", () => {
     // Legacy shadcn/daintree aliases only shrink, and Tailwind v4 bakes a
     // slash-alpha text colour into color-mix() where the contrast cannot be
