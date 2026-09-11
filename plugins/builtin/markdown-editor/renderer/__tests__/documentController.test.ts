@@ -9,7 +9,9 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
 vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 // A minimal panel store: the controller only needs `panelsById` and a live
 // subscription to notice its panel being removed.
-type PanelStoreShape = { panelsById: Record<string, { id: string }> };
+type PanelStoreShape = {
+  panelsById: Record<string, { id: string; kind?: string; browserSelectedPath?: string }>;
+};
 const panelStoreHolder = vi.hoisted(() => ({
   store: null as UseBoundStore<StoreApi<PanelStoreShape>> | null,
 }));
@@ -578,4 +580,25 @@ describe("DocumentController (#12323)", () => {
     await expect(controller.save()).resolves.toBe(false);
     expect(main.calls.some((c) => c.channel === CHANNELS.save)).toBe(false);
   });
+});
+
+it("keeps a browser document through view changes and persists it when selection changes", async () => {
+  panelStore().setState({
+    panelsById: {
+      "panel-1": { id: "panel-1", kind: "file-browser", browserSelectedPath: "docs/plan.md" },
+    },
+  });
+  const controller = await open();
+  controller.setText("# Unsaved browser draft\n");
+  panelStore().setState((state) => ({ panelsById: { ...state.panelsById } }));
+  expect(DocumentController.get("panel-1")).toBe(controller);
+  panelStore().setState({
+    panelsById: {
+      "panel-1": { id: "panel-1", kind: "file-browser", browserSelectedPath: "other.md" },
+    },
+  });
+  await flush();
+  expect(DocumentController.get("panel-1")).toBeUndefined();
+  expect(getFileDocumentProjection("panel-1")).toBeUndefined();
+  expect(main.drafts.get(KEY)?.record.draftText).toBe("# Unsaved browser draft\n");
 });

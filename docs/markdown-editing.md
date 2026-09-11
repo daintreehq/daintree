@@ -1,10 +1,12 @@
 # Markdown editing
 
-The file panel's **Edit** mode makes a Markdown file's source writable in place. It ships as the built-in plugin `daintree.markdown-editor` (`plugins/builtin/markdown-editor/`), so core stays read-only and every write goes through the plugin host's capability-gated, audited filesystem API. This page states the guarantees in the same words the UI uses.
+The file browser's **Edit** mode makes a Markdown file's source writable in place. It ships as the built-in plugin `daintree.markdown-editor` (`plugins/builtin/markdown-editor/`), so core stays read-only and every write goes through the plugin host's capability-gated, audited filesystem API. This page states the guarantees in the same words the UI uses.
 
 ## Where Edit appears
 
-Edit joins the Source / Rendered / Diff toggle for a file that has a `.md`, `.markdown` or `.mkd` extension (case-insensitive; `.mdx` is never offered), lives inside an open project or one of its worktrees, loaded as text (binary, oversized and LFS-pointer files are already excluded by the reader), is under 2 MiB, and while the Markdown editor plugin is enabled. It is offered in the file panel only; the file viewer dialog stays read-only. Disabling the plugin removes Edit live, and a panel that was persisted in Edit mode falls back to Source without rewriting the stored preference.
+Edit joins the file browser’s Source / Rendered toggle (and the standalone file panel’s Source / Rendered / Diff toggle) for a file that has a `.md`, `.markdown` or `.mkd` extension (case-insensitive; `.mdx` is never offered), lives inside an open project or one of its worktrees, loaded as text (binary, oversized and LFS-pointer files are already excluded by the reader), is under 2 MiB, and while the Markdown editor plugin is enabled. The plugin is off by default. A themed notice below the file browser’s toolbar offers **Enable Markdown editor**; enabling it opens Edit in the same content area. When enabled, **Edit** is a plugin-contributed tab alongside Source and Rendered. Standalone file panels offer it too; the standalone file viewer dialog stays read-only. Disabling the plugin removes Edit live, and a panel that was persisted in Edit mode falls back to Source without rewriting the stored preference.
+
+From a diff, **Open in file browser** in the toolbar selects the current working file in its containing worktree. Use Edit there, or enable the plugin from the notice. Deleted files do not offer this route.
 
 ## What a save writes
 
@@ -48,7 +50,7 @@ Unsaved edits are stored outside the repository, under `~/.daintree/plugin-data/
 
 ## Closing and switching
 
-The draft is document state, not view state. Switching from Edit to Source, Rendered or Diff keeps it, Rendered previews the draft while one exists, and the panel chrome shows the unsaved mark in every mode. Closing a dirty panel asks **Save**, **Discard changes** or **Cancel**. A temporary unmount — a sibling maximised, a dock tab switch, a background project view evicted — is not a close and never prompts.
+The draft is document state, not view state. Switching from Edit to Source, Rendered or Diff keeps it, Rendered previews the draft while one exists, and the panel chrome shows the unsaved mark in every mode. Switching to another file in the browser or closing a dirty panel asks **Save**, **Discard changes** or **Cancel**. A temporary unmount — a sibling maximised, a dock tab switch, a background project view evicted — is not a close and never prompts.
 
 ## Keyboard
 

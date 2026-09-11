@@ -3,10 +3,10 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 
 /**
  * Renderer-side registry for `contributes.fileEditors` (#12323): which
- * built-in plugin offers the file panel's writable Edit mode for which
+ * built-in plugin offers the file browser and file panel's writable Edit mode for which
  * extensions. A plugin's renderer entry registers here at module eval, next to
  * its `registerBuiltinView` call, mirroring its manifest — the main process
- * validates the manifest, the renderer resolves the slot. `FilePane` reads the
+ * validates the manifest, the renderer resolves the slot. `FileBrowserViewer` and `FilePane` read the
  * registry and never imports a plugin.
  *
  * Resolution is enable-aware by construction: {@link useFileEditor} resolves

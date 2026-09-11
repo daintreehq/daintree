@@ -186,6 +186,16 @@ vi.mock("react-virtuoso", () => ({
   }),
 }));
 
+import {
+  registerFileEditor,
+  __resetFileEditorRegistryForTests,
+} from "@/registry/fileEditorRegistry";
+import {
+  registerBuiltinView,
+  __resetBuiltinRendererRegistryForTests,
+} from "@/registry/builtinRendererRegistry";
+import { usePluginRuntimeStore, _resetPluginRuntimeStoreForTest } from "@/store/pluginRuntimeStore";
+import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { GitStatus } from "@shared/types/git";
@@ -203,6 +213,7 @@ import type {
 import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
+  editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   panelId?: string;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -261,6 +272,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
   return (
     <TooltipProvider>
       <FileBrowserViewer
+        editorContext={opts.editorContext}
         panelId={opts.panelId ?? "panel-1"}
         filePath={filePath}
         rootPath="/repo"
@@ -1419,5 +1431,128 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
     // unrelated control wedged between them. FilePane's suite asserts the
     // identical suffix — that parity is what #12136 asked for.
     expect(buttons.slice(-3)).toEqual(["Copy file contents", revealCopy().label, "Open in editor"]);
+  });
+});
+
+describe("plugin-contributed editing in the file browser", () => {
+  const pluginId = "daintree.markdown-editor";
+  const context = { projectId: "project-1", worktreePath: "/repo", isFocused: true };
+  let bridge: PropertyDescriptor | undefined;
+  let enabled: boolean;
+  const enable = vi.fn();
+  const editorProps: Array<Record<string, unknown>> = [];
+
+  beforeEach(() => {
+    bridge = Object.getOwnPropertyDescriptor(window, "electron");
+    _resetPluginRuntimeStoreForTest();
+    enabled = false;
+    enable.mockReset();
+    enable.mockImplementation(async () => {
+      enabled = true;
+    });
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: {
+        plugin: {
+          list: async () => [
+            {
+              instanceId: pluginId,
+              disabled: !enabled,
+              devMode: false,
+              manifest: { name: pluginId, displayName: "Markdown editor" },
+            },
+          ],
+          onProvenanceChanged: () => () => {},
+          setEnabled: enable,
+        },
+      },
+    });
+    registerFileEditor({
+      id: "markdown",
+      pluginId,
+      slot: "test.editor",
+      extensions: ["md", "markdown", "mkd"],
+    });
+    registerBuiltinView(
+      "test.editor",
+      (props: Record<string, unknown>) => {
+        editorProps.push(props);
+        return <div data-testid="plugin-editor">Plugin owns this editor</div>;
+      },
+      { pluginId }
+    );
+    editorProps.length = 0;
+  });
+
+  afterEach(() => {
+    __resetFileEditorRegistryForTests();
+    __resetBuiltinRendererRegistryForTests();
+    _resetPluginRuntimeStoreForTest();
+    useFileDocumentStore.setState({ byPanelId: {} });
+    if (bridge) Object.defineProperty(window, "electron", bridge);
+    else Reflect.deleteProperty(window, "electron");
+  });
+
+  it("enables the plugin from GEMINI.md and mounts its Edit tab in the existing viewer", async () => {
+    renderViewer("/repo/GEMINI.md", { editorContext: context });
+    const enableButton = await screen.findByRole("button", { name: "Enable Markdown editor" });
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    fireEvent.click(enableButton);
+    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    expect(enable).toHaveBeenCalledWith(pluginId, true);
+    expect(editorProps.at(-1)).toMatchObject({
+      panelId: "panel-1",
+      filePath: "/repo/GEMINI.md",
+      rootPath: "/repo",
+      ...context,
+    });
+    expect(screen.getByRole("button", { name: "Edit" }).getAttribute("aria-pressed")).toBe("true");
+    expect(dispatchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(screen.queryByTestId("plugin-editor")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+  });
+
+  it("keeps the reader available and offers Retry when enabling fails", async () => {
+    enable.mockRejectedValue(new Error("Activation failed"));
+    renderViewer("/repo/notes.md", { editorContext: context });
+    fireEvent.click(await screen.findByRole("button", { name: "Enable Markdown editor" }));
+    expect(await screen.findByText("Activation failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByTestId("plugin-editor")).toBeNull();
+  });
+
+  it.each(["/repo/file.txt", "/repo/component.mdx"])(
+    "doesn't advertise an editor for %s",
+    async (path) => {
+      renderViewer(path, { editorContext: context });
+      await waitFor(() => expect(readMock).toHaveBeenCalled());
+      expect(screen.queryByRole("button", { name: "Enable Markdown editor" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    }
+  );
+
+  it("resolves another file type through the contribution registry", async () => {
+    enabled = true;
+    registerFileEditor({ id: "text", pluginId, slot: "test.editor", extensions: ["txt"] });
+    renderViewer("/repo/note.txt", { editorContext: context });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    expect(editorProps.at(-1)).toMatchObject({ filePath: "/repo/note.txt" });
+    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("removes Edit live when the plugin is disabled", async () => {
+    enabled = true;
+    renderViewer("/repo/notes.md", { editorContext: context });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    act(() => usePluginRuntimeStore.setState({ disabledPluginIds: new Set([pluginId]) }));
+    expect(screen.queryByTestId("plugin-editor")).toBeNull();
+    expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
   });
 });

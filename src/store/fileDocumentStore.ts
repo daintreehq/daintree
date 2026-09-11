@@ -23,6 +23,8 @@ import { useShallow } from "zustand/react/shallow";
 export interface FileDocumentProjection {
   /** Opaque identity the plugin keys the underlying document by. */
   identityKey: string;
+  /** The selected document's name, including when hosted by a file browser. */
+  fileName?: string;
   /** The unsaved buffer, or null when the document is clean. */
   draftText: string | null;
   dirty: boolean;

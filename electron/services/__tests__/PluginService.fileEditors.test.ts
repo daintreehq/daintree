@@ -242,7 +242,7 @@ afterEach(async () => {
 // schema accepts the entry for every origin (it cannot see the origin); the
 // loader is where the refusal lives.
 describe("contributes.fileEditors is built-in only (#12323)", () => {
-  it("loads a built-in plugin that contributes a file editor", async () => {
+  it("discovers the Markdown editor disabled and loads its contribution after opt-in", async () => {
     await writePlugin(builtinDir, "markdown-editor", {
       name: "daintree.markdown-editor",
       version: "1.0.0",
@@ -252,6 +252,11 @@ describe("contributes.fileEditors is built-in only (#12323)", () => {
       builtinPluginsRoot: builtinDir,
     });
     await service.initialize();
+    expect(service.hasPlugin("daintree.markdown-editor")).toBe(false);
+    expect(
+      service.listPlugins().find((plugin) => plugin.manifest.name === "daintree.markdown-editor")
+    ).toMatchObject({ disabled: true, isBuiltin: true });
+    await service.setEnabled("daintree.markdown-editor", true);
     expect(service.hasPlugin("daintree.markdown-editor")).toBe(true);
   });
 

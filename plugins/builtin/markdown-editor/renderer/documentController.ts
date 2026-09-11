@@ -1,5 +1,6 @@
 import { usePanelStore } from "@/store/panelStore";
 import { isFilePanel } from "@shared/types/panel";
+import { join } from "@shared/utils/path";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
@@ -189,7 +190,9 @@ export class DocumentController {
         // Gone, or now showing another file: either way this binding is over.
         if (
           panel === undefined ||
-          (isFilePanel(panel) && panel.filePath !== this.identity.filePath)
+          (isFilePanel(panel) && panel.filePath !== this.identity.filePath) ||
+          (panel.kind === "file-browser" &&
+            join(this.rootPath, panel.browserSelectedPath ?? "") !== this.identity.filePath)
         ) {
           this.release();
         }
@@ -273,6 +276,7 @@ export class DocumentController {
     const record = this.record();
     useFileDocumentStore.getState().setFileDocument(this.panelId, {
       identityKey: this.key,
+      fileName: this.fileName,
       draftText: record.draft?.text ?? null,
       dirty: record.draft !== null,
       conflict: record.conflict !== null || record.status === "unavailable",

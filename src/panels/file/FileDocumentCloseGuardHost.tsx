@@ -27,6 +27,8 @@ interface Prompt {
 }
 
 function panelFileName(panelId: string): string {
+  const documentName = getFileDocumentProjection(panelId)?.fileName;
+  if (documentName) return documentName;
   const panel = usePanelStore.getState().panelsById[panelId];
   const filePath = panel && isFilePanel(panel) ? panel.filePath : undefined;
   return filePath?.split(/[/\\]/).filter(Boolean).pop() ?? "this file";
@@ -152,7 +154,7 @@ export function FileDocumentCloseGuardHost() {
       </AppDialog.Header>
       <AppDialog.Body>
         <AppDialog.Description>
-          Closing without saving loses the edits you made since the last save.
+          Save your edits before leaving this file, or discard them to continue.
         </AppDialog.Description>
       </AppDialog.Body>
       <AppDialog.Footer>

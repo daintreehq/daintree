@@ -764,7 +764,7 @@ From your `activate()` subscriptions and timers, call `host.invalidateFileDecora
 
 ## File editors — _Shipped (built-in only)_
 
-Declares a writable **Edit** mode on the host's file panel for the listed extensions. The manifest names the builtin view slot the plugin's renderer registers for the editor surface; the host resolves it enable-aware, so disabling the plugin removes Edit live and a panel persisted in `edit` mode falls back to Source without rewriting the preference. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one contributor.
+Declares a writable **Edit** mode alongside Source and Rendered in the host’s file browser and standalone file panel for the listed extensions. The manifest names the builtin view slot the plugin's renderer registers for the editor surface; the host resolves it enable-aware, so disabling the plugin removes Edit live and a panel persisted in `edit` mode falls back to Source without rewriting the preference. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one contributor.
 
 ```json
 {
@@ -792,7 +792,7 @@ Declares a writable **Edit** mode on the host's file panel for the listed extens
 
 **Built-in only.** The slot resolves through the builtin view registry compiled into the host bundle, which an installed plugin's renderer cannot register into, so the host refuses the contribution from any other origin at load with a recorded load error. Opening file editors to installed plugins is a separate decision.
 
-The host offers Edit only in the file panel (the file viewer dialog stays read-only), only for a file the reader loaded as text, and only inside a project or worktree root. The editor view receives the panel's fixed identity — file, containment root, worktree and project — and publishes its document state (draft, dirty, conflict, and the Save and Discard operations) through the host's file-document store, which drives the dirty mark in the panel chrome, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close.
+The host offers Edit inside the file browser’s existing content area and in standalone file panels (the standalone file viewer dialog stays read-only), only for a file the reader loaded as text, and only inside a project or worktree root. The editor view receives the panel's fixed identity — file, containment root, worktree and project — and publishes its document state (draft, dirty, conflict, and the Save and Discard operations) through the host's file-document store, which drives the dirty mark in the panel chrome, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close.
 
 ## Agents — _Shipped (minimal tier)_
 

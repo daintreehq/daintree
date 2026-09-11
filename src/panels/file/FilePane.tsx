@@ -70,6 +70,7 @@ import { logError } from "@/utils/logger";
 import { useHeightHold } from "./useHeightHold";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
+import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
 
 export interface FilePaneProps extends BasePanelProps {
@@ -1236,6 +1237,18 @@ export function FilePane({
           </FileViewerToolbar.IconButton>
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
+      {location !== "dialog" &&
+        isInsideGovernedRoot &&
+        viewMode !== "edit" &&
+        loadState === "loaded" &&
+        content !== null && (
+          <FileEditorBanner
+            key={`${id}:${filePath}`}
+            filePath={filePath}
+            content={content}
+            onEdit={() => handleViewModeChange("edit")}
+          />
+        )}
       {viewMode === "diff" && diffStale && diffContent !== undefined && (
         <InlineStatusBanner
           severity="info"

@@ -257,6 +257,7 @@ const fileEditorState = vi.hoisted(() => ({
   renderedProps: [] as Array<Record<string, unknown>>,
 }));
 vi.mock("@/registry/fileEditorRegistry", () => ({
+  resolveFileEditor: () => null,
   useFileEditor: () =>
     fileEditorState.resolved === null
       ? null
