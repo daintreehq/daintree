@@ -629,6 +629,8 @@ beforeEach(() => {
           start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
           send: vi.fn().mockResolvedValue({ delivered: true }),
           stop: vi.fn().mockResolvedValue({ stopped: true }),
+          listResumable: vi.fn().mockResolvedValue([]),
+          discardResume: vi.fn().mockResolvedValue({ discarded: true }),
           onEvent: vi.fn(() => () => {}),
           onPeerPrompt: () => () => {},
           onSequenceGap: vi.fn(() => () => {}),
@@ -1547,5 +1549,131 @@ describe("HelpPanel — the native assistant's destructive controls", () => {
     });
     expect(queryByTestId("confirm-dialog")).toBeNull();
     expect(nativePanelProps.at(-1)?.active).toBe(false);
+  });
+});
+
+/**
+ * A native lane whose engine went down with its view (#12365).
+ *
+ * Main keeps which conversation each lane was having and continues it on the lane's next
+ * start, so a cold view only has to put the lanes back where the user can reach them —
+ * and the panel back on screen when it was open as the view was lost. What it must NOT
+ * do is let an ordinary teardown forget that conversation, which is why only Stop and
+ * closing a lane ask main to.
+ */
+describe("HelpPanel — native lanes and the conversations main keeps for them (#12365)", () => {
+  type HostMock = Record<string, ReturnType<typeof vi.fn>>;
+
+  function nativeMode() {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.preferredAgentId = null;
+  }
+
+  function assistantHost(): HostMock {
+    return (window as unknown as { electron: { assistantHost: HostMock } }).electron
+      .assistantHost;
+  }
+
+  function queryStopItem(container: HTMLElement): HTMLButtonElement | null {
+    return (
+      [
+        ...container.querySelectorAll<HTMLButtonElement>("[data-testid='overflow-menu'] button"),
+      ].find((b) => b.textContent?.includes("Stop assistant")) ?? null
+    );
+  }
+
+  afterEach(() => {
+    for (const slot of [0, 1, 2]) releaseAssistantStore(slot);
+    nativePanelProps.length = 0;
+  });
+
+  it("puts the lanes back and reopens the panel on one lost while it was open", async () => {
+    nativeMode();
+    helpPanelState.isOpen = false;
+    const ensureSlot = vi.fn();
+    Object.assign(helpPanelState, { ensureSlot });
+    assistantHost().listResumable!.mockResolvedValue([
+      { slot: 0, panelWasOpen: false },
+      { slot: 2, panelWasOpen: true },
+    ]);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(assistantHost().listResumable).toHaveBeenCalledWith("proj-1");
+    expect(ensureSlot.mock.calls).toEqual([[0], [2]]);
+    // Onto the conversation, not whichever lane a cold view happens to come up on.
+    expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(2);
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+  });
+
+  it("puts the lanes back but leaves a panel closed that was closed", async () => {
+    nativeMode();
+    helpPanelState.isOpen = false;
+    const ensureSlot = vi.fn();
+    Object.assign(helpPanelState, { ensureSlot });
+    assistantHost().listResumable!.mockResolvedValue([{ slot: 1, panelWasOpen: false }]);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(ensureSlot).toHaveBeenCalledWith(1);
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(true);
+    expect(helpPanelState.setActiveSlot).not.toHaveBeenCalled();
+  });
+
+  it("asks main for nothing while a terminal agent has the panel", async () => {
+    // The reset's preference: a terminal-backed agent, whose lanes restore through the
+    // PTY hibernation entries instead.
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    expect(assistantHost().listResumable).not.toHaveBeenCalled();
+  });
+
+  it("forgets the lane's conversation when it is stopped", () => {
+    nativeMode();
+    const { container } = render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.click(queryStopItem(container)!);
+    });
+    expect(assistantHost().discardResume).toHaveBeenCalledWith("proj-1", 0);
+  });
+
+  it("forgets a closed lane's conversation, and no other lane's", () => {
+    nativeMode();
+    helpPanelState.openSlots = [0, 1];
+    const { container } = render(<HelpPanel width={380} />);
+    const close = container.querySelector<HTMLButtonElement>('button[title="Close Session 2"]');
+    expect(close).not.toBe(null);
+
+    act(() => {
+      fireEvent.click(close!);
+    });
+    expect(assistantHost().discardResume.mock.calls).toEqual([["proj-1", 1]]);
+  });
+
+  it("asks before Stop discards a conversation the lane picked back up but cannot show", () => {
+    nativeMode();
+    assistantStoreForSlot(0).getState().reset("ses_native");
+    assistantStoreForSlot(0).getState().applyEvent({
+      type: "host:ready",
+      sessionId: "ses_native",
+      seq: 1,
+      protocolVersion: 4,
+      autoApprove: false,
+      resumedSessionId: "ses_before",
+    });
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+
+    fireEvent.click(queryStopItem(container)!);
+    // An empty transcript, and a whole conversation in the assistant's context.
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+    expect(assistantHost().discardResume).not.toHaveBeenCalled();
   });
 });

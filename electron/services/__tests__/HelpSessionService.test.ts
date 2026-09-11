@@ -2207,6 +2207,7 @@ describe("HelpSessionService", () => {
       service.reportPanelOpen("proj-toggle", true);
       // User closed the panel before switching away.
       service.reportPanelOpen("proj-toggle", false);
+      expect(service.isPanelOpen("proj-toggle")).toBe(false);
 
       await service.revokeByWebContentsId(97);
       await Promise.resolve();

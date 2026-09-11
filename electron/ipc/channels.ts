@@ -800,6 +800,10 @@ export const CHANNELS = {
   ASSISTANT_HOST_START: "assistant-host:start",
   ASSISTANT_HOST_SEND: "assistant-host:send",
   ASSISTANT_HOST_STOP: "assistant-host:stop",
+  /** The lanes with a conversation their next start would continue (#12365). */
+  ASSISTANT_HOST_LIST_RESUMABLE: "assistant-host:list-resumable",
+  /** Forgets the conversation a lane would continue: Stop, and closing its tab. */
+  ASSISTANT_HOST_DISCARD_RESUME: "assistant-host:discard-resume",
   /** One validated protocol event from the engine. */
   ASSISTANT_HOST_EVENT: "assistant-host:event",
   /**

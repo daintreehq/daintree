@@ -2,17 +2,45 @@ import { defineIpcNamespace, op } from "../define.js";
 import { ASSISTANT_HOST_METHOD_CHANNELS } from "./assistantHost.preload.js";
 import { assistantHostService } from "../../services/assistant-host/AssistantHostService.js";
 import { parseAssistantHostCommand } from "../../schemas/ipc.js";
+import { isValidAssistantSlot } from "../../../shared/config/assistantSlots.js";
+import { createLogger } from "../../utils/logger.js";
+import type { IpcContext } from "../types.js";
 import type {
+  AssistantHostResumableLane,
   AssistantHostStartPayload,
   AssistantHostStartResult,
 } from "../../../shared/types/ipc/assistantHostIpc.js";
 
+const logger = createLogger("main:ipc:assistantHost");
+
+/**
+ * Whether the calling view IS the workspace it names.
+ *
+ * A lane's recorded conversation belongs to one workspace, so a view may only read or
+ * forget its own — the guard the PTY hibernation handlers put on their resume tokens.
+ */
+function callerOwnsWorkspace(
+  ctx: IpcContext,
+  projectId: unknown,
+  operation: string
+): projectId is string {
+  if (typeof projectId !== "string" || !projectId) return false;
+  if (ctx.projectId === projectId) return true;
+  logger.warn(`${operation}: projectId mismatch — refusing a cross-workspace call`, {
+    requested: projectId,
+    fromView: ctx.projectId,
+    webContentsId: ctx.webContentsId,
+  });
+  return false;
+}
+
 /**
  * IPC surface for the native assistant engine.
  *
- * Deliberately thin: three commands in, an event stream out on push channels. All the
- * lifecycle (one engine per project, pinned delivery, displacement) lives in
- * `AssistantHostService`, so this layer only validates and routes.
+ * Deliberately thin: commands in, an event stream out on push channels. All the
+ * lifecycle (one engine per project, pinned delivery, displacement, which conversation a
+ * lane continues) lives in `AssistantHostService`, so this layer only validates and
+ * routes.
  */
 export const assistantHostNamespace = defineIpcNamespace({
   name: "assistantHost",
@@ -51,6 +79,9 @@ export const assistantHostNamespace = defineIpcNamespace({
           // name — it is a piece of the window's own layout, not a permission — and
           // `startLocked` resolves anything out of range down to the default lane.
           slot: payload.slot,
+          // Strictly `true`: anything else continues the lane's conversation, which is
+          // the default a malformed payload should fall back to rather than discarding it.
+          fresh: payload.fresh === true,
           // BOTH identities come from the IPC CONTEXT, never the payload. A renderer
           // must not be able to nominate which view an assistant session — and
           // therefore its approval prompts — gets delivered to.
@@ -105,6 +136,40 @@ export const assistantHostNamespace = defineIpcNamespace({
         // engine stops when the last surface leaves.
         assistantHostService.detachSession(sessionId, ctx.webContentsId, attachmentId);
         return { stopped: true };
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * The lanes of this workspace whose conversation a start would continue (#12365).
+     *
+     * Slot numbers and whether each one's panel was open — the conversation ids stay in
+     * main.
+     */
+    listResumable: op(
+      ASSISTANT_HOST_METHOD_CHANNELS.listResumable,
+      async (ctx, projectId: string): Promise<AssistantHostResumableLane[]> => {
+        if (!callerOwnsWorkspace(ctx, projectId, "listResumable")) return [];
+        return assistantHostService.listResumable(projectId);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Forgets the conversation a lane would continue, so its next start is a new one.
+     *
+     * What Stop and closing a lane's tab mean, both confirmed in the panel when there is
+     * anything to lose. An out-of-range slot is refused rather than resolved down to lane
+     * 0 the way a start's is: resolving a DISCARD would throw away a conversation the
+     * caller never named.
+     */
+    discardResume: op(
+      ASSISTANT_HOST_METHOD_CHANNELS.discardResume,
+      async (ctx, projectId: string, slot: number): Promise<{ discarded: boolean }> => {
+        if (!callerOwnsWorkspace(ctx, projectId, "discardResume")) return { discarded: false };
+        if (!isValidAssistantSlot(slot)) return { discarded: false };
+        await assistantHostService.discardResume(projectId, slot);
+        return { discarded: true };
       },
       { withContext: true }
     ),
