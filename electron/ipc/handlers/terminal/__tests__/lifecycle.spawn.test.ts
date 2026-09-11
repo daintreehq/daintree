@@ -87,7 +87,6 @@ vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: findUntouchedClaudeSessionMock,
   isClaudeSessionWithoutTranscript: vi.fn(async () => false),
-  dropClaudeSessionsWithoutTranscript: vi.fn(async (records: unknown[]) => records),
 }));
 
 type SafeParseable = {

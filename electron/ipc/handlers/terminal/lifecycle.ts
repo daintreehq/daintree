@@ -14,7 +14,6 @@ import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js"
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
-  dropClaudeSessionsWithoutTranscript,
   findUntouchedClaudeSession,
   rememberClaudePaneStore,
   resolvePaneClaudeProjectsRoot,
@@ -55,42 +54,6 @@ import {
 import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
-
-/**
- * Which history records may come from a pane that read a different Claude store
- * than a default pane does (#12371): every record once an agent preset mentions
- * `CLAUDE_CONFIG_DIR`; otherwise those from a project that sets its own shell or
- * mentions it in its settings, and those with no project to check. The resume
- * list leaves them alone rather than judge them against the wrong store.
- */
-async function findRecordsOffDefaultClaudeStore(
-  records: readonly AgentSessionRecord[]
-): Promise<(record: AgentSessionRecord) => boolean> {
-  const mentionsClaudeStore = (value: unknown): boolean =>
-    JSON.stringify(value ?? null).includes("CLAUDE_CONFIG_DIR");
-  if (mentionsClaudeStore(store.get("agentSettings"))) return () => true;
-  const projectIds = new Set(
-    records.flatMap((record) =>
-      record.agentId === "claude" && record.projectId ? [record.projectId] : []
-    )
-  );
-  const offDefault = new Set<string>();
-  await Promise.all(
-    [...projectIds].map(async (projectId) => {
-      try {
-        // The icon can be a quarter of a megabyte and says nothing about env.
-        const { projectIconSvg: _icon, ...settings } =
-          await projectStore.getProjectSettings(projectId);
-        if (settings.terminalSettings?.shell || mentionsClaudeStore(settings)) {
-          offDefault.add(projectId);
-        }
-      } catch {
-        offDefault.add(projectId);
-      }
-    })
-  );
-  return (record) => !record.projectId || offDefault.has(record.projectId);
-}
 
 const TERMINAL_SPAWN_INTERVAL_MS = 1_000;
 const TERMINAL_SPAWN_BURST = 6;
@@ -1074,15 +1037,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
-    const records = listAgentSessions(
+    return listAgentSessions(
       payload?.worktreeId,
       app.getPath("userData"),
       getAgentSessionRetentionDays(),
       payload?.projectId
     );
-    return dropClaudeSessionsWithoutTranscript(records, {
-      keep: await findRecordsOffDefaultClaudeStore(records),
-    });
   };
 
   const handleAgentSessionClear = async (payload: { worktreeId?: string }): Promise<void> => {

@@ -39,7 +39,6 @@ vi.mock("../../claude/ClaudeSessionStore.js", () => ({
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: vi.fn(async () => undefined),
   isClaudeSessionWithoutTranscript: isClaudeSessionWithoutTranscriptMock,
-  dropClaudeSessionsWithoutTranscript: vi.fn(async (records: unknown[]) => records),
 }));
 
 import { journalAgentSession, journalAgentSessionRecord } from "../agentSessionJournal.js";

@@ -58,10 +58,13 @@ const PANE_STORE_MEMORY = 1_024;
 /** Claude Code only accepts a UUID as a session id, so nothing else can name a transcript it wrote. */
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
- * The titles a Claude pane carries before its first message: Daintree's label
- * for the agent and Claude Code's idle title, with or without its status glyph.
+ * Shells a pane starts the way the startup probe does, as an interactive login
+ * shell, so the user's profile reaches both alike. Other POSIX shells launch
+ * without `-l` (see `buildCommandLaunchShell`) and read different startup files.
  */
-const UNTOUCHED_TITLE_PATTERN = /^(?:[^\p{L}\p{N}\s]\s*)?Claude(?: Code)?$/u;
+const LOGIN_PROBED_SHELLS = new Set(["zsh", "bash"]);
+/** Pane-level overrides that move the store or change which startup files a shell reads. */
+const STARTUP_ENV_VARS = [CONFIG_DIR_VAR, "HOME", "ZDOTDIR", "ENV", "BASH_ENV"];
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
 
@@ -115,8 +118,10 @@ function isAbsence(error: unknown): boolean {
  *
  * A pane's shell sources the user's profile, which can export, change, or unset
  * `CLAUDE_CONFIG_DIR`, and main never sees the result. Certainty therefore needs
- * the pane to start from exactly what the startup probe saw: the same shell, and
- * no `CLAUDE_CONFIG_DIR` of its own for that profile to treat differently. Its
+ * the pane to start from exactly what the startup probe saw: the same shell,
+ * started the same way (zsh and bash are the shells a pane runs as an
+ * interactive login shell, like the probe), and no override of its own for
+ * `CLAUDE_CONFIG_DIR` or the variables that choose a shell's startup files. Its
  * profile then does to the pane whatever it did to the probe. Anything else — a
  * different shell, a pane-level override, no probe yet — is unknown, and so is
  * Windows, whose PowerShell and cmd profiles are never probed.
@@ -128,10 +133,12 @@ export function resolvePaneClaudeProjectsRoot(
   context: ClaudeStoreContext = {}
 ): string | null {
   if ((context.platform ?? process.platform) === "win32") return null;
-  if (pane.env && hasEnvVar(pane.env, CONFIG_DIR_VAR)) return null;
+  const paneEnv = pane.env;
+  if (paneEnv && STARTUP_ENV_VARS.some((name) => hasEnvVar(paneEnv, name))) return null;
   const observation = (context.readShellObservation ?? getShellEnvironmentObservation)();
   const shell = pane.shell ?? getEnvVar(context.env ?? process.env, "SHELL");
   if (!observation || !shell || shell !== observation.shell) return null;
+  if (!LOGIN_PROBED_SHELLS.has(path.basename(shell))) return null;
   const configDir = observation.env[CONFIG_DIR_VAR];
   if (configDir === undefined) return path.join(os.homedir(), ".claude", "projects");
   // Empty or relative: what the CLI makes of either is not something to guess at.
@@ -360,52 +367,6 @@ export async function isClaudeSessionWithoutTranscript(
     options
   );
   return observation === "missing";
-}
-
-type SessionRecordFacts = Pick<AgentSessionRecord, "agentId" | "sessionId" | "bookmark" | "title">;
-
-/**
- * A history record that could be an untouched pane: an unbookmarked Claude
- * session still wearing Claude's pre-conversation title. A record outlives the
- * spawn that knew its pane's store, so an old one has to look untouched as well
- * before it is judged at all.
- */
-function couldBeUntouchedClaudeSession(record: SessionRecordFacts): boolean {
-  if (record.agentId !== CLAUDE_AGENT_ID || record.bookmark !== undefined) return false;
-  if (!SESSION_ID_PATTERN.test(record.sessionId)) return false;
-  const title = record.title?.trim();
-  return !title || UNTOUCHED_TITLE_PATTERN.test(title);
-}
-
-export interface DropClaudeSessionsOptions<T> extends ClaudeStoreOptions {
-  /** Records the caller knows may have run against a different store. Always kept. */
-  keep?: (record: T) => boolean;
-}
-
-/**
- * Drops untouched Claude sessions from a history list, so the resume list stops
- * offering conversations `--resume` can never open. Only records that could
- * have come from a default pane are judged, against the store such a pane reads,
- * and the caller's `keep` vetoes any it knows were launched differently.
- * Read-side only: the journal on disk is untouched, and a store that can't be
- * pinned down or read in full filters nothing.
- */
-export async function dropClaudeSessionsWithoutTranscript<T extends SessionRecordFacts>(
-  records: T[],
-  options: DropClaudeSessionsOptions<T> = {}
-): Promise<T[]> {
-  const judged = (record: T): boolean =>
-    couldBeUntouchedClaudeSession(record) && !options.keep?.(record);
-  if (!records.some(judged)) return records;
-  const projectsRoot = resolvePaneClaudeProjectsRoot({}, options);
-  if (!projectsRoot || isCoolingDown(projectsRoot)) return records;
-  const ids = await readTranscriptIndex(
-    projectsRoot,
-    options.fs ?? nodeFs,
-    options.timeoutMs ?? CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS
-  );
-  if (!ids) return records;
-  return records.filter((record) => !judged(record) || ids.has(record.sessionId.toLowerCase()));
 }
 
 export function __resetClaudeSessionStoreForTests(): void {

@@ -6,7 +6,6 @@ import type { AgentSessionRecord } from "../../../../shared/types/ipc/agentSessi
 import type { ShellEnvironmentObservation } from "../../../setup/shellEnvironmentObservation.js";
 import {
   __resetClaudeSessionStoreForTests,
-  dropClaudeSessionsWithoutTranscript,
   findUntouchedClaudeSession,
   isClaudeSessionWithoutTranscript,
   observeClaudeTranscript,
@@ -97,6 +96,33 @@ describe("resolvePaneClaudeProjectsRoot", () => {
 
   it("is unknown for a pane launching a different shell than the one probed", () => {
     expect(resolvePaneClaudeProjectsRoot({ shell: "/bin/bash" }, machine())).toBeNull();
+  });
+
+  it("accepts bash as well as zsh, the shells a pane starts as a login shell", () => {
+    const bash = "/opt/homebrew/bin/bash";
+    expect(
+      resolvePaneClaudeProjectsRoot(
+        {},
+        { ...machine({ shell: bash, env: { CLAUDE_CONFIG_DIR: configDir } }), env: { SHELL: bash } }
+      )
+    ).toBe(projectsRoot);
+  });
+
+  it("is unknown for a shell a pane doesn't start as a login shell the way the probe does", () => {
+    expect(
+      resolvePaneClaudeProjectsRoot(
+        {},
+        { ...machine({ shell: "/bin/sh", env: {} }), env: { SHELL: "/bin/sh" } }
+      )
+    ).toBeNull();
+  });
+
+  it("is unknown for a pane that changes which startup files its shell reads", () => {
+    for (const name of ["HOME", "ZDOTDIR", "ENV", "BASH_ENV"]) {
+      expect(
+        resolvePaneClaudeProjectsRoot({ env: { [name]: "/elsewhere" } }, machine())
+      ).toBeNull();
+    }
   });
 
   it("is unknown for a pane with its own CLAUDE_CONFIG_DIR, even an empty one", () => {
@@ -391,64 +417,5 @@ describe("isClaudeSessionWithoutTranscript", () => {
     const record = { agentId: "claude", sessionId: SESSION, cwd: CWD };
     await expect(isClaudeSessionWithoutTranscript(record, "term-oldest")).resolves.toBe(false);
     await expect(isClaudeSessionWithoutTranscript(record, "term-1023")).resolves.toBe(true);
-  });
-});
-
-type HistoryRecord = Pick<AgentSessionRecord, "agentId" | "sessionId" | "bookmark" | "title">;
-
-describe("dropClaudeSessionsWithoutTranscript", () => {
-  it("hides untouched Claude sessions with no conversation and keeps everything else", async () => {
-    await writeTranscript(CWD_SLUG, OTHER);
-    const records: HistoryRecord[] = [
-      { agentId: "claude", sessionId: SESSION, title: "✳ Claude Code" },
-      { agentId: "claude", sessionId: OTHER, title: "✳ Claude Code" },
-      { agentId: "claude", sessionId: SESSION, title: "✳ Fix the login redirect" },
-      { agentId: "codex", sessionId: SESSION, title: null },
-      { agentId: "claude", sessionId: SESSION, title: null, bookmark: BOOKMARK },
-    ];
-
-    await expect(dropClaudeSessionsWithoutTranscript(records, machine())).resolves.toEqual(
-      records.slice(1)
-    );
-  });
-
-  it("keeps whatever the caller knows may have used another store", async () => {
-    await writeTranscript(CWD_SLUG, OTHER);
-    const records: HistoryRecord[] = [
-      { agentId: "claude", sessionId: SESSION, title: "Claude" },
-      { agentId: "claude", sessionId: SESSION.replace("006f", "106f"), title: "Claude" },
-    ];
-
-    await expect(
-      dropClaudeSessionsWithoutTranscript(records, {
-        ...machine(),
-        keep: (record) => record === records[0],
-      })
-    ).resolves.toEqual([records[0]]);
-  });
-
-  it("filters nothing when a default pane's store isn't certain", async () => {
-    const records: HistoryRecord[] = [{ agentId: "claude", sessionId: SESSION, title: null }];
-    await expect(dropClaudeSessionsWithoutTranscript(records, machine(null))).resolves.toBe(
-      records
-    );
-  });
-
-  it("doesn't read the store for a list with nothing to judge", async () => {
-    const fs = countingFs();
-    const records: HistoryRecord[] = [
-      { agentId: "codex", sessionId: SESSION, title: null },
-      { agentId: "claude", sessionId: OTHER, title: null, bookmark: BOOKMARK },
-      { agentId: "claude", sessionId: OTHER, title: "✳ Fix the login redirect" },
-      { agentId: "claude", sessionId: SESSION, title: "Claude" },
-    ];
-    await expect(
-      dropClaudeSessionsWithoutTranscript(records, {
-        ...machine(),
-        fs,
-        keep: (record) => record.agentId === "claude" && record.title === "Claude",
-      })
-    ).resolves.toBe(records);
-    expect(fs.readdirCalls).toEqual([]);
   });
 });
