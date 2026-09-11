@@ -15,26 +15,35 @@ import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } 
 interface FakeHost {
   descriptor: { sessionId: string; resumeSessionId?: string };
   onEvent: (event: Record<string, unknown>) => void;
+  disposed: boolean;
 }
 
 const hosts: FakeHost[] = [];
 /** When true, the next engines never reach `host:ready`. */
 let failReady = false;
+/** An event each new engine emits after it is up but before the host has its ready frame. */
+let preReadyEvent: ((sessionId: string) => Record<string, unknown>) | null = null;
 /** Workspaces whose assistant panel their renderer last reported open. */
 const panelOpen = new Set<string>();
+const delivered: Array<{ webContentsId: number; channel: string; payload: unknown }> = [];
 
 vi.mock("../AssistantHostProcess.js", () => ({
   AssistantHostProcess: class {
     private readonly record: FakeHost;
-    constructor(opts: FakeHost) {
-      this.record = { descriptor: opts.descriptor, onEvent: opts.onEvent };
+    private isReady = false;
+    constructor(opts: Pick<FakeHost, "descriptor" | "onEvent">) {
+      this.record = { descriptor: opts.descriptor, onEvent: opts.onEvent, disposed: false };
       hosts.push(this.record);
     }
     start() {}
     waitForReady() {
-      return failReady ? Promise.reject(new Error("engine never became ready")) : Promise.resolve();
+      if (failReady) return Promise.reject(new Error("engine never became ready"));
+      if (preReadyEvent) this.record.onEvent(preReadyEvent(this.record.descriptor.sessionId));
+      this.isReady = true;
+      return Promise.resolve();
     }
     getReadyEvent() {
+      if (!this.isReady) return null;
       // The engine's own echo (internal/host/host.go): `resumedSessionId` is present
       // exactly when the descriptor carried a `resumeSessionId`.
       const { sessionId, resumeSessionId } = this.record.descriptor;
@@ -59,7 +68,13 @@ vi.mock("../AssistantHostProcess.js", () => ({
     getTranscript() {
       return { events: [], prompts: [], truncated: false };
     }
-    dispose() {}
+    send() {
+      return true;
+    }
+    recordPrompt() {}
+    dispose() {
+      this.record.disposed = true;
+    }
     waitForExit() {
       return Promise.resolve();
     }
@@ -82,7 +97,14 @@ vi.mock("../resolveAssistantBinary.js", () => ({
 
 vi.mock("electron", () => ({
   app: { getPath: () => "/nonexistent-userdata", isPackaged: false },
-  webContents: { fromId: () => ({ isDestroyed: () => false, send: () => {} }) },
+  webContents: {
+    fromId: (webContentsId: number) => ({
+      isDestroyed: () => false,
+      send: (channel: string, payload: unknown) => {
+        delivered.push({ webContentsId, channel, payload });
+      },
+    }),
+  },
 }));
 
 vi.mock("../../../ipc/handlers/helpAssistant.js", () => ({
@@ -106,8 +128,11 @@ const { NativeAssistantResumeStore, __resetNativeAssistantResumeStoreForTests } 
   "../NativeAssistantResumeStore.js"
 );
 const { assistantSlotKey } = await import("../../../../shared/config/assistantSlots.js");
+const { CHANNELS } = await import("../../../ipc/channels.js");
 
 const VIEW = { projectId: "p1", cwd: "/tmp/p1", webContentsId: 7, windowId: 1 };
+const OTHER_WINDOW = { ...VIEW, webContentsId: 8, windowId: 2 };
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The engine opens a turn — the moment a lane has a conversation worth continuing. */
 function speak(host: FakeHost): void {
@@ -130,7 +155,9 @@ describe("native assistant resume lifecycle", () => {
 
   beforeEach(async () => {
     hosts.length = 0;
+    delivered.length = 0;
     failReady = false;
+    preReadyEvent = null;
     panelOpen.clear();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "native-resume-lifecycle-"));
     store = new NativeAssistantResumeStore(path.join(tmpDir, "resume.json"));
@@ -138,6 +165,9 @@ describe("native assistant resume lifecycle", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+    // Writes the service queued are drained before their directory goes.
+    await store.flush();
     __resetNativeAssistantResumeStoreForTests();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -174,6 +204,49 @@ describe("native assistant resume lifecycle", () => {
     expect(await service.listResumable("p1")).toEqual([]);
   });
 
+  it("records a conversation from the prompt that begins it", async () => {
+    const service = new AssistantHostService();
+    const first = await service.start(VIEW);
+    expect(recorded()).toBeNull();
+
+    service.send(
+      { type: "prompt", sessionId: first.sessionId, text: "hello" } as never,
+      VIEW.webContentsId
+    );
+    expect(recorded()).toBe(first.sessionId);
+  });
+
+  it("records a conversation that began before the host had the engine's ready frame", async () => {
+    // A wake can open in the moment between the engine becoming ready and `host:ready`
+    // being written. Asked then, the host cannot yet say which id the conversation is
+    // stored under — and no later turn may come to ask again before the view is lost.
+    preReadyEvent = (sessionId) => ({
+      type: "turn:phase",
+      sessionId,
+      seq: 2,
+      phase: "Waking",
+      wake: true,
+    });
+    const service = new AssistantHostService();
+    const first = await service.start(VIEW);
+
+    expect(recorded()).toBe(first.sessionId);
+  });
+
+  it("keeps the record's age current while the conversation is in use", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const service = new AssistantHostService();
+    await service.start(VIEW);
+    speak(hosts[0]!);
+    const firstAt = store.get(assistantSlotKey("p1", 0))!.capturedAt;
+
+    // An engine up for longer than the store's staleness cutoff would otherwise still
+    // carry its first turn's age, and be dropped on the next launch as abandoned.
+    vi.setSystemTime(firstAt + DAY_MS + 1);
+    speak(hosts[0]!);
+    expect(store.get(assistantSlotKey("p1", 0))!.capturedAt).toBe(firstAt + DAY_MS + 1);
+  });
+
   it("keeps the conversation through a start that fails", async () => {
     const service = new AssistantHostService();
     const first = await service.start(VIEW);
@@ -202,6 +275,29 @@ describe("native assistant resume lifecycle", () => {
     expect(recorded()).toBeNull();
   });
 
+  it("replaces a running engine on a fresh start rather than joining it", async () => {
+    const service = new AssistantHostService();
+    const first = await service.start(VIEW);
+    speak(hosts[0]!);
+    await service.start(OTHER_WINDOW);
+    expect(hosts).toHaveLength(1);
+    delivered.length = 0;
+
+    const fresh = await service.start({ ...VIEW, fresh: true });
+
+    // Joining would have handed "+ New session" the very conversation it replaces.
+    expect(hosts).toHaveLength(2);
+    expect(hosts[0]!.disposed).toBe(true);
+    expect(fresh.sessionId).not.toBe(first.sessionId);
+    expect(hosts[1]!.descriptor).not.toHaveProperty("resumeSessionId");
+    // The other window is told its session ended, rather than left typing into it.
+    expect(delivered).toContainEqual({
+      webContentsId: OTHER_WINDOW.webContentsId,
+      channel: CHANNELS.ASSISTANT_HOST_EXIT,
+      payload: { sessionId: first.sessionId, code: null, signal: null },
+    });
+  });
+
   it("discards one lane, and only after a start already on its way", async () => {
     const service = new AssistantHostService();
     await service.start(VIEW);
@@ -214,18 +310,43 @@ describe("native assistant resume lifecycle", () => {
     // records it again at readiness, so a discard that jumped the queue would either be
     // undone by it or keep it from resuming at all.
     const restarting = service.start(VIEW);
-    const discarding = service.discardResume("p1", 0);
+    const discarding = service.discardResume("p1", 0, VIEW.webContentsId);
     await restarting;
-    await discarding;
+    expect(await discarding).toBe(true);
 
     expect(hosts[2]!.descriptor.resumeSessionId).toBe(hosts[0]!.descriptor.sessionId);
     expect(recorded(0)).toBeNull();
     expect(recorded(1)).toBe(hosts[1]!.descriptor.sessionId);
 
-    // The engine that was running when it was discarded is still somebody's conversation
-    // (another window can be watching it), so using it records it again.
+    // The engine is still up until the asker's own detach lands. A turn arriving in that
+    // gap must not bring back what was just discarded.
     speak(hosts[2]!);
-    expect(recorded(0)).toBe(hosts[0]!.descriptor.sessionId);
+    expect(recorded(0)).toBeNull();
+  });
+
+  it("refuses to discard a conversation another window is still having", async () => {
+    const service = new AssistantHostService();
+    const first = await service.start(VIEW);
+    speak(hosts[0]!);
+    await service.start(OTHER_WINDOW);
+
+    // Stop in one window ends only that window's attachment; the other is still talking,
+    // and would lose the conversation to its next eviction.
+    expect(await service.discardResume("p1", 0, VIEW.webContentsId)).toBe(false);
+    expect(recorded()).toBe(first.sessionId);
+  });
+
+  it("lets a view that is not the workspace neither continue, discard nor overwrite it", async () => {
+    const service = new AssistantHostService();
+    const first = await service.start(VIEW);
+    speak(hosts[0]!);
+    service.stopByWebContents(VIEW.webContentsId);
+
+    await service.start({ ...VIEW, webContentsId: 9, windowId: 3, recordable: false, fresh: true });
+    expect(hosts[1]!.descriptor).not.toHaveProperty("resumeSessionId");
+    speak(hosts[1]!);
+
+    expect(recorded()).toBe(first.sessionId);
   });
 
   it("remembers whether the panel was open only when the engine went down with its view", async () => {

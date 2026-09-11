@@ -145,17 +145,19 @@ const peerPromptsTo = (id: number) =>
 // conversation on its first turn, and one store shared across the file would hand a later
 // test's start a conversation to continue that an earlier test left behind.
 let resumeDir: string;
+let resumeStore: InstanceType<typeof NativeAssistantResumeStore>;
 beforeEach(async () => {
   hosts.length = 0;
   delivered.clear();
   destroyed.clear();
   resumeDir = await mkdtemp(join(tmpdir(), "daintree-multisurface-resume-"));
-  __resetNativeAssistantResumeStoreForTests(
-    new NativeAssistantResumeStore(join(resumeDir, "resume.json"))
-  );
+  resumeStore = new NativeAssistantResumeStore(join(resumeDir, "resume.json"));
+  __resetNativeAssistantResumeStoreForTests(resumeStore);
 });
 
 afterEach(async () => {
+  // Writes the service queued are drained before their directory goes.
+  await resumeStore.flush();
   __resetNativeAssistantResumeStoreForTests();
   await rm(resumeDir, { recursive: true, force: true });
 });

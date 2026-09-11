@@ -355,6 +355,24 @@ export function HelpPanel({
   const [nativeSessionNonceBySlot, setNativeSessionNonceBySlot] = useState<Record<number, number>>(
     {}
   );
+  // Lanes main holds a conversation for, restored by this view and not yet shown, by the
+  // workspace they belong to (#12365). Until such a lane starts its store is empty — no
+  // turns, nothing resumed — so without this a restored conversation could be stopped or
+  // closed on one silent click.
+  const [savedNativeLaneBySlot, setSavedNativeLaneBySlot] = useState<Record<number, string>>({});
+  const laneHasSavedConversation = useCallback(
+    (slot: number) =>
+      activeWorkspaceId !== null && savedNativeLaneBySlot[slot] === activeWorkspaceId,
+    [activeWorkspaceId, savedNativeLaneBySlot]
+  );
+  const forgetSavedNativeLane = useCallback((slot: number) => {
+    setSavedNativeLaneBySlot((prev) => {
+      if (!(slot in prev)) return prev;
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
+  }, []);
   /**
    * The Daintree Assistant renders NATIVELY; every other help agent keeps the xterm pane.
    *
@@ -459,6 +477,12 @@ export function HelpPanel({
     // would wipe a conversation restored into slot 0 before this component mounted.
     if (previous === null) return;
     for (const slot of ASSISTANT_SLOTS) releaseAssistantStore(slot);
+    // A confirmation names the conversation it was asked about. Confirmed after a switch,
+    // the same button would act on the new workspace's lane instead — for a native lane,
+    // forgetting a conversation nobody was asked about (#12365).
+    setPendingCloseSlot(null);
+    setShowEndSessionConfirm(false);
+    setShowNewSessionConfirm(false);
   }, [activeWorkspaceId]);
 
   // Moving the agent preference to a terminal agent converts the lane the user is
@@ -1443,6 +1467,13 @@ export function HelpPanel({
         restoredNativeWorkspaceRef.current = activeWorkspaceId;
         const store = useHelpPanelStore.getState();
         for (const { slot } of lanes) store.ensureSlot(slot);
+        if (lanes.length > 0) {
+          setSavedNativeLaneBySlot((prev) => {
+            const next = { ...prev };
+            for (const { slot } of lanes) next[slot] = activeWorkspaceId;
+            return next;
+          });
+        }
         const reopen = lanes.find((lane) => lane.panelWasOpen);
         if (!reopen || store.isOpen) return;
         store.setActiveSlot(reopen.slot);
@@ -1494,10 +1525,11 @@ export function HelpPanel({
   const discardNativeConversation = useCallback(
     (slot: number) => {
       if (!activeWorkspaceId) return;
+      forgetSavedNativeLane(slot);
       const discarded = window.electron.assistantHost.discardResume?.(activeWorkspaceId, slot);
       if (discarded) safeFireAndForget(discarded, { context: "HelpPanel.discardResume" });
     },
-    [activeWorkspaceId]
+    [activeWorkspaceId, forgetSavedNativeLane]
   );
 
   const closeSlotNow = useCallback(
@@ -1562,20 +1594,24 @@ export function HelpPanel({
   // Same "something to lose" gate the Stop control uses, but evaluated against
   // the lane BEING CLOSED rather than the one on screen — a background lane is
   // exactly where a working agent goes unnoticed.
-  const laneNeedsCloseConfirm = useCallback((slot: number) => {
-    const lane = useHelpPanelStore.getState().sessions[slot];
-    if (lane?.conversationTouched) return true;
-    if (lane?.terminalId) {
-      const panel = usePanelStore.getState().panelsById[lane.terminalId];
-      const agentState = panel && isPtyPanel(panel) ? panel.agentState : undefined;
-      if (agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(agentState)) return true;
-    }
-    // The native lane keeps its whole conversation in its own store, so "something to
-    // lose" is read from there. Asked of the lane rather than of the panel's current
-    // mode, so a background native session cannot be closed on one silent click just
-    // because the tab on screen is a terminal.
-    return nativeLaneHasSomethingToLose(slot);
-  }, []);
+  const laneNeedsCloseConfirm = useCallback(
+    (slot: number) => {
+      const lane = useHelpPanelStore.getState().sessions[slot];
+      if (lane?.conversationTouched) return true;
+      if (lane?.terminalId) {
+        const panel = usePanelStore.getState().panelsById[lane.terminalId];
+        const agentState = panel && isPtyPanel(panel) ? panel.agentState : undefined;
+        if (agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(agentState)) return true;
+      }
+      // The native lane keeps its whole conversation in its own store, so "something to
+      // lose" is read from there — or, for a lane restored but not started yet, from what
+      // main said it holds (#12365). Asked of the lane rather than of the panel's current
+      // mode, so a background native session cannot be closed on one silent click just
+      // because the tab on screen is a terminal.
+      return nativeLaneHasSomethingToLose(slot) || laneHasSavedConversation(slot);
+    },
+    [laneHasSavedConversation]
+  );
 
   const handleCloseSlot = useCallback(
     (slot: number) => {
@@ -1613,8 +1649,8 @@ export function HelpPanel({
    * identical PTY action asked first.
    */
   const nativeLaneHasConversation = useCallback(
-    () => nativeLaneHasSomethingToLose(activeSlot),
-    [activeSlot]
+    () => nativeLaneHasSomethingToLose(activeSlot) || laneHasSavedConversation(activeSlot),
+    [activeSlot, laneHasSavedConversation]
   );
 
   /** Restart the lane on screen. The deck is a reading of the session that just ended,
@@ -1622,11 +1658,13 @@ export function HelpPanel({
    *  over a fresh one. */
   const restartNativeLane = useCallback(() => {
     setOperationsOpen(false);
+    // The fresh start this triggers is what forgets the saved conversation, in main.
+    forgetSavedNativeLane(activeSlot);
     setNativeSessionNonceBySlot((prev) => ({
       ...prev,
       [activeSlot]: (prev[activeSlot] ?? 0) + 1,
     }));
-  }, [activeSlot]);
+  }, [activeSlot, forgetSavedNativeLane]);
 
   /** Stop the lane on screen. Disarms THIS LANE only: a parallel session the user did
    *  not stop keeps running, exactly as "Stop" reads. Disarming ends the engine through
