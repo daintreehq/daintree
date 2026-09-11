@@ -212,6 +212,20 @@ async function resolveEnabledPluginMcpEndpoints(
   );
 }
 
+// Re-checked synchronously as each grant is minted: the endpoints above were
+// resolved before the launch's awaits, and a plugin unloaded or an endpoint
+// switched off in between would otherwise get a grant its revocation sweep has
+// already run past. `cachedPluginService` is always set by then — the endpoint
+// list could not have been non-empty without loading it.
+function isPluginMcpEndpointStillEligible(
+  projectId: string
+): (endpoint: { pluginInstanceId: string; endpointId: string }) => boolean {
+  return (endpoint) =>
+    cachedPluginService !== null &&
+    cachedPluginService.hasPlugin(endpoint.pluginInstanceId) &&
+    isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId);
+}
+
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
   if (!ptyClient) {
@@ -729,6 +743,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                       projectId: resolvedProject.id,
                       endpoints: pluginEndpoints,
                       launchAgentIdHint: launchAgentId,
+                      isEligible: isPluginMcpEndpointStillEligible(resolvedProject.id),
                     },
                   }
                 : {}),

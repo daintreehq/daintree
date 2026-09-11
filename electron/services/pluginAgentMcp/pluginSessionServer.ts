@@ -17,6 +17,13 @@ import { agentMcpEndpointRegistry, type AgentMcpEndpointRegistry } from "./endpo
 
 export const PLUGIN_MCP_SESSION_SERVER_VERSION = "1.0.0";
 
+/**
+ * Tool calls one session may have in flight. Each holds a timer, listeners and
+ * (for a worker plugin) a pending invoke; a client that fires calls without
+ * awaiting them gets a tool error past this rather than unbounded growth.
+ */
+export const MAX_CONCURRENT_PLUGIN_TOOL_CALLS = 16;
+
 /** Longest plugin-thrown error message relayed to the agent, in characters. */
 const MAX_ERROR_MESSAGE_CHARS = 2_000;
 
@@ -32,7 +39,12 @@ export interface PluginSessionServerOptions {
   endpointRegistry?: AgentMcpEndpointRegistry;
   callTimeoutMs?: number;
   maxResultBytes?: number;
+  /** How long a list or call waits for a roster that is not registered yet. */
+  rosterWaitMs?: number;
 }
+
+/** Long enough for a respawned worker to re-register; short enough to stay inside a call's budget. */
+const DEFAULT_ROSTER_WAIT_MS = 5_000;
 
 type AbortCause = "timeout" | "cancelled" | "session-closed" | "endpoint-changed";
 
@@ -77,6 +89,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     endpointRegistry = agentMcpEndpointRegistry,
     callTimeoutMs = AGENT_MCP_CALL_TIMEOUT_MS,
     maxResultBytes = AGENT_MCP_MAX_RESULT_BYTES,
+    rosterWaitMs = DEFAULT_ROSTER_WAIT_MS,
   } = options;
 
   const server = new Server(
@@ -84,8 +97,19 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       name: `daintree-plugin-${sanitizeServerNamePart(pluginInstanceId)}-${sanitizeServerNamePart(endpointId)}`,
       version: PLUGIN_MCP_SESSION_SERVER_VERSION,
     },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: { listChanged: true } } }
   );
+
+  // A roster comes and goes with the plugin's worker — a crash respawn, a dev
+  // reload, idle disposal — so tell the client when it changes rather than let
+  // it keep an inventory from before. Best-effort: before the handshake
+  // completes there is nobody to notify.
+  const offRosterChange = endpointRegistry.onDidChange((changedInstance, changedEndpoint) => {
+    if (changedInstance !== pluginInstanceId || changedEndpoint !== endpointId) return;
+    server.sendToolListChanged().catch(() => {});
+  });
+  sessionSignal.addEventListener("abort", offRosterChange, { once: true });
+  if (sessionSignal.aborted) offRosterChange();
 
   const ensureActivated = async (): Promise<void> => {
     try {
@@ -97,9 +121,36 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     }
   };
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+  /**
+   * The roster, allowing a short window for one to appear. Activation can
+   * return before the roster exists: a worker being respawned after a crash is
+   * still marked activated while its replacement boots and re-registers. An
+   * empty answer in that window reads to the client as "this endpoint has no
+   * tools", so wait briefly for the registration instead.
+   */
+  const awaitRegistration = (signal: AbortSignal) => {
+    const current = endpointRegistry.get(pluginInstanceId, endpointId);
+    if (current || signal.aborted) return Promise.resolve(current);
+    return new Promise<ReturnType<AgentMcpEndpointRegistry["get"]>>((resolve) => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        off();
+        signal.removeEventListener("abort", finish);
+        resolve(endpointRegistry.get(pluginInstanceId, endpointId));
+      };
+      const off = endpointRegistry.onDidChange((changedInstance, changedEndpoint) => {
+        if (changedInstance !== pluginInstanceId || changedEndpoint !== endpointId) return;
+        if (endpointRegistry.get(pluginInstanceId, endpointId)) finish();
+      });
+      const timer = setTimeout(finish, rosterWaitMs);
+      timer.unref?.();
+      signal.addEventListener("abort", finish, { once: true });
+    });
+  };
+
+  server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
     await ensureActivated();
-    const registration = endpointRegistry.get(pluginInstanceId, endpointId);
+    const registration = await awaitRegistration(AbortSignal.any([extra.signal, sessionSignal]));
     const tools: Tool[] = (registration?.tools ?? []).map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -109,12 +160,20 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     return { tools };
   });
 
+  let inFlight = 0;
+
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const toolName = request.params.name;
     const rawArgs: unknown = request.params.arguments ?? {};
     if (!isPlainObject(rawArgs)) {
       throw new McpError(ErrorCode.InvalidParams, "Tool arguments must be a JSON object.");
     }
+    if (inFlight >= MAX_CONCURRENT_PLUGIN_TOOL_CALLS) {
+      return toolError(
+        `Too many plugin tool calls in flight on this session (limit ${MAX_CONCURRENT_PLUGIN_TOOL_CALLS}). Wait for one to finish and retry.`
+      );
+    }
+    inFlight += 1;
 
     const controller = new AbortController();
     // Held in an object so control-flow narrowing does not pin it to `null`:
@@ -154,13 +213,14 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
 
       // A client that cached its tool list across an app restart can call
       // before it lists, so the roster must be given its chance to register.
+      let registration: ReturnType<AgentMcpEndpointRegistry["get"]>;
       try {
         await Promise.race([ensureActivated(), aborted]);
+        registration = await Promise.race([awaitRegistration(controller.signal), aborted]);
       } catch {
         return abortedResult();
       }
 
-      const registration = endpointRegistry.get(pluginInstanceId, endpointId);
       const descriptor = registration?.tools.find((tool) => tool.name === toolName);
       if (!registration || !descriptor) {
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${toolName}`);
@@ -241,6 +301,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       }
       return { content: [{ type: "text", text }], structuredContent: structured };
     } finally {
+      inFlight -= 1;
       clearTimeout(timer);
       offRegistry?.();
       extra.signal.removeEventListener("abort", onClientCancel);

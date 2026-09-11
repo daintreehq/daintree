@@ -612,7 +612,7 @@ describe("McpPaneConfigService", () => {
       await expect(fs.stat(prepared.configPath)).resolves.toBeDefined();
     });
 
-    it("an older preparation failing late leaves its successor's grants and file alone", async () => {
+    it("runs overlapping preparations for one pane in order, so the newer file wins", async () => {
       const olderGate = deferred();
       let olderWriteStarted = false;
       writeControl.hooks.push(async () => {
@@ -620,31 +620,49 @@ describe("McpPaneConfigService", () => {
         await olderGate.promise;
       });
 
-      const older = service
-        .preparePaneConfig({
-          paneId: "pane-plugin-overlap",
-          port: 45454,
-          tier: "action",
-          plugin: { projectId: PROJECT_A, endpoints: [ledger] },
-        })
-        .catch((err: Error) => err);
-      await vi.waitFor(() => expect(olderWriteStarted).toBe(true));
-
-      const newer = await service.preparePaneConfig({
+      const older = service.preparePaneConfig({
         paneId: "pane-plugin-overlap",
         port: 45454,
         tier: "action",
         plugin: { projectId: PROJECT_A, endpoints: [ledger] },
       });
-      const newerServers = await readServers(newer!.configPath);
-      const newerBearer = bearerOf(newerServers[newer!.pluginServerKeys[0]]);
+      await vi.waitFor(() => expect(olderWriteStarted).toBe(true));
+      const newerPending = service.preparePaneConfig({
+        paneId: "pane-plugin-overlap",
+        port: 45454,
+        tier: "action",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
 
-      olderGate.reject(new Error("disk full"));
-      expect(await older).toBeInstanceOf(Error);
+      // The older one finishes its write after the newer was requested; the
+      // newer then revokes it and writes last.
+      olderGate.resolve();
+      const olderPrepared = await older;
+      const olderBearer = bearerOf(
+        (await readServers(olderPrepared!.configPath))[olderPrepared!.pluginServerKeys[0]]
+      );
+      const newer = await newerPending;
+      const newerBearer = bearerOf(
+        (await readServers(newer!.configPath))[newer!.pluginServerKeys[0]]
+      );
 
+      expect(newerBearer).not.toBe(olderBearer);
+      expect(grants.authenticate(olderBearer)).toBeNull();
       expect(grants.authenticate(newerBearer)).not.toBeNull();
+      expect(service.isValidPaneToken(olderPrepared!.token!)).toBe(false);
       expect(service.isValidPaneToken(newer!.token!)).toBe(true);
-      await expect(fs.stat(newer!.configPath)).resolves.toBeDefined();
+    });
+
+    it("re-checks eligibility as each grant is minted", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-ineligible",
+        port: 45454,
+        tier: "action",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger], isEligible: () => false },
+      });
+
+      expect(prepared!.pluginServerKeys).toEqual([]);
+      expect(grants.listForTerminal("pane-plugin-ineligible")).toEqual([]);
     });
 
     it('still rejects tier "off" with no plugin endpoints', async () => {
@@ -663,13 +681,22 @@ describe("McpPaneConfigService", () => {
     const KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
 
     it("derives a key from the manifest id and endpoint, restricted to safe characters", () => {
-      const [key] = pluginServerKeysFor([
-        { pluginInstanceId: "acme.ledger", endpointId: "data.v2" },
-      ]);
+      const [key] = pluginServerKeysFor([{ pluginInstanceId: "acme.ledger", endpointId: "d.v2" }]);
       expect(key).toMatch(KEY_PATTERN);
       expect(key).toContain("acme_ledger");
-      expect(key).toContain("data_v2");
+      expect(key).toContain("d_v2");
       expect(key).not.toBe("daintree");
+    });
+
+    it("leaves room for a 32-character tool name inside Claude's 64-character limit", () => {
+      const keys = pluginServerKeysFor([
+        { pluginInstanceId: "acme.an-extremely-long-plugin-manifest-name", endpointId: "data" },
+        { pluginInstanceId: "acme.ledger", endpointId: "data" },
+      ]);
+      const longestTool = "t".repeat(32);
+      for (const key of keys) {
+        expect(`mcp__${key}__${longestTool}`.length).toBeLessThanOrEqual(64);
+      }
     });
 
     it("keeps a project plugin's key free of its 64-hex project id", () => {

@@ -21,6 +21,14 @@ import { isAgentMcpEndpointEnabled } from "./projectEnablement.js";
 import { createPluginSessionServer } from "./pluginSessionServer.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "./types.js";
 
+/**
+ * Open sessions one credential may hold. An agent needs one; a few more covers
+ * reconnects that race the old session's teardown. Beyond that a leaked or
+ * misbehaving credential would just be allocating servers until the idle
+ * reaper caught up.
+ */
+export const MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL = 8;
+
 export interface PluginMcpRouteDeps {
   /** Whether the plugin instance is loaded right now (`PluginService.hasPlugin`). */
   isPluginLoaded: (pluginInstanceId: string) => boolean | Promise<boolean>;
@@ -43,6 +51,8 @@ interface PluginMcpSession {
   idleTimer: ReturnType<typeof setTimeout>;
   /** Aborted on teardown; every in-flight call of the session listens to it. */
   lifetime: AbortController;
+  /** Follow-up responses handed to the SDK and not yet finished. */
+  openResponses: Set<http.ServerResponse>;
 }
 
 /**
@@ -267,17 +277,27 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
         return;
       }
       this.resetIdleTimer(sessionId, session);
-      await session.transport.handleRequest(req, res);
       // The SDK reads the body before it opens this request's stream, and its
       // `close()` only ends the streams that exist. A session torn down during
       // that read would leave this response open with nothing left to answer
-      // it, so end it here.
+      // it — and the SDK waiting on it — so teardown ends every response the
+      // session was handed.
+      session.openResponses.add(res);
+      res.once("close", () => session.openResponses.delete(res));
+      await session.transport.handleRequest(req, res);
       if (session.lifetime.signal.aborted && !res.writableEnded) res.end();
       return;
     }
 
     if (this.epoch !== epoch) {
       writeText(res, 503, "Service unavailable");
+      return;
+    }
+    if (
+      (this.sessionsByCredential.get(grant.credentialId)?.size ?? 0) >=
+      MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL
+    ) {
+      writeText(res, 429, "Too many sessions for this credential");
       return;
     }
     await this.handleNewSession(req, res, grant, port, epoch);
@@ -335,6 +355,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
           endpointId: grant.endpointId,
           idleTimer,
           lifetime,
+          openResponses: new Set(),
         });
         let ids = this.sessionsByCredential.get(grant.credentialId);
         if (!ids) {
@@ -405,6 +426,12 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     session.server.close().catch((err: unknown) => {
       console.error("[PluginAgentMcp] closing plugin MCP session failed:", err);
     });
+    for (const res of session.openResponses) {
+      if (res.writableEnded) continue;
+      if (!res.headersSent) writeSessionNotFound(res);
+      else res.end();
+    }
+    session.openResponses.clear();
   }
 
   /** Idempotent: every teardown path funnels through here, in whatever order they fire. */

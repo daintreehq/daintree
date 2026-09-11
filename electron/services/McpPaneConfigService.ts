@@ -15,11 +15,12 @@ import { pluginMcpRoutePath } from "./pluginAgentMcp/types.js";
 
 const PANE_CONFIG_DIR_NAME = "mcp-pane-configs";
 const MCP_SERVER_KEY = "daintree";
-const PLUGIN_SERVER_KEY_PREFIX = "daintree-plugin-";
-// Claude names a server's tools `mcp__<server>__<tool>`, and that whole name
-// has to stay short enough for the model's tool-name limit, so a long manifest
-// id is truncated and disambiguated by hash rather than carried whole.
-const MAX_PLUGIN_SERVER_KEY_LENGTH = 48;
+const PLUGIN_SERVER_KEY_PREFIX = "daintree-";
+// Claude names a server's tools `mcp__<server>__<tool>` under a 64-character
+// tool-name limit. Tool names are capped at 32 (AGENT_MCP_TOOL_NAME_PATTERN),
+// which leaves 25 for the key, so a long manifest id is truncated and
+// disambiguated by hash rather than carried whole.
+const MAX_PLUGIN_SERVER_KEY_LENGTH = 25;
 const SERVER_KEY_HASH_LENGTH = 8;
 
 interface PaneRecord {
@@ -51,6 +52,13 @@ export interface PreparePanePluginEndpoints {
   projectId: string;
   endpoints: readonly PanePluginEndpoint[];
   launchAgentIdHint?: string;
+  /**
+   * Re-checked for each endpoint immediately before its grant is minted, with
+   * no await in between. The endpoint list was resolved before this call's
+   * awaits; a plugin unloaded or an endpoint switched off meanwhile must not
+   * come back as a grant the unload or disable sweep never saw.
+   */
+  isEligible?: (endpoint: PanePluginEndpoint) => boolean;
 }
 
 export interface PreparePaneConfigParams {
@@ -147,6 +155,10 @@ export class McpPaneConfigService {
   // publish a record nor roll back what now belongs to its successor.
   private attempts = new Map<string, number>();
   private nextAttempt = 0;
+  // Preparations for one pane run one at a time. Interleaved, an older one
+  // could finish its atomic write after a newer one published, leaving the
+  // newer launch's file holding the older launch's (revoked) bearers.
+  private prepareChains = new Map<string, Promise<unknown>>();
 
   constructor(private readonly pluginGrants: PluginMcpGrantRegistry = pluginMcpGrantRegistry) {}
 
@@ -180,7 +192,18 @@ export class McpPaneConfigService {
     params: PreparePaneConfigParams & { plugin?: undefined }
   ): Promise<PreparedDaintreePaneConfig>;
   preparePaneConfig(params: PreparePaneConfigParams): Promise<PreparedPaneConfig | null>;
-  async preparePaneConfig({
+  preparePaneConfig(params: PreparePaneConfigParams): Promise<PreparedPaneConfig | null> {
+    const prior = this.prepareChains.get(params.paneId) ?? Promise.resolve();
+    const run = prior.catch(() => {}).then(() => this.prepareExclusive(params));
+    const tail = run.catch(() => {});
+    this.prepareChains.set(params.paneId, tail);
+    void tail.then(() => {
+      if (this.prepareChains.get(params.paneId) === tail) this.prepareChains.delete(params.paneId);
+    });
+    return run;
+  }
+
+  private async prepareExclusive({
     paneId,
     port,
     tier,
@@ -304,7 +327,7 @@ export class McpPaneConfigService {
   private mintPluginServers(
     paneId: string,
     port: number,
-    { projectId, endpoints, launchAgentIdHint }: PreparePanePluginEndpoints
+    { projectId, endpoints, launchAgentIdHint, isEligible }: PreparePanePluginEndpoints
   ): Record<string, PluginServerEntry> {
     const seen = new Set<string>();
     const minted: Array<{ endpoint: PanePluginEndpoint; token: string }> = [];
@@ -313,6 +336,7 @@ export class McpPaneConfigService {
       if (seen.has(identity)) continue;
       seen.add(identity);
       try {
+        if (isEligible && !isEligible(endpoint)) continue;
         const { token } = this.pluginGrants.issue({
           pluginInstanceId: endpoint.pluginInstanceId,
           endpointId: endpoint.endpointId,

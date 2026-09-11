@@ -556,8 +556,13 @@ export interface PluginAgentMcpContribution {
 export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 8;
 /** Most `agentMcp` endpoints one manifest may declare. */
 export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
-/** Tool name grammar — the subset every MCP client accepts unmangled. */
-export const AGENT_MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
+/**
+ * Tool name grammar — the subset every MCP client accepts unmangled. Capped at
+ * 32 characters because Claude exposes a server's tools as
+ * `mcp__<server>__<tool>` under a 64-character tool-name limit, and the host's
+ * server key for a plugin endpoint takes up to 25 of what is left.
+ */
+export const AGENT_MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
 /** UTF-8 byte cap on a tool description, matching the host's own MCP authoring budget. */
 export const AGENT_MCP_MAX_DESCRIPTION_BYTES = 400;
 /** UTF-8 byte cap on one tool's serialized input or output schema. */

@@ -59,6 +59,7 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
@@ -239,8 +240,8 @@ export class PluginDevWorkerHostProxy {
       try {
         this.post({ type: "invoke-result", requestId: msg.requestId, ...outcome });
       } catch (err) {
-        // A result structured clone cannot carry (a function, a class
-        // instance) must still settle main's pending call, as an error.
+        // A post that fails anyway (the port closing mid-send) must still try
+        // to settle main's pending call, as an error.
         this.post({
           type: "invoke-result",
           requestId: msg.requestId,
@@ -264,7 +265,21 @@ export class PluginDevWorkerHostProxy {
         caller,
         controller.signal,
       ]);
-      settle({ ok: true, result });
+      // Serialized here, in the plugin's process, and sent as one string. The
+      // agent receives JSON either way, so `toJSON` behaves as the author wrote
+      // it; and a graph that only explodes when serialized (shared references
+      // fan out) costs this worker its budget rather than stalling main.
+      const json = JSON.stringify(result === undefined ? null : result);
+      if (json === undefined) {
+        throw new Error("the tool returned a value that cannot be serialized to JSON");
+      }
+      const bytes = Buffer.byteLength(json, "utf8");
+      if (bytes > AGENT_MCP_MAX_RESULT_BYTES) {
+        throw new Error(
+          `the tool result is ${bytes} bytes, over the ${AGENT_MCP_MAX_RESULT_BYTES}-byte limit for plugin tool results`
+        );
+      }
+      settle({ ok: true, result: json });
     } catch (err) {
       settle({ ok: false, error: formatErrorMessage(err, "tool call failed") });
     } finally {

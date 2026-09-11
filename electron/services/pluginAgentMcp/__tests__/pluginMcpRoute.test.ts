@@ -21,7 +21,12 @@ import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
 import { setAgentMcpEndpointEnabled } from "../projectEnablement.js";
-import { PluginMcpRoute, parsePluginMcpRoute, type PluginMcpRouteDeps } from "../pluginMcpRoute.js";
+import {
+  MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL,
+  PluginMcpRoute,
+  parsePluginMcpRoute,
+  type PluginMcpRouteDeps,
+} from "../pluginMcpRoute.js";
 import {
   PLUGIN_MCP_ROUTE_PREFIX,
   pluginMcpRoutePath,
@@ -369,6 +374,43 @@ describe("PluginMcpRoute", () => {
       /Unknown tool/
     );
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("caps the sessions one credential may hold open", async () => {
+    const { token } = issue();
+    for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) {
+      const response = await rawRequest({ token });
+      expect(response.status).toBe(200);
+      await response.body?.cancel();
+    }
+
+    const refused = await rawRequest({ token });
+    expect(refused.status).toBe(429);
+    expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
+
+    // Another credential is unaffected.
+    const other = await rawRequest({ token: issue({ terminalId: "term-2" }).token });
+    expect(other.status).toBe(200);
+    await other.body?.cancel();
+  });
+
+  it("waits for a roster that registers after activation instead of listing nothing", async () => {
+    endpoints.unregisterPlugin(INSTANCE);
+    const { token } = issue();
+    const { client } = await connect(token);
+
+    const listing = client.listTools();
+    setTimeout(() => {
+      endpoints.register({
+        pluginInstanceId: INSTANCE,
+        endpointId: ENDPOINT,
+        tools: [LOOKUP],
+        invoke,
+      });
+    }, 20);
+
+    const { tools } = await listing;
+    expect(tools.map((tool) => tool.name)).toEqual(["lookup"]);
   });
 
   it("refuses methods other than GET, POST and DELETE", async () => {

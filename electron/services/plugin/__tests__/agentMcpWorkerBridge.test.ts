@@ -8,7 +8,11 @@ vi.mock("../../../utils/logger.js", () => ({
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
-import type { PluginMcpCaller, PluginMcpToolDefinition } from "../../../../shared/types/plugin.js";
+import {
+  AGENT_MCP_MAX_RESULT_BYTES,
+  type PluginMcpCaller,
+  type PluginMcpToolDefinition,
+} from "../../../../shared/types/plugin.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -338,6 +342,36 @@ describe("agent MCP over the worker bridge", () => {
   });
 });
 
+describe("worker tool results arriving in main", () => {
+  it("rejects a result that is not serialized JSON, or is over budget, without parsing it", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", registerNotify({ list_rows: WIRE_TOOL }));
+    await flush();
+    const execute = host.rosters[0].tools.list_rows.execute;
+
+    const answer = async (result: unknown) => {
+      const call = execute({}, CALLER, new AbortController().signal);
+      await flush();
+      const invoke = [...workerHost.sent]
+        .reverse()
+        .find((m) => m.type === "invoke" && m.kind === "mcp-tool");
+      workerHost.emit("worker-message", {
+        type: "invoke-result",
+        requestId: invoke.requestId,
+        ok: true,
+        result,
+      });
+      return call;
+    };
+
+    await expect(answer({ rows: [] })).rejects.toThrow(/not serialized JSON/);
+    await expect(answer(JSON.stringify("x".repeat(AGENT_MCP_MAX_RESULT_BYTES)))).rejects.toThrow(
+      /byte limit/
+    );
+    await expect(answer(JSON.stringify({ rows: [1] }))).resolves.toEqual({ rows: [1] });
+  });
+});
+
 describe("worker-side host.mcp", () => {
   function makeProxy() {
     const sent: any[] = [];
@@ -412,7 +446,7 @@ describe("worker-side host.mcp", () => {
       type: "invoke-result",
       requestId: "i1",
       ok: true,
-      result: "from second",
+      result: JSON.stringify("from second"),
     });
 
     disposeSecond();
@@ -444,14 +478,9 @@ describe("worker-side host.mcp", () => {
     });
   });
 
-  it("settles main with an error when a result cannot cross the port", async () => {
-    const sent: any[] = [];
-    const post = vi.fn((msg: any) => {
-      structuredClone(msg);
-      sent.push(msg);
-    });
-    const proxy = new PluginDevWorkerHostProxy("acme.ledger", post, IDENTITY);
-    await proxy.host.mcp.registerTools("data", { list_rows: tool(() => ({ fn: () => 1 })) });
+  it("settles main with an error when a result cannot be serialized to JSON", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.mcp.registerTools("data", { list_rows: tool(() => ({ n: 1n })) });
 
     proxy.handleMessage({
       type: "invoke",
@@ -467,6 +496,55 @@ describe("worker-side host.mcp", () => {
     expect(sent).toContainEqual(
       expect.objectContaining({ type: "invoke-result", requestId: "i1", ok: false })
     );
+  });
+
+  it("serializes the result in the worker, honouring the plugin's own toJSON", async () => {
+    const { proxy, sent } = makeProxy();
+    class Row {
+      constructor(readonly secret: string) {}
+      toJSON() {
+        return { shown: this.secret.length > 0 };
+      }
+    }
+    await proxy.host.mcp.registerTools("data", { list_rows: tool(() => new Row("hidden")) });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i1",
+      kind: "mcp-tool",
+      endpointId: "data",
+      toolName: "list_rows",
+      args: {},
+      caller: CALLER,
+    });
+    await flush();
+
+    expect(sent).toContainEqual({
+      type: "invoke-result",
+      requestId: "i1",
+      ok: true,
+      result: JSON.stringify({ shown: true }),
+    });
+  });
+
+  it("refuses an over-budget result in the worker rather than sending it", async () => {
+    const { proxy, sent } = makeProxy();
+    const huge = "x".repeat(AGENT_MCP_MAX_RESULT_BYTES + 1);
+    await proxy.host.mcp.registerTools("data", { list_rows: tool(() => huge) });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i1",
+      kind: "mcp-tool",
+      endpointId: "data",
+      toolName: "list_rows",
+      args: {},
+      caller: CALLER,
+    });
+    await flush();
+
+    const result = sent.find((m) => m.type === "invoke-result");
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("byte limit") });
   });
 
   it("releases a cancelled call even when its execute never settles", async () => {

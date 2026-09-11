@@ -15,6 +15,7 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import type {
   PluginHostApi,
   PluginIpcContext,
@@ -109,6 +110,24 @@ function projectMcpCaller(caller: PluginMcpCaller): PluginMcpCaller {
       ? { launchAgentIdHint: caller.launchAgentIdHint }
       : {}),
   };
+}
+
+/**
+ * A worker tool result arrives as the JSON text the worker serialized. The size
+ * is checked before parsing, so a worker cannot make main build a value larger
+ * than the result budget; everything downstream then handles plain JSON data.
+ */
+function parseWorkerToolResult(result: unknown): unknown {
+  if (typeof result !== "string") {
+    throw new Error("plugin worker returned a tool result that is not serialized JSON");
+  }
+  const bytes = Buffer.byteLength(result, "utf8");
+  if (bytes > AGENT_MCP_MAX_RESULT_BYTES) {
+    throw new Error(
+      `the tool result is ${bytes} bytes, over the ${AGENT_MCP_MAX_RESULT_BYTES}-byte limit for plugin tool results`
+    );
+  }
+  return JSON.parse(result) as unknown;
 }
 
 type InvokeTarget =
@@ -1167,7 +1186,10 @@ export class PluginDevWorkerMainBridge {
                   )
                 );
               }
-              return this.invoke({ kind: "mcp-tool", endpointId, toolName, args, caller }, signal);
+              return this.invoke(
+                { kind: "mcp-tool", endpointId, toolName, args, caller },
+                signal
+              ).then(parseWorkerToolResult);
             },
           };
         }
