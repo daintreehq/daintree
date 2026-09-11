@@ -1961,6 +1961,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * live surface is still using.
      */
     stop(sessionId: string, attachmentId: string): Promise<{ stopped: boolean }>;
+    /**
+     * The lanes of this workspace with a conversation their next start would continue,
+     * and whether each one's panel was open when its engine went down with the view
+     * (#12365).
+     */
+    listResumable(
+      projectId: string
+    ): Promise<import("./assistantHostIpc.js").AssistantHostResumableLane[]>;
+    /** Forgets the conversation a lane would continue. What Stop and closing its tab mean. */
+    discardResume(projectId: string, slot: number): Promise<{ discarded: boolean }>;
     /** One validated protocol event from the engine. */
     onEvent(callback: (event: import("./assistantHost.js").AssistantHostEvent) => void): () => void;
     /**

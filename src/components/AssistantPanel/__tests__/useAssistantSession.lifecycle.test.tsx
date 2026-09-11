@@ -33,7 +33,7 @@ let releaseStart: (result: {
   sessionId: string;
   /** The surface's attachment, which is what a detach names — see `AssistantHostService`. */
   attachmentId: string;
-  ready: null;
+  ready: Record<string, unknown> | null;
   replay?: Record<string, unknown>[];
 }) => void;
 
@@ -343,5 +343,88 @@ describe("useAssistantSession — a mid-turn message main refuses", () => {
     expect(send).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "question:answer", questionId: "q1", choiceIndex: 1 })
     );
+  });
+});
+
+describe("useAssistantSession — which conversation a start continues (#12365)", () => {
+  type Props = typeof OPTS & { restartNonce?: number };
+
+  it("declines the lane's conversation only when the restart nonce moves", async () => {
+    const { rerender } = renderHook((props: Props) => useAssistantSession(props), {
+      initialProps: { ...OPTS, restartNonce: 3 },
+    });
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    // Mounting under a nonce that moved long ago is not a restart: a lane remounted after
+    // its view came back continues its conversation.
+    expect(start.mock.calls[0]![0]).not.toHaveProperty("fresh");
+
+    rerender({ ...OPTS, restartNonce: 4 });
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    expect(start.mock.calls[1]![0]).toMatchObject({ fresh: true });
+
+    // Anything else re-running the start — here the project folder moving — picks the
+    // conversation back up.
+    rerender({ ...OPTS, cwd: "/moved", restartNonce: 4 });
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(3));
+    expect(start.mock.calls[2]![0]).not.toHaveProperty("fresh");
+  });
+
+  it("still starts fresh after a restart asked for while the lane was not running", async () => {
+    const { rerender } = renderHook((props: Props) => useAssistantSession(props), {
+      initialProps: { ...OPTS, enabled: false, restartNonce: 0 },
+    });
+    rerender({ ...OPTS, enabled: false, restartNonce: 1 });
+    expect(start).not.toHaveBeenCalled();
+
+    rerender({ ...OPTS, enabled: true, restartNonce: 1 });
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    expect(start.mock.calls[0]![0]).toMatchObject({ fresh: true });
+  });
+
+  it("says so when the engine continued a conversation the panel cannot show", async () => {
+    renderHook(() => useAssistantSession(OPTS));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      releaseStart({
+        sessionId: "ses_new",
+        attachmentId: "att_test",
+        ready: {
+          type: "host:ready",
+          sessionId: "ses_new",
+          seq: 1,
+          protocolVersion: 4,
+          autoApprove: false,
+          resumedSessionId: "ses_old",
+        },
+      });
+    });
+
+    const state = useAssistantStore.getState();
+    // Counted as a conversation, so Stop and "+ New session" ask before discarding it…
+    expect(state.resumed).toBe(true);
+    // …and named on screen, because nothing else on screen shows it exists.
+    expect(state.notices.map((notice) => notice.level)).toEqual(["info"]);
+  });
+
+  it("says nothing of the kind about a conversation that is new", async () => {
+    renderHook(() => useAssistantSession(OPTS));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      releaseStart({
+        sessionId: "ses_new",
+        attachmentId: "att_test",
+        ready: {
+          type: "host:ready",
+          sessionId: "ses_new",
+          seq: 1,
+          protocolVersion: 4,
+          autoApprove: false,
+        },
+      });
+    });
+
+    const state = useAssistantStore.getState();
+    expect(state.resumed).toBe(false);
+    expect(state.notices).toEqual([]);
   });
 });

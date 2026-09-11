@@ -96,6 +96,17 @@ const ASSISTANT_CHANNEL_SURFACE = new Map<string, string>([
   [CHANNELS.ASSISTANT_HOST_START, "Starts an engine process for this window. Transport."],
   [CHANNELS.ASSISTANT_HOST_SEND, "One typed command into the running engine. Transport."],
   [CHANNELS.ASSISTANT_HOST_STOP, "Ends the session. Transport."],
+  [
+    CHANNELS.ASSISTANT_HOST_LIST_RESUMABLE,
+    "Which of this workspace's lanes have a conversation a start would continue, and " +
+      "whether each one's panel was open when its engine was lost. Slot numbers and a " +
+      "flag — the conversation ids stay in main. Lifecycle.",
+  ],
+  [
+    CHANNELS.ASSISTANT_HOST_DISCARD_RESUME,
+    "Forgets the conversation a lane would continue, for Stop and closing its tab. A " +
+      "workspace and a slot in, whether it ran out. Lifecycle.",
+  ],
   [CHANNELS.ASSISTANT_HOST_EVENT, "One validated protocol event back. Transport."],
   [CHANNELS.ASSISTANT_HOST_GAP, "A hole in the engine's sequence. Transport integrity."],
   [CHANNELS.ASSISTANT_HOST_EXIT, "The engine process ended. Lifecycle."],
