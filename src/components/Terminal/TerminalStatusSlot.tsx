@@ -1,4 +1,4 @@
-import { Cpu, Hourglass, Pause, type LucideIcon } from "lucide-react";
+import { Hourglass, Pause, type LucideIcon } from "lucide-react";
 import type { TerminalFlowStatus } from "@/types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store";
@@ -12,10 +12,10 @@ import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 // wider type is purely so the future-sab branch is reachable. When the SAB
 // transport path is revived, restore the narrow prop type.
 
-type HoldStatus = Extract<
-  TerminalFlowStatus,
-  "paused-backpressure" | "paused-resource-governor" | "suspended"
->;
+// No `paused-resource-governor`: the governor pauses every terminal on its host
+// at once, so that pause shows once for the whole app on the toolbar's
+// HostMemoryPauseIndicator rather than on every pane (#12375).
+type HoldStatus = Extract<TerminalFlowStatus, "paused-backpressure" | "suspended">;
 
 interface HoldDisplay {
   icon: LucideIcon;
@@ -35,17 +35,6 @@ const HOLD_DISPLAY: Record<HoldStatus, HoldDisplay> = {
     body: "Output paused to prevent data loss.",
     showsHeldDuration: true,
   },
-  "paused-resource-governor": {
-    icon: Cpu,
-    label: "Paused for memory pressure",
-    title: "System memory pressure",
-    body: "Paused to reduce memory pressure. Recovers automatically.",
-    // ResourceGovernor pauses via the coordinator but does not emit
-    // `pause-start` / `pause-end` reliability metrics, so the
-    // `pause-duration-gauge` funnel never tracks it. A frozen "Paused for Xs"
-    // line would be a lie.
-    showsHeldDuration: false,
-  },
   // FUTURE_SAB: `suspended` is only emitted by the SharedArrayBuffer transport
   // path in the PTY host (`BackpressureManager.suspendVisualStream`, see
   // `electron/pty-host/backpressure.ts`). That path is unreachable in
@@ -64,7 +53,6 @@ const HOLD_DISPLAY: Record<HoldStatus, HoldDisplay> = {
 function toHoldStatus(status: TerminalFlowStatus | undefined): HoldStatus | null {
   switch (status) {
     case "paused-backpressure":
-    case "paused-resource-governor":
     case "suspended":
       return status;
     default:

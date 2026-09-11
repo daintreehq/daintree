@@ -26,7 +26,7 @@ beforeEach(() => {
 
 // FUTURE_SAB: `suspended` has no production producer (#9900); it stays in the
 // matrix so the forward-looking presentation keeps its semantics.
-const HOLDS = ["paused-backpressure", "paused-resource-governor", "suspended"] as const;
+const HOLDS = ["paused-backpressure", "suspended"] as const;
 
 function tooltipText(): string {
   return screen.getByTestId("tooltip-content").textContent ?? "";
@@ -47,6 +47,9 @@ describe("TerminalStatusSlot", () => {
     { flowStatus: undefined, submitStatus: undefined },
     { flowStatus: "running", submitStatus: undefined },
     { flowStatus: "data-loss", submitStatus: undefined },
+    // #12375 — the governor pauses every terminal on its host at once, so that
+    // pause shows once on the toolbar rather than as a glyph on every pane.
+    { flowStatus: "paused-resource-governor", submitStatus: undefined },
     { flowStatus: undefined, submitStatus: "stalled" },
     { flowStatus: undefined, submitStatus: "failed" },
   ] as const)(
@@ -79,7 +82,7 @@ describe("TerminalStatusSlot", () => {
   });
 
   it("is a tab stop while showing, since the tooltip is the only place its explanation is visible", () => {
-    render(<TerminalStatusSlot id="t1" flowStatus="paused-resource-governor" />);
+    render(<TerminalStatusSlot id="t1" flowStatus="paused-backpressure" />);
     const status = screen.getByRole("status");
     expect(status.tabIndex).toBeGreaterThanOrEqual(0);
     status.focus();
@@ -115,11 +118,6 @@ describe("TerminalStatusSlot", () => {
     expect(tooltipText()).not.toMatch(/right-click|force resume/i);
   });
 
-  it("tells the user a memory-pressure pause recovers without them", () => {
-    render(<TerminalStatusSlot id="t1" flowStatus="paused-resource-governor" />);
-    expect(tooltipText()).toMatch(/recovers automatically/i);
-  });
-
   it("tells the user a suspended stream recovers on focus (FUTURE_SAB; #9900)", () => {
     render(<TerminalStatusSlot id="t1" flowStatus="suspended" />);
     expect(tooltipText()).toMatch(/recovers automatically on focus/i);
@@ -129,7 +127,6 @@ describe("TerminalStatusSlot", () => {
   // announcer is the single source of announcements across a fleet of panes.
   it.each([
     { flowStatus: "paused-backpressure" as const },
-    { flowStatus: "paused-resource-governor" as const },
     { flowStatus: "suspended" as const },
     { submitStatus: "slow" as const },
     { flowStatus: "paused-backpressure" as const, submitStatus: "slow" as const },
@@ -196,9 +193,11 @@ describe("TerminalStatusSlot", () => {
     expect(tooltipText()).not.toContain("Paused for");
   });
 
-  it("never claims a held duration for a memory-pressure pause, which has no duration producer", () => {
-    mockTerminal = { id: "t1", kind: "terminal", heldDurationMs: 65_000 };
-    render(<TerminalStatusSlot id="t1" flowStatus="paused-resource-governor" />);
-    expect(tooltipText()).not.toContain("Paused for");
+  it("leaves a memory pause during a slow prompt to the toolbar and names only the prompt", () => {
+    render(
+      <TerminalStatusSlot id="t1" flowStatus="paused-resource-governor" submitStatus="slow" />
+    );
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe("Prompt still sending");
+    expect(tooltipText()).not.toMatch(/memory/i);
   });
 });

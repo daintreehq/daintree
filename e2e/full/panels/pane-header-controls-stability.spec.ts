@@ -29,7 +29,7 @@ import { T_LONG, T_MEDIUM, T_SETTLE, T_SHORT } from "../../helpers/timeouts";
 
 type Box = { x: number; y: number; width: number; height: number };
 type Controls = { close: Box; maximize: Box };
-type FlowStatus = "running" | "paused-backpressure" | "paused-resource-governor";
+type FlowStatus = "running" | "paused-backpressure";
 type SubmitState = "slow" | "settled";
 
 /** The rendered grid, the grid the pane's current box would fit, and the PTY's. */
@@ -227,7 +227,7 @@ interface StatusStep {
 }
 
 // Covers a slow prompt and a backpressure pause arriving in both orders, each
-// clearing under the other, and the memory pause.
+// clearing under the other. The memory pause has no pane glyph (#12375).
 const STATUS_STEPS: StatusStep[] = [
   {
     label: "a backpressure pause",
@@ -253,11 +253,6 @@ const STATUS_STEPS: StatusStep[] = [
     label: "the prompt settling under the pause",
     apply: (id) => sendSubmitStatus(id, "settled"),
     glyph: /^Output paused$/,
-  },
-  {
-    label: "a memory-pressure pause",
-    apply: (id) => sendFlowStatus(id, "paused-resource-governor"),
-    glyph: /memory pressure/,
   },
   {
     label: "every status clearing",
