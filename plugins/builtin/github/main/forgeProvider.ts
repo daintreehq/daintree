@@ -391,6 +391,10 @@ export const githubForgeProvider: ForgeProviderImpl = {
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
   },
 
+  buildRepoUrl(repo: RepoRef): string {
+    return `https://github.com/${repo.owner}/${repo.repo}`;
+  },
+
   // GitHub's `Files changed` view deep-links to a specific file via a
   // `#diff-<sha256-of-utf8-path>` anchor (the SHA-256 is computed from the
   // file's UTF-8 path bytes, not the URL-encoded form). The hash input must

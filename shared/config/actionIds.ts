@@ -224,6 +224,7 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
+  "forge.openRepo",
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",

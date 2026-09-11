@@ -1133,6 +1133,14 @@ export interface ForgeProviderImpl {
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildCommitsUrl(repo: RepoRef, branch?: string): string;
   /**
+   * Optional. Build the repository's home page on the forge — what "View
+   * repository" in the toolbar's forge stats menu and the `forge.openRepo`
+   * action open. Omit the field when the forge has no page for the repository
+   * as a whole; the host then hides that menu entry and `forge.openRepo`
+   * rejects rather than guessing a URL.
+   */
+  buildRepoUrl?(repo: RepoRef): string;
+  /**
    * Optional. Build a deep-link to a specific file's entry on a PR's
    * "Files changed" view. The provider knows its own anchor algorithm
    * (GitHub hashes the path bytes; GitLab uses a different hash + prefix;

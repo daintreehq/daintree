@@ -79,8 +79,8 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
     // bare `transition-opacity` sat in the same tailwind-merge conflict group as
     // the base Button cva's `transition` and replaced it outright, leaving both
     // the hover tint and the cva's `active:scale-[0.98]` press snap with no
-    // transitioned property. And because the pill is a Radix tooltip trigger it
-    // always carries a data-state, so index.css's global reduced-motion control
+    // transitioned property. And because the pill is a Radix context-menu trigger
+    // it always carries a data-state, so index.css's global reduced-motion control
     // rule (which excludes [data-state="closed"]) misses it at rest — toolbar.css
     // must drop the scale interpolation itself. WCAG 2.3.3.
     //

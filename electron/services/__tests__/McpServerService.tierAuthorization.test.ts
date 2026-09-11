@@ -1361,6 +1361,11 @@ describe("McpServerService", () => {
         description: "Open the commits view via the forge provider",
       }),
       createManifestEntry({
+        id: "forge.openRepo" as ActionId,
+        title: "Open repository (Forge)",
+        description: "Open the repository home page via the forge provider",
+      }),
+      createManifestEntry({
         id: "forge.assignIssue" as ActionId,
         title: "Assign Issue (Forge)",
         description: "Assign an issue via the forge provider",

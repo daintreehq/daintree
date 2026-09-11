@@ -3206,6 +3206,7 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     "forge.openIssues",
     "forge.openPRs",
     "forge.openCommits",
+    "forge.openRepo",
     "forge.assignIssue",
   ];
 

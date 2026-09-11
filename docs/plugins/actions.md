@@ -170,6 +170,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `forge.openIssues` | Open Issues | safe | `projectId?`, `projectPath?`, `query?`, `state?` |
 | `forge.openPR` | Open pull request | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.openPRs` | Open Pull Requests | safe | `projectId?`, `projectPath?`, `query?`, `state?` |
+| `forge.openRepo` | Open repository | safe | `projectId?`, `projectPath?` |
 | `forge.removeIssueLabel` | Remove Issue Label | safe | `issueNumber`, `label`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.reopenIssue` | Reopen Issue | confirm | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.reopenPR` | Reopen pull request | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |

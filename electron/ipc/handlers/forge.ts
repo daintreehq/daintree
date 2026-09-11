@@ -1,6 +1,6 @@
 // eager-import-allow: reads forge config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
-import { openExternalUrl } from "../../utils/openExternal.js";
+import { canOpenExternalUrl, openExternalUrl } from "../../utils/openExternal.js";
 import { checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getRegisteredForgeProviders } from "../../services/forgeProviderRegistry.js";
@@ -532,6 +532,44 @@ export const forgeOpenPRNamespace = defineIpcNamespace({
   },
 });
 
+// Repository home page (#12354). `buildRepoUrl` is an optional provider
+// capability, and only a URL the host would actually open counts as having it:
+// the read answers `null` otherwise so the toolbar leaves "View repository" out,
+// and the open rejects instead of offering a click that goes nowhere.
+function repoUrlFor({ impl, repoRef }: Awaited<ReturnType<typeof resolveForCwd>>): string | null {
+  // Truthiness, never `in`: a capability explicitly set to `undefined` still
+  // satisfies `in` and would be called as a non-function.
+  if (!impl.buildRepoUrl) return null;
+  const url: unknown = impl.buildRepoUrl(repoRef);
+  return typeof url === "string" && canOpenExternalUrl(url) ? url : null;
+}
+
+async function handleForgeOpenRepo(payload: { cwd: string }): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_OPEN_REPO, 20, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  const url = repoUrlFor(await resolveForCwd(payload.cwd));
+  if (!url) {
+    throw new Error("This project's forge provider doesn't link to a repository page");
+  }
+  await openExternalUrl(url);
+}
+
+async function handleForgeGetRepoUrl(payload: { cwd: string }): Promise<string | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_REPO_URL, 20, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  return repoUrlFor(await resolveForCwd(payload.cwd));
+}
+
+export const forgeRepoLinkNamespace = defineIpcNamespace({
+  name: "forgeRepoLink",
+  ops: {
+    openRepo: op(CHANNELS.FORGE_OPEN_REPO, handleForgeOpenRepo),
+    getRepoUrl: op(CHANNELS.FORGE_GET_REPO_URL, handleForgeGetRepoUrl),
+  },
+});
+
 function assertCwd(cwd: unknown): asserts cwd is string {
   if (typeof cwd !== "string" || !cwd.trim()) {
     throw new Error("Invalid working directory");
@@ -846,6 +884,7 @@ export function registerForgeHandlers(): () => void {
   );
 
   cleanups.push(forgeOpenPRNamespace.register());
+  cleanups.push(forgeRepoLinkNamespace.register());
   cleanups.push(forgePRWritesNamespace.register());
 
   cleanups.push(
