@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
 /**
  * One project, one engine, many surfaces.
@@ -122,10 +125,14 @@ vi.mock("../../HelpSessionService.js", () => ({
     getDebugLogging: () => false,
     getBypassPermissions: () => false,
     revokeSession: () => Promise.resolve(),
+    isPanelOpen: () => false,
   },
 }));
 
 const { AssistantHostService } = await import("../AssistantHostService.js");
+const { NativeAssistantResumeStore, __resetNativeAssistantResumeStoreForTests } = await import(
+  "../NativeAssistantResumeStore.js"
+);
 
 const PROJECT = "p1";
 const CWD = "/tmp/project";
@@ -134,10 +141,23 @@ const deliveriesTo = (id: number) => delivered.get(id) ?? [];
 const peerPromptsTo = (id: number) =>
   deliveriesTo(id).filter((d) => d.channel === "assistant-host:peer-prompt");
 
-beforeEach(() => {
+// Each test gets its own conversation records (#12365). The service records a lane's
+// conversation on its first turn, and one store shared across the file would hand a later
+// test's start a conversation to continue that an earlier test left behind.
+let resumeDir: string;
+beforeEach(async () => {
   hosts.length = 0;
   delivered.clear();
   destroyed.clear();
+  resumeDir = await mkdtemp(join(tmpdir(), "daintree-multisurface-resume-"));
+  __resetNativeAssistantResumeStoreForTests(
+    new NativeAssistantResumeStore(join(resumeDir, "resume.json"))
+  );
+});
+
+afterEach(async () => {
+  __resetNativeAssistantResumeStoreForTests();
+  await rm(resumeDir, { recursive: true, force: true });
 });
 
 async function twoSurfaces() {

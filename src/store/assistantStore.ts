@@ -432,6 +432,12 @@ export interface AssistantSessionState {
   autoApprove: boolean;
   /** Why the engine stopped, when it did. */
   stoppedReason: string | null;
+  /**
+   * True when the engine continued a conversation this panel never saw (#12365). The
+   * transcript is empty but the conversation is not, so it counts as something a restart
+   * or a stop would discard.
+   */
+  resumed: boolean;
   /** Fatal error that prevented (or ended) the session. */
   error: string | null;
 
@@ -556,6 +562,7 @@ const EMPTY: AssistantSessionState = {
   awaitingLocalCommand: false,
   autoApprove: false,
   stoppedReason: null,
+  resumed: false,
   error: null,
   turns: [],
   toolCalls: {},
@@ -945,6 +952,7 @@ const assistantStoreCreator: StateCreator<AssistantStore> = (set, get) => ({
           routing: event.routing ?? null,
           logFile: event.logFile ?? null,
           commands: event.commands ?? [],
+          resumed: Boolean(event.resumedSessionId),
           error: null,
         });
         return;
