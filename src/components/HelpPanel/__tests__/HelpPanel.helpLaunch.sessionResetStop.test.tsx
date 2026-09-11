@@ -1676,4 +1676,48 @@ describe("HelpPanel — native lanes and the conversations main keeps for them (
     expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
     expect(assistantHost().discardResume).not.toHaveBeenCalled();
   });
+
+  it("asks before closing a restored lane that has not started yet", async () => {
+    nativeMode();
+    const ensureSlot = vi.fn((slot: number) => {
+      if (!helpPanelState.openSlots.includes(slot)) {
+        helpPanelState.openSlots = [...helpPanelState.openSlots, slot];
+      }
+    });
+    Object.assign(helpPanelState, { ensureSlot });
+    assistantHost().listResumable!.mockResolvedValue([{ slot: 1, panelWasOpen: false }]);
+
+    const { container, rerender, getByTestId } = render(<HelpPanel width={380} />);
+    await act(async () => {});
+    act(() => {
+      rerender(<HelpPanel width={380} />);
+    });
+    const close = container.querySelector<HTMLButtonElement>('button[title="Close Session 2"]');
+    expect(close).not.toBe(null);
+
+    act(() => {
+      fireEvent.click(close!);
+    });
+    // Its store is empty until it starts, but main is holding a conversation for it.
+    expect(getByTestId("dialog-title").textContent).toBe("Close Session 2?");
+    expect(assistantHost().discardResume).not.toHaveBeenCalled();
+  });
+
+  it("drops an open confirmation when the workspace changes under it", () => {
+    nativeMode();
+    assistantStoreForSlot(0).getState().reset("ses_native");
+    assistantStoreForSlot(0).getState().appendUserTurn("something worth keeping");
+    const { container, rerender, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(queryStopItem(container)!);
+    expect(queryByTestId("confirm-dialog")).not.toBe(null);
+
+    projectStoreState.currentProject = { id: "proj-2", path: "/other" };
+    act(() => {
+      rerender(<HelpPanel width={380} />);
+    });
+
+    // Confirmed now, Stop would forget proj-2's conversation — which nobody was asked about.
+    expect(queryByTestId("confirm-dialog")).toBe(null);
+    expect(assistantHost().discardResume).not.toHaveBeenCalled();
+  });
 });
