@@ -2935,6 +2935,20 @@ export interface PluginActivationApi {
    *   is revoked and the subscription is rejected.
    */
   onDidWake(callback: (event: PluginSystemWakeEvent) => void): Promise<() => void>;
+  /**
+   * Serve the tool rosters of the endpoints declared in `contributes.agentMcp`
+   * to agents running in Daintree's terminals. Gated on the `mcp:expose`
+   * capability. See {@link PluginMcpApi}.
+   *
+   * `registerTools` is revoke-guarded — call it during `activate()`. The tools'
+   * `execute` functions run for the plugin's whole lifetime; only binding the
+   * roster is restricted to the activation window.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` from `registerTools` if the plugin
+   *   did not declare the `mcp:expose` capability, and a revoked-host error if
+   *   it is called after activation resolves or times out.
+   */
+  readonly mcp: PluginMcpApi;
 }
 
 /**

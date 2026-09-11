@@ -10,6 +10,7 @@ export type {
   DispatchedActionRecord,
   RegisteredForgeProviderRecord,
   RegisteredFileDecorationProviderRecord,
+  RegisteredMcpToolsRecord,
   InvalidationRecord,
   ShowQuickPickRecord,
   ShowInputBoxRecord,

@@ -99,6 +99,16 @@ export type {
   PluginSystemApi,
 } from "./plugin.js";
 
+// ── Agent MCP endpoints (host.mcp) ──────────────────────────────────
+
+export type {
+  PluginAgentMcpContribution,
+  PluginMcpApi,
+  PluginMcpToolDefinition,
+  PluginMcpCaller,
+  PluginMcpJsonSchema,
+} from "./plugin.js";
+
 // ── Settings (host.settings) ────────────────────────────────────────
 
 export type {

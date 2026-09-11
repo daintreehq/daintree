@@ -31,6 +31,10 @@ import {
 } from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
+import { abortErrorFor } from "./pluginAbortError.js";
+import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
+import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
+import type { AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
 
 import { events } from "../events.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
@@ -46,6 +50,7 @@ import {
 } from "../fileDecorationRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { isAppError } from "../../utils/errorTypes.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
@@ -101,6 +106,8 @@ import type {
   PluginGitCommitResult,
   PluginPanelBadge,
   PluginHostBinding,
+  PluginMcpCaller,
+  PluginMcpToolDefinition,
 } from "../../../shared/types/plugin.js";
 import type {
   LoadedPlugin,
@@ -379,6 +386,47 @@ function trackPluginDisposer(
 }
 
 /**
+ * Run one agent MCP tool the way {@link AgentMcpToolInvoker} promises: a sync
+ * throw and a sync return both become a promise, and the promise rejects the
+ * moment `signal` aborts even if `execute` never looks at it — a plugin that
+ * ignores its signal must not be able to hold a call open past its budget.
+ * Called as a method on the plugin's own definition so an `execute` written
+ * with `this` behaves as it would in the worker, where it is called that way.
+ */
+function runAgentMcpTool(
+  definition: PluginMcpToolDefinition,
+  execute: PluginMcpToolDefinition["execute"],
+  args: Record<string, unknown>,
+  caller: PluginMcpCaller,
+  signal: AbortSignal
+): Promise<unknown> {
+  if (signal.aborted) return Promise.reject(abortErrorFor(signal));
+  return new Promise<unknown>((resolve, reject) => {
+    const onAbort = (): void => reject(abortErrorFor(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    const detach = (): void => signal.removeEventListener("abort", onAbort);
+    let result: unknown;
+    try {
+      result = Reflect.apply(execute, definition, [args, caller, signal]);
+    } catch (err) {
+      detach();
+      reject(err);
+      return;
+    }
+    Promise.resolve(result).then(
+      (value) => {
+        detach();
+        resolve(value);
+      },
+      (err: unknown) => {
+        detach();
+        reject(err);
+      }
+    );
+  });
+}
+
+/**
  * Build one plugin's host object.
  *
  * `binding` names the project this host acts for and is captured here, once —
@@ -613,6 +661,10 @@ export function createHost(
     scope === "worktree"
       ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
       : { projectRoot: boundScopeRoot };
+
+  // The live disposer per `agentMcp` endpoint, so a replaced roster is released
+  // rather than kept reachable from the unload cascade for the host's lifetime.
+  const mcpRosterDisposers = new Map<string, () => void>();
 
   const host: PluginHostApi = {
     get pluginId() {
@@ -1188,6 +1240,89 @@ export function createHost(
         unregisterFileDecorationProviderImpl(pluginId, contributionId, impl)
       );
       return Promise.resolve(dispose);
+    },
+    mcp: {
+      registerTools: (endpointId, tools) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: mcp.registerTools called after activate() returned or timed out`
+          );
+        }
+        if (!deps.declaredCapabilities(pluginId).has("mcp:expose")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" mcp.registerTools requires "mcp:expose", which is not declared in manifest.capabilities`
+          );
+        }
+        if (typeof endpointId !== "string" || endpointId.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" mcp.registerTools: endpointId must be a non-empty string`
+          );
+        }
+        // Same reason as forge and decoration providers: per-project enablement,
+        // grants and the route are all driven by the manifest's declarations, so
+        // a roster for an undeclared endpoint could never be reached — reject it
+        // rather than hold an orphan.
+        const declared = deps.plugins
+          .get(pluginId)
+          ?.manifest.contributes.agentMcp?.some((endpoint) => endpoint.id === endpointId);
+        if (!declared) {
+          throw new Error(
+            `Plugin "${pluginId}" mcp.registerTools: endpoint "${endpointId}" is not declared in contributes.agentMcp`
+          );
+        }
+        let descriptors: ReturnType<typeof validateAgentMcpTools>;
+        try {
+          descriptors = validateAgentMcpTools(tools);
+        } catch (err) {
+          throw new Error(
+            `Plugin "${pluginId}" mcp.registerTools("${endpointId}"): ${formatErrorMessage(err, "invalid tool roster")}`,
+            { cause: err }
+          );
+        }
+        // Capture each definition and its `execute` now. The registry advertises
+        // the validated snapshot, so dispatch must run exactly those tools too —
+        // not whatever the plugin's roster object holds by the time a call lands.
+        const roster = tools as Record<string, PluginMcpToolDefinition>;
+        const executors = new Map<
+          string,
+          { definition: PluginMcpToolDefinition; execute: PluginMcpToolDefinition["execute"] }
+        >();
+        for (const { name } of descriptors) {
+          const definition = roster[name];
+          executors.set(name, { definition, execute: definition.execute });
+        }
+        const invoke: AgentMcpToolInvoker = (toolName, args, caller, signal) => {
+          // A route that looked the roster up before an unload landed may still
+          // call through it; the instance it belonged to is gone, so refuse.
+          if (!isBound()) {
+            return Promise.reject(new Error(`Plugin "${pluginId}" is not loaded`));
+          }
+          const entry = executors.get(toolName);
+          if (!entry) {
+            return Promise.reject(
+              new Error(`Plugin "${pluginId}" endpoint "${endpointId}" has no tool "${toolName}"`)
+            );
+          }
+          return runAgentMcpTool(entry.definition, entry.execute, args, caller, signal);
+        };
+        const unregister = agentMcpEndpointRegistry.register({
+          pluginInstanceId: pluginId,
+          endpointId,
+          tools: descriptors,
+          invoke,
+        });
+        const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+          unregister();
+          if (mcpRosterDisposers.get(endpointId) === dispose) mcpRosterDisposers.delete(endpointId);
+        });
+        // Released after the replacement is bound. The registry's disposer is
+        // identity-guarded, so this drops the old roster's tracking and closures
+        // without the endpoint ever going empty in between.
+        const prior = mcpRosterDisposers.get(endpointId);
+        mcpRosterDisposers.set(endpointId, dispose);
+        prior?.();
+        return Promise.resolve(dispose);
+      },
     },
     // NOT revoke-guarded: called from the plugin's own post-activation
     // subscription callbacks (worktree changes, polling timers). The

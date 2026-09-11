@@ -33,6 +33,8 @@ import type {
   PluginPanelBadge,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
+  PluginMcpCaller,
+  PluginMcpJsonSchema,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -83,6 +85,8 @@ export type PluginHostNotifyMethod =
   | "setPanelBadge"
   | "registerFileDecorationProvider"
   | "unregisterFileDecorationProvider"
+  | "mcp.registerTools"
+  | "mcp.unregisterTools"
   | "logger.info"
   | "logger.warn"
   | "logger.error"
@@ -118,6 +122,8 @@ export type PluginWorkerSubscriptionKind =
  * Callback kinds main invokes back in the worker. `file-decoration-method`
  * round-trips a registered `FileDecorationProviderImpl` method (just
  * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
+ * `mcp-tool` runs one tool of a roster bound through `host.mcp.registerTools`,
+ * and is the one kind main can cancel (`invoke-cancel`).
  * `command` is the odd one out: nothing is registered ahead of it. The handler
  * module for a manifest-declared command is imported by the worker on first
  * dispatch, from the absolute path main resolved (#12274), so there is no
@@ -126,7 +132,8 @@ export type PluginWorkerSubscriptionKind =
  * SYNCHRONOUS methods (`parseRemote`, the URL builders, `classifyPushError`)
  * the host calls and consumes synchronously, which can't cross this async port.
  */
-export type PluginWorkerInvokeKind = "action" | "command" | "handler" | "file-decoration-method";
+export type PluginWorkerInvokeKind =
+  "action" | "command" | "handler" | "file-decoration-method" | "mcp-tool";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
@@ -195,6 +202,27 @@ export type PluginHostToWorkerMessage =
       method: string;
       args: unknown[];
     }
+  /**
+   * Run one tool of an `agentMcp` roster the worker registered. `caller` is the
+   * host's provenance for the call, copied field by field on the main side so
+   * nothing beyond the public descriptor crosses the port.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "mcp-tool";
+      endpointId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+      caller: PluginMcpCaller;
+    }
+  /**
+   * Abort an in-flight `mcp-tool` invoke — the main-side counterpart of the
+   * worker's `host-cancel`, since an `AbortSignal` cannot cross the port. Main
+   * has already settled the caller by the time this is sent, so any
+   * `invoke-result` that follows for this id is dropped.
+   */
+  | { type: "invoke-cancel"; requestId: string }
   /** Deliver a subscription event to a worker-held callback (fire-and-forget). */
   | { type: "subscription-event"; subscriptionId: string; payload: unknown }
   /**
@@ -353,6 +381,29 @@ export interface RegisterFileDecorationProviderParams {
 /** Params for `unregisterFileDecorationProvider` (`host-notify`). */
 export interface UnregisterFileDecorationProviderParams {
   providerId: string;
+}
+
+/**
+ * Params for `mcp.registerTools` (`host-notify`). Only what an agent is shown
+ * travels; each tool's `execute` stays in the worker and main runs it through an
+ * `mcp-tool` invoke. The host re-validates the whole roster — the worker is the
+ * untrusted side of this port.
+ */
+export interface RegisterMcpToolsParams {
+  endpointId: string;
+  tools: Record<
+    string,
+    {
+      description: string;
+      inputSchema: PluginMcpJsonSchema;
+      outputSchema?: PluginMcpJsonSchema;
+    }
+  >;
+}
+
+/** Params for `mcp.unregisterTools` (`host-notify`). */
+export interface UnregisterMcpToolsParams {
+  endpointId: string;
 }
 
 /** Params for a `logger.*` call (`host-notify`). */

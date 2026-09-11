@@ -140,6 +140,8 @@ import {
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
+import { agentMcpEndpointRegistry } from "./pluginAgentMcp/endpointRegistry.js";
+import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import {
   buildPluginPermissionExecArgv,
   classifyPluginPermissionPaths,
@@ -4940,6 +4942,17 @@ export class PluginService {
 
   unloadPlugin(pluginId: string): void {
     if (!this.plugins.has(pluginId)) return;
+    // First, before anything else can run plugin code or yield: every agent
+    // credential for this instance dies, and only then do its rosters go. The
+    // other order leaves a window where a live grant resolves to an endpoint
+    // with no tools — or, across a reload, to the next generation's tools,
+    // which inherits no authority. Idle worker disposal (`deactivateWorker`)
+    // deliberately skips this: the instance is still loaded, its grants stay
+    // valid, and the roster returns when the worker re-activates.
+    runUnloadStep(pluginId, "revokeAgentMcpGrants", () => {
+      pluginMcpGrantRegistry.revokePlugin(pluginId);
+      agentMcpEndpointRegistry.unregisterPlugin(pluginId);
+    });
     // Drop activation state so a runtime reload (e.g. dev-mode re-scan) can
     // re-activate from scratch — otherwise the fast-path `activatedPlugins`
     // hit would short-circuit `_doActivate` after the new manifest landed.
