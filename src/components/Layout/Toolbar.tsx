@@ -38,6 +38,18 @@ import {
 } from "./toolbarButtonMetadata";
 import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
+import {
+  buildToolbarVisibilityMenuRows,
+  canListToolbarButton,
+  resolveToolbarButtonMetadata,
+  type ToolbarSide,
+} from "./toolbarVisibilityMenu";
+import {
+  isToolbarButtonOnToolbar,
+  setToolbarButtonOnToolbar,
+  type ToolbarButtonPlacementState,
+} from "@/lib/toolbarVisibilityDispatch";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
@@ -669,12 +681,25 @@ export function Toolbar({
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
+  const toggleButtonVisibility = useToolbarPreferencesStore(
+    (state) => state.toggleButtonVisibility
+  );
+  const setPluginButtonPromoted = useToolbarPreferencesStore(
+    (state) => state.setPluginButtonPromoted
+  );
+  const setPanelButtonOnToolbar = useToolbarPreferencesStore(
+    (state) => state.setPanelButtonOnToolbar
+  );
+  const setLauncherItemOnToolbar = useToolbarPreferencesStore(
+    (state) => state.setLauncherItemOnToolbar
+  );
   // Live subscription so pin/unpin toggles from the launcher immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
   // store mutations, so we prefer the store value when available.
   const liveAgentSettings = useAgentSettingsStore((s) => s.settings);
   const effectiveAgentSettings = liveAgentSettings ?? agentSettings;
+  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Store-derived rather than local click state so every clipboard copy spins
@@ -1630,7 +1655,10 @@ export function Toolbar({
     [pluginConfigs]
   );
 
-  const effectiveLeftButtons = useMemo(() => {
+  // Every button holding a slot on each side, hidden or not. The toolbar draws
+  // the visible subset; its empty-space menu (#12355) lists the whole set, since
+  // hiding never takes a button's position away.
+  const positionedLeftButtons = useMemo(() => {
     // Dedupe defensively so a persisted list holding a repeated id never
     // renders duplicate pills (#10937) — the store also heals this, this is
     // belt-and-suspenders at the render boundary.
@@ -1656,31 +1684,35 @@ export function Toolbar({
     // boundary, so the groups have to actually be contiguous. Ordering here
     // rather than at the render loop means overflow, keyboard roving, and the
     // DOM all see the same canonical sequence.
-    return orderToolbarButtonsByGroup(
-      positioned.filter((id) =>
-        isToolbarButtonVisible(
-          id,
-          pinnedButtons,
-          effectiveAgentSettings,
-          agentAvailability,
-          pluginConfigs.has(id)
-        )
-      ),
-      resolveToolbarGroup
-    );
+    return orderToolbarButtonsByGroup(positioned, resolveToolbarGroup);
   }, [
     toolbarLayout.leftButtons,
     launcherOnRight,
     unpositionedAgentPins,
     unpositionedLauncherItemPins,
-    pinnedButtons,
-    effectiveAgentSettings,
-    agentAvailability,
-    pluginConfigs,
     resolveToolbarGroup,
   ]);
 
-  const effectiveRightButtons = useMemo(() => {
+  const isButtonShownOnToolbar = useCallback(
+    (id: AnyToolbarButtonId) =>
+      isToolbarButtonVisible(
+        id,
+        pinnedButtons,
+        effectiveAgentSettings,
+        agentAvailability,
+        pluginConfigs.has(id)
+      ),
+    [pinnedButtons, effectiveAgentSettings, agentAvailability, pluginConfigs]
+  );
+
+  // Filtering the grouped list yields the same sequence as grouping the filtered
+  // one — grouping is a stable partition.
+  const effectiveLeftButtons = useMemo(
+    () => positionedLeftButtons.filter(isButtonShownOnToolbar),
+    [positionedLeftButtons, isButtonShownOnToolbar]
+  );
+
+  const positionedRightButtons = useMemo(() => {
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
@@ -1703,15 +1735,7 @@ export function Toolbar({
     // replaced. Buttons the user already dragged into a side list keep that
     // position and are filtered on promotion below like any other id.
     const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
-    return [...base, ...extra].filter((id) =>
-      isToolbarButtonVisible(
-        id,
-        pinnedButtons,
-        effectiveAgentSettings,
-        agentAvailability,
-        pluginConfigs.has(id)
-      )
-    );
+    return [...base, ...extra];
   }, [
     toolbarLayout.rightButtons,
     toolbarLayout.leftButtons,
@@ -1720,10 +1744,12 @@ export function Toolbar({
     unpositionedLauncherItemPins,
     pluginButtonIds,
     pinnedButtons,
-    effectiveAgentSettings,
-    agentAvailability,
-    pluginConfigs,
   ]);
+
+  const effectiveRightButtons = useMemo(
+    () => positionedRightButtons.filter(isButtonShownOnToolbar),
+    [positionedRightButtons, isButtonShownOnToolbar]
+  );
 
   const availableLeftIds = useMemo(
     () =>
@@ -1894,6 +1920,77 @@ export function Toolbar({
       ...buildLauncherToolbarMeta(launcherCatalog),
     }),
     [pluginButtonIds, pluginConfigs, launcherCatalog]
+  );
+
+  // The same bundle Settings → Toolbar hands the placement resolvers, so the
+  // empty-space menu's checkmarks and toggles route exactly as that page does.
+  const toolbarPlacementState = useMemo<ToolbarButtonPlacementState>(
+    () => ({
+      pinnedButtons,
+      leftButtons: toolbarLayout.leftButtons,
+      rightButtons: toolbarLayout.rightButtons,
+      agentSettings: effectiveAgentSettings,
+      agentAvailability,
+      isPluginContribution: (id) => pluginConfigs.has(id),
+    }),
+    [
+      pinnedButtons,
+      toolbarLayout.leftButtons,
+      toolbarLayout.rightButtons,
+      effectiveAgentSettings,
+      agentAvailability,
+      pluginConfigs,
+    ]
+  );
+
+  // Rows for the empty-space menu (#12355), built from the side lists before
+  // the visibility filter so a hidden button still has one.
+  const toolbarMenuRows = useMemo(
+    () =>
+      buildToolbarVisibilityMenuRows(positionedLeftButtons, positionedRightButtons, {
+        resolveMetadata: (id) =>
+          resolveToolbarButtonMetadata(id, TOOLBAR_BUTTON_METADATA, dynamicOverflowMeta),
+        canList: (id) =>
+          canListToolbarButton(
+            id,
+            buttonRegistry,
+            PROJECT_SCOPED_TOOLBAR_IDS,
+            effectiveAgentSettings,
+            agentAvailability
+          ),
+        isOnToolbar: (id) => isToolbarButtonOnToolbar(id, toolbarPlacementState),
+      }),
+    [
+      positionedLeftButtons,
+      positionedRightButtons,
+      dynamicOverflowMeta,
+      buttonRegistry,
+      effectiveAgentSettings,
+      agentAvailability,
+      toolbarPlacementState,
+    ]
+  );
+
+  const handleToolbarMenuToggle = useCallback(
+    (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
+      setToolbarButtonOnToolbar(buttonId, side, onToolbar, toolbarPlacementState, {
+        setAgentPinned,
+        toggleButtonVisibility,
+        positionAgentButton,
+        setPluginButtonPromoted,
+        setPanelButtonOnToolbar,
+        setLauncherItemOnToolbar,
+      });
+    },
+    [
+      toolbarPlacementState,
+      setAgentPinned,
+      toggleButtonVisibility,
+      positionAgentButton,
+      setPluginButtonPromoted,
+      setPanelButtonOnToolbar,
+      setLauncherItemOnToolbar,
+    ]
   );
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
@@ -2173,263 +2270,269 @@ export function Toolbar({
       {/* Brand marks in the toolbar are painted on the toolbar surface, not on
           whichever surface the theme happens to make hardest. */}
       <BrandSurface surface="surface-toolbar">
-        <div
-          ref={toolbarRef}
-          role="toolbar"
-          aria-label="Main toolbar"
-          onKeyDown={handleToolbarKeyDown}
-          onFocusCapture={handleToolbarFocusCapture}
-          className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
-        >
-          {!isLinux() && <div className="window-resize-strip" />}
-
-          {/* LEFT GROUP */}
+        <ToolbarButtonsContextMenu rows={toolbarMenuRows} onToggle={handleToolbarMenuToggle}>
           <div
-            role="group"
-            aria-label="Navigation and agents"
-            className="flex items-center gap-1.5 z-20"
+            ref={toolbarRef}
+            role="toolbar"
+            aria-label="Main toolbar"
+            onKeyDown={handleToolbarKeyDown}
+            onFocusCapture={handleToolbarFocusCapture}
+            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
           >
-            {isMac() && (
-              <div
-                data-fullscreen={isFullscreen ? "true" : undefined}
-                className={cn(
-                  "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                  isFullscreen ? "w-0" : "w-16"
-                )}
-              />
-            )}
-            {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
+            {!isLinux() && <div className="window-resize-strip" />}
+
+            {/* LEFT GROUP */}
+            <div
+              role="group"
+              aria-label="Navigation and agents"
+              className="flex items-center gap-1.5 z-20"
+            >
+              {isMac() && (
+                <div
+                  data-fullscreen={isFullscreen ? "true" : undefined}
+                  className={cn(
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    isFullscreen ? "w-0" : "w-16"
+                  )}
+                />
+              )}
+              {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
               recovery surface for the application menu itself, so it must not
               be hideable or reorderable into an overflow popover (#11813).
               Gated here as well as inside the component so macOS doesn't keep
               an empty flex item, which would add a stray gap-1.5 column. */}
-            {!isMac() && (
-              <div className="app-no-drag">
-                <AppMenuButton />
+              {!isMac() && (
+                <div className="app-no-drag">
+                  <AppMenuButton />
+                </div>
+              )}
+              <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
+
+              <div className={toolbarDividerClass} />
+
+              <div
+                ref={leftGroupRef}
+                className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+              >
+                {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
-            )}
-            <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
+              <div className="app-no-drag">
+                {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
+              </div>
+            </div>
 
-            <div className={toolbarDividerClass} />
-
+            {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
             <div
-              ref={leftGroupRef}
-              className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+              role="group"
+              aria-label="Project"
+              className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
             >
-              {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
-            </div>
-            <div className="app-no-drag">
-              {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
-            </div>
-          </div>
-
-          {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
-          <div
-            role="group"
-            aria-label="Project"
-            className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
-          >
-            {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
-            {currentProject && (
-              <ProjectIdentityEditor
-                project={currentProject}
-                open={isIdentityEditorOpen}
-                onOpenChange={handleIdentityEditorOpenChange}
-                onCloseAutoFocus={suppressPillTooltipForFocusRestore}
-              />
-            )}
-            <Tooltip
-              open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
-              onOpenChange={
-                workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
-              }
-            >
-              <ContextMenu onOpenChange={handlePillContextMenuOpenChange}>
-                {shouldMountProjectSwitcherDropdown ? (
-                  <Suspense fallback={projectSwitcherTrigger}>
-                    <LazyProjectSwitcherPalette
-                      mode="dropdown"
-                      isOpen={isDropdownOpen}
-                      query={projectSwitcher.query}
-                      results={projectSwitcher.results}
-                      browseBands={projectSwitcher.browseBands}
-                      selectedIndex={projectSwitcher.selectedIndex}
-                      onQueryChange={projectSwitcher.setQuery}
-                      onSelectPrevious={projectSwitcher.selectPrevious}
-                      onSelectNext={projectSwitcher.selectNext}
-                      onSelect={projectSwitcher.selectRow}
-                      onHoverProject={projectSwitcher.onHoverProject}
-                      onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
-                      fleetLiveness={projectSwitcher.fleetLiveness}
-                      onClose={handlePillDropdownClose}
-                      onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
-                      consumeCloseAutoFocusSuppression={
-                        projectSwitcher.consumeCloseAutoFocusSuppression
-                      }
-                      onAddProject={projectSwitcher.addProject}
-                      onCloneRepo={projectSwitcher.cloneRepo}
-                      onStopProject={handleStopProject}
-                      onCloseProject={handleCloseProject}
-                      onSleepProject={handleSleepProject}
-                      onLocateProject={handleLocateProject}
-                      onMoveOrRenameProject={handleMoveOrRenameProject}
-                      onTogglePinProject={projectSwitcher.togglePinProject}
-                      onCopyPath={projectSwitcher.copyPath}
-                      onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
-                      onSelectNewWindow={handleSelectNewWindow}
-                      dropdownAlign="center"
-                      removeConfirmProject={projectSwitcher.removeConfirmProject}
-                      onRemoveConfirmClose={handleRemoveConfirmClose}
-                      onConfirmRemove={projectSwitcher.confirmRemoveProject}
-                      isRemovingProject={projectSwitcher.isRemovingProject}
-                      sleepConfirmProject={projectSwitcher.sleepConfirmProject}
-                      onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
-                      onConfirmSleep={projectSwitcher.confirmSleep}
-                      isSleepingProject={projectSwitcher.isSleepingProject}
-                      rankedSearch={projectSwitcher.isRankedSearch}
-                      scratchResults={projectSwitcher.scratchResults}
-                      onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
-                      onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-                      onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
-                      deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
-                      onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
-                      onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
-                      isDeletingScratch={projectSwitcher.isDeletingScratch}
-                      onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
-                      deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
-                      onDismissDeleteAllScratchesConfirm={
-                        projectSwitcher.dismissDeleteAllScratchesConfirm
-                      }
-                      onConfirmDeleteAllScratches={() =>
-                        void projectSwitcher.confirmDeleteAllScratches()
-                      }
-                      isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
-                      onRenameScratch={(scratchId, name) =>
-                        void projectSwitcher.renameScratch(scratchId, name)
-                      }
-                      onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
-                      saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
-                      onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-                      onConfirmDeleteOriginalScratch={() =>
-                        void projectSwitcher.confirmDeleteOriginalScratch()
-                      }
-                      isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+              {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
+              {currentProject && (
+                <ProjectIdentityEditor
+                  project={currentProject}
+                  open={isIdentityEditorOpen}
+                  onOpenChange={handleIdentityEditorOpenChange}
+                  onCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                />
+              )}
+              <Tooltip
+                open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
+                onOpenChange={
+                  workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
+                }
+              >
+                <ContextMenu onOpenChange={handlePillContextMenuOpenChange}>
+                  {shouldMountProjectSwitcherDropdown ? (
+                    <Suspense fallback={projectSwitcherTrigger}>
+                      <LazyProjectSwitcherPalette
+                        mode="dropdown"
+                        isOpen={isDropdownOpen}
+                        query={projectSwitcher.query}
+                        results={projectSwitcher.results}
+                        browseBands={projectSwitcher.browseBands}
+                        selectedIndex={projectSwitcher.selectedIndex}
+                        onQueryChange={projectSwitcher.setQuery}
+                        onSelectPrevious={projectSwitcher.selectPrevious}
+                        onSelectNext={projectSwitcher.selectNext}
+                        onSelect={projectSwitcher.selectRow}
+                        onHoverProject={projectSwitcher.onHoverProject}
+                        onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+                        fleetLiveness={projectSwitcher.fleetLiveness}
+                        onClose={handlePillDropdownClose}
+                        onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                        consumeCloseAutoFocusSuppression={
+                          projectSwitcher.consumeCloseAutoFocusSuppression
+                        }
+                        onAddProject={projectSwitcher.addProject}
+                        onCloneRepo={projectSwitcher.cloneRepo}
+                        onStopProject={handleStopProject}
+                        onCloseProject={handleCloseProject}
+                        onSleepProject={handleSleepProject}
+                        onLocateProject={handleLocateProject}
+                        onMoveOrRenameProject={handleMoveOrRenameProject}
+                        onTogglePinProject={projectSwitcher.togglePinProject}
+                        onCopyPath={projectSwitcher.copyPath}
+                        onOpenProjectSettings={
+                          currentProject ? handleOpenProjectSettings : undefined
+                        }
+                        onSelectNewWindow={handleSelectNewWindow}
+                        dropdownAlign="center"
+                        removeConfirmProject={projectSwitcher.removeConfirmProject}
+                        onRemoveConfirmClose={handleRemoveConfirmClose}
+                        onConfirmRemove={projectSwitcher.confirmRemoveProject}
+                        isRemovingProject={projectSwitcher.isRemovingProject}
+                        sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+                        onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+                        onConfirmSleep={projectSwitcher.confirmSleep}
+                        isSleepingProject={projectSwitcher.isSleepingProject}
+                        rankedSearch={projectSwitcher.isRankedSearch}
+                        scratchResults={projectSwitcher.scratchResults}
+                        onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
+                        onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+                        onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
+                        deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+                        onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+                        onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+                        isDeletingScratch={projectSwitcher.isDeletingScratch}
+                        onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+                        deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+                        onDismissDeleteAllScratchesConfirm={
+                          projectSwitcher.dismissDeleteAllScratchesConfirm
+                        }
+                        onConfirmDeleteAllScratches={() =>
+                          void projectSwitcher.confirmDeleteAllScratches()
+                        }
+                        isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+                        onRenameScratch={(scratchId, name) =>
+                          void projectSwitcher.renameScratch(scratchId, name)
+                        }
+                        onSaveAsProject={(scratchId) =>
+                          void projectSwitcher.saveAsProject(scratchId)
+                        }
+                        saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+                        onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+                        onConfirmDeleteOriginalScratch={() =>
+                          void projectSwitcher.confirmDeleteOriginalScratch()
+                        }
+                        isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+                      >
+                        {projectSwitcherTrigger}
+                      </LazyProjectSwitcherPalette>
+                    </Suspense>
+                  ) : (
+                    projectSwitcherTrigger
+                  )}
+                  {currentProject && (
+                    <ContextMenuContent
+                      className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+                      onCloseAutoFocus={handlePillContextMenuCloseAutoFocus}
                     >
-                      {projectSwitcherTrigger}
-                    </LazyProjectSwitcherPalette>
-                  </Suspense>
-                ) : (
-                  projectSwitcherTrigger
-                )}
-                {currentProject && (
-                  <ContextMenuContent
-                    className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-                    onCloseAutoFocus={handlePillContextMenuCloseAutoFocus}
-                  >
-                    {/* The display name and emoji. Distinct from the switcher
+                      {/* The display name and emoji. Distinct from the switcher
                         row's "Move or rename project…", which relocates the
                         folder on disk. */}
-                    <ContextMenuItem onSelect={handleEditProjectIdentity}>
-                      <Pencil className="mr-2 h-3.5 w-3.5" />
-                      Edit name and icon…
-                    </ContextMenuItem>
-                    <ContextMenuItem onSelect={handlePillTogglePin}>
-                      {activeSearchableProject?.isPinned ? (
-                        <>
-                          <PinOff className="mr-2 h-3.5 w-3.5" />
-                          Unpin project
-                        </>
-                      ) : (
-                        <>
-                          <Pin className="mr-2 h-3.5 w-3.5" />
-                          Pin project
-                        </>
-                      )}
-                    </ContextMenuItem>
-                    <ContextMenuItem onSelect={handleCopyProjectPath}>
-                      <Clipboard className="mr-2 h-3.5 w-3.5" />
-                      Copy path
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem onSelect={handleOpenProjectSettings}>
-                      Project settings
-                    </ContextMenuItem>
-                    {activeSearchableProject && activeSearchableProject.processCount > 0 && (
-                      <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
-                        <Square className="mr-2 h-3.5 w-3.5" />
-                        Stop all agents
+                      <ContextMenuItem onSelect={handleEditProjectIdentity}>
+                        <Pencil className="mr-2 h-3.5 w-3.5" />
+                        Edit name and icon…
                       </ContextMenuItem>
-                    )}
-                    <ContextMenuItem
-                      onSelect={() => handleCloseProject(currentProject.id)}
-                      className="text-status-error focus:text-status-error"
-                    >
-                      <X className="mr-2 h-3.5 w-3.5" />
-                      Close project
-                    </ContextMenuItem>
-                  </ContextMenuContent>
+                      <ContextMenuItem onSelect={handlePillTogglePin}>
+                        {activeSearchableProject?.isPinned ? (
+                          <>
+                            <PinOff className="mr-2 h-3.5 w-3.5" />
+                            Unpin project
+                          </>
+                        ) : (
+                          <>
+                            <Pin className="mr-2 h-3.5 w-3.5" />
+                            Pin project
+                          </>
+                        )}
+                      </ContextMenuItem>
+                      <ContextMenuItem onSelect={handleCopyProjectPath}>
+                        <Clipboard className="mr-2 h-3.5 w-3.5" />
+                        Copy path
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem onSelect={handleOpenProjectSettings}>
+                        Project settings
+                      </ContextMenuItem>
+                      {activeSearchableProject && activeSearchableProject.processCount > 0 && (
+                        <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
+                          <Square className="mr-2 h-3.5 w-3.5" />
+                          Stop all agents
+                        </ContextMenuItem>
+                      )}
+                      <ContextMenuItem
+                        onSelect={() => handleCloseProject(currentProject.id)}
+                        className="text-status-error focus:text-status-error"
+                      >
+                        <X className="mr-2 h-3.5 w-3.5" />
+                        Close project
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  )}
+                </ContextMenu>
+                {currentProject && (
+                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                    <div className="flex flex-col gap-0.5">
+                      <div className="text-xs font-medium">
+                        {currentProject.name}
+                        {branchName ? ` · ${branchName}` : ""}
+                      </div>
+                      <div className="text-text-muted font-mono text-2xs truncate">
+                        {currentProject.path}
+                      </div>
+                    </div>
+                  </TooltipContent>
                 )}
-              </ContextMenu>
-              {currentProject && (
-                <TooltipContent side="bottom" className="max-w-[28rem]">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="text-xs font-medium">
-                      {currentProject.name}
-                      {branchName ? ` · ${branchName}` : ""}
+                {!currentProject && currentScratch && (
+                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                    <div className="flex flex-col gap-0.5">
+                      <div className="text-xs font-medium">{currentScratch.name}</div>
+                      <div className="text-text-muted text-2xs">Scratch workspace</div>
                     </div>
-                    <div className="text-text-muted font-mono text-2xs truncate">
-                      {currentProject.path}
-                    </div>
-                  </div>
-                </TooltipContent>
-              )}
-              {!currentProject && currentScratch && (
-                <TooltipContent side="bottom" className="max-w-[28rem]">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="text-xs font-medium">{currentScratch.name}</div>
-                    <div className="text-text-muted text-2xs">Scratch workspace</div>
-                  </div>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </div>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </div>
 
-          {/* RIGHT GROUP */}
-          <div
-            role="group"
-            aria-label="Tools and settings"
-            className="flex items-center justify-end gap-1.5 z-20"
-          >
+            {/* RIGHT GROUP */}
             <div
-              ref={rightGroupRef}
-              className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
+              role="group"
+              aria-label="Tools and settings"
+              className="flex items-center justify-end gap-1.5 z-20"
             >
-              {renderButtons(effectiveRightButtons, rightVisibleSet)}
-            </div>
-            <div className="app-no-drag">
-              {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
-            </div>
-
-            <div className={toolbarDividerClass} />
-
-            <div className="app-no-drag flex items-center gap-0.5">
-              {buttonRegistry["assistant-toggle"]!.render()}
-              {buttonRegistry["portal-toggle"]!.render()}
-            </div>
-
-            {isWindows() && (
               <div
-                aria-hidden="true"
-                data-fullscreen={isFullscreen ? "true" : undefined}
-                className={cn(
-                  "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                  isFullscreen && "w-0"
-                )}
-                style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
-              />
-            )}
+                ref={rightGroupRef}
+                className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
+              >
+                {renderButtons(effectiveRightButtons, rightVisibleSet)}
+              </div>
+              <div className="app-no-drag">
+                {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
+              </div>
+
+              <div className={toolbarDividerClass} />
+
+              <div className="app-no-drag flex items-center gap-0.5">
+                {buttonRegistry["assistant-toggle"]!.render()}
+                {buttonRegistry["portal-toggle"]!.render()}
+              </div>
+
+              {isWindows() && (
+                <div
+                  aria-hidden="true"
+                  data-fullscreen={isFullscreen ? "true" : undefined}
+                  className={cn(
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    isFullscreen && "w-0"
+                  )}
+                  style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
+                />
+              )}
+            </div>
           </div>
-        </div>
+        </ToolbarButtonsContextMenu>
       </BrandSurface>
     </header>
   );
