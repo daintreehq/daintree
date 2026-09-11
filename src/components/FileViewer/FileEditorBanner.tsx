@@ -37,6 +37,9 @@ export function FileEditorBanner({ filePath, content, onEdit }: FileEditorBanner
   if (!registration || !meta || dismissed || contentBytes > registration.maxBytes) {
     return null;
   }
+  // Enablement is persisted before activation finishes. Keep the current
+  // attempt visible until it succeeds or the user can act on its error.
+  if (!disabled && !pending && !error) return null;
 
   const edit = async () => {
     if (busy.current) return;
@@ -67,7 +70,7 @@ export function FileEditorBanner({ filePath, content, onEdit }: FileEditorBanner
   return (
     <FileEditorHintBar
       pluginName={meta.displayName}
-      state={disabled ? "disabled" : "ready"}
+      state="disabled"
       pending={pending}
       error={error}
       onAction={() => void edit()}

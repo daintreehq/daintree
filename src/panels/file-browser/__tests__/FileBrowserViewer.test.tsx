@@ -1439,6 +1439,7 @@ describe("plugin-contributed editing in the file browser", () => {
   const context = { projectId: "project-1", worktreePath: "/repo", isFocused: true };
   let bridge: PropertyDescriptor | undefined;
   let enabled: boolean;
+  let activationStatus: { pendingRestart?: boolean; loadError?: string };
   const enable = vi.fn();
   const editorProps: Array<Record<string, unknown>> = [];
 
@@ -1446,6 +1447,7 @@ describe("plugin-contributed editing in the file browser", () => {
     bridge = Object.getOwnPropertyDescriptor(window, "electron");
     _resetPluginRuntimeStoreForTest();
     enabled = false;
+    activationStatus = {};
     enable.mockReset();
     enable.mockImplementation(async () => {
       enabled = true;
@@ -1458,6 +1460,7 @@ describe("plugin-contributed editing in the file browser", () => {
             {
               instanceId: pluginId,
               disabled: !enabled,
+              ...activationStatus,
               devMode: false,
               manifest: { name: pluginId, displayName: "Markdown editor" },
             },
@@ -1494,7 +1497,7 @@ describe("plugin-contributed editing in the file browser", () => {
   });
 
   it("enables the plugin from GEMINI.md and mounts its Edit tab in the existing viewer", async () => {
-    renderViewer("/repo/GEMINI.md", { editorContext: context });
+    const viewer = renderViewer("/repo/GEMINI.md", { editorContext: context });
     const enableButton = await screen.findByRole("button", { name: "Enable and edit" });
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     fireEvent.click(enableButton);
@@ -1510,9 +1513,55 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Source" }));
     expect(screen.queryByTestId("plugin-editor")).toBeNull();
+    expect(screen.queryByTestId("file-editor-hint")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    expect(screen.queryByTestId("file-editor-hint")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    viewer.unmount();
+    renderViewer("/repo/another.md", { editorContext: context });
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(screen.queryByTestId("file-editor-hint")).toBeNull();
   });
+
+  it("offers Edit without a hint when the plugin is already enabled", async () => {
+    enabled = true;
+    renderViewer("/repo/notes.md", { editorContext: context });
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(screen.queryByTestId("file-editor-hint")).toBeNull();
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it("removes the hint when the plugin is enabled from Preferences", async () => {
+    renderViewer("/repo/notes.md", { editorContext: context });
+    expect(await screen.findByTestId("file-editor-hint")).toBeTruthy();
+    enabled = true;
+    act(() => usePluginRuntimeStore.getState().refresh());
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(screen.queryByTestId("file-editor-hint")).toBeNull();
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it.each([{ pendingRestart: true }, { loadError: "Activation failed" }])(
+    "preserves Retry when the enabled preference is saved but activation fails: %j",
+    async (status) => {
+      activationStatus = status;
+      renderViewer("/repo/notes.md", { editorContext: context });
+      fireEvent.click(await screen.findByRole("button", { name: "Enable and edit" }));
+      expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+      await waitFor(() =>
+        expect(usePluginRuntimeStore.getState().disabledPluginIds.has(pluginId)).toBe(false)
+      );
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      expect(screen.queryByTestId("plugin-editor")).toBeNull();
+      activationStatus = {};
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Source" }));
+      expect(screen.queryByTestId("file-editor-hint")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    }
+  );
 
   it("keeps the reader available and offers Retry when enabling fails", async () => {
     enable.mockRejectedValue(new Error("Activation failed"));
