@@ -908,6 +908,21 @@ export function Toolbar({
     [isCopyingTree, activeWorktree, clearCopyTreeNotice]
   );
 
+  // Where focus goes when the menu closes because its button was evicted to
+  // the overflow menu — set by the eviction effect, consumed once here.
+  const copyTreeEvictionFocusRef = useRef<HTMLElement | null>(null);
+  const handleCopyTreeCloseAutoFocus = useCallback((event: Event) => {
+    const target = copyTreeEvictionFocusRef.current;
+    if (!target) return;
+    copyTreeEvictionFocusRef.current = null;
+    // Radix would restore to the trigger, which is invisible by now. Deferred
+    // a frame so it lands after the shared handler has armed tooltip
+    // suppression — the wrapper runs this callback before that handler, and a
+    // focus placed earlier would drag the overflow trigger's tooltip open.
+    event.preventDefault();
+    requestAnimationFrame(() => target.focus({ preventScroll: true }));
+  }, []);
+
   // The menu's pinned entry: the old one-click behavior, now one row deeper.
   // Radix closes the menu on select; the handlers only dispatch.
   const handleCopyTreeFullContext = useCallback(() => {
@@ -1320,10 +1335,17 @@ export function Toolbar({
       "copy-tree": {
         render: () => (
           <div className="relative">
-            <DropdownMenu open={copyTreeOpen} onOpenChange={handleCopyTreeOpenChange}>
-              <ContextMenu>
-                <ContextMenuTrigger asChild>
-                  {/* Controlled union: hover opens through onOpenChange as
+            {/* ContextMenu outermost and DropdownMenu inside it, both triggers
+                composed straight onto the Button. The two wrappers publish the
+                same OverlayFocusRestoreContext and a trigger registers with
+                the NEAREST provider — so with ContextMenu nested inside
+                DropdownMenu (the PluginTrayButton shape) the dropdown's trigger
+                lands on the context menu's restore state, and a pointer pick
+                in the menu drops focus on <body>. This order gives the
+                dropdown — the button's whole job — the correct provider. */}
+            <ContextMenu>
+              <DropdownMenu open={copyTreeOpen} onOpenChange={handleCopyTreeOpenChange}>
+                {/* Controlled union: hover opens through onOpenChange as
                     normal, while a completion notice forces the tooltip open
                     for its short display window — the whole feedback for a
                     finished copy, in place of a toast. Close requests clear
@@ -1335,16 +1357,17 @@ export function Toolbar({
                     lands mid-hover would inherit whatever's left of the hover
                     window instead of getting the notice's own. Hover-only opens
                     keep the shared window. */}
-                  <Tooltip
-                    autoDismiss={copyTreeNotice === null}
-                    open={copyTreeTooltipHovered || copyTreeNotice !== null}
-                    onOpenChange={(open) => {
-                      setCopyTreeTooltipHovered(open);
-                      if (!open) clearCopyTreeNotice();
-                    }}
-                  >
-                    <TooltipTrigger asChild>
-                      <DropdownMenuTrigger asChild>
+                <Tooltip
+                  autoDismiss={copyTreeNotice === null}
+                  open={copyTreeTooltipHovered || copyTreeNotice !== null}
+                  onOpenChange={(open) => {
+                    setCopyTreeTooltipHovered(open);
+                    if (!open) clearCopyTreeNotice();
+                  }}
+                >
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <ContextMenuTrigger asChild>
                         <Button
                           ref={copyTreeButtonRef}
                           variant="ghost"
@@ -1362,37 +1385,38 @@ export function Toolbar({
                         >
                           {showCopyingSpinner ? <Spinner /> : <Folders />}
                         </Button>
-                      </DropdownMenuTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="font-medium">
-                      {copyTreeNotice ? (
-                        <span className="flex flex-col gap-0.5">
-                          <span>{copyTreeNotice.title}</span>
-                          <span className="font-normal text-text-secondary">
-                            {copyTreeNotice.message}
-                          </span>
+                      </ContextMenuTrigger>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="font-medium">
+                    {copyTreeNotice ? (
+                      <span className="flex flex-col gap-0.5">
+                        <span>{copyTreeNotice.title}</span>
+                        <span className="font-normal text-text-secondary">
+                          {copyTreeNotice.message}
                         </span>
-                      ) : isCopyingTree ? (
-                        "Copying…"
-                      ) : !activeWorktree ? (
-                        "Open a worktree first"
-                      ) : (
-                        createTooltipContent("Copy context", copyTreeShortcut)
-                      )}
-                    </TooltipContent>
-                  </Tooltip>
-                </ContextMenuTrigger>
-                <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-                  <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
-                </ContextMenuContent>
-              </ContextMenu>
-              <CopyTreeMenuContent
-                shortcut={copyTreeShortcut}
-                onCopyFullContext={handleCopyTreeFullContext}
-                onRunRecent={handleCopyTreeRunRecent}
-                onOpenContextSettings={handleOpenContextSettings}
-              />
-            </DropdownMenu>
+                      </span>
+                    ) : isCopyingTree ? (
+                      "Copying…"
+                    ) : !activeWorktree ? (
+                      "Open a worktree first"
+                    ) : (
+                      createTooltipContent("Copy context", copyTreeShortcut)
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+                <CopyTreeMenuContent
+                  shortcut={copyTreeShortcut}
+                  onCopyFullContext={handleCopyTreeFullContext}
+                  onRunRecent={handleCopyTreeRunRecent}
+                  onOpenContextSettings={handleOpenContextSettings}
+                  onCloseAutoFocus={handleCopyTreeCloseAutoFocus}
+                />
+              </DropdownMenu>
+              <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
+              </ContextMenuContent>
+            </ContextMenu>
             {/* The toast this tooltip replaced was announced by assistive
                 tech; a forced-open tooltip isn't, so the notice is mirrored
                 into a live region. The hook toggles a zero-width space onto
@@ -1524,6 +1548,7 @@ export function Toolbar({
       handleCopyTreeFullContext,
       handleCopyTreeRunRecent,
       handleOpenContextSettings,
+      handleCopyTreeCloseAutoFocus,
       copyTreeOpen,
       copyTreeNotice,
       copyTreeAnnouncement,
@@ -1799,21 +1824,25 @@ export function Toolbar({
       const focusWasInPanel =
         document.activeElement instanceof HTMLElement &&
         document.activeElement.closest("[data-copy-tree-panel]") !== null;
-      setCopyTreeOpen(false);
       // The anchor is on its way to being hidden, so it can't take focus back.
       // The overflow trigger is where the command now lives, which makes it the
       // honest destination — otherwise a keyboard user is dropped onto <body>.
       // It has to be the trigger on the side that swallowed the button: the
       // other one renders display:none and untabbable when its own side has no
       // overflow, so focusing it would be the silent no-op this prevents.
+      //
+      // Recorded, not focused here: the menu is a modal Radix menu and its
+      // FocusScope is still trapping while it is open, so a synchronous
+      // `.focus()` at this point is bounced straight back inside. The move
+      // happens in the menu's own onCloseAutoFocus, once the trap has let go.
       if (focusWasInPanel) {
         const side = rightOverflow.includes("copy-tree") ? "right" : "left";
-        toolbarRef.current
-          ?.querySelector<HTMLElement>(
+        copyTreeEvictionFocusRef.current =
+          toolbarRef.current?.querySelector<HTMLElement>(
             `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
-          )
-          ?.focus();
+          ) ?? null;
       }
+      setCopyTreeOpen(false);
     }
   }, [leftOverflow, rightOverflow]);
 

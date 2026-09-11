@@ -212,6 +212,54 @@ describe("CopyTreeMenuContent", () => {
     expect(listed[0]).toContain("Run s0");
   });
 
+  it("keeps a run whose empty exclude or always list switches off the project defaults", () => {
+    // `mergeCopyTreeOptions` backfills these two from project settings only
+    // when they are undefined — an explicit `[]` is an override, not a default.
+    seed([
+      makeRecord({ id: "x", name: "no excludes", options: { exclude: [] } }),
+      makeRecord({ id: "a", name: "no always", options: { always: [] } }),
+    ]);
+    renderMenu();
+    expect(listedRecents()).toHaveLength(2);
+  });
+
+  it("treats a false flag the same as an absent one", () => {
+    // The generator ignores `modified: false`, so a record carrying it is the
+    // default run and must not be listed beneath the pinned entry.
+    seed([makeRecord({ id: "f", options: { modified: false, scopeIgnoresIgnoreFiles: false } })]);
+    renderMenu();
+    expect(listedRecents()).toHaveLength(0);
+  });
+
+  it("pulls the history snapshot on first open, not while the menu is closed", () => {
+    // The toolbar mounts the content component whether or not the menu is
+    // open; only Radix's presence boundary keeps the store out of app start.
+    seed([]);
+    const { rerender } = render(
+      <DropdownMenu open={false}>
+        <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+        <CopyTreeMenuContent
+          onCopyFullContext={noop}
+          onRunRecent={noop}
+          onOpenContextSettings={noop}
+        />
+      </DropdownMenu>
+    );
+    expect(initSpy).not.toHaveBeenCalled();
+
+    rerender(
+      <DropdownMenu open>
+        <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+        <CopyTreeMenuContent
+          onCopyFullContext={noop}
+          onRunRecent={noop}
+          onOpenContextSettings={noop}
+        />
+      </DropdownMenu>
+    );
+    expect(initSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("puts the file count in the accessible name, not only the trailing slot", () => {
     // The trailing meta is aria-hidden by the primitive's design, so the
     // count would otherwise be invisible to assistive tech.

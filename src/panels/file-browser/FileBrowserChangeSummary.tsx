@@ -73,7 +73,10 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                 className={cn(
                   "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs",
                   "transition-colors duration-150 ease-out",
-                  isReadable && PALETTE_ROW_FOCUS_CLASS,
+                  // Unconditional: a deleted file's row stays in the tab order
+                  // (aria-disabled, so the explanation can be read), and a
+                  // focusable row without a ring takes the browser's default.
+                  PALETTE_ROW_FOCUS_CLASS,
                   isReadable
                     ? "cursor-pointer text-daintree-text/80 hover:bg-tint/5 hover:text-text-primary"
                     : "cursor-default text-daintree-text/40"

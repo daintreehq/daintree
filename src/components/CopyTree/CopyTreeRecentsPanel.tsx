@@ -22,6 +22,14 @@ import type { CopyTreeHistoryRecord } from "@shared/types";
 const RECENTS_LIMIT = 5;
 
 /**
+ * Options that change the run even when empty. `mergeCopyTreeOptions` backfills
+ * `exclude` and `always` from project settings only when they are undefined —
+ * an explicit `[]` or `""` switches that backfill off, so a record carrying one
+ * is a different run from the toolbar's default and must stay listed.
+ */
+const EXPLICIT_EVEN_WHEN_EMPTY: ReadonlySet<string> = new Set(["exclude", "always"]);
+
+/**
  * Whether a stored run is the pinned action wearing a different hat.
  *
  * Records hold the caller's runtime options *before* project settings are
@@ -33,17 +41,20 @@ const RECENTS_LIMIT = 5;
  *
  * Keyed on the options rather than the name: a record *named* "Full context"
  * that carries a format or an exclude is a genuinely different run and stays.
- * An explicit `format` equal to the default is the one exception worth
- * normalising, because the palette and MCP routes pass it where the toolbar
- * omits it, and the two mean the same run.
+ * Three shapes normalise to "default": an absent value, a `false` flag (which
+ * the generator treats the same as an absent one), and an explicit `format`
+ * equal to the default — the palette and MCP routes pass it where the toolbar
+ * omits it, and the two mean the same run. An empty selection array is default
+ * too, except for the two overrides above.
  */
 function isPinnedDefault(record: CopyTreeHistoryRecord): boolean {
-  return Object.entries(record.options).every(
-    ([key, value]) =>
-      value === undefined ||
-      (Array.isArray(value) && value.length === 0) ||
-      (key === "format" && value === DEFAULT_COPYTREE_FORMAT)
-  );
+  return Object.entries(record.options).every(([key, value]) => {
+    if (value === undefined || value === false) return true;
+    if (key === "format") return value === DEFAULT_COPYTREE_FORMAT;
+    if (EXPLICIT_EVEN_WHEN_EMPTY.has(key)) return false;
+    if (Array.isArray(value)) return value.length === 0;
+    return value === "";
+  });
 }
 
 /**
@@ -97,6 +108,8 @@ interface CopyTreeMenuContentProps {
   onRunRecent: (record: CopyTreeHistoryRecord) => void;
   /** Open Project settings on the Context tab, where excludes and budgets live. */
   onOpenContextSettings: () => void;
+  /** Forwarded to the content; the toolbar uses it to redirect focus on overflow eviction. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -114,15 +127,40 @@ interface CopyTreeMenuContentProps {
  * primitive brings the density, arrow-key navigation, typeahead, and close-time
  * focus handling with it; nothing here restates any of that.
  *
- * Radix unmounts the content while the menu is closed, so the history store's
- * one-time snapshot pull still lands on first open rather than at app start.
+ * The store hooks live in `CopyTreeMenuItems` below, under Radix's presence
+ * boundary, so the history snapshot pull still lands on first open.
  */
-export function CopyTreeMenuContent({
+export function CopyTreeMenuContent({ onCloseAutoFocus, ...items }: CopyTreeMenuContentProps) {
+  return (
+    <DropdownMenuContent
+      align="end"
+      sideOffset={4}
+      aria-label="Copy context"
+      data-copy-tree-panel=""
+      // Wide enough for a path and a trailing size on one line; the names
+      // truncate past that rather than the menu growing to fit them.
+      className="w-[280px]"
+      onCloseAutoFocus={onCloseAutoFocus}
+    >
+      <CopyTreeMenuItems {...items} />
+    </DropdownMenuContent>
+  );
+}
+
+/**
+ * The store-owning half, deliberately a CHILD of `DropdownMenuContent`: Radix's
+ * presence boundary unmounts the content's descendants while the menu is
+ * closed, not the component that renders the content. Holding the history
+ * hooks here — rather than in `CopyTreeMenuContent`, which the toolbar mounts
+ * unconditionally — is what keeps the store's snapshot pull on first open
+ * instead of at app start.
+ */
+function CopyTreeMenuItems({
   shortcut,
   onCopyFullContext,
   onRunRecent,
   onOpenContextSettings,
-}: CopyTreeMenuContentProps) {
+}: Omit<CopyTreeMenuContentProps, "onCloseAutoFocus">) {
   const records = useCopyTreeHistoryStore((s) => s.records);
   const loading = useCopyTreeHistoryStore((s) => s.loading);
   const init = useCopyTreeHistoryStore((s) => s.init);
@@ -148,15 +186,7 @@ export function CopyTreeMenuContent({
   const showLoading = useDohertyGate(loading);
 
   return (
-    <DropdownMenuContent
-      align="end"
-      sideOffset={4}
-      aria-label="Copy context"
-      data-copy-tree-panel=""
-      // Wide enough for a path and a trailing size on one line; the names
-      // truncate past that rather than the menu growing to fit them.
-      className="w-[280px]"
-    >
+    <>
       <DropdownMenuItem onSelect={onCopyFullContext}>
         Copy full context
         {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
@@ -197,6 +227,6 @@ export function CopyTreeMenuContent({
           every copy actually live. Without this the menu is a dead end for
           someone who opened it wanting to change what a copy contains. */}
       <DropdownMenuItem onSelect={onOpenContextSettings}>Context settings</DropdownMenuItem>
-    </DropdownMenuContent>
+    </>
   );
 }
