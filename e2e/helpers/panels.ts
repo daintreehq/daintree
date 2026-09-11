@@ -401,24 +401,27 @@ export async function clickToolbarButton(
 /**
  * Copy the active worktree's full context from the toolbar (#11733).
  *
- * The visible copy-tree button no longer copies — it opens a recents dropdown
- * whose first row does. Every other route still copies on the spot: the overflow
- * row and the `Cmd+Shift+C` fallback both bypass the panel by design.
+ * The visible copy-tree button no longer copies — it opens a utility menu
+ * whose first entry does. Every other route still copies on the spot: the
+ * overflow row and the `Cmd+Shift+C` fallback both bypass the menu by design.
  *
- * Branching on the returned route rather than probing for the panel is what
+ * Branching on the returned route rather than probing for the menu is what
  * makes this deterministic. `locator.isVisible()` does not wait — its `timeout`
- * option is a no-op — so a probe would race a cold lazy chunk and silently
- * return having copied nothing, leaving the caller's clipboard assertion to pass
- * on whatever was there before.
+ * option is a no-op — so a probe would race the menu's open and silently return
+ * having copied nothing, leaving the caller's clipboard assertion to pass on
+ * whatever was there before.
+ *
+ * The entry is matched by prefix: the keybinding hint renders inside the
+ * menuitem, so it is part of the accessible name.
  */
 export async function copyFullContextFromToolbar(page: Page, timeout = 5000): Promise<void> {
   const route = await clickToolbarButton(page, SEL.toolbar.copyContext, timeout);
   if (route !== "visible") return;
 
-  const panel = page.getByRole("dialog", { name: "Copy context" });
-  const fullCopyRow = panel.getByRole("button", { name: "Copy full context", exact: true });
-  await fullCopyRow.waitFor({ state: "visible", timeout });
-  await fullCopyRow.click({ timeout });
+  const menu = page.getByRole("menu", { name: "Copy context" });
+  const fullCopyItem = menu.getByRole("menuitem", { name: /^Copy full context/ });
+  await fullCopyItem.waitFor({ state: "visible", timeout });
+  await fullCopyItem.click({ timeout });
 }
 
 /**
