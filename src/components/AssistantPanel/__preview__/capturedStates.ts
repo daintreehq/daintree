@@ -75,6 +75,7 @@ export const CAPTURED_STATES = {
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: null,
+    resumed: false,
     error: null,
     turns: [],
     toolCalls: {},
@@ -149,18 +150,19 @@ export const CAPTURED_STATES = {
     toolGrants: {},
     queuedInterjections: [],
     retractedDraft: null,
-    lastActivityAt: 1788070816429,
-    turnStartedAt: 1788070815531,
+    lastActivityAt: 1789096799342,
+    turnStartedAt: 1789096798461,
     phaseIsWake: false,
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_7c6b068d-7c10-4a50-80c9-03dda365a40d",
+        turnId: "local_73688160-d625-416b-8554-3f327022339b",
         role: "user",
-        startedAt: 1788070815530,
+        startedAt: 1789096798460,
         segments: [
           {
             kind: "text",
@@ -175,14 +177,14 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070815530,
+        startedAt: 1789096798461,
         segments: [
           {
             kind: "text",
-            text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanation that wraps at panel width.\n24. Step 24 — a line of explanation that wraps at",
+            text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanat",
           },
         ],
-        text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanation that wraps at panel width.\n24. Step 24 — a line of explanation that wraps at",
+        text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanat",
         toolCallIds: [],
         interjections: [],
         complete: false,
@@ -266,12 +268,13 @@ export const CAPTURED_STATES = {
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_18dca55b-ef38-453a-9317-989cbd33728d",
+        turnId: "local_65adb792-0762-48fc-a4cf-de6172b6271f",
         role: "user",
-        startedAt: 1788070816470,
+        startedAt: 1789096799412,
         segments: [
           {
             kind: "text",
@@ -286,7 +289,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816470,
+        startedAt: 1789096799412,
         segments: [
           {
             kind: "tools",
@@ -301,7 +304,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1", "c2"],
         interjections: [],
         complete: true,
-        endedAt: 1788070816481,
+        endedAt: 1789096799425,
         outcome: "answered",
       },
     ],
@@ -313,7 +316,7 @@ export const CAPTURED_STATES = {
         danger: false,
         verb: "Listed worktrees",
         state: "done",
-        startedAt: 1788070816472,
+        startedAt: 1789096799414,
         progress: "reading",
         durationMs: 240,
         severity: "info",
@@ -326,7 +329,7 @@ export const CAPTURED_STATES = {
         verb: "Read git state",
         target: "wt_forge",
         state: "done",
-        startedAt: 1788070816473,
+        startedAt: 1789096799415,
         progress: "reading",
         durationMs: 240,
         severity: "info",
@@ -415,18 +418,19 @@ export const CAPTURED_STATES = {
     toolGrants: {},
     queuedInterjections: [],
     retractedDraft: null,
-    lastActivityAt: 1788070816533,
-    turnStartedAt: 1788070816533,
+    lastActivityAt: 1789096799475,
+    turnStartedAt: 1789096799475,
     phaseIsWake: false,
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_de2f2174-2da6-45ae-b426-fdb7573e04d5",
+        turnId: "local_e96ce482-7d3e-4fcb-bc92-d4029fef5279",
         role: "user",
-        startedAt: 1788070816533,
+        startedAt: 1789096799474,
         segments: [
           {
             kind: "text",
@@ -441,7 +445,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816533,
+        startedAt: 1789096799475,
         segments: [
           {
             kind: "tools",
@@ -474,7 +478,7 @@ export const CAPTURED_STATES = {
         needsTypedConfirm: true,
         rememberable: false,
         grantKey: "git.push",
-        requestedAt: 1788070816533,
+        requestedAt: 1789096799475,
       },
     ],
     notices: [],
@@ -547,18 +551,19 @@ export const CAPTURED_STATES = {
     toolGrants: {},
     queuedInterjections: [],
     retractedDraft: null,
-    lastActivityAt: 1788070816594,
-    turnStartedAt: 1788070816594,
+    lastActivityAt: 1789096799540,
+    turnStartedAt: 1789096799540,
     phaseIsWake: false,
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_53a2035a-fea2-439a-b581-a77f9e3059b6",
+        turnId: "local_5c28b9b8-b7b0-45c1-82ba-75c3ac10ed54",
         role: "user",
-        startedAt: 1788070816594,
+        startedAt: 1789096799540,
         segments: [
           {
             kind: "text",
@@ -573,7 +578,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816594,
+        startedAt: 1789096799540,
         segments: [],
         text: "",
         toolCallIds: [],
@@ -592,7 +597,7 @@ export const CAPTURED_STATES = {
         needsTypedConfirm: false,
         rememberable: true,
         grantKey: "terminal.sendCommand",
-        requestedAt: 1788070816594,
+        requestedAt: 1789096799540,
       },
     ],
     notices: [],
@@ -665,8 +670,8 @@ export const CAPTURED_STATES = {
     toolGrants: {},
     queuedInterjections: [],
     retractedDraft: null,
-    lastActivityAt: 1788070816654,
-    turnStartedAt: 1788070816654,
+    lastActivityAt: 1789096799600,
+    turnStartedAt: 1789096799600,
     phaseIsWake: false,
     pendingQuestion: {
       questionId: "qst_1",
@@ -688,16 +693,17 @@ export const CAPTURED_STATES = {
         },
       ],
       defaultIndex: 0,
-      requestedAt: 1788070816654,
+      requestedAt: 1789096799600,
     },
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_c3dee15f-bb70-448c-a794-b7af1a183ae6",
+        turnId: "local_36149c41-948a-425f-bb25-e0c56763c559",
         role: "user",
-        startedAt: 1788070816654,
+        startedAt: 1789096799599,
         segments: [
           {
             kind: "text",
@@ -712,7 +718,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816654,
+        startedAt: 1789096799599,
         segments: [],
         text: "",
         toolCallIds: [],
@@ -792,8 +798,8 @@ export const CAPTURED_STATES = {
     toolGrants: {},
     queuedInterjections: [],
     retractedDraft: null,
-    lastActivityAt: 1788070816715,
-    turnStartedAt: 1788070816715,
+    lastActivityAt: 1789096799661,
+    turnStartedAt: 1789096799661,
     phaseIsWake: false,
     pendingQuestion: {
       questionId: "qst_1",
@@ -835,16 +841,17 @@ export const CAPTURED_STATES = {
         },
       ],
       defaultIndex: 2,
-      requestedAt: 1788070816715,
+      requestedAt: 1789096799661,
     },
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_6e118ffa-c4ee-4e9b-97e3-31eaef8a809c",
+        turnId: "local_e2e89431-5e42-46d1-befc-fd4728e99d10",
         role: "user",
-        startedAt: 1788070816714,
+        startedAt: 1789096799661,
         segments: [
           {
             kind: "text",
@@ -859,7 +866,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816715,
+        startedAt: 1789096799661,
         segments: [],
         text: "",
         toolCallIds: [],
@@ -945,12 +952,13 @@ export const CAPTURED_STATES = {
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_74f6b463-c2fe-4e54-bd40-c3230bd140a4",
+        turnId: "local_7c908258-f2db-411b-b72b-37d0226e6e47",
         role: "user",
-        startedAt: 1788070816775,
+        startedAt: 1789096799725,
         segments: [
           {
             kind: "text",
@@ -965,7 +973,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816776,
+        startedAt: 1789096799725,
         segments: [
           {
             kind: "tools",
@@ -980,7 +988,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1"],
         interjections: [],
         complete: true,
-        endedAt: 1788070816784,
+        endedAt: 1789096799735,
         outcome: "answered",
       },
     ],
@@ -1078,12 +1086,13 @@ export const CAPTURED_STATES = {
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_c7dba4c1-7dc8-411a-b6a1-a3d7dadd986c",
+        turnId: "local_08a158a3-9b41-4253-89d4-5ee28749f1e3",
         role: "user",
-        startedAt: 1788070816836,
+        startedAt: 1789096799784,
         segments: [
           {
             kind: "text",
@@ -1098,7 +1107,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816836,
+        startedAt: 1789096799784,
         segments: [
           {
             kind: "tools",
@@ -1113,7 +1122,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1"],
         interjections: [],
         complete: true,
-        endedAt: 1788070816845,
+        endedAt: 1789096799792,
         outcome: "hedged",
       },
     ],
@@ -1136,7 +1145,7 @@ export const CAPTURED_STATES = {
         id: "n1",
         level: "warning",
         message: "MCP connection degraded — orchestration tools are offline.",
-        at: 1788070816837,
+        at: 1789096799784,
         turnId: "turn_1",
         afterTurnId: "turn_1",
       },
@@ -1219,12 +1228,13 @@ export const CAPTURED_STATES = {
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_4db710d9-fd77-4830-8192-60cd427f3299",
+        turnId: "local_7179a212-c497-4ce7-882f-9e18951be1b6",
         role: "user",
-        startedAt: 1788070816897,
+        startedAt: 1789096799844,
         segments: [
           {
             kind: "text",
@@ -1239,7 +1249,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816897,
+        startedAt: 1789096799844,
         segments: [
           {
             kind: "text",
@@ -1250,7 +1260,7 @@ export const CAPTURED_STATES = {
         toolCallIds: [],
         interjections: [],
         complete: true,
-        endedAt: 1788070816897,
+        endedAt: 1789096799844,
         outcome: "answered",
       },
     ],
@@ -1261,7 +1271,7 @@ export const CAPTURED_STATES = {
         id: "n2",
         level: "warning",
         message: "1 update were lost in transit. This part of the conversation may be incomplete.",
-        at: 1788070816897,
+        at: 1789096799844,
         turnId: null,
         afterTurnId: "turn_1",
       },
@@ -1341,12 +1351,13 @@ export const CAPTURED_STATES = {
     pendingQuestion: null,
     awaitingLocalCommand: false,
     stoppedReason: "exit",
+    resumed: false,
     error: null,
     turns: [
       {
-        turnId: "local_33b7b38e-9488-41f6-b5e2-46f66bc25316",
+        turnId: "local_9c85f259-0d78-4cdb-94fb-6556f634ae14",
         role: "user",
-        startedAt: 1788070816958,
+        startedAt: 1789096799904,
         segments: [
           {
             kind: "text",
@@ -1361,13 +1372,13 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1788070816958,
+        startedAt: 1789096799904,
         segments: [],
         text: "",
         toolCallIds: [],
         interjections: [],
         complete: true,
-        endedAt: 1788070816959,
+        endedAt: 1789096799905,
         outcome: "unknown",
       },
     ],
@@ -1378,7 +1389,7 @@ export const CAPTURED_STATES = {
         id: "n3",
         level: "error",
         message: "The model provider is unavailable. Try again shortly.",
-        at: 1788070816959,
+        at: 1789096799906,
         turnId: null,
         code: "upstream_unavailable",
         afterTurnId: "turn_1",

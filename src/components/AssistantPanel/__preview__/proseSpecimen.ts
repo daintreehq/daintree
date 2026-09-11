@@ -105,6 +105,7 @@ export const PROSE_SPECIMEN: AssistantSessionState = {
   pendingQuestion: null,
   awaitingLocalCommand: false,
   stoppedReason: null,
+  resumed: false,
   error: null,
   turns: [
     {
