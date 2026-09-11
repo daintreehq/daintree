@@ -163,6 +163,7 @@ import type {
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
+  HostMemoryPauseSnapshot,
   FdLeakWarningPayload,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
@@ -338,6 +339,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<void>;
+    /** Main's current terminal-host memory pause, ORed across every host shard (#12375). */
+    getHostMemoryPause(): Promise<HostMemoryPauseSnapshot>;
     /**
      * Mint a dedicated worker-ingest MessagePort for this terminal (issue
      * #10960). Resolves with the handshake token; the port itself arrives via
@@ -391,6 +394,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;
+    /**
+     * Terminal-host memory pause changes. Main pushes only to each window's
+     * active view, so pair with `getHostMemoryPause`.
+     */
+    onHostMemoryPause(callback: (snapshot: HostMemoryPauseSnapshot) => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;

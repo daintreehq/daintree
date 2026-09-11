@@ -1091,6 +1091,23 @@ export interface HostThrottlePayload {
   timestamp: number;
 }
 
+/**
+ * The terminal hosts' memory pause as one app-wide reading for the UI (#12375),
+ * ORed across every host shard by `HostMemoryPauseTracker`.
+ */
+export interface HostMemoryPauseSnapshot {
+  /**
+   * A pressure episode is open on at least one host: it paused output and its
+   * pressure hasn't cleared since. A forced resume keeps the episode open while
+   * that host still reports high memory.
+   */
+  active: boolean;
+  /** At least one host has output paused right now. */
+  paused: boolean;
+  /** An episode has stayed open long enough to count as a stalled recovery. */
+  stalled: boolean;
+}
+
 /** Payload for terminal reliability metrics (backpressure/suspend) */
 /**
  * How the pty-host disposed of one resize request.

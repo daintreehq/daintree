@@ -54,9 +54,12 @@ function getAgentStateMessage(
 // and a panel's `flowStatus` field is widened, this check will return true
 // for the new values automatically (#9900).
 function isPausedFlow(status: TerminalFlowStatus | undefined): boolean {
+  // `paused-resource-governor` is deliberately absent: the governor pauses
+  // every terminal on a host at once, and useHostMemoryPauseSync announces that
+  // once for the whole app (#12375). Counting it here would fan the release
+  // back out as one "output resumed" per pane.
   return (
     status === "paused-backpressure" ||
-    status === "paused-resource-governor" ||
     // FUTURE_SAB: no production producer.
     status === "paused-user" ||
     // FUTURE_SAB: only emitted by the disabled SAB path.
@@ -81,7 +84,8 @@ function getFlowStatusMessage(
     case "paused-backpressure":
       return `${title}: output paused`;
     case "paused-resource-governor":
-      return `${title}: output paused, memory pressure`;
+      // Host-wide, so useHostMemoryPauseSync announces it once (#12375).
+      return null;
     // FUTURE_SAB: `suspended` is only emitted by the SAB transport path
     // (`BackpressureManager.suspendVisualStream`); no production producer.
     // Kept so the formatter stays type-safe forward-looking code.
@@ -248,6 +252,19 @@ export function useAccessibilityAnnouncements() {
                 debounceTimersRef.current.delete(key);
               }, BADGE_DEBOUNCE_MS);
               debounceTimersRef.current.set(key, timer);
+            } else if (
+              terminal.flowStatus === "paused-resource-governor" &&
+              prev.flowStatus !== "paused-resource-governor"
+            ) {
+              // A pane pause still waiting out its debounce is overtaken by the
+              // host-wide one. Announcing it would leave a "paused" that no
+              // per-pane "resumed" ever follows.
+              const key = `${terminal.id}:flow`;
+              const pending = debounceTimersRef.current.get(key);
+              if (pending) {
+                clearTimeout(pending);
+                debounceTimersRef.current.delete(key);
+              }
             }
 
             // Queue-count threshold transitions (0→N, N→0).

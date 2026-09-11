@@ -15,6 +15,7 @@ import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
+import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -1319,6 +1320,9 @@ function buildElectronApi(): ElectronAPI {
       forceResume: (id: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 
+      getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE),
+
       requestWorkerIngestPort: (id: string): Promise<{ token: string } | null> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT, id),
 
@@ -1411,6 +1415,9 @@ function buildElectronApi(): ElectronAPI {
 
       onReclaimMemory: (callback: () => void) =>
         _eventBusOn("window:reclaim-memory", () => callback()),
+
+      onHostMemoryPause: (callback: (snapshot: HostMemoryPauseSnapshot) => void) =>
+        _eventBusOn("terminal:host-memory-pause", callback),
     },
 
     // Files API

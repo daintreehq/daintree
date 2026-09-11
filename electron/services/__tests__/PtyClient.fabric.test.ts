@@ -728,6 +728,104 @@ describe("PtyClient fabric", () => {
       expect(events).toEqual([true, false]);
       client.dispose();
     });
+
+    it("reads the memory pause per shard, so a sibling's hold can't hide a forced resume", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      type Snapshot = { active: boolean; paused: boolean; stalled: boolean };
+      const snapshots: Snapshot[] = [];
+      client.on("host-memory-pause-changed", (snapshot: Snapshot) => {
+        snapshots.push(snapshot);
+      });
+
+      shardA.child.emit("message", {
+        type: "host-memory-warning",
+        isWarning: true,
+        utilizationPercent: 96,
+        timestamp: 1,
+      });
+      shardA.child.emit("message", { type: "host-throttled", isThrottled: true, timestamp: 2 });
+      defaultShard().child.emit("message", {
+        type: "host-throttled",
+        isThrottled: true,
+        timestamp: 3,
+      });
+      // Shard A hits its pause bound still warning. Main still holds, so the
+      // aggregate never flips and this transition never leaves the aggregator.
+      shardA.child.emit("message", {
+        type: "host-throttled",
+        isThrottled: false,
+        forced: true,
+        timestamp: 4,
+      });
+      defaultShard().child.emit("message", {
+        type: "host-throttled",
+        isThrottled: false,
+        forced: false,
+        timestamp: 5,
+      });
+
+      expect(client.getHostMemoryPause()).toEqual({ active: true, paused: false, stalled: false });
+      expect(snapshots).toEqual([
+        { active: true, paused: true, stalled: false },
+        { active: true, paused: false, stalled: false },
+      ]);
+      client.dispose();
+    });
+
+    it("publishes the release when a paused shard's host exits", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      type Snapshot = { active: boolean; paused: boolean; stalled: boolean };
+      const snapshots: Snapshot[] = [];
+      client.on("host-memory-pause-changed", (snapshot: Snapshot) => {
+        snapshots.push(snapshot);
+      });
+
+      shardA.child.emit("message", { type: "host-throttled", isThrottled: true, timestamp: 1 });
+      expect(client.getHostMemoryPause().active).toBe(true);
+
+      shardA.child.emit("exit", 1);
+
+      expect(snapshots.at(-1)).toEqual({ active: false, paused: false, stalled: false });
+      expect(client.getHostMemoryPause()).toEqual({ active: false, paused: false, stalled: false });
+      client.dispose();
+    });
+
+    it("keeps a replacement shard's memory pause when the retired shard's exit lands late", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const retired = projectShard("project-a");
+      retired.child.emit("message", { type: "ready" });
+
+      retired.child.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(retired.child, "dispose")).toHaveLength(1);
+
+      // Same project, same shard key, new process — up before the old one's
+      // exit has arrived.
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const replacement = forks.at(-1)!;
+      expect(replacement).not.toBe(retired);
+      replacement.child.emit("message", { type: "ready" });
+      replacement.child.emit("message", {
+        type: "host-throttled",
+        isThrottled: true,
+        timestamp: 1,
+      });
+      expect(client.getHostMemoryPause().active).toBe(true);
+
+      retired.child.emit("exit", 0);
+
+      expect(client.getHostMemoryPause()).toEqual({ active: true, paused: true, stalled: false });
+      client.dispose();
+    });
   });
 
   describe("cross-shard aggregation", () => {

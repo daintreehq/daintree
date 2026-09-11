@@ -17,6 +17,7 @@ const devServerSync = vi.fn();
 const soundPlayback = vi.fn();
 const storeUpdate = vi.fn();
 const pluginUpdateCheck = vi.fn();
+const hostMemoryPause = vi.fn();
 const mark = vi.fn();
 
 vi.mock("@/hooks/useHibernationNotifications", () => ({
@@ -30,6 +31,9 @@ vi.mock("@/hooks/useParkReleaseNotifications", () => ({
 }));
 vi.mock("@/hooks/useDiskSpaceWarnings", () => ({
   useDiskSpaceWarnings: () => diskSpace(),
+}));
+vi.mock("@/hooks/useHostMemoryPauseSync", () => ({
+  useHostMemoryPauseSync: () => hostMemoryPause(),
 }));
 vi.mock("@/hooks/useForgeTokenHealth", () => ({
   useForgeTokenHealth: () => tokenHealth(),
@@ -66,6 +70,7 @@ const allHooks = [
   soundPlayback,
   storeUpdate,
   pluginUpdateCheck,
+  hostMemoryPause,
 ];
 
 describe("PostHydrationListeners", () => {

@@ -23,6 +23,8 @@ import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
+import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
+import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import type { PrerequisiteCheckResult } from "@shared/types";
@@ -739,5 +741,68 @@ describe("GlobalBannerCoordinator — missing prerequisite slot (#11763)", () =>
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Required tools are missing")).toBeTruthy();
+  });
+});
+
+describe("GlobalBannerCoordinator — host memory stall slot (#12375)", () => {
+  const STALLED = { active: true, paused: true, stalled: true };
+  const stallTitle = HOST_MEMORY_PAUSE_COPY.stall.title;
+
+  afterEach(() => {
+    useHostMemoryPauseStore.setState({ snapshot: null, visible: false });
+  });
+
+  it("stays out of the slot while the pause is still recovering on its own", () => {
+    useHostMemoryPauseStore.setState({
+      snapshot: { active: true, paused: true, stalled: false },
+      visible: true,
+    });
+
+    const { container } = render(<GlobalBannerCoordinator />);
+
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("takes the slot once recovery stalls", () => {
+    useHostMemoryPauseStore.setState({ snapshot: STALLED, visible: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText(stallTitle)).toBeTruthy();
+  });
+
+  it("wins the slot over the session-restore confirmation", () => {
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
+    useHostMemoryPauseStore.setState({ snapshot: STALLED, visible: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText(stallTitle)).toBeTruthy();
+    expect(screen.queryByText(/Session recovered after unexpected exit/)).toBeNull();
+  });
+
+  it("yields the slot to a disabled crash watchdog", () => {
+    usePanelStore.setState({ watchdogStatus: "disabled" });
+    useHostMemoryPauseStore.setState({ snapshot: STALLED, visible: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
+    expect(screen.queryByText(stallTitle)).toBeNull();
+  });
+
+  it("clears itself when the episode closes", () => {
+    useHostMemoryPauseStore.setState({ snapshot: STALLED, visible: true });
+    render(<GlobalBannerCoordinator />);
+    expect(screen.getByText(stallTitle)).toBeTruthy();
+
+    act(() => {
+      useHostMemoryPauseStore.setState({
+        snapshot: { active: false, paused: false, stalled: false },
+        visible: false,
+      });
+    });
+
+    expect(screen.queryByText(stallTitle)).toBeNull();
   });
 });

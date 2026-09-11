@@ -6,6 +6,7 @@ import { useIdleTerminalNotifications } from "../hooks/useIdleTerminalNotificati
 import { useIdleBackgroundCloseNotifications } from "../hooks/useIdleBackgroundCloseNotifications";
 import { useParkReleaseNotifications } from "../hooks/useParkReleaseNotifications";
 import { useDiskSpaceWarnings } from "../hooks/useDiskSpaceWarnings";
+import { useHostMemoryPauseSync } from "../hooks/useHostMemoryPauseSync";
 import { useForgeTokenHealth } from "../hooks/useForgeTokenHealth";
 import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
 import { useStoreUpdateListener } from "../hooks/useStoreUpdateListener";
@@ -20,11 +21,12 @@ import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/ap
  * effect flush — keeping early input responsive (#9769).
  *
  * Every hook here was audited to tolerate a late mount: the notification hooks
- * carry module-scope re-attach guards, the forge/store hooks pull current
- * state on mount, and the rest are poll-backed or react to events that cannot
- * fire before the window is interactive. Hooks that must subscribe before first
- * paint (focus-intent, OS DND, plugin deep-link, keybindings, action registry,
- * MCP/plugin bridges) deliberately stay in `AppInner`.
+ * carry module-scope re-attach guards, the forge/store hooks and the host
+ * memory pause sync pull current state on mount, and the rest are poll-backed
+ * or react to events that cannot fire before the window is interactive. Hooks
+ * that must subscribe before first paint (focus-intent, OS DND, plugin
+ * deep-link, keybindings, action registry, MCP/plugin bridges) deliberately
+ * stay in `AppInner`.
  */
 export function PostHydrationListeners() {
   useHibernationNotifications();
@@ -32,6 +34,7 @@ export function PostHydrationListeners() {
   useIdleBackgroundCloseNotifications();
   useParkReleaseNotifications();
   useDiskSpaceWarnings();
+  useHostMemoryPauseSync();
   useForgeTokenHealth();
   useForgeRateLimit();
   useRecipeFocusReload();

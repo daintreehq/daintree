@@ -14,6 +14,7 @@ import type {
   SerializedTerminalSnapshot,
 } from "@shared/types";
 import type {
+  HostMemoryPauseSnapshot,
   PtyHostToRendererMessage,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
@@ -938,5 +939,18 @@ export const terminalClient = {
 
   restartService: (): Promise<void> => {
     return window.electron.terminal.restartService();
+  },
+
+  /** Main's current terminal-host memory pause snapshot (#12375). */
+  getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> => {
+    return window.electron.terminal.getHostMemoryPause();
+  },
+
+  /**
+   * Listen for terminal-host memory pause changes. Main pushes only to each
+   * window's active view, so pair this with `getHostMemoryPause`.
+   */
+  onHostMemoryPause: (callback: (snapshot: HostMemoryPauseSnapshot) => void): (() => void) => {
+    return window.electron.terminal.onHostMemoryPause(callback);
   },
 } as const;

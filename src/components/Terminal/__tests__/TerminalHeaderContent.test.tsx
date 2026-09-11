@@ -819,14 +819,16 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     expect(badge!.textContent).toContain("Paused");
   });
 
-  it("paused-resource-governor badge sets aria-live='off'", () => {
+  // #12375 — the governor pauses every terminal on a host at once, so its pause
+  // shows once on the toolbar rather than as an identical pill on every pane.
+  it("renders no pane pill for a resource-governor pause", () => {
     mockTerminal = { id: "t1" };
     const { container } = render(
       <TerminalHeaderContent id="t1" flowStatus="paused-resource-governor" />
     );
-    const badge = container.querySelector('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    expect(badge!.textContent).toContain("memory");
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("Paused");
+    expect(text).not.toMatch(/memory/i);
   });
 
   // FUTURE_SAB: see Suspended pill (#9900). The badge never renders in
@@ -888,9 +890,10 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
   });
 
   // FUTURE_SAB: `suspended` is a skeleton value (#9900). The test
-  // exercises the chip-row vocabulary for all three flow pills; the
-  // suspended case never renders in production.
-  it.each(["paused-backpressure", "paused-resource-governor", "suspended"] as const)(
+  // exercises the chip-row vocabulary for both flow pills; the suspended
+  // case never renders in production. `paused-resource-governor` has no
+  // pane pill at all (#12375).
+  it.each(["paused-backpressure", "suspended"] as const)(
     // FUTURE_SAB: see above.
     "%s flow pill is rendered with neutral overlay, not status-warning",
     (status) => {

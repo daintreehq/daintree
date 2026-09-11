@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pause, Cpu, Hourglass, Lock, CheckCircle2, Moon } from "lucide-react";
+import { Pause, Hourglass, Lock, CheckCircle2, Moon } from "lucide-react";
 import type { AgentState, PanelKind, AgentStateChangeTrigger, TerminalFlowStatus } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -433,33 +433,9 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
-      {/* Resource-governor pause badge — Tier-1 ambient. Distinguished from
-          the other two flow pills by its `Cpu` icon (memory pressure). */}
-      {flowStatus === "paused-resource-governor" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Cpu className="w-3 h-3" aria-hidden="true" />
-              Paused (memory)
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">System memory pressure</span>
-              <span>Paused to reduce memory pressure. Recovers automatically.</span>
-              {/* Held-duration gauge intentionally omitted: ResourceGovernor
-                  pauses via the coordinator but does not emit `pause-start`
-                  / `pause-end` reliability metrics, so the
-                  `pause-duration-gauge` funnel never tracks it. Showing
-                  a frozen "Paused for Xs" line would be a lie. */}
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
+      {/* No pill for `paused-resource-governor`: the governor pauses every
+          terminal on its host at once, so that pause shows once for the whole
+          app on the toolbar's HostMemoryPauseIndicator (#12375). */}
 
       {/* FUTURE_SAB: Suspended badge — Tier-1 ambient. The `suspended` flowStatus
           is only emitted by the SharedArrayBuffer transport path in the PTY host

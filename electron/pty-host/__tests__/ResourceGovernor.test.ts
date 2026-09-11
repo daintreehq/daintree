@@ -319,6 +319,42 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("emits forced: false when pressure clears on the tick the pause bound elapses", () => {
+      // Both release conditions hold at once. Under the efficiency profile the
+      // warning clears below the resume threshold, so a forced flag here would
+      // keep the UI's memory episode open on pressure that already cleared.
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      // Hold pressure right up to the bound, then clear it on the tick past it.
+      vi.advanceTimersByTime(10000 - governor.getSnapshot().throttleDurationMs);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+      mockMemoryUsage(250);
+      vi.advanceTimersByTime(2000);
+
+      const event = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "host-throttled" &&
+          (c[0] as Record<string, unknown>)?.isThrottled === false
+      )?.[0] as Record<string, unknown> | undefined;
+
+      expect(event).toBeDefined();
+      expect(event?.duration).toBeGreaterThan(10000);
+      expect(event?.forced).toBe(false);
+
+      governor.dispose();
+    });
   });
 
   describe("dispose", () => {

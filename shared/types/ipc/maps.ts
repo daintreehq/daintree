@@ -1428,6 +1428,9 @@ export interface IpcEventMap {
     timestamp: number;
   };
   "terminal:backend-ready": void;
+  // App-wide terminal-host memory pause (#12375), sent to each window's active
+  // view on every change. Views that missed it pull `terminal:get-host-memory-pause`.
+  "terminal:host-memory-pause": import("../pty-host.js").HostMemoryPauseSnapshot;
   "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
   "terminal:restore-scrollback": { terminalIds: string[] };
 
@@ -2189,6 +2192,8 @@ export type IpcEventBusMap = Pick<
   | "terminal:backend-crashed"
   | "terminal:backend-recovering"
   | "terminal:backend-ready"
+  // Terminal-host memory pause, one snapshot for the whole app (window-scoped)
+  | "terminal:host-memory-pause"
   | "terminal:spawn-result"
   // Terminal observability
   | "terminal:resize-result"
