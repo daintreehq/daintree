@@ -1577,6 +1577,65 @@ describe("HttpLifecycle", () => {
       }
     );
 
+    describe("plugin route", () => {
+      function pluginReq(headers: Record<string, string> = {}): http.IncomingMessage {
+        return {
+          method: "POST",
+          url: "/mcp/plugin/acme.ledger/data",
+          headers: { host: "127.0.0.1:45454", authorization: "Bearer test-api-key", ...headers },
+        } as unknown as http.IncomingMessage;
+      }
+      const invoke = (lc: HttpLifecycle, req: http.IncomingMessage, res: http.ServerResponse) =>
+        (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(req, res);
+
+      it("hands plugin paths to the plugin handler without consulting orchestration auth", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const handler = { handle: vi.fn(async () => {}), closeAllSessions: vi.fn() };
+        lc.setPluginRouteHandler(handler);
+        const req = pluginReq();
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, req, res);
+
+        expect(handler.handle).toHaveBeenCalledWith(req, res, expect.any(URL), 45454);
+        expect(res.writeHead).not.toHaveBeenCalled();
+        expect(deps.auditService.recordAuth401).not.toHaveBeenCalled();
+      });
+
+      it("answers 404 when no plugin handler is mounted, even for a valid orchestration bearer", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, pluginReq(), res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, expect.anything());
+      });
+
+      it("still applies the Host check before the plugin handler", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        (lc as unknown as { port: number }).port = 45454;
+        const handler = { handle: vi.fn(async () => {}), closeAllSessions: vi.fn() };
+        lc.setPluginRouteHandler(handler);
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, pluginReq({ host: "evil.example:45454" }), res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
+        expect(handler.handle).not.toHaveBeenCalled();
+      });
+    });
+
     it("returns 401 with WWW-Authenticate: Bearer realm header", async () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);

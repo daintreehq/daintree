@@ -105,7 +105,8 @@
           "clipboard:read",
           "clipboard:write",
           "shell:exec",
-          "socket:connect"
+          "socket:connect",
+          "mcp:expose"
         ]
       }
     },
@@ -481,7 +482,8 @@
                     "clipboard:read",
                     "clipboard:write",
                     "shell:exec",
-                    "socket:connect"
+                    "socket:connect",
+                    "mcp:expose"
                   ]
                 }
               }
@@ -1187,6 +1189,42 @@
               "id",
               "name",
               "terminals"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "agentMcp": {
+          "default": [],
+          "maxItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400
+              },
+              "mode": {
+                "type": "string",
+                "const": "tools"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "mode"
             ],
             "additionalProperties": false
           }

@@ -125,6 +125,10 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // excluded from CONFIRM_TRIGGERING_CAPABILITIES: elevating on a token the
   // host cannot enforce would buy friction without buying safety.
   "socket:connect",
+  // Serve `contributes.agentMcp` tools to terminal agents over the host's MCP
+  // listener. Declaring it exposes nothing by itself: each endpoint stays dark
+  // until the user enables it for a specific project.
+  "mcp:expose",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -529,6 +533,93 @@ export interface McpServerContribution {
 }
 
 /**
+ * One `contributes.agentMcp` entry: an MCP tools endpoint the plugin serves to
+ * agents running in Daintree's terminals — the inbound direction, unlike
+ * {@link McpServerContribution}, where Daintree is the client.
+ *
+ * The host owns everything but the tools: the transport (a plugin-only path on
+ * the existing loopback listener), the per-terminal credential, the project
+ * binding and revocation. The plugin supplies the tool roster at activation via
+ * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
+ * an endpoint reaches no agent until the user enables it for a project.
+ */
+export interface PluginAgentMcpContribution {
+  id: string;
+  /** Shown in the per-project enablement UI and used as the agent-side server name's label. */
+  name: string;
+  description?: string;
+  /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
+  mode: "tools";
+}
+
+/** Most tools one `agentMcp` endpoint may register. Client tool caps are app-wide, not per server. */
+export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 8;
+/** Most `agentMcp` endpoints one manifest may declare. */
+export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
+/** Tool name grammar — the subset every MCP client accepts unmangled. */
+export const AGENT_MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
+/** UTF-8 byte cap on a tool description, matching the host's own MCP authoring budget. */
+export const AGENT_MCP_MAX_DESCRIPTION_BYTES = 400;
+/** UTF-8 byte cap on one tool's serialized input or output schema. */
+export const AGENT_MCP_MAX_SCHEMA_BYTES = 8 * 1024;
+/** UTF-8 byte cap on one serialized tool result. */
+export const AGENT_MCP_MAX_RESULT_BYTES = 256 * 1024;
+/** Wall-clock budget for one tool call before the host aborts it. */
+export const AGENT_MCP_CALL_TIMEOUT_MS = 60_000;
+
+/**
+ * Who a tool call came from, as far as the host can say. Provenance, not
+ * identity: the grant was issued for a launch in this terminal and project, but
+ * any process that read the credential can present it. `launchAgentIdHint` is
+ * what the terminal was launched as — never proof of what is calling.
+ */
+export interface PluginMcpCaller {
+  /** Stable correlation id for the credential. Never the credential itself. */
+  readonly credentialId: string;
+  readonly projectId: string;
+  readonly terminalId: string;
+  readonly launchAgentIdHint?: string;
+}
+
+/** A JSON Schema object describing a tool's arguments or result. Must be `type: "object"`. */
+export type PluginMcpJsonSchema = { type: "object" } & Record<string, unknown>;
+
+/**
+ * One tool on an `agentMcp` endpoint. `execute` receives the arguments the
+ * agent sent (validated only as a JSON object — checking them against
+ * `inputSchema` is the plugin's job), the caller's provenance, and a signal
+ * aborted when the call is cancelled, times out, or the plugin unloads. The
+ * return value must be JSON-serializable; it reaches the agent as the tool
+ * result. A thrown error becomes a tool error carrying its message.
+ */
+export interface PluginMcpToolDefinition {
+  description: string;
+  inputSchema: PluginMcpJsonSchema;
+  outputSchema?: PluginMcpJsonSchema;
+  execute(
+    args: Record<string, unknown>,
+    caller: PluginMcpCaller,
+    signal: AbortSignal
+  ): unknown | Promise<unknown>;
+}
+
+/** Host API for serving `contributes.agentMcp` endpoints. Requires `mcp:expose`. */
+export interface PluginMcpApi {
+  /**
+   * Bind the tool roster for an endpoint declared in `contributes.agentMcp`,
+   * keyed by tool name. An undeclared endpoint id, a roster over
+   * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, or a tool breaking the name,
+   * description or schema limits is rejected whole. Calling it again for the
+   * same endpoint replaces the roster. Returns a disposer; every roster is
+   * dropped when the plugin unloads. Must be called during `activate()`.
+   */
+  registerTools(
+    endpointId: string,
+    tools: Record<string, PluginMcpToolDefinition>
+  ): Promise<() => void>;
+}
+
+/**
  * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
  * ships — instructions/knowledge (not executable code) that Daintree's built-in
  * MCP server surfaces to agents through the `skills.search` / `skills.load`
@@ -849,6 +940,12 @@ export interface PluginManifest {
     commands: PluginActionContribution[];
     views: ViewContribution[];
     mcpServers: McpServerContribution[];
+    /**
+     * MCP tools endpoints this plugin serves to terminal agents. Requires the
+     * `mcp:expose` capability. Optional in the type but always materialized by
+     * the manifest schema's `.default([])`, for the same reason as `surfaces`.
+     */
+    agentMcp?: PluginAgentMcpContribution[];
     /**
      * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
      * surfaced to agents via the built-in MCP server's `skills.search` /

@@ -1732,7 +1732,7 @@ type PluginPanelBadge = {
 };
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
 type ContextMenuLocation = "worktree" | "terminal" | "file";
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
 interface MenuItemContribution {
@@ -2020,6 +2020,25 @@ interface McpServerContribution {
     command: string;
     args?: string[];
     env?: Record<string, string>;
+}
+/**
+ * One `contributes.agentMcp` entry: an MCP tools endpoint the plugin serves to
+ * agents running in Daintree's terminals — the inbound direction, unlike
+ * {@link McpServerContribution}, where Daintree is the client.
+ *
+ * The host owns everything but the tools: the transport (a plugin-only path on
+ * the existing loopback listener), the per-terminal credential, the project
+ * binding and revocation. The plugin supplies the tool roster at activation via
+ * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
+ * an endpoint reaches no agent until the user enables it for a project.
+ */
+interface PluginAgentMcpContribution {
+    id: string;
+    /** Shown in the per-project enablement UI and used as the agent-side server name's label. */
+    name: string;
+    description?: string;
+    /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
+    mode: "tools";
 }
 /**
  * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
@@ -2314,6 +2333,12 @@ interface PluginManifest {
         commands: PluginActionContribution[];
         views: ViewContribution[];
         mcpServers: McpServerContribution[];
+        /**
+         * MCP tools endpoints this plugin serves to terminal agents. Requires the
+         * `mcp:expose` capability. Optional in the type but always materialized by
+         * the manifest schema's `.default([])`, for the same reason as `surfaces`.
+         */
+        agentMcp?: PluginAgentMcpContribution[];
         /**
          * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
          * surfaced to agents via the built-in MCP server's `skills.search` /

@@ -603,6 +603,15 @@ export interface StoreSchema {
   projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
 
   /**
+   * Plugin MCP endpoints the user turned on per project, keyed
+   * `projectId → manifestId → endpointId → { decidedAt }`; presence means on.
+   * Read and written only through `services/pluginAgentMcp/projectEnablement.ts`.
+   * Out of the repository for the same reason as `projectPluginVisibility`.
+   * Same additive-key convention as `projectPluginTrust` above.
+   */
+  projectAgentMcpEnablement?: Record<string, Record<string, Record<string, { decidedAt: number }>>>;
+
+  /**
    * Workspaces the user asked to keep resident in the project-view cache
    * (#12313), keyed by workspace id — a project's 64-hex id or a scratch
    * workspace's UUID, the same vocabulary `ProjectViewManager.views` and an MCP
@@ -827,6 +836,7 @@ const storeOptions = {
     pluginCapabilityConsent: {},
     projectPluginTrust: {},
     projectSurfaceChoices: {},
+    projectAgentMcpEnablement: {},
     workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,

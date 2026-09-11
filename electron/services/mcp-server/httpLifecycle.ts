@@ -25,6 +25,7 @@ import type {
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
+import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
   ActiveBearerRecord,
@@ -281,8 +282,13 @@ export class HttpLifecycle {
   // explicit revoke, transport close) can find which bearer owns a closing
   // session without re-parsing the header they no longer hold.
   private readonly sessionToTokenHash = new Map<string, string>();
+  private pluginRouteHandler: PluginMcpRouteHandler | null = null;
 
   constructor(private readonly deps: HttpLifecycleDeps) {}
+
+  setPluginRouteHandler(handler: PluginMcpRouteHandler | null): void {
+    this.pluginRouteHandler = handler;
+  }
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.httpServer.listening && this.port !== null;
@@ -880,6 +886,7 @@ export class HttpLifecycle {
 
     // Drain sessions
     this.deps.sessionStore.drain();
+    this.pluginRouteHandler?.closeAllSessions();
     // Wipe the bearer register so a restart starts from zero live clients —
     // every external client must reconnect, re-registering on handshake.
     this.clearAllBearers();
@@ -976,6 +983,7 @@ export class HttpLifecycle {
         this.deps.auditService.flushNow();
         this.deps.turnOutcomeService.flushNow();
         this.deps.sessionStore.drain();
+        this.pluginRouteHandler?.closeAllSessions();
         this.clearAllBearers();
         // The drain wipes session-scoped state (grants, dedup, pins);
         // the abuse-policy denial Map is owned alongside but lives on
@@ -1133,6 +1141,19 @@ export class HttpLifecycle {
     }
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
+
+    // Plugin endpoints authenticate their own credentials and nothing else, so
+    // they branch off before the orchestration gate: a plugin grant must never
+    // reach `isAuthorized`, whose fallback would score it as a workbench bearer.
+    if (url.pathname.startsWith(PLUGIN_MCP_ROUTE_PREFIX)) {
+      if (this.pluginRouteHandler && this.port !== null) {
+        await this.pluginRouteHandler.handle(req, res, url, this.port);
+      } else {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not found");
+      }
+      return;
+    }
 
     const authHeader = req.headers.authorization ?? "";
     if (!isAuthorized(authHeader, this.apiKeyBearerHash, this.helpTokenValidator)) {
