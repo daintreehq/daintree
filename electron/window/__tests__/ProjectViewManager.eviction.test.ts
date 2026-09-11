@@ -221,6 +221,11 @@ const assistantBackendsForProject = (projectId: string) => {
   return backend ? [backend] : [];
 };
 const isTerminalLive = (terminalId: string): boolean => liveTerminals.has(terminalId);
+// The native engine's half (#12364): the views whose loss would end a live
+// engine, keyed by WebContents id alone — the way the teardown it predicts is.
+const nativeEngineViews = new Set<number>();
+const wouldEndNativeAssistant = (webContentsId: number): boolean =>
+  nativeEngineViews.has(webContentsId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
@@ -277,6 +282,7 @@ describe("ProjectViewManager — eviction safety", () => {
     mockGetAppMetrics.mockReturnValue([]);
     assistantBackends.clear();
     liveTerminals.clear();
+    nativeEngineViews.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -983,6 +989,222 @@ describe("ProjectViewManager — eviction safety", () => {
 
       expect(wcB.close).toHaveBeenCalled();
       expect(managerWithLimit.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+    });
+  });
+
+  // ── Native assistant engines share the floor (issue #12364) ──
+  //
+  // The native engine is a child process of main, not a PTY, so the backends
+  // above never see it — and evicting its view runs `stopByWebContents`, which
+  // ends the engine and its conversation. The PTY pair stays wired but empty
+  // here, because an empty backend list is exactly what used to decide the
+  // answer before the engine was ever asked about.
+  describe("live native assistant engines (#12364)", () => {
+    let managers: ProjectViewManager[] = [];
+
+    function makeManager(
+      cachedProjectViews: number,
+      hooks: {
+        onViewEvicted?: (id: number) => void;
+        wouldEndNativeAssistant?: (id: number) => boolean;
+      } = {}
+    ) {
+      const mgr = new ProjectViewManager(win as never, {
+        dirname: "/test",
+        paintGateTimeoutMs: 0,
+        paintGateHardTimeoutMs: 0,
+        warmPaintGateTimeoutMs: 0,
+        warmPaintGateHardTimeoutMs: 0,
+        cachedProjectViews,
+        assistantBackendsForProject,
+        isTerminalLive,
+        wouldEndNativeAssistant: hooks.wouldEndNativeAssistant ?? wouldEndNativeAssistant,
+        onViewEvicted: hooks.onViewEvicted,
+      });
+      managers.push(mgr);
+      return mgr;
+    }
+
+    afterEach(() => {
+      // Each manager starts a randomly-phased memory sampler; a tick left running
+      // could write into the shared logInfo mock during a later test.
+      for (const mgr of managers) mgr.dispose();
+      managers = [];
+    });
+
+    const evictedProjectIds = () =>
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([event]) => event === "projectview.eviction")
+        .map(([, ctx]) => (ctx as { projectId: string }).projectId);
+
+    const webContentsOf = (mgr: ProjectViewManager, projectId: string) =>
+      mgr.getAllViews().find((v) => v.projectId === projectId)!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    function registerA(mgr: ProjectViewManager) {
+      const wcA = createMockWebContents();
+      mgr.registerInitialView(
+        { webContents: wcA, setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      return wcA;
+    }
+
+    it("keeps a native engine's view out of LRU eviction with no PTY backend at all", async () => {
+      // The reported bug. Nothing bound a PTY, so the empty backend list returned
+      // false and the engine's view — the LRU one — was reclaimed like any other.
+      // No agent-state seed either: an engine waiting on its user is still an engine.
+      const onViewEvicted = vi.fn();
+      const managerWithLimit = makeManager(2, { onViewEvicted });
+      const wcA = registerA(managerWithLimit);
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      nativeEngineViews.add(wcA.id);
+      const wcB = webContentsOf(managerWithLimit, "proj-b");
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+      expect(remaining).toContain("proj-a");
+      expect(remaining).not.toContain("proj-b");
+      expect(wcA.close).not.toHaveBeenCalled();
+      expect(wcB.close).toHaveBeenCalled();
+      // `onViewEvicted` is what stops the engine in the product.
+      expect(onViewEvicted).toHaveBeenCalledWith(wcB.id);
+      expect(onViewEvicted).not.toHaveBeenCalledWith(wcA.id);
+    });
+
+    it("holds the cache over its limit for a native engine beside a PTY assistant", async () => {
+      // The halves are OR'd: neither kind of assistant may mask the other.
+      const managerWithLimit = makeManager(2);
+      const wcA = registerA(managerWithLimit);
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      nativeEngineViews.add(wcA.id);
+      const wcB = webContentsOf(managerWithLimit, "proj-b");
+      assistantBackends.set("proj-b", { terminalId: "t-help-b", webContentsId: wcB.id });
+      liveTerminals.add("t-help-b");
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      expect(
+        managerWithLimit
+          .getAllViews()
+          .map((v) => v.projectId)
+          .sort()
+      ).toEqual(["proj-a", "proj-b", "proj-c"]);
+      expect(wcA.close).not.toHaveBeenCalled();
+      expect(wcB.close).not.toHaveBeenCalled();
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+        "projectview.eviction-skipped",
+        expect.objectContaining({
+          reason: "lru",
+          overflow: 1,
+          protectedProjectIds: ["proj-a", "proj-b"],
+        })
+      );
+    });
+
+    it("stops protecting the view once losing it would no longer end an engine", async () => {
+      // The engine exited or its session was stopped, so the service stops naming
+      // the view. The floor is re-read on every pass, and the next one takes it.
+      const managerWithLimit = makeManager(2);
+      const wcA = registerA(managerWithLimit);
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      nativeEngineViews.add(wcA.id);
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+      expect(wcA.close).not.toHaveBeenCalled();
+
+      nativeEngineViews.delete(wcA.id);
+      await managerWithLimit.switchTo("proj-d", "/path/d");
+      await flushImmediates();
+
+      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).not.toContain("proj-a");
+      expect(wcA.close).toHaveBeenCalled();
+    });
+
+    it("protects only the view whose loss would end the engine", async () => {
+      // A window that merely joined the engine detaches without harm and can rejoin,
+      // so the service does not name its view and it stays an ordinary candidate.
+      const managerWithLimit = makeManager(2);
+      const wcA = registerA(managerWithLimit);
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      nativeEngineViews.add(wcA.id + 5000);
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).not.toContain("proj-a");
+      expect(wcA.close).toHaveBeenCalled();
+    });
+
+    it("keeps a native engine's view through the forced tier-2 reclaim (#11477)", async () => {
+      const onViewEvicted = vi.fn();
+      const managerWithLimit = makeManager(3, { onViewEvicted });
+      const wcA = registerA(managerWithLimit);
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      nativeEngineViews.add(wcA.id);
+      const wcB = webContentsOf(managerWithLimit, "proj-b");
+
+      managerWithLimit.reclaimCachedViewsUnderPressure();
+
+      expect(
+        managerWithLimit
+          .getAllViews()
+          .map((v) => v.projectId)
+          .sort()
+      ).toEqual(["proj-a", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+      expect(wcA.close).not.toHaveBeenCalled();
+      expect(onViewEvicted).toHaveBeenCalledWith(wcB.id);
+      expect(onViewEvicted).not.toHaveBeenCalledWith(wcA.id);
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+        "projectview.eviction-skipped",
+        expect.objectContaining({
+          reason: "pressure",
+          forced: true,
+          protectedCount: 1,
+          protectedProjectIds: ["proj-a"],
+        })
+      );
+    });
+
+    it("never asks about, or keeps, a view whose renderer is already gone", async () => {
+      // The service can still name a dead surface until something reaps it. Asking
+      // before the destroyed guard would pin a dead entry over the cap indefinitely.
+      const asked = vi.fn(wouldEndNativeAssistant);
+      const managerWithLimit = makeManager(2, { wouldEndNativeAssistant: asked });
+      const wcA = registerA(managerWithLimit);
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      nativeEngineViews.add(wcA.id);
+      wcA.isDestroyed.mockReturnValue(true);
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).not.toContain("proj-a");
+      expect(evictedProjectIds()).toContain("proj-a");
+      expect(asked).not.toHaveBeenCalledWith(wcA.id);
     });
   });
 
@@ -2484,6 +2706,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     mockGetAppMetrics.mockReturnValue([]);
     assistantBackends.clear();
     liveTerminals.clear();
+    nativeEngineViews.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -3006,6 +3229,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     mockGetAppMetrics.mockReturnValue([]);
     assistantBackends.clear();
     liveTerminals.clear();
+    nativeEngineViews.clear();
     win = createMockWindow();
     manager = makeManager(3);
     manager.setMemoryPressurePolicy(BAND);

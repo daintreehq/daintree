@@ -81,6 +81,9 @@ import {
   setStopDiskSpaceMonitor,
   getMainProcessWatchdogClientRef,
 } from "./window/windowServices.js";
+// After windowServices on purpose: its IPC handlers already evaluate this module,
+// so importing it here adds no boot work and moves nothing in the init order.
+import { assistantHostService } from "./services/assistant-host/AssistantHostService.js";
 import { getMcpServerServiceRef, getResourceProfileService } from "./window/serviceRefs.js";
 import {
   setupPowerMonitor,
@@ -418,6 +421,11 @@ if (!gotTheLock) {
       // async, and a shard that times out comes back as an empty list, which
       // would read as "the assistant is gone" and unprotect a live one.
       isTerminalLive: (terminalId) => getPtyClient()?.hasTerminal(terminalId) === true,
+      // The native engine's half (#12364). It never binds a PTY, so the pair above
+      // cannot see it, and `onViewEvicted` below stops it outright. The service
+      // answers from the same rule its teardown applies, keyed by the view alone.
+      wouldEndNativeAssistant: (webContentsId) =>
+        assistantHostService.wouldEndLiveEngine(webContentsId),
       // Keeps a workspace an MCP session is bound to out of the freeze sweep,
       // and out of eviction entirely while a dispatch is in flight (#11790).
       // A bound session drives a *background* workspace by design, and a frozen
