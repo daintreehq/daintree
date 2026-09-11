@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Pencil } from "lucide-react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { resolveFileEditor } from "@/registry/fileEditorRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { FileEditorHintBar } from "@/components/FileViewer/FileEditorHintBar";
 
 interface FileEditorBannerProps {
   filePath: string;
@@ -66,26 +65,13 @@ export function FileEditorBanner({ filePath, content, onEdit }: FileEditorBanner
   };
 
   return (
-    <InlineStatusBanner
-      severity={error ? "error" : "warning"}
-      icon={Pencil}
-      title={
-        error
-          ? `Couldn't open ${meta.displayName}`
-          : `Edit this file with the ${meta.displayName} plugin`
-      }
-      description={error ?? undefined}
-      role="status"
-      ariaLive="polite"
-      animated={false}
-      action={{
-        id: "edit-file",
-        label: error ? "Retry" : disabled ? `Enable ${meta.displayName}` : "Start editing",
-        onClick: () => void edit(),
-        disabled: pending,
-      }}
-      onClose={() => setDismissed(true)}
-      closeAriaLabel="Dismiss editing tip"
+    <FileEditorHintBar
+      pluginName={meta.displayName}
+      state={disabled ? "disabled" : "ready"}
+      pending={pending}
+      error={error}
+      onAction={() => void edit()}
+      onDismiss={() => setDismissed(true)}
     />
   );
 }
