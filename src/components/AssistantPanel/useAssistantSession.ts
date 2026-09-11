@@ -148,6 +148,11 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
    * is still using, or the one this panel has just re-attached to.
    */
   const attachmentIdRef = useRef<string | null>(null);
+  /**
+   * The restart nonce the last start ran under. A start under a newer one is "+ New
+   * session" — the only start that declines the lane's recorded conversation.
+   */
+  const startedNonceRef = useRef(opts.restartNonce ?? 0);
   /** Non-null while a start is in flight, so stray frames can be told apart from noise. */
   const pendingSessionRef = useRef<number | null>(null);
   /** Frames that arrived before this hook learned its session id. */
@@ -347,6 +352,13 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       return;
     }
 
+    // A newer nonce is "+ New session", the one start that must not continue the lane's
+    // recorded conversation. Anything else re-running this effect — a remount, a moved
+    // folder, the lane armed again — picks it back up (#12365). Consumed only here, so a
+    // bump made while the lane was disabled still starts fresh when it next runs.
+    const fresh = restartNonce !== startedNonceRef.current;
+    startedNonceRef.current = restartNonce;
+
     const state = store.getState();
     state.reset(null);
     state.setConnection("starting", null);
@@ -355,7 +367,7 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
 
     safeFireAndForget(
       window.electron.assistantHost
-        .start({ projectId, cwd, slot })
+        .start({ projectId, cwd, slot, ...(fresh ? { fresh: true } : {}) })
         .then((started) => {
           const {
             sessionId,
@@ -427,11 +439,23 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
           }
           preAdoptionRef.current = new Map();
           pendingSessionRef.current = null;
-          // This panel joined a conversation already running elsewhere, and main's
-          // replay buffer no longer reaches its beginning. Say so: a transcript that
-          // silently starts in the middle reads as a conversation that began there, and
-          // the user would go looking for messages that are not missing at all.
-          if (replayTruncated) {
+          if (ready?.resumedSessionId) {
+            // The engine continued a conversation this panel never saw (#12365): the view
+            // that showed it was lost, and the transcript with it, while the conversation
+            // lived on in the engine's own database. It is in the assistant's context and
+            // nowhere on screen — say so, rather than show an empty panel the assistant
+            // then talks about as though it were not.
+            store
+              .getState()
+              .pushNotice(
+                "info",
+                "Picked up your previous conversation. Earlier messages aren't shown here."
+              );
+          } else if (replayTruncated) {
+            // This panel joined a conversation already running elsewhere, and main's
+            // replay buffer no longer reaches its beginning. Say so: a transcript that
+            // silently starts in the middle reads as a conversation that began there, and
+            // the user would go looking for messages that are not missing at all.
             store
               .getState()
               .pushNotice(
