@@ -77,7 +77,18 @@ vi.mock("../worktreeStore", async (importOriginal) => {
   };
 });
 
+vi.mock("@/utils/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/logger")>();
+  return {
+    ...actual,
+    logDebug: vi.fn(),
+    logInfo: vi.fn(),
+    logWarn: vi.fn(),
+  };
+});
+
 const { usePanelStore } = await import("../panelStore");
+const { logDebug, logInfo, logWarn } = await import("@/utils/logger");
 const { useWorktreeSelectionStore, persistMruList, suppressMruRecording } =
   await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
@@ -1363,6 +1374,214 @@ describe("rendererStoreOrchestrator", () => {
 
     // Worktree should NOT have been switched since orchestrator is destroyed
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+
+  describe("focus-follow breaker (#12370)", () => {
+    const panel = (id: string, worktreeId: string) => ({
+      id,
+      title: id,
+      kind: "terminal" as const,
+      cwd: "/test",
+      cols: 80,
+      rows: 24,
+      location: "grid" as const,
+      worktreeId,
+    });
+
+    function seedTwoWorktrees() {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-1" });
+      usePanelStore.setState({
+        panelsById: { "term-1": panel("term-1", "wt-1"), "term-2": panel("term-2", "wt-2") },
+        panelIds: ["term-1", "term-2"],
+        focusedId: "term-1",
+      });
+    }
+
+    // Two writers disagreeing about focus, as the incident's persisted state
+    // showed: focus alternates across the worktree boundary and each flip
+    // asks the orchestrator to follow. Returns the active id after each flip.
+    function pingPong(flips: number): Array<string | null> {
+      const seen: Array<string | null> = [];
+      for (let i = 0; i < flips; i++) {
+        usePanelStore.setState({ focusedId: i % 2 === 0 ? "term-2" : "term-1" });
+        seen.push(useWorktreeSelectionStore.getState().activeWorktreeId);
+      }
+      return seen;
+    }
+
+    // The first flip is a fresh hop and every flip after it revisits, so the
+    // ninth flip is the eighth revisit and trips. Flip 8 landed on wt-1, so
+    // once held the active worktree is wt-1 with focus parked on term-2 — a
+    // fresh attempt needs a same-worktree hop first; only the second write
+    // crosses the boundary.
+    function crossFlip() {
+      usePanelStore.setState({ focusedId: "term-1" });
+      usePanelStore.setState({ focusedId: "term-2" });
+    }
+
+    afterEach(() => {
+      // Dispose the timer owner while the clock it armed against is still the
+      // fake one, so cancellation is real rather than a clock swap.
+      destroyStoreOrchestrator();
+      vi.useRealTimers();
+    });
+
+    it("stops following focus once eight promotions in the window revisit worktrees already passed through", () => {
+      seedTwoWorktrees();
+
+      const seen = pingPong(11);
+
+      expect(seen.slice(0, 8)).toEqual([
+        "wt-2",
+        "wt-1",
+        "wt-2",
+        "wt-1",
+        "wt-2",
+        "wt-1",
+        "wt-2",
+        "wt-1",
+      ]);
+      // The ninth trips and is dropped. Flip 10 lands back inside the active
+      // worktree; flip 11 is a suppressed attempt.
+      expect(seen.slice(8)).toEqual(["wt-1", "wt-1", "wt-1"]);
+
+      expect(logWarn).toHaveBeenCalledTimes(1);
+      const [message, context] = vi.mocked(logWarn).mock.calls[0]!;
+      expect(message).toContain("breaker tripped");
+      // The warning carries the whole window — the A→B→A pattern plus the
+      // writer's stack for every hop — so an incident log is diagnosable
+      // without a live capture.
+      const hop = (from: string, to: string, revisit: boolean) =>
+        expect.objectContaining({ from, to, revisit, stack: expect.any(String) });
+      expect(context).toEqual(
+        expect.objectContaining({
+          from: "wt-1",
+          to: "wt-2",
+          panelId: "term-2",
+          promotions: [
+            hop("wt-1", "wt-2", false),
+            hop("wt-2", "wt-1", true),
+            hop("wt-1", "wt-2", true),
+            hop("wt-2", "wt-1", true),
+            hop("wt-1", "wt-2", true),
+            hop("wt-2", "wt-1", true),
+            hop("wt-1", "wt-2", true),
+            hop("wt-2", "wt-1", true),
+            hop("wt-1", "wt-2", true),
+          ],
+        })
+      );
+      expect(logDebug).toHaveBeenCalledWith(
+        expect.stringContaining("suppressed"),
+        expect.objectContaining({ from: "wt-1", to: "wt-2", suppressedCount: 1 })
+      );
+
+      // Focus-sourced switches never touch the durable selection or record a
+      // worktree MRU entry — the property that made the incident invisible in
+      // persisted state, and the property the breaker must preserve.
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-1");
+      expect(usePanelStore.getState().mruList.some((e) => e.startsWith("worktree:"))).toBe(false);
+    });
+
+    it("never trips on a one-way tour across many worktrees", () => {
+      // Cycling agents with the keyboard visits a fresh worktree every hop;
+      // nine cross-worktree promotions in a burst, and only the return to the
+      // first is a revisit.
+      const ids = Array.from({ length: 8 }, (_, i) => `wt-${i + 1}`);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(ids.map((id) => [`term-${id}`, panel(`term-${id}`, id)])),
+        panelIds: ids.map((id) => `term-${id}`),
+        focusedId: "term-wt-1",
+      });
+
+      for (const id of ids.slice(1)) {
+        usePanelStore.setState({ focusedId: `term-${id}` });
+        expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe(id);
+      }
+      usePanelStore.setState({ focusedId: "term-wt-1" });
+
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+      expect(logWarn).not.toHaveBeenCalled();
+    });
+
+    it("keeps holding while attempts keep arriving, even past the cooldown length", () => {
+      vi.useFakeTimers();
+      seedTwoWorktrees();
+      pingPong(9);
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+      vi.advanceTimersByTime(1_500);
+      crossFlip();
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+      // 3 s since the trip, but only 1.5 s since the last attempt.
+      vi.advanceTimersByTime(1_500);
+      crossFlip();
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+      expect(logInfo).not.toHaveBeenCalled();
+    });
+
+    it("catches the grid up to the parked focus once the writer has been quiet for the cooldown", () => {
+      vi.useFakeTimers();
+      seedTwoWorktrees();
+      // Nine flips trip the breaker; the eleventh is a suppressed attempt that
+      // leaves focus parked on term-2 while wt-1 stays active.
+      pingPong(11);
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+      // No further focus write: re-activating the parked panel is invisible to
+      // the subscription, so the release timer has to do this on its own.
+      vi.advanceTimersByTime(2_001);
+
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
+      expect(logInfo).toHaveBeenCalledWith(
+        expect.stringContaining("released"),
+        expect.objectContaining({ suppressedCount: 1 })
+      );
+    });
+
+    it("leaves the grid alone at release when focus is already back inside the active worktree", () => {
+      vi.useFakeTimers();
+      seedTwoWorktrees();
+      pingPong(9);
+      usePanelStore.setState({ focusedId: "term-1" });
+
+      vi.advanceTimersByTime(2_001);
+
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+      expect(logInfo).not.toHaveBeenCalled();
+    });
+
+    it("drops the release timer with the orchestrator", () => {
+      vi.useFakeTimers();
+      seedTwoWorktrees();
+      pingPong(9);
+      // Let the terminal-MRU persist debounce fire so the release timer is
+      // the only one left pending.
+      vi.advanceTimersByTime(1_000);
+      expect(vi.getTimerCount()).toBe(1);
+
+      destroyStoreOrchestrator();
+
+      // Cancelled outright, not merely neutered by the liveness flag.
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(3_000);
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+      expect(logInfo).not.toHaveBeenCalled();
+    });
+
+    it("starts each orchestrator lifetime with an open breaker", () => {
+      seedTwoWorktrees();
+      pingPong(9);
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+      destroyStoreOrchestrator();
+      initStoreOrchestrator();
+      crossFlip();
+
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
+    });
   });
 
   describe("availability → agent-settings sync (issue #5158)", () => {

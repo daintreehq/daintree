@@ -47,7 +47,10 @@ export interface WorktreePortProtocol {
     } & WorktreeEventVersion;
   };
   "set-active": {
-    payload: { worktreeId: string };
+    // `origin` is echoed back on the resulting `worktree-activated` event so
+    // the requesting view can skip the echo of a selection it already applied
+    // locally, while still applying host-originated activations (#12370).
+    payload: { worktreeId: string; origin?: string };
     result: { ok: true };
   };
   // Full-replacement set of worktree IDs that currently have an agent

@@ -30,6 +30,12 @@ import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
 import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
+import { logDebug } from "@/utils/logger";
+import {
+  RENDERER_ACTIVATION_ORIGIN,
+  latestActivationRequest,
+  markHostActivationApplied,
+} from "@/store/worktreeActivationOrigin";
 
 // How long the topology watcher may stay dark before we escalate from the
 // Tier-1 ambient pip to a Tier-3 low-priority inbox notification (#9908). The
@@ -135,6 +141,10 @@ function overlayVersion(current: WorktreeEventVersion): WorktreeEventVersion {
 interface WorktreeActivatedEvent {
   type: "worktree-activated";
   worktreeId: string;
+  epoch: string;
+  seq: number;
+  silent?: boolean;
+  origin?: string;
 }
 
 export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
@@ -621,9 +631,74 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // Activations are stamped from the same `(epoch, seq)` counter as the
+    // topology events but never advance the store's version — they carry no
+    // topology. They get their own high-water mark so a replayed or reordered
+    // activation cannot re-select a worktree this view has moved past.
+    let lastActivation: WorktreeEventVersion | null = null;
+    // This view's latest request at the moment a foreign activation was
+    // applied over it, with the selection generation right after that apply.
+    // Consumed by the own-echo branch below.
+    let displacedRequest: {
+      worktreeId: string;
+      durable: boolean;
+      generation: number;
+    } | null = null;
     cleanups.push(
       worktreePort.onEvent("worktree-activated", (data) => {
         const event = data as WorktreeActivatedEvent;
+        const version = { epoch: event.epoch, seq: event.seq };
+        if (lastActivation && compareVersion(version, lastActivation) < 0) {
+          logDebug("[WorktreeStore] worktree-activated ignored: stale", {
+            worktreeId: event.worktreeId,
+            ...version,
+          });
+          return;
+        }
+        lastActivation = version;
+        // The echo of this view's own `set-active`. The selection was applied
+        // locally before the request went out, and by the time the echo lands
+        // the view may already have moved on — re-selecting it here with the
+        // default "user" source is what turns two overlapping requests (A then
+        // B, echoed A then B) into a loop that persists and rewrites the MRU
+        // on every hop (#12370). Host-originated activations carry no origin.
+        if (event.origin === RENDERER_ACTIVATION_ORIGIN) {
+          // One exception: the ack of this view's latest request landing
+          // after another window's activation was applied over it, with no
+          // selection of any kind since (the generation check — a local pick
+          // in between, including a ghost row that sends nothing, wins). Two
+          // windows picking different worktrees in the same round trip would
+          // otherwise settle on different answers with nothing left in
+          // flight to reconcile them. This is a catch-up to what the host
+          // already holds, never a re-send: marked host-applied so the sync
+          // hook stays quiet, and made with the source the pick had.
+          const selection = useWorktreeSelectionStore.getState();
+          const displaced = displacedRequest;
+          if (
+            displaced &&
+            displaced.worktreeId === event.worktreeId &&
+            displaced.generation === selection._policyGeneration &&
+            selection.activeWorktreeId !== event.worktreeId &&
+            store.getState().worktrees.has(event.worktreeId)
+          ) {
+            displacedRequest = null;
+            logDebug("[WorktreeStore] worktree-activated re-applied: own request displaced", {
+              worktreeId: event.worktreeId,
+              durable: displaced.durable,
+              ...version,
+            });
+            markHostActivationApplied(event.worktreeId);
+            selection.selectWorktree(event.worktreeId, {
+              source: displaced.durable ? "user" : "focus",
+            });
+            return;
+          }
+          logDebug("[WorktreeStore] worktree-activated ignored: own echo", {
+            worktreeId: event.worktreeId,
+            ...version,
+          });
+          return;
+        }
         const selectionStore = useWorktreeSelectionStore.getState();
         // Skip the worktree-activated handler if the active id already
         // matches the event's id. The host's MessagePort echoes
@@ -659,11 +734,24 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             return;
           }
         }
+        logDebug("[WorktreeStore] worktree-activated applied", {
+          from: activeId,
+          to: event.worktreeId,
+          ...version,
+        });
+        // The host is the author of this selection; the sync hook must not
+        // send it back as a `set-active` of our own.
+        markHostActivationApplied(event.worktreeId);
         selectionStore.setPendingWorktree(event.worktreeId);
         selectionStore.selectWorktree(event.worktreeId);
         if (store.getState().worktrees.has(event.worktreeId)) {
           selectionStore.applyPendingWorktreeSelection(event.worktreeId);
         }
+        const latest = latestActivationRequest();
+        displacedRequest =
+          latest && latest.worktreeId !== event.worktreeId
+            ? { ...latest, generation: useWorktreeSelectionStore.getState()._policyGeneration }
+            : null;
       })
     );
 
