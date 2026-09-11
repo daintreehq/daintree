@@ -133,6 +133,7 @@ const { AssistantHostService } = await import("../AssistantHostService.js");
 const { NativeAssistantResumeStore, __resetNativeAssistantResumeStoreForTests } = await import(
   "../NativeAssistantResumeStore.js"
 );
+const { CHANNELS } = await import("../../../ipc/channels.js");
 
 const PROJECT = "p1";
 const CWD = "/tmp/project";
@@ -249,6 +250,9 @@ describe("a project open on more than one surface", () => {
     // answers and cannot act. They get an ordinary exit instead.
     service.stopByWebContents(10);
     expect(hosts[0]?.disposed).toBe(true);
+    // …and told so now. The process's own exit arrives after the session is deregistered,
+    // and would reach only the surface that left.
+    expect(deliveriesTo(11).map((d) => d.channel)).toEqual([CHANNELS.ASSISTANT_HOST_EXIT]);
   });
 
   it("ignores a stale detach that names a superseded attachment", async () => {

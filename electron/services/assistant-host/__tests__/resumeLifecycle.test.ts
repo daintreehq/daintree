@@ -132,6 +132,7 @@ const { CHANNELS } = await import("../../../ipc/channels.js");
 
 const VIEW = { projectId: "p1", cwd: "/tmp/p1", webContentsId: 7, windowId: 1 };
 const OTHER_WINDOW = { ...VIEW, webContentsId: 8, windowId: 2 };
+const FOREIGN_VIEW = { ...VIEW, webContentsId: 9, windowId: 3, recordable: false };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The engine opens a turn — the moment a lane has a conversation worth continuing. */
@@ -166,6 +167,7 @@ describe("native assistant resume lifecycle", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     // Writes the service queued are drained before their directory goes.
     await store.flush();
     __resetNativeAssistantResumeStoreForTests();
@@ -204,15 +206,19 @@ describe("native assistant resume lifecycle", () => {
     expect(await service.listResumable("p1")).toEqual([]);
   });
 
-  it("records a conversation from the prompt that begins it", async () => {
+  it("waits for the engine to report a turn rather than counting a prompt it may refuse", async () => {
     const service = new AssistantHostService();
     const first = await service.start(VIEW);
-    expect(recorded()).toBeNull();
 
     service.send(
       { type: "prompt", sessionId: first.sessionId, text: "hello" } as never,
       VIEW.webContentsId
     );
+    // Taken by the pipe is not taken by the engine: a prompt refused as busy stores
+    // nothing, and a lane restored for it would announce a conversation that never began.
+    expect(recorded()).toBeNull();
+
+    speak(hosts[0]!);
     expect(recorded()).toBe(first.sessionId);
   });
 
@@ -324,6 +330,23 @@ describe("native assistant resume lifecycle", () => {
     expect(recorded(0)).toBeNull();
   });
 
+  it("starts a new engine rather than joining one whose conversation was discarded", async () => {
+    const service = new AssistantHostService();
+    await service.start(VIEW);
+    speak(hosts[0]!);
+    expect(await service.discardResume("p1", 0, VIEW.webContentsId)).toBe(true);
+
+    // Armed again before Stop's own detach landed, while the discarded engine is still up.
+    // Joining it would carry on the conversation Stop ended, and never record it again.
+    const again = await service.start(VIEW);
+    expect(hosts).toHaveLength(2);
+    expect(hosts[0]!.disposed).toBe(true);
+    expect(hosts[1]!.descriptor).not.toHaveProperty("resumeSessionId");
+
+    speak(hosts[1]!);
+    expect(recorded()).toBe(again.sessionId);
+  });
+
   it("refuses to discard a conversation another window is still having", async () => {
     const service = new AssistantHostService();
     const first = await service.start(VIEW);
@@ -342,11 +365,25 @@ describe("native assistant resume lifecycle", () => {
     speak(hosts[0]!);
     service.stopByWebContents(VIEW.webContentsId);
 
-    await service.start({ ...VIEW, webContentsId: 9, windowId: 3, recordable: false, fresh: true });
+    await service.start({ ...FOREIGN_VIEW, fresh: true });
     expect(hosts[1]!.descriptor).not.toHaveProperty("resumeSessionId");
     speak(hosts[1]!);
 
     expect(recorded()).toBe(first.sessionId);
+  });
+
+  it("makes a foreign view's engine the lane's conversation once the workspace joins it", async () => {
+    const service = new AssistantHostService();
+    const foreign = await service.start(FOREIGN_VIEW);
+    speak(hosts[0]!);
+    expect(recorded()).toBeNull();
+
+    // The workspace's own view is now having this conversation. Left unrecorded, its next
+    // eviction would lose it.
+    await service.start(VIEW);
+    expect(hosts).toHaveLength(1);
+    speak(hosts[0]!);
+    expect(recorded()).toBe(foreign.sessionId);
   });
 
   it("remembers whether the panel was open only when the engine went down with its view", async () => {
@@ -385,5 +422,37 @@ describe("native assistant resume lifecycle", () => {
 
     await service.shutdown(10);
     expect(recorded()).toBe(first.sessionId);
+  });
+
+  it("waits at quit for a conversation still on its way to disk", async () => {
+    let release!: () => void;
+    vi.spyOn(store, "flush").mockReturnValue(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      })
+    );
+    const service = new AssistantHostService();
+    await service.start(VIEW);
+
+    let settled = false;
+    const done = service.shutdown(5_000).then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    release();
+    await done;
+    expect(settled).toBe(true);
+  });
+
+  it("does not let a stuck write hold quit past its budget", async () => {
+    vi.spyOn(store, "flush").mockReturnValue(new Promise<void>(() => {}));
+    const service = new AssistantHostService();
+    await service.start(VIEW);
+
+    // Resolves at all: a write that never lands costs one conversation its continuity, not
+    // the whole quit.
+    await service.shutdown(20);
   });
 });

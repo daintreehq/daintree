@@ -59,6 +59,7 @@ import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { DAINTREE_ASSISTANT_AGENT_ID } from "@shared/config/agentRegistry";
+import type { AssistantHostResumableLane } from "@shared/types/ipc/assistantHostIpc";
 import { assistantPlatformSupport } from "@shared/config/assistantPlatform";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -355,23 +356,32 @@ export function HelpPanel({
   const [nativeSessionNonceBySlot, setNativeSessionNonceBySlot] = useState<Record<number, number>>(
     {}
   );
-  // Lanes main holds a conversation for, restored by this view and not yet shown, by the
-  // workspace they belong to (#12365). Until such a lane starts its store is empty — no
-  // turns, nothing resumed — so without this a restored conversation could be stopped or
-  // closed on one silent click.
-  const [savedNativeLaneBySlot, setSavedNativeLaneBySlot] = useState<Record<number, string>>({});
+  // The native lanes main holds a conversation for, as it last answered for a workspace
+  // (#12365). Read each time a workspace becomes active, not only on a cold view: it is what
+  // says a lane has something to lose before its engine has started — its store is empty
+  // until then, and a same-renderer switch released it — so a stale answer would let Stop
+  // or a close forget a conversation on one silent click.
+  const [resumableLanes, setResumableLanes] = useState<{
+    workspaceId: string;
+    lanes: AssistantHostResumableLane[];
+  } | null>(null);
+  // Counts only until the lane adopts a session. From then its own store — turns, a resumed
+  // conversation, live state — is the answer, and main may have replaced the conversation
+  // since it was listed.
   const laneHasSavedConversation = useCallback(
     (slot: number) =>
-      activeWorkspaceId !== null && savedNativeLaneBySlot[slot] === activeWorkspaceId,
-    [activeWorkspaceId, savedNativeLaneBySlot]
+      resumableLanes !== null &&
+      resumableLanes.workspaceId === activeWorkspaceId &&
+      resumableLanes.lanes.some((lane) => lane.slot === slot) &&
+      assistantStoreForSlot(slot).getState().sessionId === null,
+    [resumableLanes, activeWorkspaceId]
   );
   const forgetSavedNativeLane = useCallback((slot: number) => {
-    setSavedNativeLaneBySlot((prev) => {
-      if (!(slot in prev)) return prev;
-      const next = { ...prev };
-      delete next[slot];
-      return next;
-    });
+    setResumableLanes((prev) =>
+      prev?.lanes.some((lane) => lane.slot === slot)
+        ? { ...prev, lanes: prev.lanes.filter((lane) => lane.slot !== slot) }
+        : prev
+    );
   }, []);
   /**
    * The Daintree Assistant renders NATIVELY; every other help agent keeps the xterm pane.
@@ -1452,32 +1462,32 @@ export function HelpPanel({
   // lane, and main hands it its conversation. Lanes nobody selects start nothing.
   //
   // The native half of the restore above, under the same conditions: once per workspace,
-  // and only while the view is genuinely cold, so it never fights the user's own tabs.
-  const restoredNativeWorkspaceRef = useRef<string | null>(null);
+  // and only while the view is genuinely cold, so it never fights the user's own tabs. It
+  // reads the listing below rather than asking again.
+  const restoredNativeWorkspacesRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!activeWorkspaceId || restoredNativeWorkspaceRef.current === activeWorkspaceId) return;
-    if (!useNativeAssistant) return;
+    if (!activeWorkspaceId || resumableLanes?.workspaceId !== activeWorkspaceId) return;
+    if (restoredNativeWorkspacesRef.current.has(activeWorkspaceId)) return;
+    restoredNativeWorkspacesRef.current.add(activeWorkspaceId);
     if (openSlots.length > 1 || terminalId) return;
+    const store = useHelpPanelStore.getState();
+    for (const { slot } of resumableLanes.lanes) store.ensureSlot(slot);
+    const reopen = resumableLanes.lanes.find((lane) => lane.panelWasOpen);
+    if (!reopen || store.isOpen) return;
+    store.setActiveSlot(reopen.slot);
+    setOpen(true);
+  }, [resumableLanes, activeWorkspaceId, openSlots.length, terminalId, setOpen]);
+
+  // Ask main which of this workspace's native lanes hold a conversation, each time the
+  // workspace becomes active (#12365). See `resumableLanes`.
+  useEffect(() => {
+    if (!activeWorkspaceId || !useNativeAssistant) return;
     const listing = window.electron.assistantHost.listResumable?.(activeWorkspaceId);
     if (!listing) return;
     let cancelled = false;
     void listing
       .then((lanes) => {
-        if (cancelled || restoredNativeWorkspaceRef.current === activeWorkspaceId) return;
-        restoredNativeWorkspaceRef.current = activeWorkspaceId;
-        const store = useHelpPanelStore.getState();
-        for (const { slot } of lanes) store.ensureSlot(slot);
-        if (lanes.length > 0) {
-          setSavedNativeLaneBySlot((prev) => {
-            const next = { ...prev };
-            for (const { slot } of lanes) next[slot] = activeWorkspaceId;
-            return next;
-          });
-        }
-        const reopen = lanes.find((lane) => lane.panelWasOpen);
-        if (!reopen || store.isOpen) return;
-        store.setActiveSlot(reopen.slot);
-        setOpen(true);
+        if (!cancelled) setResumableLanes({ workspaceId: activeWorkspaceId, lanes });
       })
       .catch((err) => {
         logWarn("HelpPanel: failed to list resumable native lanes", err);
@@ -1485,7 +1495,7 @@ export function HelpPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, openSlots.length, terminalId, useNativeAssistant, setOpen]);
+  }, [activeWorkspaceId, useNativeAssistant]);
 
   const handleOpenParallelSession = useCallback(() => {
     const slot = useHelpPanelStore.getState().openSlot();
