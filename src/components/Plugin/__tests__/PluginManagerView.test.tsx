@@ -780,6 +780,36 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText(/HTTP 500/)).toBeTruthy());
   });
 
+  const surfaceUpdateCheckError = async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([urlPlugin()]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "fetch-failed",
+      message: "HTTP 500",
+    });
+    renderDialog();
+    await selectPlugin();
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText(/HTTP 500/)).toBeTruthy());
+  };
+
+  it("opens the uninstall confirm without an earlier, unrelated error", async () => {
+    await surfaceUpdateCheckError();
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/HTTP 500/)).toBeNull();
+  });
+
+  it("opens the URL dialog without an earlier, unrelated error", async () => {
+    await surfaceUpdateCheckError();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/HTTP 500/)).toBeNull();
+  });
+
   it("opens the URL dialog and routes the URL through installFromUrl", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());

@@ -99,7 +99,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [deleteSettings, setDeleteSettings] = useState(false);
   const [isUninstalling, setIsUninstalling] = useState(false);
 
+  // The uninstall confirm and the URL dialog render the shared error inline as
+  // an alert, so opening either must drop an unrelated earlier failure rather
+  // than announce it as if the dialog's own action had failed.
   const armUninstall = (plugin: LoadedPluginInfo) => {
+    setError(null);
     setDeleteSettings(false);
     setPendingUninstall(plugin);
   };
@@ -111,6 +115,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [isInstalling, setIsInstalling] = useState(false);
+  const openUrlDialog = useCallback(() => {
+    setError(null);
+    setShowUrlDialog(true);
+  }, []);
   // `daintree://plugin/open` target — the dialog scrolls to and highlights the
   // matching row, then clears it. Held in a ref for the consumption effect so
   // `onConsumed` isn't a reactive dependency that re-fires the effect.
@@ -325,13 +333,13 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         // deep link is the one path that can open this one over the other.
         setPendingUninstall(null);
         setUrlInput(deepLinkIntent.url);
-        setShowUrlDialog(true);
+        openUrlDialog();
       }
     } else {
       setFocusPluginId(deepLinkIntent.pluginId);
     }
     deepLinkConsumedRef.current?.();
-  }, [isOpen, deepLinkIntent]);
+  }, [isOpen, deepLinkIntent, openUrlDialog]);
 
   // A `daintree://plugin/open` for a plugin that isn't installed gets a quiet
   // inline notice rather than a silent no-op. Waits for the list to settle so a
@@ -869,7 +877,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     closeUninstall,
     confirmUninstall,
     showUrlDialog,
-    setShowUrlDialog,
+    openUrlDialog,
     closeUrlDialog,
     urlInput,
     setUrlInput,

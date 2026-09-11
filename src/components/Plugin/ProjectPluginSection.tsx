@@ -156,7 +156,7 @@ export function ProjectPluginSection({
           drops under Chromium 146 + VoiceOver (LESSON #9006). */}
       <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
         This project{" "}
-        <span className="ml-1.5 normal-case tracking-normal text-text-placeholder">
+        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
           {plugins.length}
         </span>
       </h3>

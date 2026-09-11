@@ -729,7 +729,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 <FilePlus />
                 Install from file
               </Button>
-              <Button variant="outline" size="sm" onClick={() => pm.setShowUrlDialog(true)}>
+              <Button variant="outline" size="sm" onClick={pm.openUrlDialog}>
                 <Link2 />
                 Install from URL
               </Button>
