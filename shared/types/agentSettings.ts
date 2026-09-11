@@ -1140,7 +1140,9 @@ export function supportsSessionIdAssignment(agentId: string | undefined): boolea
  * Always mint per launch — never reuse a persisted id here. Re-assigning an
  * existing id is rejected by the CLI ("Session ID <id> is already in use"),
  * which would take down the launch, so a duplicated pane and a restore that
- * falls through to a fresh start each need their own new id.
+ * falls through to a fresh start each need their own new id. The one exception
+ * is an id the CLI never wrote a conversation for, which it accepts again — see
+ * {@link relaunchResumeAsAssignedSession}.
  */
 export function mintAssignedSessionId(agentId: string | undefined): string | undefined {
   return supportsSessionIdAssignment(agentId) ? crypto.randomUUID() : undefined;
@@ -1161,7 +1163,7 @@ const SESSION_ID_SLOT = " daintree-session-id-slot ";
  * `'\''` for every apostrophe: read without them, that sequence leaves the
  * quote state inverted and splits an ordinary prompt like `don't` mid-word.
  */
-function splitShellWords(command: string): string[] {
+function scanShellWords(command: string): { words: string[]; unterminated: boolean } {
   const words: string[] = [];
   let current = "";
   let started = false;
@@ -1204,7 +1206,11 @@ function splitShellWords(command: string): string[] {
     started = true;
   }
   if (started) words.push(current);
-  return words;
+  return { words, unterminated: quote !== null };
+}
+
+function splitShellWords(command: string): string[] {
+  return scanShellWords(command).words;
 }
 
 /** Does one command word fill this slot of the agent's assigning-arg shape? */
@@ -1253,6 +1259,91 @@ export function stripAssignedSessionIdArgs(command: string, agentId: string | un
     }
   }
   return command;
+}
+
+const ASSIGNABLE_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Drop one layer of matching quotes, the kind `escapeShellArg` wraps a word in. */
+function unquoteShellWord(word: string): string {
+  const quote = word[0];
+  if (word.length >= 2 && (quote === "'" || quote === '"') && word.endsWith(quote)) {
+    return word.slice(1, -1);
+  }
+  return word;
+}
+
+export interface AssignedSessionRelaunch {
+  /** The id the command was resuming. */
+  sessionId: string;
+  /** The same command, assigning that id to a new conversation instead. */
+  command: string;
+}
+
+/**
+ * Rewrites an exact-id resume into an assignment of that same id (#12371).
+ *
+ * An agent that takes its id at launch only writes the conversation once the
+ * user sends something, so a pane nobody typed into leaves an id `--resume`
+ * can't find. The CLI still accepts that id for a NEW conversation — the "already
+ * in use" rejection {@link mintAssignedSessionId} warns about only applies once a
+ * conversation exists — so the pane can come back as a working fresh session
+ * under the id the rest of the app already has on record. Proving no
+ * conversation exists is the caller's job; this only reshapes the command.
+ *
+ * Matches the agent's own resume args on shell words, like
+ * {@link stripAssignedSessionIdArgs}, so a prompt that merely mentions the flag
+ * is left alone. Only a UUID qualifies, since the CLI assigns nothing else.
+ *
+ * Returns `undefined` when the agent can't assign ids or the command resumes no
+ * such id.
+ */
+export function relaunchResumeAsAssignedSession(
+  command: string,
+  agentId: string | undefined
+): AssignedSessionRelaunch | undefined {
+  if (!command || !agentId || !supportsSessionIdAssignment(agentId)) return undefined;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (resume?.kind !== "session-id") return undefined;
+  const shape = resume.args(SESSION_ID_SLOT);
+  const slotOffset = shape.findIndex((token) => token.includes(SESSION_ID_SLOT));
+  if (slotOffset === -1) return undefined;
+  const [prefix = "", suffix = ""] = (shape[slotOffset] ?? "").split(SESSION_ID_SLOT);
+
+  const { words, unterminated } = scanShellWords(command);
+  // A quote left open reads differently in a POSIX shell, where a backslash can
+  // escape it, than in PowerShell, where it can't. There is no telling which
+  // words are real arguments then, so nothing is rewritten.
+  if (unterminated) return undefined;
+  const matchesAt = (tokens: readonly string[], at: number): boolean =>
+    tokens.length > 0 &&
+    tokens.every((token, offset) => shapeWordMatches(token, words[at + offset] ?? ""));
+
+  // One unambiguous selector or nothing. A second resume, an id already being
+  // assigned, or a resume-latest flag each mean the CLI picks the conversation
+  // some other way, and swapping one flag would leave it contradicting the rest.
+  const resumeAt = words.flatMap((_, at) => (matchesAt(shape, at) ? [at] : []));
+  const [at] = resumeAt;
+  if (at === undefined || resumeAt.length > 1) return undefined;
+  const assignShape = resume.assignSessionIdArgs?.(SESSION_ID_SLOT) ?? [];
+  const latestShape = resume.resumeLatestArgs ?? [];
+  if (words.some((_, i) => matchesAt(assignShape, i) || matchesAt(latestShape, i))) {
+    return undefined;
+  }
+
+  const slotWord = words[at + slotOffset] ?? "";
+  const sessionId = unquoteShellWord(
+    slotWord.slice(prefix.length, slotWord.length - suffix.length)
+  );
+  if (!ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId)) return undefined;
+  const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
+  if (!assigning?.length) return undefined;
+  words.splice(
+    at,
+    shape.length,
+    ...assigning.map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)))
+  );
+  return { sessionId, command: words.join(" ") };
 }
 
 export interface BuildLaunchCommandFromFlagsOptions {

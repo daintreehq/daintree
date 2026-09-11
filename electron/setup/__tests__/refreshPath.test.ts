@@ -691,3 +691,77 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
     }
   });
 });
+
+describe("refreshPath shell observation (#12371)", () => {
+  const savedShell = process.env.SHELL;
+
+  beforeEach(() => {
+    vi.resetModules();
+    savedPath = process.env.PATH;
+    vi.clearAllMocks();
+    delete process.env.DAINTREE_SHELL_PROBE;
+    process.env.SHELL = "/bin/zsh";
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+  });
+
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    if (savedShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = savedShell;
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+  });
+
+  it("keeps what the named login shell exports for Claude's store, and nothing else", async () => {
+    shellEnvMock.mockResolvedValue({
+      PATH: "/usr/bin:/bin",
+      CLAUDE_CONFIG_DIR: "/custom/claude",
+      UNRELATED_SECRET: "never kept",
+    });
+    const { refreshPath } = await import("../environment.js");
+    const { getShellEnvironmentObservation } = await import("../shellEnvironmentObservation.js");
+    expect(getShellEnvironmentObservation()).toBeUndefined();
+
+    await refreshPath();
+
+    expect(shellEnvMock).toHaveBeenCalledWith("/bin/zsh");
+    expect(getShellEnvironmentObservation()).toEqual({
+      shell: "/bin/zsh",
+      env: { CLAUDE_CONFIG_DIR: "/custom/claude" },
+    });
+  });
+
+  it("records a probed shell that leaves the store unset", async () => {
+    shellEnvMock.mockResolvedValue({ PATH: "/usr/bin:/bin" });
+    const { refreshPath } = await import("../environment.js");
+    const { getShellEnvironmentObservation } = await import("../shellEnvironmentObservation.js");
+
+    await refreshPath();
+
+    expect(getShellEnvironmentObservation()).toEqual({ shell: "/bin/zsh", env: {} });
+  });
+
+  it("observes nothing when the named shell fails, though PATH still comes from the fallback", async () => {
+    shellEnvMock
+      .mockRejectedValueOnce(new Error("broken .zshrc"))
+      .mockResolvedValueOnce({ PATH: "/from/fallback", CLAUDE_CONFIG_DIR: "/other/claude" });
+    const { refreshPath } = await import("../environment.js");
+    const { getShellEnvironmentObservation } = await import("../shellEnvironmentObservation.js");
+
+    await refreshPath();
+
+    expect(shellEnvMock).toHaveBeenLastCalledWith();
+    expect(process.env.PATH).toBe("/from/fallback");
+    expect(getShellEnvironmentObservation()).toBeUndefined();
+  });
+
+  it("observes nothing without a named shell to probe", async () => {
+    delete process.env.SHELL;
+    shellEnvMock.mockResolvedValue({ PATH: "/usr/bin:/bin", CLAUDE_CONFIG_DIR: "/custom/claude" });
+    const { refreshPath } = await import("../environment.js");
+    const { getShellEnvironmentObservation } = await import("../shellEnvironmentObservation.js");
+
+    await refreshPath();
+
+    expect(getShellEnvironmentObservation()).toBeUndefined();
+  });
+});

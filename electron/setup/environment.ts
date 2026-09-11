@@ -31,6 +31,7 @@ import {
 } from "./windowsPath.js";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 import { getMaxWebGLContextCeiling } from "../utils/webglContextBudget.js";
+import { recordShellEnvironment } from "./shellEnvironmentObservation.js";
 // Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
 // the service here would evaluate its logger/telemetry/store import chain at
 // module load, before this file's body re-paths userData for dev instances.
@@ -493,10 +494,21 @@ async function runRefreshPath(): Promise<void> {
         } else {
           try {
             const { shellEnv } = (await import("shell-env")) as {
-              shellEnv: () => Promise<Record<string, string>>;
+              shellEnv: (shell?: string) => Promise<Record<string, string>>;
             };
-            const env = await shellEnv();
+            // The shell is named first because only a named shell fails loudly.
+            // Left to choose, shell-env quietly tries other shells and then hands
+            // back this process's own environment: fine for PATH, but it says
+            // nothing about what a terminal's shell exports (#12371).
+            const probeShell = process.env.SHELL || undefined;
+            let env = probeShell ? await shellEnv(probeShell).catch(() => undefined) : undefined;
             if (timedOut) return;
+            if (env && probeShell) {
+              recordShellEnvironment(probeShell, env);
+            } else {
+              env = await shellEnv();
+              if (timedOut) return;
+            }
             if (env.PATH) {
               process.env.PATH = deduplicatePath(env.PATH, false);
             }
