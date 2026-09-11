@@ -296,6 +296,21 @@ describe("ProjectAgentToolsSection", () => {
     expect(switchFor("Household ledger").getAttribute("aria-checked")).toBe("true");
   });
 
+  it("flags a failed refresh over rows it can no longer vouch for", async () => {
+    agentMcpApi.listProjectEndpoints.mockResolvedValueOnce(snapshot([endpoint()]));
+    render(<ProjectAgentToolsSection />);
+    await screen.findByTestId("project-agent-tool-row");
+
+    agentMcpApi.listProjectEndpoints.mockRejectedValueOnce(new Error("offline"));
+    act(() => provenanceListener?.());
+    expect((await screen.findByRole("alert")).textContent).toContain("out of date");
+    expect(screen.getByTestId("project-agent-tool-row")).toBeTruthy();
+
+    agentMcpApi.listProjectEndpoints.mockResolvedValueOnce(snapshot([endpoint()]));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
   it("offers a retry when the first read fails", async () => {
     agentMcpApi.listProjectEndpoints.mockRejectedValueOnce(new Error("offline"));
     render(<ProjectAgentToolsSection />);

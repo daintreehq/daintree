@@ -20,7 +20,7 @@ Amounts are integer cents, negative for money out. Each row carries a separate `
 
 ## Turning it on
 
-The endpoint is off until you enable it for the project. Trusting the project's plugins is not enough: exposing an endpoint to agents is a separate per-project decision, stored in Daintree's own settings and never in the repository. Once it is on, a Claude agent launched in that project gets the endpoint through the MCP config file Daintree writes for the launch (with its own credential for that terminal), and sees the three tools as `mcp__daintree-acme_ledger-data__<tool>` (the server key gains a hash suffix if it would collide with another enabled endpoint, such as an installed copy of the same plugin). Turning it off revokes live credentials immediately. Daintree's MCP HTTP listener must be enabled, and only Claude launches are wired today.
+The endpoint is off until you turn it on in **Project settings → Plugins → Agent tools**. Trusting the project's plugins is not enough: exposing an endpoint to agents is a separate per-project decision, stored in Daintree's own settings and never in the repository. Once it is on, a Claude agent launched in that project gets the endpoint through the MCP config file Daintree writes for the launch (with its own credential for that terminal), and sees the three tools as `mcp__daintree-acme_ledger-data__<tool>` (the server key gains a hash suffix if it would collide with another enabled endpoint, such as an installed copy of the same plugin). Turning it off revokes live credentials immediately. Daintree's MCP HTTP listener must be enabled, and only Claude launches are wired today.
 
 ## What the plugin does for itself
 
@@ -48,4 +48,4 @@ Whether `ledger.db` is committed is the project's call. The plugin sets SQLite's
 
 At most 8 tools per endpoint, names matching `^[a-z][a-z0-9_]{0,31}$`, descriptions up to 400 bytes, schemas that are plain `{ "type": "object" }` objects up to 8 KiB, results up to 256 KiB of JSON, and 60 seconds per call. The host rejects a roster that breaks any of these whole.
 
-`engines.daintree` is `>=0.37.0`, the first release carrying `agentMcp`. A development build still versioned 0.36.x refuses the manifest until you lower it locally.
+`engines.daintree` is `>=0.36.1` so development builds of this branch load it; a release without `agentMcp` rejects the manifest at the schema gate regardless of the range.

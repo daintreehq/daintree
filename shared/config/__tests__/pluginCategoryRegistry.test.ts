@@ -96,6 +96,10 @@ describe("pluginCategoryRegistry", () => {
       const withMcp = makeManifest();
       withMcp.contributes.mcpServers = [{ id: "srv" } as never];
       expect(resolvePluginCategory(withMcp)).toBe("ai");
+
+      const withAgentMcp = makeManifest();
+      withAgentMcp.contributes.agentMcp = [{ id: "data" } as never];
+      expect(resolvePluginCategory(withAgentMcp)).toBe("ai");
     });
 
     it("derives workspace from panel or view contributions", () => {

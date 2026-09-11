@@ -119,14 +119,15 @@ export function ProjectAgentToolsSection() {
     } catch (err) {
       logError("Failed to change plugin agent tool access", err);
       setFailed({ endpoint, enabled });
-    } finally {
-      writesInFlight.current -= 1;
-      setPending((prev) => {
-        const out = new Set(prev);
-        out.delete(key);
-        return out;
-      });
     }
+    // After the try/catch rather than in a `finally`: neither branch leaves
+    // early, and the React Compiler bails out on a `finally` block.
+    writesInFlight.current -= 1;
+    setPending((prev) => {
+      const out = new Set(prev);
+      out.delete(key);
+      return out;
+    });
     // Overlapping writes can answer out of order, and a failed one may mean the
     // plugin went away underneath the click. Once the last write settles, one
     // fresh read is the truth.
@@ -140,7 +141,9 @@ export function ProjectAgentToolsSection() {
     if (failed !== null) void setEnabled(failed.endpoint, failed.enabled);
   };
 
-  if (snapshot === null && loadFailed) {
+  // With nothing on screen yet — or an earlier answer that had nothing to show —
+  // a failed read is the whole section, so say so rather than render nothing.
+  if (loadFailed && (snapshot === null || snapshot.endpoints.length === 0)) {
     return (
       <div
         className="space-y-2 pt-1 border-t border-border-default"
@@ -177,6 +180,16 @@ export function ProjectAgentToolsSection() {
           Agents reach these tools through Daintree&apos;s MCP server, which is off. Turn it on in
           Settings → MCP Server.
         </p>
+      )}
+      {loadFailed && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <p role="alert" className="text-xs text-status-error">
+            Couldn&apos;t refresh this list, so it may be out of date.
+          </p>
+          <Button variant="ghost" size="sm" onClick={refresh}>
+            Retry
+          </Button>
+        </div>
       )}
       {failed !== null && (
         <div className="flex items-center gap-2 flex-wrap">

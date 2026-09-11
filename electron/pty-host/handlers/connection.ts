@@ -1,6 +1,10 @@
 import type { MessagePort } from "node:worker_threads";
 import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
-import { POOL_ENV_EMPTY_HASH, computePoolEnvHash } from "../../services/pty/ptyPoolEnvHash.js";
+import {
+  POOL_ENV_EMPTY_HASH,
+  carriesPoolStrippedEnv,
+  computePoolEnvHash,
+} from "../../services/pty/ptyPoolEnvHash.js";
 import { markPerformance } from "../../utils/performance.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
@@ -393,6 +397,10 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             // entries are tagged with the current epoch and survive (#9774).
             // warmForKey is idempotent, per-key capacity-capped, and circuit-
             // broken, so stale/deleted worktree paths self-limit.
+            // A project env carrying a secret-named variable makes every
+            // launch that uses it pool-ineligible (`carriesPoolStrippedEnv`),
+            // so shells warmed for its key would never be taken.
+            if (carriesPoolStrippedEnv(msg.projectEnv ?? undefined)) return;
             for (const cwd of panelCwds) {
               pool.warmForKey(cwd, warmCallerEnv, projectEnvHash);
             }

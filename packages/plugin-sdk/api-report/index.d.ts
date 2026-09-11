@@ -2012,7 +2012,7 @@ interface McpServerContribution {
  */
 interface PluginAgentMcpContribution {
     id: string;
-    /** Shown in the per-project enablement UI and used as the agent-side server name's label. */
+    /** Shown in the per-project enablement UI. Agents never see it; their server key derives from the ids. */
     name: string;
     description?: string;
     /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */

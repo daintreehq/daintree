@@ -285,6 +285,27 @@ describe("acme.ledger — tool calls round-trip through the project's database",
   });
 });
 
+describe("acme.ledger — row ids past 2^53", () => {
+  it("returns the row it just inserted, not a neighbour the id rounded onto", async () => {
+    const { call, dispose } = await activated();
+    await call("summarize_by_category");
+    const external = new DatabaseSync(ledgerFile());
+    external
+      .prepare("INSERT INTO transactions (id, date, amount_cents, category) VALUES (?, ?, ?, ?)")
+      .run(9007199254740992n, "2026-01-01", -1, "external");
+    external.close();
+
+    const result = await call("add_transaction", {
+      date: "2026-09-01",
+      amount_cents: 200,
+      category: "mine",
+    });
+    expect(result.transaction).toMatchObject({ category: "mine", amount_cents: 200 });
+    expect(result.transaction.id).toBe("9007199254740993");
+    dispose();
+  });
+});
+
 describe("acme.ledger — argument validation is the plugin's job", () => {
   it.each([
     ["add_transaction", { amount_cents: -1, category: "misc" }, /date is required/],

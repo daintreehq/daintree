@@ -415,11 +415,13 @@ export async function activate(host) {
     // host can give up on the call while the row is being committed and
     // discard the success. The description tells the agent to list first.
     signal.throwIfAborted();
-    const { lastInsertRowid } = db
-      .prepare(
-        "INSERT INTO transactions (date, amount_cents, category, memo, recorded_at, recorded_terminal_id, recorded_agent_hint) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      )
-      .run(
+    const insert = db.prepare(
+      "INSERT INTO transactions (date, amount_cents, category, memo, recorded_at, recorded_terminal_id, recorded_agent_hint) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    );
+    // BigInt, so a row id past 2^53 — another writer can put one there — is
+    // not rounded onto a neighbouring row when it is read back below.
+    insert.setReadBigInts(true);
+    const { lastInsertRowid } = insert.run(
         date,
         amount,
         category,

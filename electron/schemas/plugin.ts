@@ -1306,7 +1306,7 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
   ],
   [
     "mcpServers",
-    "contributed MCP servers are reachable through the app-global plugin-MCP surface, where an external agent session carries no project binding to check the contribution against.",
+    "contributed MCP servers run under one app-wide supervisor whose tools Daintree and its in-app Assistant call with no project binding to check the contribution against. To serve tools to this project's agents, declare contributes.agentMcp instead.",
   ],
 ] as const satisfies ReadonlyArray<readonly [string, string]>;
 

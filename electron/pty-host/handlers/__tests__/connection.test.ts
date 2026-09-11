@@ -399,7 +399,7 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     const pool = makeFakePool();
     const handlers = createConnectionHandlers(makePoolCtx(pool));
 
-    const projectEnv = { MY_API_KEY: "x", NODE_ENV: "production" };
+    const projectEnv = { APP_MODE: "x", NODE_ENV: "production" };
     handlers["set-active-project"]({
       windowId: 1,
       projectId: "proj-a",
@@ -430,6 +430,27 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     // `computePoolEnvHash` (forgetting `filterSensitiveOnly`, shadowing the
     // import, etc.) is caught here.
     expect(envHashA).toBe(computePoolEnvHash(projectEnv));
+  });
+
+  it("warms no panel cwds when projectEnv carries a secret-named variable", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    // Launches carrying this env bypass the pool (the pool would strip the
+    // secret), so a shell warmed for its key could never be taken.
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: { MY_API_KEY: "x", NODE_ENV: "production" },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.drainAndRefill).toHaveBeenCalledWith("/repo");
+    expect(pool.warmForKey).not.toHaveBeenCalled();
   });
 
   it("falls back to env-empty warm (callerEnv undefined) when projectEnv is null", async () => {

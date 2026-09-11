@@ -174,7 +174,7 @@ What the host does with the roster:
 
 Declaring an endpoint exposes nothing. It reaches an agent only when all of these hold:
 
-1. **The endpoint is enabled for the project.** Exposure is its own per-project decision, separate from installing or trusting the plugin, default off, and stored in Daintree's user store — never in the repository. The store and its revocation are built; a user-facing control for it is not yet part of this build. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
+1. **The endpoint is enabled for the project.** Exposure is its own per-project decision, separate from installing or trusting the plugin, default off, and stored in Daintree's user store — never in the repository. The user switches it in **Project settings → Plugins → Agent tools**. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
 2. **Daintree's MCP server is enabled** (Settings → MCP server), because the endpoint is served on that listener.
 3. **The plugin is loaded** — enabled, not blocklisted, and for a project plugin, loaded for this project.
 4. **The agent is Claude Code, launched after the endpoint was turned on.** Each Claude launch in the project is handed one entry per enabled endpoint in the Daintree-owned `--mcp-config` file it already receives, whether or not the project's Daintree MCP tier is on. Other agent CLIs, the in-app Daintree Assistant, and help sessions are not handed plugin endpoints today.

@@ -377,7 +377,7 @@ Each step was a separate PR. The contract was allowed to evolve while GitHub was
 - **Federation / ForgeFed actor URLs.** Pattern matching is hostname-based; ActivityPub actor matching is not in scope.
 - **A "forge auth" UI panel owned by the host.** Each plugin renders its own auth section.
 - **A normalized review-thread shape.** Reviews diverge too much across providers. Plugins ship their own review-thread UI under a `ReviewCapability` interface that returns provider-shaped data.
-- **MCP-as-forge-provider.** MCP servers can coexist alongside (a provider plugin can also ship an `mcpServers` contribution for agent use), but MCP is not the primary IDE data path.
+- **MCP-as-forge-provider.** MCP can coexist alongside — a provider plugin can ship an `mcpServers` contribution (Daintree and its in-app Assistant call it) or an `agentMcp` endpoint (terminal agents call it) — but MCP is not the primary IDE data path.
 - **Removing GitHub.** GitHub stays as a built-in plugin. The goal is decoupling, not eviction.
 
 ## Trade-offs
