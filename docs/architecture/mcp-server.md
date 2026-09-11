@@ -4,12 +4,13 @@
 
 Daintree ships its own local **MCP (Model Context Protocol) HTTP server** that lets an external agent — or Daintree's own in-app help assistant — drive the IDE programmatically. Every tool the server exposes is a [built-in action](./action-system.md): a `tools/call` request resolves to an `ActionService.dispatch(actionId, args)` in a renderer, and the dispatch result is serialized back as the tool result. The server is `daintree`'s control plane for agents; it is **inbound** — agents call _into_ the IDE.
 
-Do not confuse this with the two outbound MCP concepts in the plugin docs:
+Do not confuse it with the plugin MCP concepts in the plugin docs:
 
 | Concept | Direction | Owner | Docs |
 | --- | --- | --- | --- |
 | **Daintree MCP server** (this doc) | agent → IDE | `electron/services/McpServerService.ts` + `electron/services/mcp-server/` | here |
-| Plugin-authored MCP servers | IDE → external MCP server | plugin process, supervised | [`docs/plugins/`](../plugins/) |
+| Plugin agent MCP endpoints (`contributes.agentMcp`) | agent → plugin, hosted on this listener | host route + plugin's registered tools | [Plugin endpoints](#plugin-endpoints) below, [`agent-extensions.md`](../plugins/agent-extensions.md#agent-mcp-endpoints) |
+| Plugin-authored MCP servers (`contributes.mcpServers`) | IDE → plugin's stdio server; reached only through the `pluginMcp` IPC surface, never by terminal agents | plugin process, supervised | [`docs/plugins/`](../plugins/) |
 | Plugin-MCP supervisor | spawns/monitors plugin servers | host | [`docs/plugins/architecture.md`](../plugins/architecture.md) |
 
 This server is **security-load-bearing**: it accepts network connections (loopback only) and turns them into privileged IDE mutations (commit, push, delete worktree, launch agents). The auth ladder, tier model, per-tool grants, rate limits, and abuse policy below are the gates that keep an agent from doing more than the user authorized. The subsystem lives in `electron/services/mcp-server/` plus the `McpServerService` orchestrator.
@@ -122,7 +123,7 @@ Roughly in dependency order rather than by size — per-file line counts are del
 | `sessionDedup.ts` | Idempotency keys + canonical args hashing for the creation-tool dedup cache. |
 | `resourceOwnership.ts` | Which session created which terminal/worktree, written only from trusted post-dispatch results. Backs `terminal.closeOwned` / `worktree.deleteOwned` / `terminal.revealOwned` / `terminal.interruptOwned` — the reveal reads the recorded `workspaceId` to know where the panel actually lives — and `terminal.list`'s `owned` filter reads it. See [Resource ownership](#resource-ownership-11909). |
 
-Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts` so the renderer's blast-radius preview can read them without an IPC round-trip.
+Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts` so the renderer's blast-radius preview can read them without an IPC round-trip. The plugin endpoint route lives outside this directory, in `electron/services/pluginAgentMcp/` — see [Plugin endpoints](#plugin-endpoints).
 
 ## Topology and process ownership
 
@@ -148,11 +149,13 @@ Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts` so the re
         renderer WebContents → ActionService.dispatch(actionId, args)
 ```
 
+Requests under `/mcp/plugin/` leave this picture right after the host/origin guard — see [Plugin endpoints](#plugin-endpoints).
+
 The HTTP server, `SessionStore`, and the audit/turn-outcome logs all live in **main**. Action _execution_ happens in a **renderer** `WebContents` reached through `rendererBridge`. There are two transports on one port: `/mcp` (Streamable HTTP, the modern path) and `/sse` + `POST /messages` (legacy SSE). Default port is `45454` (`DEFAULT_PORT`), with up to `MAX_PORT_RETRIES` (10) fallback ports on bind conflict.
 
 ## Auth ladder (`tierAuth.ts` + `httpLifecycle.handleRequest`)
 
-Every request passes `isAuthorized(authHeader, apiKeyBearerHash, helpTokenValidator)`. The checks, in order:
+Every request outside `/mcp/plugin/` passes `isAuthorized(authHeader, apiKeyBearerHash, helpTokenValidator)` — the plugin route branches off before this gate and runs its own (see [Plugin endpoints](#plugin-endpoints)). The checks, in order:
 
 1. **API-key bearer (timing-safe).** When an API key is configured, the server precomputes `sha256("Bearer <key>")` at startup (`precomputeApiKeyBearerHash`). Each request's raw `Authorization` header is hashed and compared with `crypto.timingSafeEqual` — a constant-time compare so an attacker can't recover the key byte-by-byte from response timing. A match grants the `external` tier.
 2. **Empty-auth fallback (no key configured).** If `apiKeyBearerHash` is `null` _and_ the header is empty (`authHeader.length === 0`), the request is allowed at `external`. This is the "loopback-only, no key set" convenience path — it only matters because the server already refuses any non-loopback `Host`/`Origin` (see below), so the trust boundary is the OS network stack, not the bearer. The moment a key is set, this branch is dead.
@@ -372,6 +375,32 @@ Two distinct mechanisms widen what a session can do past its baseline:
 - **Per-tool grants** ("Approve once"): `GrantCache` mints a `(sessionId, toolId)` grant authorizing _one_ tool without elevating the session. It has a **sliding TTL** (`MCP_GRANT_TTL_MS`, 15 min, refreshed on each successful dispatch through the grant) and a **hard wall-clock ceiling** (`MCP_GRANT_MAX_LIFETIME_MS`, 30 min from `issuedAt`) so a model calling more often than once per TTL can't hold a grant forever. The `issuedAt` field doubles as a race token: a `refresh` carrying a stale `issuedAt` (the grant was revoked and re-issued mid-dispatch) is a silent no-op, so a winning revoke is never resurrected (lesson #2243). All three TTLs are intentionally ≤ the 30-minute SSE idle timeout so a grant/elevation can never silently outlive its session.
 
 `minimumPermittingTier(toolId)` computes the lowest non-`external` tier that would permit a denied tool, so the renderer's "Approve once" / "Always allow" buttons target the _narrowest_ sufficient tier rather than blanket-elevating to `system`.
+
+## Plugin endpoints
+
+The same listener also serves the tools plugins contribute through `contributes.agentMcp`, on a separate route: `/mcp/plugin/<pluginInstanceId>/<endpointId>`, each segment URI-encoded. These endpoints are for agents in Daintree's terminals and have nothing to do with the orchestration surface above — no actions, no tiers, no renderer. The author-facing contract is [Agent extensions → Agent MCP endpoints](../plugins/agent-extensions.md#agent-mcp-endpoints); the plugin-side registries and the launch path are in [Plugin architecture → Agent MCP endpoints](../plugins/architecture.md#agent-mcp-endpoints); the consent and credential model is in the [trust model](../plugins/trust-model.md#agent-mcp-endpoints-mcpexpose). The code is `electron/services/pluginAgentMcp/` (`pluginMcpRoute.ts`, `pluginSessionServer.ts`, `grantRegistry.ts`), mounted by `McpServerService`.
+
+**The pre-auth branch.** `HttpLifecycle.handleRequest` runs its duplicate-header, `Host` and `Origin` checks for every request, then hands anything under `/mcp/plugin/` to the plugin route **before** `isAuthorized` runs. A plugin credential therefore never reaches the orchestration gate, and nothing on the plugin path ever reaches orchestration routing. With no route mounted, the prefix answers `404`.
+
+**Grant auth, separate from tiers.** The route accepts plugin grants and nothing else: an API-key, pane or help bearer is simply not a grant there and gets `401` (`WWW-Authenticate: Bearer realm="Daintree plugin MCP"`), and a plugin grant presented on `/mcp` or `/sse` fails `isAuthorized` the same way. A grant carries no tier, so the tier model, per-tool grants, the confirm gate and the rest of the `tools/call` chain below do not apply. Grants are minted per Claude launch by `McpPaneConfigService` — one per endpoint the user enabled for the project, independent of the project's Daintree MCP tier, so a launch whose tier is `"off"` gets a config file with only plugin entries — and live in `PluginMcpGrantRegistry`, which stores only a SHA-256 digest of each bearer.
+
+**Per-request checks**, re-run on every HTTP leg rather than trusted from the session id:
+
+| Check | Failure |
+| --- | --- |
+| The bearer names a live grant | `401` |
+| Method is `GET`, `POST` or `DELETE` (Streamable HTTP only; the route serves no SSE) | `405` |
+| The path names exactly the grant's plugin instance and endpoint | `403` |
+| The plugin instance is loaded, the grant is still live after that check, and the endpoint is still enabled for the grant's project | `403` (`401` if revoked meanwhile) |
+| A workspace selector (`Daintree-Workspace-Id` header or `workspaceId` query parameter), if sent, is well-formed, unambiguous and equals the grant's project | `400` |
+| An `mcp-session-id`, if sent, names a session opened by this credential on this route | `404 Session not found`, identical to an unknown id |
+| A new session: the listener has not stopped since the request arrived, and the credential holds fewer than 8 open sessions (checked against established sessions, so concurrent handshakes can overshoot) | `503`, then `429` |
+
+**Session↔credential binding.** A plugin session answers only to the credential and route that opened it — the same rule as orchestration sessions (see **Session binding** under [Auth ladder](#auth-ladder-tierauthts--httplifecyclehandlerequest)), enforced by the route's own session table rather than `SessionStore`, so a guessed or stolen session id reveals nothing and borrows nothing.
+
+**Tools-only sessions.** Each session gets its own MCP `Server` advertising `tools` (with `listChanged`) and nothing else: no resources, no prompts, no `instructions`. `tools/list` activates the plugin if needed, waits up to 5 seconds for a respawning worker's roster, and returns exactly the registered roster; a roster change sends `notifications/tools/list_changed`. `tools/call` refuses non-object arguments and unknown tools with `InvalidParams`, allows 16 calls in flight per session (the 17th gets a tool error), stops waiting on a call after 60 seconds — activation included — or when the roster changes under it (the plugin's `execute` is signalled, not killed), rejects results over 256 KiB serialized, and truncates plugin error messages past 2,000 characters. Idle sessions close after `MCP_SSE_IDLE_TIMEOUT_MS` (30 minutes).
+
+**Revocation.** Revoking a grant deletes it first, so every new request already fails authentication, and then closes every session the credential holds: in-flight calls are aborted and their open responses ended. Grants are revoked when the terminal launch ends, when the plugin instance unloads, and when the user switches the endpoint off for the project. Stopping or losing the listener closes every plugin session; the grants themselves survive, but the URL in the agent's config file names the port the listener had at launch.
 
 ## End-to-end `tools/call` flow (`sessionServer.ts`)
 
@@ -659,4 +688,4 @@ The in-app fleet broadcast is supervised past submission (#10930): `fleetRunStor
 - [`action-system.md`](./action-system.md) — the `ActionService`, `ActionDefinition`, and `BuiltInActionId` surface every MCP tool maps onto.
 - [`destructive-action-safeguards.md`](./destructive-action-safeguards.md) — the `danger` tier model and the per-action confirm audit that the MCP host-confirmation gate participates in.
 - [`agent-activity-monitoring.md`](./agent-activity-monitoring.md) — `AgentStateService`, the agent FSM, and the `agent:state-changed` events that `waitUntilIdle` and `TurnOutcomeService` consume.
-- [`docs/plugins/`](../plugins/) — the _outbound_, plugin-authored MCP servers (distinct from this server).
+- [`docs/plugins/agent-extensions.md`](../plugins/agent-extensions.md) — both plugin MCP directions: the _outbound_, plugin-authored `mcpServers` Daintree connects to as a client (distinct from this server), and the `agentMcp` endpoints this listener serves to terminal agents.

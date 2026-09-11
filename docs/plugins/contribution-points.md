@@ -24,13 +24,14 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `keybindings` | Available — renderer-level, so they resolve within the focused project |
 | `settings` | Available — `scope: "project"` values resolve from the bound project root, not the focused one |
 | `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
+| `agentMcp` | Available — every credential for the endpoint is minted per terminal and bound to one project, and a project plugin's endpoint can only be granted to its own project |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
-| `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load` |
+| `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
 | `recipes` | Rejected — the plugin recipe registry is broadcast to every renderer unfiltered |
 | `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
-| `mcpServers` | Rejected — contributed servers are reachable app-globally, where a session carries no project binding to check |
+| `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 
 Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
@@ -530,13 +531,61 @@ Declares Model Context Protocol servers the plugin ships. The manifest key is `m
 | `args` | no | Argv after the command. |
 | `env` | no | Environment variables. Values can reference settings with `${settings:settingId}` syntax — the id must name a declared `contributes.settings[].id`, else the manifest is rejected at parse time (`settings_token_unknown`; a malformed token shape is `settings_token_malformed`). The same validation applies to `${settings:*}` tokens in `command` and `args`. |
 
-Daintree supervises the process: lazy spawn on first tool use, hard kill on Daintree exit, and on an unexpected crash it transitions the server to `crashed` and rejects pending and subsequent tool calls until an explicit manual restart — there is no automatic retry or backoff. The plugin's tools are exposed to any agent running in Daintree through the same MCP surface user-configured MCP servers use.
+Daintree supervises the process: lazy spawn on first tool use, hard kill on Daintree exit, and on an unexpected crash it transitions the server to `crashed` and rejects pending and subsequent tool calls until an explicit manual restart — there is no automatic retry or backoff.
+
+Daintree is the **client** of this server. Its tools are reachable only through the `window.electron.pluginMcp` IPC surface, whose tool consumer is the in-app Daintree Assistant; the plugin manager's settings UI starts, restarts and inspects the server. They are not merged into the `tools/list` that agents running in Daintree's terminals see. To give terminal agents tools, declare an [agent MCP endpoint](#agent-mcp-endpoints--shipped) instead.
 
 **Secret rotation auto-restart:** when a **user-scope** setting changes, every currently running server (status `ready` or `crashed`) that references it via `${settings:settingId}` in its `command`, `args`, or `env` is automatically restarted so the new value is folded in at the next spawn. The restart is debounced ~1s, so a burst of edits coalesces into one respawn. Servers that were never lazily started stay stopped — a settings change never eagerly boots a server.
 
-Tool use is gated by a consent/permission/audit subsystem (`electron/services/plugin-mcp/` — `PluginMcpConsentService`, `PluginMcpTierAuth`, `PluginMcpAuditService`, `PluginMcpConsentStore`): inbound tool calls are checked against per-server permission tiers, prompt for consent when required, and are recorded to an audit log. Discovery is lazy and two-tier — a cheap tool list first, full schemas fetched on demand.
+Tool use is gated by a consent/permission/audit subsystem (`electron/services/plugin-mcp/` — `PluginMcpConsentService`, `PluginMcpTierAuth`, `PluginMcpAuditService`, `PluginMcpConsentStore`): each `pluginMcp.callTool` into the server is checked against per-server permission tiers, prompts for consent when required, and is recorded to an audit log. Discovery is lazy and two-tier — a cheap tool list first, full schemas fetched on demand.
 
 **Intentionally excluded:** remote MCP transports (`url`), explicit transport types, per-server working directories, restart policies. These are deferred until use cases concretely require them.
+
+## Agent MCP endpoints — _Shipped_
+
+Declares an MCP tools endpoint the plugin serves to agents running in Daintree's terminals. This is the opposite direction from [`mcpServers`](#mcp-servers--shipped): Daintree hosts the endpoint on its own loopback MCP listener and the agent is the client. The manifest entry is declarative only — the tools arrive at activation through [`host.mcp.registerTools`](./host-api.md#mcpregistertools). See [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) for the worked example.
+
+```json
+{
+  "capabilities": ["mcp:expose"],
+  "contributes": {
+    "agentMcp": [
+      {
+        "id": "ledger",
+        "name": "Ledger",
+        "description": "Read and record entries in this project's ledger.",
+        "mode": "tools"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Letters, digits, `.`, `_` and `-`, at most 64 characters, and not `.` or `..` — the id is a segment of the endpoint's URL path. The id `registerTools` binds a roster to. |
+| `name` | yes | Label for the endpoint, 1–80 characters. Carried in the host's declared-endpoint metadata; agents never see it — the agent-side server key comes from the manifest and endpoint ids. |
+| `description` | no | 1–400 characters. |
+| `mode` | yes | `"tools"` — host-managed tools, the only mode today. |
+
+The entry is strict: an unknown field (a `url`, a `command`) is rejected rather than read as a transport the host will not honour. At most one endpoint per plugin, and the manifest is rejected unless `capabilities` includes `mcp:expose` (`mcp_expose_capability_required`).
+
+**Tool limits**, enforced on the whole roster when it is registered — a roster that breaks any of them is rejected, never trimmed:
+
+| Limit | Value |
+| --- | --- |
+| Tools per endpoint | 8 |
+| Tool name | `^[a-z][a-z0-9_]{0,31}$` — at most 32 characters, so Claude's `mcp__<server>__<tool>` name stays within its 64-character limit |
+| Description | Non-empty, at most 400 UTF-8 bytes |
+| `inputSchema` / `outputSchema` | A plain object with `type: "object"`, at most 8 KiB serialized each |
+| Result | At most 256 KiB of serialized JSON |
+| Call timeout | 60 seconds, activation included |
+
+**Enabling it per project.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each endpoint is enabled per project, as a user decision that is stored in Daintree's own user store (`projectAgentMcpEnablement`), keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. The store and its revocation path are built; a user-facing control for toggling it is not yet part of this build. Once an endpoint is enabled, each Claude Code launch in that project receives a credential for it. Other agent CLIs are not handed plugin endpoints yet. The Daintree MCP server must be enabled in Settings → MCP server, since the endpoint is served on its listener.
+
+**Available under `scope: "project"`.** Unlike `mcpServers` and `skills`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's enablement on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
 
 ## Skills — _Shipped_
 
@@ -881,7 +930,7 @@ This is a wiring gap rather than a hard limit — the detector already computes 
 A few surfaces I've decided **not** to expose as dedicated contribution points:
 
 - **Agent provider SDKs.** Registering a launchable agent CLI is a contribution point (see [Agents](#agents--shipped-minimal-tier)), but a full model-provider SDK is not. Adding a new model backend is handled via OpenAI-compatible base URL configuration in Daintree's settings — the complexity of a full provider SDK isn't justified when 95% of users just need to point Daintree at a different endpoint.
-- **Agent lifecycle hooks (PreToolUse, PostToolUse, Stop).** Use an MCP server instead. A plugin that wants to intercept tool calls ships an MCP server that the agent talks to; the server can refuse or annotate tool calls. This is simpler than a dedicated hook API and reuses the MCP ecosystem.
+- **Agent lifecycle hooks (PreToolUse, PostToolUse, Stop).** Not offered, and nothing else intercepts an agent's tool calls either. A plugin that wants agents to route work through it serves its own tools from an [agent MCP endpoint](#agent-mcp-endpoints--shipped); those tools can refuse or annotate what they are asked to do, but they never see the agent's calls to anything else. This is simpler than a dedicated hook API and reuses the MCP ecosystem.
 - **Subagents.** Daintree spawns fresh agents natively. Plugins that want to compose agents use skills + MCP to drive the orchestration, not a dedicated subagent contribution.
 - **Status bar items, tree views, editor decorations.** Daintree isn't an editor; these surfaces don't map cleanly to what we render. Revisit if a specific need emerges.
 

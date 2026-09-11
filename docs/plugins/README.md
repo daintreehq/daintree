@@ -9,7 +9,7 @@ The two have different manifests, different load contracts, and a different set 
 
 > **Status: pre-release, in active development.** The runtime is implemented — discovery, load/activate/unload, manifest validation, every contribution point, host settings and storage, MCP supervision, worktree observation, the out-of-process plugin worker, and the remote kill-switch. The `daintree-plugin` CLI ships `new`, `validate`, `package`, `install`, `uninstall`, and `dev` (hot-reload). All five packages live in-repo under `packages/` (`daintree-plugin`, `create-daintree-plugin`, `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `@daintreehq/plugin-testing`) and are workspace-linked, so the `@daintreehq/*` imports resolve and build from within this repo. **None are published to public npm yet**, so `npx daintree-plugin …` / `npm install @daintreehq/plugin-sdk` returns E404 outside the workspace; the publish pipeline exists (`.github/workflows/release-packages.yml`, fired by per-package tags) and is waiting on the first release. Per-contribution-point status lives in [Contribution points](./contribution-points.md); APIs may still change before 1.0.
 
-Plugins extend Daintree with panels and the React views that fill them, commands, toolbar buttons, menu items, keybindings, context menus, settings, MCP servers, skills, recipes, agents, process-tool detections, forge providers, and file decorations. You can write a plugin for your own workflow and sideload it, share a plugin with your team by distributing a single file or URL, or publish one for others to install.
+Plugins extend Daintree with panels and the React views that fill them, commands, toolbar buttons, menu items, keybindings, context menus, settings, MCP servers Daintree connects to, MCP tools served to the agents in its terminals, skills, recipes, agents, process-tool detections, forge providers, and file decorations. You can write a plugin for your own workflow and sideload it, share a plugin with your team by distributing a single file or URL, or publish one for others to install.
 
 This section documents the plugin system for plugin authors. If you're looking for Daintree's own internals, see [`../development.md`](../development.md); for how the plugin system itself is built, [Architecture](./architecture.md).
 
@@ -38,7 +38,7 @@ The two entry points are at the top of this page. Everything below is reference 
 | --- | --- |
 | [Getting started](./getting-started.md) | Scaffold, build, and install your first plugin |
 | [Manifest reference](./manifest.md) | Every field `plugin.json` accepts, and what the schema rejects |
-| [Contribution points](./contribution-points.md) | All sixteen contribution types — shape, example, status, project-scope availability |
+| [Contribution points](./contribution-points.md) | All seventeen contribution types — shape, example, status, project-scope availability |
 | [Host API](./host-api.md) | The runtime `host` object your `activate()` receives, the calling conventions, and the renderer hooks |
 | [Patterns](./patterns.md) | The working patterns a real plugin is made of: pull then push, watch and badge, open files, launch an agent, own the canvas |
 | [Document packages](./document-packages.md) | Share npm editor adapters once per document, with exact build matching and explicit trust limits |
@@ -56,14 +56,14 @@ The two entry points are at the top of this page. Everything below is reference 
 
 | Doc | What it covers |
 | --- | --- |
-| [Agent extensions](./agent-extensions.md) | MCP servers and skills — how a plugin extends an agent already running in Daintree |
+| [Agent extensions](./agent-extensions.md) | The two MCP directions — `mcpServers` (Daintree is the client) and `agentMcp` (Daintree serves your tools to terminal agents) — plus skills |
 | [Forge providers](./forge-provider.md) | Implementing a code-hosting backend. **Built-in plugins only** — the interface is synchronous and can't cross the plugin worker's port |
 
 **Contract and internals**
 
 | Doc | What it covers |
 | --- | --- |
-| [Trust model](./trust-model.md) | What declared capabilities do and don't buy: disclosure, danger derivation, just-in-time consent, the kill-switch, the non-guarantees |
+| [Trust model](./trust-model.md) | What declared capabilities do and don't buy: disclosure, danger derivation, just-in-time consent, agent MCP credentials, the kill-switch, the non-guarantees |
 | [Distribution](./distribution.md) | The `.dntr` format, packaging, sideload, file and URL install, updates, uninstall |
 | [Architecture](./architecture.md) | Lifecycle, the worker model, the renderer host, the MCP supervisor, the SDK boundary |
 
