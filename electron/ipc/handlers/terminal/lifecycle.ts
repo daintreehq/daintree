@@ -16,6 +16,8 @@ import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.j
 import {
   dropClaudeSessionsWithoutTranscript,
   findUntouchedClaudeSession,
+  rememberClaudePaneStore,
+  resolvePaneClaudeProjectsRoot,
 } from "../../../services/claude/ClaudeSessionStore.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
@@ -53,6 +55,42 @@ import {
 import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
+
+/**
+ * Which history records may come from a pane that read a different Claude store
+ * than a default pane does (#12371): every record once an agent preset mentions
+ * `CLAUDE_CONFIG_DIR`; otherwise those from a project that sets its own shell or
+ * mentions it in its settings, and those with no project to check. The resume
+ * list leaves them alone rather than judge them against the wrong store.
+ */
+async function findRecordsOffDefaultClaudeStore(
+  records: readonly AgentSessionRecord[]
+): Promise<(record: AgentSessionRecord) => boolean> {
+  const mentionsClaudeStore = (value: unknown): boolean =>
+    JSON.stringify(value ?? null).includes("CLAUDE_CONFIG_DIR");
+  if (mentionsClaudeStore(store.get("agentSettings"))) return () => true;
+  const projectIds = new Set(
+    records.flatMap((record) =>
+      record.agentId === "claude" && record.projectId ? [record.projectId] : []
+    )
+  );
+  const offDefault = new Set<string>();
+  await Promise.all(
+    [...projectIds].map(async (projectId) => {
+      try {
+        // The icon can be a quarter of a megabyte and says nothing about env.
+        const { projectIconSvg: _icon, ...settings } =
+          await projectStore.getProjectSettings(projectId);
+        if (settings.terminalSettings?.shell || mentionsClaudeStore(settings)) {
+          offDefault.add(projectId);
+        }
+      } catch {
+        offDefault.add(projectId);
+      }
+    })
+  );
+  return (record) => !record.projectId || offDefault.has(record.projectId);
+}
 
 const TERMINAL_SPAWN_INTERVAL_MS = 1_000;
 const TERMINAL_SPAWN_BURST = 6;
@@ -499,17 +537,24 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
-    // An untouched Claude pane comes back as `--resume <id>` for an id Claude
-    // Code never wrote a conversation for, and the CLI exits on it (#12371).
-    // Every way a pane resumes (relaunch, restart, sleep/wake, eviction, the
-    // resume list) funnels through this spawn, so this is where to look. Awaited
-    // above the resource bindings for the same reason as the PATH refresh, and
-    // applied below to the finished command the launch carriers are built from.
-    // Enrichment too: a lookup that fails leaves the resume exactly as it was.
+    // Which Claude store this pane will read, decided from what it launches with
+    // (#12371). Remembered for the close that journals it, and needed right here:
+    // an untouched Claude pane comes back as `--resume <id>` for an id Claude Code
+    // never wrote a conversation for, and the CLI exits on it. Every way a pane
+    // resumes (relaunch, restart, sleep/wake, eviction, the resume list) funnels
+    // through this spawn, so this is where to look. Awaited above the resource
+    // bindings for the same reason as the PATH refresh, and applied below to the
+    // finished command the launch carriers are built from. Enrichment too: a
+    // lookup that fails leaves the resume exactly as it was.
+    const claudePaneStore =
+      launchAgentId === "claude"
+        ? resolvePaneClaudeProjectsRoot({ shell: quotingShell, env: spawnEnv })
+        : undefined;
+    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
     const untouchedSessionId = await findUntouchedClaudeSession(safeCommand, launchAgentId, {
       cwd,
       agentSessionId: validatedOptions.agentSessionId,
-      env: spawnEnv,
+      projectsRoot: claudePaneStore ?? null,
     }).catch(() => undefined);
 
     if (isHelpLaunch && launchAgentId) {
@@ -1029,14 +1074,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
-    return dropClaudeSessionsWithoutTranscript(
-      listAgentSessions(
-        payload?.worktreeId,
-        app.getPath("userData"),
-        getAgentSessionRetentionDays(),
-        payload?.projectId
-      )
+    const records = listAgentSessions(
+      payload?.worktreeId,
+      app.getPath("userData"),
+      getAgentSessionRetentionDays(),
+      payload?.projectId
     );
+    return dropClaudeSessionsWithoutTranscript(records, {
+      keep: await findRecordsOffDefaultClaudeStore(records),
+    });
   };
 
   const handleAgentSessionClear = async (payload: { worktreeId?: string }): Promise<void> => {

@@ -1612,15 +1612,16 @@ describe("launch-time session id assignment (#11782)", () => {
       expect(relaunchResumeAsAssignedSession("", ASSIGNING)).toBeUndefined();
     });
 
-    it("reads an escaped quote as part of a double-quoted prompt", () => {
-      const prompt = `"say \\" --resume ${sessionId} \\" once"`;
-      const command = `claude --append-system-prompt ${prompt} --resume ${sessionId}`;
-      expect(relaunchResumeAsAssignedSession(command, ASSIGNING)?.command).toBe(
-        `claude --append-system-prompt ${prompt} --session-id ${sessionId}`
-      );
-      expect(
-        stripAssignedSessionIdArgs(`claude "say \\" --session-id ${sessionId} \\" ok"`, ASSIGNING)
-      ).toBe(`claude "say \\" --session-id ${sessionId} \\" ok"`);
+    it("declines a command whose quoting reads differently from shell to shell", () => {
+      // A POSIX shell ends this prompt at the last quote and PowerShell at the
+      // first; a tokenizer can only guess, so no rewrite.
+      const command = `claude --append-system-prompt "say \\" --resume ${sessionId} \\" once" --resume ${sessionId}`;
+      expect(relaunchResumeAsAssignedSession(command, ASSIGNING)).toBeUndefined();
+    });
+
+    it("strips the flag after a Windows path that ends in a backslash", () => {
+      const command = `claude --add-dir "C:\\work\\" --session-id ${sessionId}`;
+      expect(stripAssignedSessionIdArgs(command, ASSIGNING)).toBe(`claude --add-dir "C:\\work\\"`);
     });
 
     it("declines a command that picks its conversation more than one way", () => {

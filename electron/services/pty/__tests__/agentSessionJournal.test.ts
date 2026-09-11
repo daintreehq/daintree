@@ -23,7 +23,9 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 const { isClaudeSessionWithoutTranscriptMock } = vi.hoisted(() => ({
-  isClaudeSessionWithoutTranscriptMock: vi.fn(async (_record: unknown) => false),
+  isClaudeSessionWithoutTranscriptMock: vi.fn(
+    async (_record: unknown, _terminalId: string) => false
+  ),
 }));
 
 // The real lookup reads the developer's own Claude store; keep every case here
@@ -33,6 +35,7 @@ vi.mock("../../claude/ClaudeSessionStore.js", () => ({
   CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
   resolvePaneClaudeProjectsRoot: vi.fn(() => null),
   __resetClaudeSessionStoreForTests: vi.fn(),
+  rememberClaudePaneStore: vi.fn(),
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: vi.fn(async () => undefined),
   isClaudeSessionWithoutTranscript: isClaudeSessionWithoutTranscriptMock,
@@ -288,7 +291,8 @@ describe("journalAgentSession", () => {
 
     expect(skipped).toBeNull();
     expect(isClaudeSessionWithoutTranscriptMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "sess-empty", agentId: "claude" })
+      expect.objectContaining({ sessionId: "sess-empty", agentId: "claude" }),
+      "term-1"
     );
     expect(await readSessionHistory(userDataDir)).toEqual([]);
     expect(recordedEvents).toEqual([]);

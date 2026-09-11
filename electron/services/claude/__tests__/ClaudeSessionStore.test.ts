@@ -3,12 +3,14 @@ import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 import type { AgentSessionRecord } from "../../../../shared/types/ipc/agentSessionHistory.js";
+import type { ShellEnvironmentObservation } from "../../../setup/shellEnvironmentObservation.js";
 import {
   __resetClaudeSessionStoreForTests,
   dropClaudeSessionsWithoutTranscript,
   findUntouchedClaudeSession,
   isClaudeSessionWithoutTranscript,
   observeClaudeTranscript,
+  rememberClaudePaneStore,
   resolvePaneClaudeProjectsRoot,
   type ClaudeStoreFs,
   type ClaudeStoreOptions,
@@ -18,6 +20,7 @@ const SESSION = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
 const OTHER = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
 const CWD = "/work/app";
 const CWD_SLUG = "-work-app";
+const SHELL = "/bin/zsh";
 
 const realFs: ClaudeStoreFs = {
   lstat: (target) => lstat(target),
@@ -26,23 +29,25 @@ const realFs: ClaudeStoreFs = {
 
 let configDir: string;
 let projectsRoot: string;
-/** A POSIX pane whose login profile points Claude at the temp store. */
-let context: ClaudeStoreOptions;
 
 beforeEach(async () => {
   __resetClaudeSessionStoreForTests();
   configDir = await mkdtemp(path.join(os.tmpdir(), "claude-session-store-"));
   projectsRoot = path.join(configDir, "projects");
-  context = {
-    platform: "linux",
-    env: {},
-    readShellEnv: () => ({ CLAUDE_CONFIG_DIR: configDir }),
-  };
 });
 
 afterEach(async () => {
   await rm(configDir, { recursive: true, force: true });
 });
+
+/** A POSIX machine whose probed login shell points Claude at `configDir`, unless told otherwise. */
+function machine(observation?: ShellEnvironmentObservation | null): ClaudeStoreOptions {
+  const observed =
+    observation === undefined
+      ? { shell: SHELL, env: { CLAUDE_CONFIG_DIR: configDir } }
+      : (observation ?? undefined);
+  return { platform: "linux", env: { SHELL }, readShellObservation: () => observed };
+}
 
 async function writeTranscript(slug: string, sessionId: string): Promise<void> {
   const dir = path.join(projectsRoot, slug);
@@ -70,66 +75,51 @@ function countingFs(
 }
 
 describe("resolvePaneClaudeProjectsRoot", () => {
-  const linux = (shell: Record<string, string> | undefined, env: Record<string, string> = {}) => ({
-    platform: "linux" as const,
-    env,
-    readShellEnv: () => shell,
+  it("follows the store the probed profile points panes at", () => {
+    expect(resolvePaneClaudeProjectsRoot({}, machine())).toBe(projectsRoot);
   });
 
-  it("follows a store the login profile exports, which main never inherits", () => {
-    expect(resolvePaneClaudeProjectsRoot(undefined, linux({ CLAUDE_CONFIG_DIR: configDir }))).toBe(
-      projectsRoot
-    );
-  });
-
-  it("uses the default store when neither the profile nor the pane relocates it", () => {
-    expect(resolvePaneClaudeProjectsRoot(undefined, linux({}))).toBe(
+  it("uses the default store when the probed profile leaves it unset", () => {
+    expect(resolvePaneClaudeProjectsRoot({}, machine({ shell: SHELL, env: {} }))).toBe(
       path.join(os.homedir(), ".claude", "projects")
     );
   });
 
-  it("follows the pane's own override when the profile sets none", () => {
-    expect(resolvePaneClaudeProjectsRoot({ CLAUDE_CONFIG_DIR: configDir }, linux({}))).toBe(
+  it("accepts a pane that names the probed shell itself", () => {
+    expect(resolvePaneClaudeProjectsRoot({ shell: SHELL }, { ...machine(), env: {} })).toBe(
       projectsRoot
     );
   });
 
-  it("agrees with a profile that exports the same store the pane inherits", () => {
-    expect(
-      resolvePaneClaudeProjectsRoot(
-        undefined,
-        linux({ CLAUDE_CONFIG_DIR: configDir }, { CLAUDE_CONFIG_DIR: configDir })
-      )
-    ).toBe(projectsRoot);
+  it("is unknown before the shell has been probed", () => {
+    expect(resolvePaneClaudeProjectsRoot({}, machine(null))).toBeNull();
   });
 
-  it("can't say which store a POSIX pane reads before its shell was observed", () => {
-    expect(resolvePaneClaudeProjectsRoot(undefined, linux(undefined))).toBeNull();
+  it("is unknown for a pane launching a different shell than the one probed", () => {
+    expect(resolvePaneClaudeProjectsRoot({ shell: "/bin/bash" }, machine())).toBeNull();
   });
 
-  it("refuses a profile and a pane that name different stores", () => {
-    expect(
-      resolvePaneClaudeProjectsRoot(
-        { CLAUDE_CONFIG_DIR: configDir },
-        linux({ CLAUDE_CONFIG_DIR: path.join(configDir, "elsewhere") })
-      )
-    ).toBeNull();
+  it("is unknown for a pane with its own CLAUDE_CONFIG_DIR, even an empty one", () => {
+    for (const value of [configDir, ""]) {
+      expect(
+        resolvePaneClaudeProjectsRoot({ env: { CLAUDE_CONFIG_DIR: value } }, machine())
+      ).toBeNull();
+    }
   });
 
-  it("refuses a relative override, which the CLI resolves against each pane's own cwd", () => {
-    expect(
-      resolvePaneClaudeProjectsRoot(undefined, linux({ CLAUDE_CONFIG_DIR: "relative/claude" }))
-    ).toBeNull();
+  it("is unknown when the profile sets an empty or relative store", () => {
+    for (const value of ["", "relative/claude"]) {
+      expect(
+        resolvePaneClaudeProjectsRoot(
+          {},
+          machine({ shell: SHELL, env: { CLAUDE_CONFIG_DIR: value } })
+        )
+      ).toBeNull();
+    }
   });
 
-  it("trusts what a Windows pane inherits, since it sources no login profile", () => {
-    expect(
-      resolvePaneClaudeProjectsRoot(undefined, {
-        platform: "win32",
-        env: { CLAUDE_CONFIG_DIR: configDir },
-        readShellEnv: () => undefined,
-      })
-    ).toBe(projectsRoot);
+  it("is unknown on Windows, whose PowerShell and cmd profiles are never probed", () => {
+    expect(resolvePaneClaudeProjectsRoot({}, { ...machine(), platform: "win32" })).toBeNull();
   });
 });
 
@@ -241,21 +231,26 @@ describe("observeClaudeTranscript", () => {
 
   it("lets a caller joining a slow scan give up at its own deadline", async () => {
     await writeTranscript(CWD_SLUG, OTHER);
+    let releaseRoot: () => void = () => {};
+    const rootListed = new Promise<void>((resolve) => {
+      releaseRoot = resolve;
+    });
     const slow: ClaudeStoreFs = {
       ...realFs,
       readdir: async (target) => {
-        if (target === projectsRoot) await new Promise((resolve) => setTimeout(resolve, 150));
+        if (target === projectsRoot) await rootListed;
         return realFs.readdir(target);
       },
     };
 
     const owner = observeClaudeTranscript(SESSION, undefined, projectsRoot, {
       fs: slow,
-      timeoutMs: 1_000,
+      timeoutMs: 30_000,
     });
     await expect(
       observeClaudeTranscript(SESSION, undefined, projectsRoot, { fs: slow, timeoutMs: 20 })
     ).resolves.toBe("unknown");
+    releaseRoot();
     // The joiner running out of time says nothing about the store itself.
     await expect(owner).resolves.toBe("missing");
   });
@@ -277,55 +272,46 @@ describe("findUntouchedClaudeSession", () => {
   it("names the id to reassign when a resume has no conversation behind it", async () => {
     await writeTranscript(CWD_SLUG, OTHER);
     await expect(
-      findUntouchedClaudeSession(
-        `claude --resume ${SESSION}`,
-        "claude",
-        { cwd: CWD, agentSessionId: SESSION },
-        context
-      )
+      findUntouchedClaudeSession(`claude --resume ${SESSION}`, "claude", {
+        cwd: CWD,
+        agentSessionId: SESSION,
+        projectsRoot,
+      })
     ).resolves.toBe(SESSION);
   });
 
   it("keeps the resume when the conversation exists", async () => {
     await writeTranscript(CWD_SLUG, SESSION);
     await expect(
-      findUntouchedClaudeSession(`claude --resume ${SESSION}`, "claude", { cwd: CWD }, context)
+      findUntouchedClaudeSession(`claude --resume ${SESSION}`, "claude", {
+        cwd: CWD,
+        projectsRoot,
+      })
     ).resolves.toBeUndefined();
   });
 
-  it("keeps the resume when it can't tell which store the pane reads", async () => {
-    await writeTranscript(CWD_SLUG, OTHER);
+  it("keeps the resume without reading anything when the pane's store isn't certain", async () => {
+    const fs = countingFs();
     await expect(
       findUntouchedClaudeSession(
         `claude --resume ${SESSION}`,
         "claude",
-        { cwd: CWD },
-        { ...context, readShellEnv: () => undefined }
+        { cwd: CWD, projectsRoot: null },
+        { fs }
       )
     ).resolves.toBeUndefined();
-  });
-
-  it("checks the store the pane's own environment points at", async () => {
-    await writeTranscript(CWD_SLUG, OTHER);
-    await expect(
-      findUntouchedClaudeSession(
-        `claude --resume ${SESSION}`,
-        "claude",
-        { cwd: CWD, env: { CLAUDE_CONFIG_DIR: configDir } },
-        { ...context, readShellEnv: () => ({}) }
-      )
-    ).resolves.toBe(SESSION);
+    expect(fs.lstatCalls).toEqual([]);
+    expect(fs.readdirCalls).toEqual([]);
   });
 
   it("leaves a pane alone when its record names a different id than its command resumes", async () => {
     await writeTranscript(CWD_SLUG, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     await expect(
-      findUntouchedClaudeSession(
-        `claude --resume ${SESSION}`,
-        "claude",
-        { cwd: CWD, agentSessionId: OTHER },
-        context
-      )
+      findUntouchedClaudeSession(`claude --resume ${SESSION}`, "claude", {
+        cwd: CWD,
+        agentSessionId: OTHER,
+        projectsRoot,
+      })
     ).resolves.toBeUndefined();
   });
 
@@ -335,19 +321,16 @@ describe("findUntouchedClaudeSession", () => {
       findUntouchedClaudeSession(
         `claude --session-id ${SESSION}`,
         "claude",
-        { cwd: CWD },
-        {
-          ...context,
-          fs,
-        }
+        { cwd: CWD, projectsRoot },
+        { fs }
       )
     ).resolves.toBeUndefined();
     await expect(
       findUntouchedClaudeSession(
         `codex resume ${SESSION}`,
         "codex",
-        { cwd: CWD },
-        { ...context, fs }
+        { cwd: CWD, projectsRoot },
+        { fs }
       )
     ).resolves.toBeUndefined();
     expect(fs.readdirCalls).toEqual([]);
@@ -355,7 +338,6 @@ describe("findUntouchedClaudeSession", () => {
   });
 });
 
-type HistoryRecord = Pick<AgentSessionRecord, "agentId" | "sessionId" | "bookmark" | "title">;
 const BOOKMARK = { bookmarkedAt: 1 } as AgentSessionRecord["bookmark"];
 
 describe("isClaudeSessionWithoutTranscript", () => {
@@ -363,30 +345,56 @@ describe("isClaudeSessionWithoutTranscript", () => {
     await writeTranscript(CWD_SLUG, OTHER);
   });
 
-  it("flags a session still wearing Claude's pre-conversation title", async () => {
-    for (const title of ["✳ Claude Code", "Claude", null]) {
+  it("judges a closed session by the store its own terminal launched against", async () => {
+    rememberClaudePaneStore("term-1", projectsRoot);
+
+    await expect(
+      isClaudeSessionWithoutTranscript(
+        { agentId: "claude", sessionId: SESSION, cwd: CWD },
+        "term-1"
+      )
+    ).resolves.toBe(true);
+    await expect(
+      isClaudeSessionWithoutTranscript({ agentId: "claude", sessionId: OTHER, cwd: CWD }, "term-1")
+    ).resolves.toBe(false);
+  });
+
+  it("never judges a terminal whose store is unknown or was never remembered", async () => {
+    rememberClaudePaneStore("term-uncertain", null);
+    for (const terminalId of ["term-uncertain", "term-never-spawned"]) {
       await expect(
         isClaudeSessionWithoutTranscript(
-          { agentId: "claude", sessionId: SESSION, cwd: CWD, title },
-          context
+          { agentId: "claude", sessionId: SESSION, cwd: CWD },
+          terminalId
         )
-      ).resolves.toBe(true);
+      ).resolves.toBe(false);
     }
   });
 
-  it("keeps anything that shows a conversation happened or isn't this agent's to judge", async () => {
-    const records = [
-      // Retitled after its conversation, so its store may be one this process can't see.
-      { agentId: "claude", sessionId: SESSION, cwd: CWD, title: "✳ Fix the login redirect" },
-      { agentId: "claude", sessionId: OTHER, cwd: CWD, title: "✳ Claude Code" },
-      { agentId: "claude", sessionId: SESSION, cwd: CWD, title: null, bookmark: BOOKMARK },
-      { agentId: "codex", sessionId: SESSION, cwd: CWD, title: null },
-    ];
-    for (const record of records) {
-      await expect(isClaudeSessionWithoutTranscript(record, context)).resolves.toBe(false);
-    }
+  it("leaves bookmarks and other agents alone", async () => {
+    rememberClaudePaneStore("term-1", projectsRoot);
+    await expect(
+      isClaudeSessionWithoutTranscript(
+        { agentId: "claude", sessionId: SESSION, cwd: CWD, bookmark: BOOKMARK },
+        "term-1"
+      )
+    ).resolves.toBe(false);
+    await expect(
+      isClaudeSessionWithoutTranscript({ agentId: "codex", sessionId: SESSION, cwd: CWD }, "term-1")
+    ).resolves.toBe(false);
+  });
+
+  it("forgets the oldest terminals once it remembers too many", async () => {
+    rememberClaudePaneStore("term-oldest", projectsRoot);
+    for (let i = 0; i < 1_024; i++) rememberClaudePaneStore(`term-${i}`, projectsRoot);
+
+    const record = { agentId: "claude", sessionId: SESSION, cwd: CWD };
+    await expect(isClaudeSessionWithoutTranscript(record, "term-oldest")).resolves.toBe(false);
+    await expect(isClaudeSessionWithoutTranscript(record, "term-1023")).resolves.toBe(true);
   });
 });
+
+type HistoryRecord = Pick<AgentSessionRecord, "agentId" | "sessionId" | "bookmark" | "title">;
 
 describe("dropClaudeSessionsWithoutTranscript", () => {
   it("hides untouched Claude sessions with no conversation and keeps everything else", async () => {
@@ -399,28 +407,48 @@ describe("dropClaudeSessionsWithoutTranscript", () => {
       { agentId: "claude", sessionId: SESSION, title: null, bookmark: BOOKMARK },
     ];
 
-    await expect(dropClaudeSessionsWithoutTranscript(records, context)).resolves.toEqual(
+    await expect(dropClaudeSessionsWithoutTranscript(records, machine())).resolves.toEqual(
       records.slice(1)
     );
   });
 
-  it("filters nothing when it can't tell which store the sessions came from", async () => {
-    const records: HistoryRecord[] = [{ agentId: "claude", sessionId: SESSION, title: null }];
+  it("keeps whatever the caller knows may have used another store", async () => {
+    await writeTranscript(CWD_SLUG, OTHER);
+    const records: HistoryRecord[] = [
+      { agentId: "claude", sessionId: SESSION, title: "Claude" },
+      { agentId: "claude", sessionId: SESSION.replace("006f", "106f"), title: "Claude" },
+    ];
+
     await expect(
-      dropClaudeSessionsWithoutTranscript(records, { ...context, readShellEnv: () => undefined })
-    ).resolves.toBe(records);
+      dropClaudeSessionsWithoutTranscript(records, {
+        ...machine(),
+        keep: (record) => record === records[0],
+      })
+    ).resolves.toEqual([records[0]]);
   });
 
-  it("doesn't read the store for a list with nothing to check", async () => {
+  it("filters nothing when a default pane's store isn't certain", async () => {
+    const records: HistoryRecord[] = [{ agentId: "claude", sessionId: SESSION, title: null }];
+    await expect(dropClaudeSessionsWithoutTranscript(records, machine(null))).resolves.toBe(
+      records
+    );
+  });
+
+  it("doesn't read the store for a list with nothing to judge", async () => {
     const fs = countingFs();
     const records: HistoryRecord[] = [
       { agentId: "codex", sessionId: SESSION, title: null },
       { agentId: "claude", sessionId: OTHER, title: null, bookmark: BOOKMARK },
       { agentId: "claude", sessionId: OTHER, title: "✳ Fix the login redirect" },
+      { agentId: "claude", sessionId: SESSION, title: "Claude" },
     ];
-    await expect(dropClaudeSessionsWithoutTranscript(records, { ...context, fs })).resolves.toBe(
-      records
-    );
+    await expect(
+      dropClaudeSessionsWithoutTranscript(records, {
+        ...machine(),
+        fs,
+        keep: (record) => record.agentId === "claude" && record.title === "Claude",
+      })
+    ).resolves.toBe(records);
     expect(fs.readdirCalls).toEqual([]);
   });
 });

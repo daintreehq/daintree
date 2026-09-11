@@ -70,12 +70,19 @@ vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
 const findUntouchedClaudeSessionMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => Promise<string | undefined>>(async () => undefined)
 );
+const claudeStoreMocks = vi.hoisted(() => ({
+  resolvePaneClaudeProjectsRoot: vi.fn<(...args: unknown[]) => string | null>(
+    () => "/claude-store/projects"
+  ),
+  rememberClaudePaneStore: vi.fn(),
+}));
 // Full surface: the real session journal imports this module too, and a factory
 // that omits an export throws for every consumer that reaches it.
 vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
   CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
   CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
-  resolvePaneClaudeProjectsRoot: vi.fn(() => null),
+  resolvePaneClaudeProjectsRoot: claudeStoreMocks.resolvePaneClaudeProjectsRoot,
+  rememberClaudePaneStore: claudeStoreMocks.rememberClaudePaneStore,
   __resetClaudeSessionStoreForTests: vi.fn(),
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: findUntouchedClaudeSessionMock,
@@ -888,6 +895,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
   describe("untouched Claude sessions (#12371)", () => {
     const SESSION = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+    const CLAUDE_STORE = "/claude-store/projects";
 
     async function spawnClaude(options: Record<string, unknown>) {
       const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -919,7 +927,14 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(findUntouchedClaudeSessionMock).toHaveBeenCalledWith(
         `claude --resume ${SESSION}`,
         "claude",
-        expect.objectContaining({ cwd, agentSessionId: SESSION })
+        expect.objectContaining({ cwd, agentSessionId: SESSION, projectsRoot: CLAUDE_STORE })
+      );
+      expect(claudeStoreMocks.resolvePaneClaudeProjectsRoot).toHaveBeenCalledWith(
+        expect.objectContaining({ shell: "/usr/bin/nu" })
+      );
+      expect(claudeStoreMocks.rememberClaudePaneStore).toHaveBeenCalledWith(
+        expect.any(String),
+        CLAUDE_STORE
       );
       expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
       expect(spawnArgs.command).not.toContain("--resume");
@@ -964,6 +979,13 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
       expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
       expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+    });
+
+    it("resolves and remembers no Claude store for a launch that isn't Claude", async () => {
+      await spawnClaude({ launchAgentId: "codex", command: "codex", shell: "/usr/bin/nu" });
+
+      expect(claudeStoreMocks.resolvePaneClaudeProjectsRoot).not.toHaveBeenCalled();
+      expect(claudeStoreMocks.rememberClaudePaneStore).not.toHaveBeenCalled();
     });
   });
 });

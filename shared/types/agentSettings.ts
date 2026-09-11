@@ -1163,7 +1163,7 @@ const SESSION_ID_SLOT = " daintree-session-id-slot ";
  * `'\''` for every apostrophe: read without them, that sequence leaves the
  * quote state inverted and splits an ordinary prompt like `don't` mid-word.
  */
-function splitShellWords(command: string): string[] {
+function scanShellWords(command: string): { words: string[]; unterminated: boolean } {
   const words: string[] = [];
   let current = "";
   let started = false;
@@ -1173,16 +1173,7 @@ function splitShellWords(command: string): string[] {
   for (const char of command) {
     if (quote) {
       current += char;
-      // Inside double quotes a backslash still escapes the next character, so
-      // `\"` belongs to the word instead of ending it; POSIX shells and Windows
-      // argv parsing agree on that. Single quotes take everything literally.
-      if (escaped) {
-        escaped = false;
-      } else if (quote === '"' && char === "\\") {
-        escaped = true;
-      } else if (char === quote) {
-        quote = null;
-      }
+      if (char === quote) quote = null;
       continue;
     }
     if (escaped) {
@@ -1215,7 +1206,11 @@ function splitShellWords(command: string): string[] {
     started = true;
   }
   if (started) words.push(current);
-  return words;
+  return { words, unterminated: quote !== null };
+}
+
+function splitShellWords(command: string): string[] {
+  return scanShellWords(command).words;
 }
 
 /** Does one command word fill this slot of the agent's assigning-arg shape? */
@@ -1315,7 +1310,11 @@ export function relaunchResumeAsAssignedSession(
   if (slotOffset === -1) return undefined;
   const [prefix = "", suffix = ""] = (shape[slotOffset] ?? "").split(SESSION_ID_SLOT);
 
-  const words = splitShellWords(command);
+  const { words, unterminated } = scanShellWords(command);
+  // A quote left open reads differently in a POSIX shell, where a backslash can
+  // escape it, than in PowerShell, where it can't. There is no telling which
+  // words are real arguments then, so nothing is rewritten.
+  if (unterminated) return undefined;
   const matchesAt = (tokens: readonly string[], at: number): boolean =>
     tokens.length > 0 &&
     tokens.every((token, offset) => shapeWordMatches(token, words[at + offset] ?? ""));

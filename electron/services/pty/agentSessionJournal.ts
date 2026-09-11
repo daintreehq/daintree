@@ -28,9 +28,12 @@ export interface JournalCloseContext {
   generation?: number | null;
 }
 
-async function hasNoClaudeConversation(record: Omit<AgentSessionRecord, "savedAt">) {
+async function hasNoClaudeConversation(
+  record: Omit<AgentSessionRecord, "savedAt">,
+  terminalId: string
+): Promise<boolean> {
   try {
-    return await isClaudeSessionWithoutTranscript(record);
+    return await isClaudeSessionWithoutTranscript(record, terminalId);
   } catch {
     return false;
   }
@@ -66,11 +69,12 @@ export async function journalAgentSessionRecord(
 
   // A Claude pane nobody typed into leaves an assigned id with no conversation
   // behind it (#12371). Journaling it offers a resume that can never open and
-  // spends a slot of the per-worktree cap. Checked after the generation is
+  // spends a slot of the per-worktree cap. Judged against the store the pane
+  // itself launched against, never a guess. Checked after the generation is
   // frozen, so the wait can't pick up a respawn's, and before the ledger is
   // consulted, so a skip claims nothing. A bookmark is the user's explicit pin
   // and is never second-guessed; a failed lookup journals as before.
-  if (!record.bookmark && (await hasNoClaudeConversation(record))) {
+  if (!record.bookmark && (await hasNoClaudeConversation(record, ctx.terminalId))) {
     logger.debug(`Skipping journal for ${ctx.terminalId}: no Claude conversation was written`);
     return null;
   }

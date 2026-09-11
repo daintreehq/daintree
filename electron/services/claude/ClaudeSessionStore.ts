@@ -10,9 +10,10 @@
  * side of the #4100 boundary `ClaudeSubagentReader` sits on.
  *
  * Claude Code writes nothing else keyed by the id before that first message, so
- * absence can only ever be proven in one store at a time. Everything here starts
- * by asking which store that is, and answers `unknown` when it can't be sure:
- * reading the wrong one would call a live conversation missing.
+ * absence can only ever be proven in one store. Everything here starts by asking
+ * which store a pane reads, and answers `unknown` unless that is certain:
+ * reading the wrong one would call a live conversation missing, and a relaunch
+ * built on that is rejected by the CLI as already in use.
  *
  * Every answer is one observation at one moment and is never kept: the first
  * message can create the transcript right after a `missing`.
@@ -24,10 +25,10 @@ import path from "path";
 import { relaunchResumeAsAssignedSession } from "../../../shared/types/agentSettings.js";
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
 import {
-  getShellObservedEnv,
-  type ShellObservedEnv,
+  getShellEnvironmentObservation,
+  type ShellEnvironmentObservation,
 } from "../../setup/shellEnvironmentObservation.js";
-import { getEnvVar } from "../pty/EnvironmentFilter.js";
+import { getEnvVar, hasEnvVar } from "../pty/EnvironmentFilter.js";
 import { deriveProjectSlug } from "./ClaudeSubagentReader.js";
 
 /**
@@ -52,12 +53,13 @@ const CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR";
 const TRANSCRIPT_SUFFIX = ".jsonl";
 /** Concurrent project-directory reads during a scan. */
 const SCAN_CONCURRENCY = 8;
+/** Terminals whose store is remembered from their spawn; the oldest go first. */
+const PANE_STORE_MEMORY = 1_024;
 /** Claude Code only accepts a UUID as a session id, so nothing else can name a transcript it wrote. */
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * The titles a Claude pane carries before its first message: Daintree's label
  * for the agent and Claude Code's idle title, with or without its status glyph.
- * Claude Code retitles the terminal after the conversation it starts.
  */
 const UNTOUCHED_TITLE_PATTERN = /^(?:[^\p{L}\p{N}\s]\s*)?Claude(?: Code)?$/u;
 
@@ -71,8 +73,9 @@ export interface ClaudeStoreFs {
 
 /** Where a pane's store is decided from. Defaults are this process's own. */
 export interface ClaudeStoreContext {
+  /** Daintree's own environment, for the shell a terminal gets by default. */
   env?: EnvLike;
-  readShellEnv?: () => ShellObservedEnv | undefined;
+  readShellObservation?: () => ShellEnvironmentObservation | undefined;
   platform?: NodeJS.Platform;
 }
 
@@ -97,44 +100,43 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OU
   return Promise.race([promise, expiry]).finally(() => clearTimeout(timer));
 }
 
+function errorCode(error: unknown): unknown {
+  return (error as { code?: unknown } | null)?.code;
+}
+
 function isAbsence(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
+  const code = errorCode(error);
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-function readConfigDir(env: EnvLike | undefined): string | undefined {
-  return (env && getEnvVar(env, CONFIG_DIR_VAR)?.trim()) || undefined;
-}
-
-function projectsRootFor(configDir: string | undefined): string | null {
-  if (!configDir) return path.join(os.homedir(), ".claude", "projects");
-  // A relative value resolves against the CLI's own cwd, which differs per pane.
-  return path.isAbsolute(configDir) ? path.join(configDir, "projects") : null;
-}
-
 /**
- * The `projects/` directory a Claude pane launched with `spawnEnv` reads, or
- * null when that can't be pinned to one place.
+ * The `projects/` directory a Claude pane will read, or null unless that is
+ * certain.
  *
- * A pane's shell sources the user's profile, and main copies only `PATH` out of
- * the startup shell probe, so a `CLAUDE_CONFIG_DIR` exported from `.zshrc`
- * reaches every pane but never this process. The probe's own observation fills
- * that in; without one, a POSIX pane's store is unknowable. Windows panes don't
- * source a login profile, so what they inherit is what they get. A profile that
- * exports a different value from the one the pane inherits may or may not win,
- * depending on how it is written, so that is unknown too.
+ * A pane's shell sources the user's profile, which can export, change, or unset
+ * `CLAUDE_CONFIG_DIR`, and main never sees the result. Certainty therefore needs
+ * the pane to start from exactly what the startup probe saw: the same shell, and
+ * no `CLAUDE_CONFIG_DIR` of its own for that profile to treat differently. Its
+ * profile then does to the pane whatever it did to the probe. Anything else — a
+ * different shell, a pane-level override, no probe yet — is unknown, and so is
+ * Windows, whose PowerShell and cmd profiles are never probed.
+ *
+ * `pane.shell` defaults to the shell a terminal gets when nothing names one.
  */
 export function resolvePaneClaudeProjectsRoot(
-  spawnEnv?: EnvLike,
+  pane: { shell?: string; env?: EnvLike } = {},
   context: ClaudeStoreContext = {}
 ): string | null {
-  const platform = context.platform ?? process.platform;
-  const shellEnv = platform === "win32" ? {} : (context.readShellEnv ?? getShellObservedEnv)();
-  if (!shellEnv) return null;
-  const inherited = readConfigDir(spawnEnv) ?? readConfigDir(context.env ?? process.env);
-  const exported = readConfigDir(shellEnv);
-  if (inherited && exported && inherited !== exported) return null;
-  return projectsRootFor(exported ?? inherited);
+  if ((context.platform ?? process.platform) === "win32") return null;
+  if (pane.env && hasEnvVar(pane.env, CONFIG_DIR_VAR)) return null;
+  const observation = (context.readShellObservation ?? getShellEnvironmentObservation)();
+  const shell = pane.shell ?? getEnvVar(context.env ?? process.env, "SHELL");
+  if (!observation || !shell || shell !== observation.shell) return null;
+  const configDir = observation.env[CONFIG_DIR_VAR];
+  if (configDir === undefined) return path.join(os.homedir(), ".claude", "projects");
+  // Empty or relative: what the CLI makes of either is not something to guess at.
+  const trimmed = configDir.trim();
+  return trimmed && path.isAbsolute(trimmed) ? path.join(trimmed, "projects") : null;
 }
 
 const unreachableUntil = new Map<string, number>();
@@ -148,7 +150,11 @@ function isCoolingDown(projectsRoot: string): boolean {
 }
 
 function markUnreachable(projectsRoot: string): void {
-  unreachableUntil.set(projectsRoot, Date.now() + CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS);
+  const now = Date.now();
+  for (const [root, until] of unreachableUntil) {
+    if (until <= now) unreachableUntil.delete(root);
+  }
+  unreachableUntil.set(projectsRoot, now + CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS);
 }
 
 /**
@@ -170,7 +176,7 @@ async function scanTranscriptIds(
   try {
     projectDirs = await fs.readdir(projectsRoot);
   } catch (error) {
-    if ((error as { code?: unknown } | null)?.code !== "ENOENT") return null;
+    if (errorCode(error) !== "ENOENT" || isCancelled()) return null;
     try {
       await fs.lstat(path.dirname(projectsRoot));
       return new Set();
@@ -291,60 +297,62 @@ export async function observeClaudeTranscript(
  * conversation Claude Code never wrote (#12371), or undefined when the command
  * should run exactly as given.
  *
- * Only a proven absence in the store this pane will actually read changes
- * anything. Reassigning an id that does have a conversation is rejected by the
- * CLI as already in use, so `unknown` keeps the resume that would have run
- * before this check existed. `env` is the spawn's own overrides.
+ * Only a proven absence in `pane.projectsRoot` — the store this pane will read,
+ * from {@link resolvePaneClaudeProjectsRoot} — changes anything, so an uncertain
+ * store or an `unknown` keeps the resume that would have run before this check.
  */
 export async function findUntouchedClaudeSession(
   command: string,
   launchAgentId: string | undefined,
-  pane: { cwd: string; agentSessionId?: string; env?: EnvLike },
-  options: ClaudeStoreOptions = {}
+  pane: { cwd: string; agentSessionId?: string; projectsRoot: string | null },
+  options: Pick<ClaudeStoreOptions, "fs" | "timeoutMs"> = {}
 ): Promise<string | undefined> {
-  if (launchAgentId !== CLAUDE_AGENT_ID) return undefined;
+  if (launchAgentId !== CLAUDE_AGENT_ID || !pane.projectsRoot) return undefined;
   const relaunch = relaunchResumeAsAssignedSession(command, launchAgentId);
   if (!relaunch) return undefined;
   // A pane on record under a different id than the one its command resumes is
   // not a shape Daintree builds. Leave it to the CLI rather than reassign the
   // wrong conversation's id.
   if (pane.agentSessionId && pane.agentSessionId !== relaunch.sessionId) return undefined;
-  const projectsRoot = resolvePaneClaudeProjectsRoot(pane.env, options);
   const observation = await observeClaudeTranscript(
     relaunch.sessionId,
     pane.cwd,
-    projectsRoot,
+    pane.projectsRoot,
     options
   );
   return observation === "missing" ? relaunch.sessionId : undefined;
 }
 
-type SessionRecordFacts = Pick<AgentSessionRecord, "agentId" | "sessionId" | "bookmark" | "title">;
+const paneStores = new Map<string, string | null>();
 
 /**
- * A history record that could be an untouched pane: an unbookmarked Claude
- * session still wearing Claude's pre-conversation title. A record doesn't say
- * which store its pane read — a preset can relocate it — so the title is what
- * keeps a real conversation, in a store this process can't see, from being
- * judged against the wrong one.
+ * Remember which store a Claude terminal was launched against, so its close is
+ * judged by the pane's own store. A history record says nothing about the
+ * environment its pane had; the spawn is the one place that knew.
  */
-function couldBeUntouchedClaudeSession(record: SessionRecordFacts): boolean {
-  if (record.agentId !== CLAUDE_AGENT_ID || record.bookmark !== undefined) return false;
-  if (!SESSION_ID_PATTERN.test(record.sessionId)) return false;
-  const title = record.title?.trim();
-  return !title || UNTOUCHED_TITLE_PATTERN.test(title);
+export function rememberClaudePaneStore(terminalId: string, projectsRoot: string | null): void {
+  paneStores.delete(terminalId);
+  paneStores.set(terminalId, projectsRoot);
+  if (paneStores.size > PANE_STORE_MEMORY) {
+    const oldest = paneStores.keys().next().value;
+    if (oldest !== undefined) paneStores.delete(oldest);
+  }
 }
 
 /**
- * True only for a record that could be an untouched pane and whose transcript is
- * proven missing — the journal's cue not to record a session nobody can resume.
+ * True only for an unbookmarked Claude session whose transcript is proven
+ * missing from the store its terminal was launched against — the journal's cue
+ * not to record a session nobody can resume. A terminal whose store was never
+ * remembered, or wasn't certain, never qualifies.
  */
 export async function isClaudeSessionWithoutTranscript(
-  record: SessionRecordFacts & Pick<AgentSessionRecord, "cwd">,
-  options: ClaudeStoreOptions = {}
+  record: Pick<AgentSessionRecord, "agentId" | "sessionId" | "bookmark" | "cwd">,
+  terminalId: string,
+  options: Pick<ClaudeStoreOptions, "fs" | "timeoutMs"> = {}
 ): Promise<boolean> {
-  if (!couldBeUntouchedClaudeSession(record)) return false;
-  const projectsRoot = resolvePaneClaudeProjectsRoot(undefined, options);
+  if (record.agentId !== CLAUDE_AGENT_ID || record.bookmark !== undefined) return false;
+  const projectsRoot = paneStores.get(terminalId);
+  if (!projectsRoot) return false;
   const observation = await observeClaudeTranscript(
     record.sessionId,
     record.cwd,
@@ -354,18 +362,42 @@ export async function isClaudeSessionWithoutTranscript(
   return observation === "missing";
 }
 
+type SessionRecordFacts = Pick<AgentSessionRecord, "agentId" | "sessionId" | "bookmark" | "title">;
+
+/**
+ * A history record that could be an untouched pane: an unbookmarked Claude
+ * session still wearing Claude's pre-conversation title. A record outlives the
+ * spawn that knew its pane's store, so an old one has to look untouched as well
+ * before it is judged at all.
+ */
+function couldBeUntouchedClaudeSession(record: SessionRecordFacts): boolean {
+  if (record.agentId !== CLAUDE_AGENT_ID || record.bookmark !== undefined) return false;
+  if (!SESSION_ID_PATTERN.test(record.sessionId)) return false;
+  const title = record.title?.trim();
+  return !title || UNTOUCHED_TITLE_PATTERN.test(title);
+}
+
+export interface DropClaudeSessionsOptions<T> extends ClaudeStoreOptions {
+  /** Records the caller knows may have run against a different store. Always kept. */
+  keep?: (record: T) => boolean;
+}
+
 /**
  * Drops untouched Claude sessions from a history list, so the resume list stops
- * offering conversations `--resume` can never open. Read-side only: the journal
- * on disk is untouched, bookmarks and retitled sessions always stay, and a store
- * that can't be pinned down or read in full filters nothing.
+ * offering conversations `--resume` can never open. Only records that could
+ * have come from a default pane are judged, against the store such a pane reads,
+ * and the caller's `keep` vetoes any it knows were launched differently.
+ * Read-side only: the journal on disk is untouched, and a store that can't be
+ * pinned down or read in full filters nothing.
  */
 export async function dropClaudeSessionsWithoutTranscript<T extends SessionRecordFacts>(
   records: T[],
-  options: ClaudeStoreOptions = {}
+  options: DropClaudeSessionsOptions<T> = {}
 ): Promise<T[]> {
-  if (!records.some(couldBeUntouchedClaudeSession)) return records;
-  const projectsRoot = resolvePaneClaudeProjectsRoot(undefined, options);
+  const judged = (record: T): boolean =>
+    couldBeUntouchedClaudeSession(record) && !options.keep?.(record);
+  if (!records.some(judged)) return records;
+  const projectsRoot = resolvePaneClaudeProjectsRoot({}, options);
   if (!projectsRoot || isCoolingDown(projectsRoot)) return records;
   const ids = await readTranscriptIndex(
     projectsRoot,
@@ -373,12 +405,11 @@ export async function dropClaudeSessionsWithoutTranscript<T extends SessionRecor
     options.timeoutMs ?? CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS
   );
   if (!ids) return records;
-  return records.filter(
-    (record) => !couldBeUntouchedClaudeSession(record) || ids.has(record.sessionId.toLowerCase())
-  );
+  return records.filter((record) => !judged(record) || ids.has(record.sessionId.toLowerCase()));
 }
 
 export function __resetClaudeSessionStoreForTests(): void {
   inFlightScans.clear();
   unreachableUntil.clear();
+  paneStores.clear();
 }

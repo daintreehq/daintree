@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CHANNELS } from "../../../channels.js";
 import type { HandlerDependencies } from "../../../types.js";
+import { projectStore } from "../../../../services/ProjectStore.js";
 
 // Focused coverage of the bookmark IPC handlers in registerTerminalLifecycleHandlers:
 // error-code mapping, the generation freeze/recheck, and the prepare-before-remove
@@ -32,8 +33,12 @@ const m = vi.hoisted(() => ({
   renameBookmark: vi.fn(),
   deleteBookmark: vi.fn(),
   listBookmarks: vi.fn(() => []),
-  listAgentSessions: vi.fn((): Array<{ sessionId: string; agentId: string }> => []),
-  dropClaudeSessionsWithoutTranscript: vi.fn(async (records: unknown[]) => records),
+  listAgentSessions: vi.fn(
+    (): Array<{ sessionId: string; agentId: string; projectId?: string | null }> => []
+  ),
+  dropClaudeSessionsWithoutTranscript: vi.fn(
+    async (records: unknown[], _options?: unknown) => records
+  ),
   readSessionHistorySync: vi.fn<() => { sessionId: string; projectId: string | null }[]>(() => []),
   // Typed so the evicted-ledger case (mockReturnValue(undefined)) type-checks.
   currentGeneration: vi.fn<() => number | undefined>(() => 1),
@@ -64,6 +69,7 @@ vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
   CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
   resolvePaneClaudeProjectsRoot: vi.fn(() => null),
   __resetClaudeSessionStoreForTests: vi.fn(),
+  rememberClaudePaneStore: vi.fn(),
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: vi.fn().mockResolvedValue(undefined),
   isClaudeSessionWithoutTranscript: vi.fn(async () => false),
@@ -446,6 +452,44 @@ describe("bookmark mutator handlers", () => {
     m.dropClaudeSessionsWithoutTranscript.mockResolvedValueOnce([retrieved[1]]);
 
     await expect(list({}, {})).resolves.toEqual([retrieved[1]]);
-    expect(m.dropClaudeSessionsWithoutTranscript).toHaveBeenLastCalledWith(retrieved);
+    expect(m.dropClaudeSessionsWithoutTranscript).toHaveBeenLastCalledWith(
+      retrieved,
+      expect.objectContaining({ keep: expect.any(Function) })
+    );
+  });
+
+  it("session list keeps records whose pane may have read another Claude store", async () => {
+    register();
+    const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
+    vi.mocked(projectStore.getProjectSettings).mockImplementation(async (projectId: string) => {
+      if (projectId === "proj-shell") return { terminalSettings: { shell: "/bin/bash" } } as never;
+      if (projectId === "proj-env") {
+        return { environmentVariables: { CLAUDE_CONFIG_DIR: "/work/claude" } } as never;
+      }
+      if (projectId === "proj-broken") throw new Error("unreadable settings");
+      // An icon that happens to contain the name is not an environment setting.
+      return { projectIconSvg: "<svg><title>CLAUDE_CONFIG_DIR</title></svg>" } as never;
+    });
+    const record = (sessionId: string, projectId: string | null) => ({
+      sessionId,
+      agentId: "claude",
+      projectId,
+    });
+    const retrieved = [
+      record("plain", "proj-plain"),
+      record("own-shell", "proj-shell"),
+      record("own-store", "proj-env"),
+      record("unreadable", "proj-broken"),
+      record("no-project", null),
+    ];
+    m.listAgentSessions.mockReturnValueOnce(retrieved);
+
+    await list({}, {});
+
+    const [, options] = m.dropClaudeSessionsWithoutTranscript.mock.calls.at(-1) as [
+      unknown,
+      { keep: (record: unknown) => boolean },
+    ];
+    expect(retrieved.map((entry) => options.keep(entry))).toEqual([false, true, true, true, true]);
   });
 });
