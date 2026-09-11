@@ -130,9 +130,8 @@ vi.mock("../../HelpSessionService.js", () => ({
 }));
 
 const { AssistantHostService } = await import("../AssistantHostService.js");
-const { NativeAssistantResumeStore, __resetNativeAssistantResumeStoreForTests } = await import(
-  "../NativeAssistantResumeStore.js"
-);
+const { NativeAssistantResumeStore, __resetNativeAssistantResumeStoreForTests } =
+  await import("../NativeAssistantResumeStore.js");
 const { CHANNELS } = await import("../../../ipc/channels.js");
 
 const PROJECT = "p1";
