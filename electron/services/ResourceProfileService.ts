@@ -782,8 +782,8 @@ export class ResourceProfileService {
   /**
    * Read system-wide available memory in MB. Mirrors
    * ProjectViewManager.getAvailableMemoryMb(): on macOS "available" =
-   * free + purgeable, because Darwin holds reclaimable pages as purgeable
-   * rather than free. On Windows/Linux, `free` alone is accurate. Returns
+   * free + purgeable + fileBacked (see readSystemMemorySnapshot). On
+   * Windows/Linux, `free` alone is accurate. Returns
    * null when the Chromium API is unavailable (e.g., under test mocks).
    */
   private getAvailableSystemMemoryMb(): number | null {
@@ -981,8 +981,8 @@ export class ResourceProfileService {
     // System-available memory signal. The app-private signal above only sees
     // this process's footprint; if another app on the box is hoarding RAM
     // and the OS is paging, we want to back off even when our own memory
-    // looks fine. Mirrors the (free + purgeable) pattern ProjectViewManager
-    // already uses for cached-view eviction.
+    // looks fine. Reads the same figure ProjectViewManager uses for cached-view
+    // eviction.
     const sysAvailMb = this.getAvailableSystemMemoryMb();
     if (sysAvailMb !== null) {
       let sysScore = 0;

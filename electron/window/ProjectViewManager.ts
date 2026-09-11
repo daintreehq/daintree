@@ -107,8 +107,9 @@ const DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS = 30_000;
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
  * call (5–50 ms per invocation) out of the budget that would risk main-thread
  * jank. Each tick also evaluates the low-memory pressure floor (see
- * `maybeEvictUnderPressure`), bounding pressure-eviction latency to one
- * sample period without a new timer.
+ * `maybeEvictUnderPressure`), which acts only on consecutive low readings and
+ * spares a view used within the last minute, so pressure-eviction latency is a
+ * few sample periods and needs no new timer.
  */
 const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 
@@ -288,6 +289,8 @@ export class ProjectViewManager {
   activeProjectId: string | null = null;
   maxCachedViews = 1;
   memoryPressurePolicy: MemoryPressurePolicy | null = null;
+  /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */
+  pressureSampleStreak = 0;
   win: BrowserWindow;
   dirname: string;
   onRecreateWindow?: () => Promise<void>;
@@ -1102,6 +1105,8 @@ export class ProjectViewManager {
    * an inverted or non-finite edge disables rather than half-arms the policy.
    */
   setMemoryPressurePolicy(policy: MemoryPressurePolicy | null): void {
+    // Readings counted against the previous band say nothing about this one.
+    this.pressureSampleStreak = 0;
     if (
       policy == null ||
       !Number.isFinite(policy.criticalMb) ||
@@ -1128,6 +1133,7 @@ export class ProjectViewManager {
    * cache in a single pass.
    */
   setLowMemoryFreeThresholdMb(mb: number | null): void {
+    this.pressureSampleStreak = 0;
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {
       this.memoryPressurePolicy = null;
     } else {

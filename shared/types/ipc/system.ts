@@ -285,7 +285,7 @@ export interface DiagnosticsInfo {
   eventLoopP99Ms: number;
   /** Total physical RAM (MB) from os.totalmem(); omitted when unreadable. */
   systemTotalMB?: number;
-  /** Available physical RAM (MB) — free (+ purgeable on macOS) from process.getSystemMemoryInfo(); omitted when unreadable. */
+  /** Available physical RAM (MB) — free (+ purgeable and file-backed on macOS) from process.getSystemMemoryInfo(); omitted when unreadable. */
   systemAvailableMB?: number;
 }
 

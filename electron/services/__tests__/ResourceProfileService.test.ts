@@ -1619,10 +1619,16 @@ describe("ResourceProfileService", () => {
       }
     });
 
-    function stubSystemMemory(freeKb: number, purgeableKb: number, totalKb: number): void {
+    function stubSystemMemory(
+      freeKb: number,
+      purgeableKb: number,
+      totalKb: number,
+      fileBackedKb = 0
+    ): void {
       (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo = vi.fn(() => ({
         free: freeKb,
         purgeable: purgeableKb,
+        fileBacked: fileBackedKb,
         total: totalKb,
       }));
     }
@@ -1689,6 +1695,25 @@ describe("ResourceProfileService", () => {
       // Asserting "performance" only passes if purgeable was added — without it
       // the score would jump to +2 (sys mem critical).
       stubSystemMemory(200 * 1024, 4 * 1024 * 1024, EIGHT_GB / 1024);
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("includes the file cache in the 'available' calculation (#12363)", () => {
+      // Same shape as the purgeable case: 200 MB free alone is below the 10%
+      // floor, and 4 GB of file-backed pages lifts it above 20%. "performance"
+      // only holds if fileBacked was added.
+      stubSystemMemory(200 * 1024, 0, EIGHT_GB / 1024, 4 * 1024 * 1024);
 
       const deps = createDeps();
       const service = new ResourceProfileService(deps);

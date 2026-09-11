@@ -198,7 +198,7 @@ function ensureEventLoopHistogram(): IntervalHistogram {
 /**
  * Snapshot total + available physical memory for the diagnostics popover.
  * `systemTotalMB` comes from os.totalmem() (always available). `systemAvailableMB`
- * = free (+ purgeable on macOS) per process.getSystemMemoryInfo(), mirroring
+ * = free (+ purgeable and file-backed on macOS) per process.getSystemMemoryInfo(), mirroring
  * ProcessMemoryMonitor.readAvailableMemoryMb so the two stay in sync; it is
  * omitted when that Chromium API is unavailable (e.g. test mocks), so the
  * renderer hides the row rather than showing 0.

@@ -349,8 +349,8 @@ function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
 
 /**
  * Read system-wide available memory in MB. On macOS, "available" = free +
- * purgeable, because Darwin holds reclaimable pages as purgeable rather than
- * free — using `free` alone would fire false positives on every healthy mac.
+ * purgeable + fileBacked (see readSystemMemorySnapshot) — using `free` alone
+ * would fire false positives on every healthy mac.
  * On Windows/Linux, `free` alone is accurate. Returns null when the Chromium
  * API is unavailable (e.g., under test mocks). Mirrors the pattern in
  * ProjectViewManager.getAvailableMemoryMb so the two memory floors stay in
@@ -540,11 +540,10 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
       // System-wide signal uses the reclaim band's critical edge: RAM-relative
       // below ~10 GB, flat at 1 GB above it. Only the band's *warning* edge
-      // widens with RAM (#11926) — this one stays capped, because `availableMb`
-      // is `free + purgeable` and omits Darwin's `fileBacked` file cache, so a
-      // 64–128 GB machine reports far less "available" than it has headroom
-      // for. Raising this edge against that scale would read healthy file-cache
-      // occupancy as critical and hand tier 2 a machine that is fine.
+      // widens with RAM (#11926) — this one is the emergency edge that hands
+      // tier 2 a collapse, and `availableMb` counts Darwin's file cache
+      // (#12363), so on a large Mac it is crossed only once that cache is
+      // spent. See `getSystemMemoryThresholds`.
       const availableMb = readAvailableSystemMemoryMb();
       const systemPressureActive = availableMb !== null && availableMb < systemLowMemoryThresholdMb;
       if (systemPressureActive) {
