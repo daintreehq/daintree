@@ -71,6 +71,18 @@ export const WORKBENCH_TIER_TOOLS = [
   "keybinding.getOverrides",
 
   "slashCommands.list",
+  // The richer catalog behind `slashCommands.list`: bounded command, skill and
+  // plugin lookup for an explicit agent/worktree, with exact invocation tokens.
+  // It returns the same frontmatter metadata from the same discovery engine, so
+  // it takes the same tier. It landed without this wiring, which left the
+  // assistant told to use an action `tools/list` never offered it.
+  //
+  // `agentCapabilities.get` is deliberately NOT here. It returns the source
+  // file body, and discovery follows symlinks with no containment on the
+  // read, so a repository could point a `SKILL.md` at a file outside every
+  // skill root and have it returned. Expose it once that read is contained;
+  // `agentCapabilityTierExposure.test.ts` fails if it arrives here first.
+  "agentCapabilities.search",
 
   "skills.search",
   "skills.load",

@@ -401,7 +401,15 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // of the same description the external ceiling above pays for: the tool sits
   // on the action tier as well, so the in-app cohort is advertised the identical
   // prose rather than a second wording of it.
-  const MAX_COHORT_TOTAL_BYTES = 53_887;
+  // 53_887 → 54_095 for `agentCapabilities.search`, which shipped with its
+  // contract but on no tier, so the assistant was told to use an action
+  // `tools/list` never offered it. Workbench only, beside the
+  // `slashCommands.list` it extends, so the external total does not move. Its
+  // 272 B is the whole of the increase (the prior total sat 64 B under the old
+  // ceiling), and the description predates this change: the measured total,
+  // not an allowance. `agentCapabilities.get` stays off every tier until its
+  // source read is contained, and costs nothing here until then.
+  const MAX_COHORT_TOTAL_BYTES = 54_095;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
