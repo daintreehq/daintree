@@ -16,6 +16,7 @@ import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
 import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 interface FleetCountChipProps {
   armedCount: number;
@@ -219,7 +220,10 @@ export function FleetCountChip({
                         type="button"
                         onClick={() => focusArmedPane(id)}
                         aria-label={`Focus ${title}`}
-                        className="flex-1 truncate px-2 py-1 text-left text-xs leading-[inherit] text-text-primary"
+                        className={cn(
+                          "flex-1 truncate px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
+                          PALETTE_ROW_FOCUS_CLASS
+                        )}
                       >
                         {title}
                       </button>

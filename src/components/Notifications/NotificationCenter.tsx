@@ -15,7 +15,6 @@ import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
@@ -52,6 +51,7 @@ import {
   selectKindOffKinds,
   KIND_SHORT_LABEL,
 } from "@/lib/notificationEffectiveState";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 const NEEDS_ATTENTION_CAP = 5;
 const CONTEXT_NONE_KEY = "__none__";
@@ -1705,7 +1705,10 @@ function ContextSectionHeader({
           <button
             type="button"
             onClick={onMarkRead}
-            className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:text-text-primary hover:bg-overlay-raised focus-visible:text-text-primary focus-visible:bg-overlay-raised transition-colors"
+            className={cn(
+              "inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:text-text-primary hover:bg-overlay-raised transition-colors",
+              PALETTE_ROW_FOCUS_CLASS
+            )}
           >
             Mark read
           </button>

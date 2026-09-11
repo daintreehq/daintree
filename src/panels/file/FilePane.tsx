@@ -76,6 +76,8 @@ import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
+import { cn } from "@/lib/utils";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -1381,7 +1383,10 @@ export function FilePane({
                       role="option"
                       aria-selected={false}
                       onClick={() => setFilePanelPath(id, result.absolutePath)}
-                      className="text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-text-primary hover:bg-border-default"
+                      className={cn(
+                        "text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-text-primary hover:bg-border-default",
+                        PALETTE_ROW_FOCUS_CLASS
+                      )}
                       data-testid="file-pane-result"
                     >
                       {result.relativePath}

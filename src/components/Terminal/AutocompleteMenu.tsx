@@ -11,6 +11,7 @@ import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 function getDescriptionSnippet(description: string, maxLength = 60): string {
   const cleaned = description.replace(/\s+/g, " ").trim();
@@ -190,6 +191,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       aria-disabled={isRowStale || undefined}
                       className={cn(
                         "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-[color,background-color,opacity] duration-150 ease-out",
+                        PALETTE_ROW_FOCUS_CLASS,
                         idx === selectedIndex
                           ? "bg-overlay-soft text-text-primary"
                           : "text-text-secondary hover:bg-tint/[0.05] hover:text-text-primary",
