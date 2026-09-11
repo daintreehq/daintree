@@ -1,196 +1,232 @@
-import { useEffect, useRef } from "react";
-import { Folders, History } from "@/components/icons";
-import { cn } from "@/lib/utils";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { useEffect, useMemo } from "react";
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuMeta,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+} from "@/components/ui/dropdown-menu";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useCopyTreeHistoryStore } from "@/store/copyTreeHistoryStore";
+import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { formatBytes } from "@/lib/formatBytes";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 
 /**
- * How many recent runs the panel shows. Main keeps twenty per project so the
- * long tail survives a burst of one-off copies; the panel is a shortcut list,
+ * How many recent runs the menu shows. Main keeps twenty per project so the
+ * long tail survives a burst of one-off copies; the menu is a shortcut list,
  * not a browser, so it takes the newest handful.
  */
 const RECENTS_LIMIT = 5;
 
-/** Row count while hydrating — a plausible list, not the cap. */
-const SKELETON_ROWS = 3;
+/**
+ * Options that change the run even when empty. `mergeCopyTreeOptions` backfills
+ * `exclude` and `always` from project settings only when they are undefined —
+ * an explicit `[]` or `""` switches that backfill off, so a record carrying one
+ * is a different run from the toolbar's default and must stay listed.
+ */
+const EXPLICIT_EVEN_WHEN_EMPTY: ReadonlySet<string> = new Set(["exclude", "always"]);
 
 /**
- * The compact second line on a recent: how big the run was and when it last
- * ran. Deliberately not `formatCopyResultMessage` — that composes a completion
- * sentence ("Copied 12 files (3.4 KB) as XML to clipboard") for the toast that
- * announces a copy just happened, which is the wrong tense and far too long for
- * a list row describing a copy the user might repeat.
+ * Whether a stored run is the pinned action wearing a different hat.
+ *
+ * Records hold the caller's runtime options *before* project settings are
+ * merged in, so a full-context copy is recorded with no options at all — which
+ * is exactly what the menu's own "Copy full context" entry dispatches. Left in
+ * the list it renders as a second copy of the entry directly above it, and the
+ * user has to stop and work out whether the two differ. The dominant action is
+ * not repeated inside the menu it anchors.
+ *
+ * Keyed on the options rather than the name: a record *named* "Full context"
+ * that carries a format or an exclude is a genuinely different run and stays.
+ * Three shapes normalise to "default": an absent value, a `false` flag (which
+ * the generator treats the same as an absent one), and an explicit `format`
+ * equal to the default — the palette and MCP routes pass it where the toolbar
+ * omits it, and the two mean the same run. An empty selection array is default
+ * too, except for the two overrides above.
+ */
+function isPinnedDefault(record: CopyTreeHistoryRecord): boolean {
+  return Object.entries(record.options).every(([key, value]) => {
+    if (value === undefined || value === false) return true;
+    if (key === "format") return value === DEFAULT_COPYTREE_FORMAT;
+    if (EXPLICIT_EVEN_WHEN_EMPTY.has(key)) return false;
+    if (Array.isArray(value)) return value.length === 0;
+    return value === "";
+  });
+}
+
+/**
+ * The full description of a recent: how big the run was and when it last ran.
+ * This is the entry's accessible name; the visible trailing slot shows the
+ * shorter `formatRecentTrailing` because a menu row is one line wide.
+ *
+ * Deliberately not `formatCopyResultMessage` — that composes a completion
+ * sentence for the toast that announces a copy just happened, which is the
+ * wrong tense for a list of copies the user might repeat.
  *
  * `totalSize` rides on the run result's optional stats, so a run that reported
- * no size is shown without one rather than padded with a zero.
+ * no size is described without one rather than padded with a zero. A
+ * non-default format is named because it changes what lands on the clipboard
+ * and nothing else in the row says so; the default is left unsaid.
+ *
+ * `formatTimeAgo` rather than `formatRelativeTime`: "11d ago" carries the same
+ * information as "11 days ago" in a third of the width, and the verbose
+ * formatter stays with the settings tables that have room for it.
  */
 export function formatRecentMeta(record: CopyTreeHistoryRecord, now?: number): string {
   const { fileCount, totalSize } = record.stats;
-  const parts = [fileCount === 1 ? "1 file" : `${fileCount} files`];
+  const parts = [fileCount === 1 ? "1 file" : `${fileCount.toLocaleString()} files`];
   if (totalSize) parts.push(formatBytes(totalSize));
-  parts.push(formatRelativeTime(record.lastUsedAt, now));
+  if (record.options.format && record.options.format !== DEFAULT_COPYTREE_FORMAT) {
+    parts.push(record.options.format);
+  }
+  parts.push(formatTimeAgo(record.lastUsedAt, now));
   return parts.join(" · ");
 }
 
-// Rows carry no accent: hierarchy here comes from typography and placement, and
-// the panel is one focus region where the focus ring is the only anchor that
-// earns emphasis. The keyboard highlight rides the same neutral surface as
-// hover rather than a second colour, and the app's default focus outline is
-// left in place rather than replaced.
-const rowClass = cn(
-  "w-full flex items-center gap-2.5 px-3 py-2 text-left",
-  "text-text-primary hover:bg-overlay-raised focus-visible:bg-overlay-raised",
-  "transition-colors"
-);
+/**
+ * What fits beside a name on one menu line: the size, because it is the one
+ * fact that changes what the user does next, and the age, because it is how
+ * they recognise the run. The file count and a non-default format live in the
+ * accessible name only — a third token here was what truncated the names.
+ */
+export function formatRecentTrailing(record: CopyTreeHistoryRecord, now?: number): string {
+  const parts: string[] = [];
+  if (record.stats.totalSize) parts.push(formatBytes(record.stats.totalSize));
+  parts.push(formatTimeAgo(record.lastUsedAt, now));
+  return parts.join(" · ");
+}
 
-// The primary action is the panel's header: a framed button in its own padded
-// band rather than the first row of the list, so it reads as "the button, with
-// its history underneath" instead of one more entry. Neutral raised surface —
-// the focus ring it takes on open is the region's one emphasis signal.
-const primaryButtonClass = cn(
-  "w-full flex items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left",
-  "border border-divider bg-overlay-subtle text-text-primary hover:bg-overlay-raised",
-  "transition-colors"
-);
-
-interface CopyTreeRecentsPanelProps {
-  /** The old one-click behavior, now one click deeper. */
+interface CopyTreeMenuContentProps {
+  /** The keybinding shown beside the pinned entry, as the tooltip shows it. */
+  shortcut?: string | null;
+  /** The old one-click behavior, now one row deeper. */
   onCopyFullContext: () => void;
   /** Re-run a stored option set against the active worktree. */
   onRunRecent: (record: CopyTreeHistoryRecord) => void;
+  /** Open Project settings on the Context tab, where excludes and budgets live. */
+  onOpenContextSettings: () => void;
+  /** Forwarded to the content; the toolbar uses it to redirect focus on overflow eviction. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
- * The copy-tree toolbar dropdown (#11733).
+ * The copy-context toolbar menu (#11733).
  *
  * Six output formats, filters, scoped copies and MCP-named copy trees had all
- * collapsed behind one button that silently generated the full tree. This panel
- * keeps that copy one click away and puts the project's recent runs beside it.
+ * collapsed behind one button that silently generated the full tree. This
+ * menu keeps that copy one row away and lists the project's recent runs
+ * beneath it.
  *
- * Lazy-loaded and mounted only once the dropdown has opened, so the history
- * mirror's IPC pull is paid on first use rather than at app start.
+ * A plain `DropdownMenu`, the same primitive the toolbar's overflow menu two
+ * icons over uses, and not the panel it replaced: it is a utility menu — open,
+ * pick, gone — and the panel had grown a hero button, two-line rows, a footer
+ * and its own focus-restoration plumbing to look like something else. The
+ * primitive brings the density, arrow-key navigation, typeahead, and close-time
+ * focus handling with it; nothing here restates any of that.
+ *
+ * The store hooks live in `CopyTreeMenuItems` below, under Radix's presence
+ * boundary, so the history snapshot pull still lands on first open.
  */
-export function CopyTreeRecentsPanel({
+export function CopyTreeMenuContent({ onCloseAutoFocus, ...items }: CopyTreeMenuContentProps) {
+  return (
+    <DropdownMenuContent
+      align="end"
+      sideOffset={4}
+      aria-label="Copy context"
+      data-copy-tree-panel=""
+      // Wide enough for a path and a trailing size on one line; the names
+      // truncate past that rather than the menu growing to fit them.
+      className="w-[280px]"
+      onCloseAutoFocus={onCloseAutoFocus}
+    >
+      <CopyTreeMenuItems {...items} />
+    </DropdownMenuContent>
+  );
+}
+
+/**
+ * The store-owning half, deliberately a CHILD of `DropdownMenuContent`: Radix's
+ * presence boundary unmounts the content's descendants while the menu is
+ * closed, not the component that renders the content. Holding the history
+ * hooks here — rather than in `CopyTreeMenuContent`, which the toolbar mounts
+ * unconditionally — is what keeps the store's snapshot pull on first open
+ * instead of at app start.
+ */
+function CopyTreeMenuItems({
+  shortcut,
   onCopyFullContext,
   onRunRecent,
-}: CopyTreeRecentsPanelProps) {
+  onOpenContextSettings,
+}: Omit<CopyTreeMenuContentProps, "onCloseAutoFocus">) {
   const records = useCopyTreeHistoryStore((s) => s.records);
   const loading = useCopyTreeHistoryStore((s) => s.loading);
   const init = useCopyTreeHistoryStore((s) => s.init);
-  const primaryRowRef = useRef<HTMLButtonElement>(null);
-
-  // The trigger advertises `aria-haspopup="dialog"`, and this panel is where
-  // the button's own action now lives — so focus has to come in with it. The
-  // dropdown portals to the end of <body>, so a keyboard user who left focus on
-  // the trigger would otherwise have to tab through the whole app to reach
-  // these rows. The body unmounts on close, so this runs once per open.
-  useEffect(() => {
-    primaryRowRef.current?.focus();
-  }, []);
 
   // Idempotent at the store: later opens re-run this and return immediately.
-  // The subscription deliberately outlives the panel — an MCP or context-menu
-  // copy taken while the dropdown is closed still lands before the next open.
+  // The subscription deliberately outlives the menu — an MCP or context-menu
+  // copy taken while it is closed still lands before the next open.
   useEffect(() => {
     init();
   }, [init]);
 
-  // Records arrive newest-first and project-scoped from Main, so this is the
-  // whole selection step.
-  const recents = records.slice(0, RECENTS_LIMIT);
+  // Records arrive newest-first and project-scoped from Main. The default-run
+  // filter comes before the cap, so dropping the duplicate frees a slot for a
+  // real run rather than leaving a gap.
+  const recents = useMemo(
+    () => records.filter((record) => !isPinnedDefault(record)).slice(0, RECENTS_LIMIT),
+    [records]
+  );
 
-  // The primary button paints immediately; only the recents section waits.
-  // The bones are `immediate` because this gate has already proven the wait
-  // exceeded the Doherty threshold — the class-level delay would gate it twice.
-  const showSkeleton = useDohertyGate(loading);
+  // The pinned entry is usable immediately; only the recents wait, and under
+  // the Doherty gate they wait silently. A local history read should never
+  // take long enough to show this.
+  const showLoading = useDohertyGate(loading);
 
   return (
-    <div
-      data-copy-tree-panel=""
-      role="dialog"
-      aria-label="Copy context"
-      // Keeps its own 420px ceiling — this panel's proportions are not being
-      // redesigned here — but stops that ceiling exceeding the room actually
-      // left under the anchor, so a short window no longer runs the list off
-      // the bottom of the screen. The variable comes from FixedDropdown's
-      // positioning pass; the fallback preserves the previous behaviour if
-      // this ever renders outside that shell. Same mechanism the notification
-      // center adopted in #12061.
-      className="w-[320px] max-h-[min(420px,var(--fixed-dropdown-available-height,420px))] flex flex-col"
-    >
-      {/* No headings: the framed primary button IS the header, and everything
-          under the divider is self-evidently the run history — each row names
-          its run and ends in a relative timestamp. */}
-      <div className="p-1.5 border-b border-divider">
-        <button
-          ref={primaryRowRef}
-          type="button"
-          onClick={onCopyFullContext}
-          className={primaryButtonClass}
-        >
-          <Folders className="w-4 h-4 shrink-0 text-daintree-text/70" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">Copy full context</span>
-        </button>
-      </div>
+    <>
+      <DropdownMenuItem onSelect={onCopyFullContext}>
+        Copy full context
+        {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
+      </DropdownMenuItem>
 
-      <ScrollShadow className="flex-1 min-h-0">
-        {/* One stable child: the shadow hook observes firstElementChild, so it
-            must outlive the skeleton/empty-state/list swaps below. */}
-        <div className="py-1">
-          {loading ? (
-            showSkeleton ? (
-              <>
-                <Skeleton label="Loading recent copies" className="flex flex-col gap-2 px-3 py-2">
-                  {Array.from({ length: SKELETON_ROWS }, (_, i) => (
-                    <div key={i} className="flex flex-col gap-1.5">
-                      <SkeletonBone immediate heightPx={12} className="w-1/2" />
-                      <SkeletonBone immediate heightPx={10} className="w-2/3" />
-                    </div>
-                  ))}
-                </Skeleton>
-                {/* Sibling, never nested: the Skeleton wrapper's aria-busy
-                    silences mutations inside its subtree. A local history read
-                    should never take this long, so if it does the user needs to
-                    be told rather than left watching a pulse. */}
-                <SkeletonHint className="px-3 pb-2" />
-              </>
-            ) : null
-          ) : recents.length === 0 ? (
-            <EmptyState
-              variant="zero-data"
-              scale="popover"
-              title="Copy a context to start your recents"
-              icon={<History />}
-              className="py-6"
-            />
-          ) : (
-            <ul className="flex flex-col">
-              {recents.map((record) => (
-                <li key={record.id}>
-                  <button
-                    type="button"
-                    onClick={() => onRunRecent(record)}
-                    className={cn(rowClass, "items-start")}
-                  >
-                    <span className="min-w-0 flex-1 flex flex-col gap-0.5">
-                      <span className="truncate text-sm">{record.name}</span>
-                      <span className="truncate text-2xs text-text-secondary">
-                        {formatRecentMeta(record)}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </ScrollShadow>
-    </div>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>Recent</DropdownMenuLabel>
+      {loading ? (
+        showLoading ? (
+          <DropdownMenuItem disabled>Loading recent copies…</DropdownMenuItem>
+        ) : null
+      ) : recents.length === 0 ? (
+        // Names an action that can actually populate this list. "Copy
+        // context" could not: the entry above records a run with no options,
+        // which is the pinned action itself and is filtered back out, so
+        // following that invitation leaves the list empty and the message
+        // standing. Copying a folder (the file browser's row menu) stores a
+        // scope, and a scoped run does appear here.
+        <DropdownMenuItem disabled>Copy a folder to reuse it here</DropdownMenuItem>
+      ) : (
+        recents.map((record) => (
+          <DropdownMenuItem
+            key={record.id}
+            data-copy-tree-recent=""
+            onSelect={() => onRunRecent(record)}
+            // The trailing slot is aria-hidden by design; the full description,
+            // file count included, goes into the name instead.
+            aria-label={`${record.name}, ${formatRecentMeta(record)}`}
+          >
+            <span className="min-w-0 truncate">{record.name}</span>
+            <DropdownMenuMeta className="shrink-0">{formatRecentTrailing(record)}</DropdownMenuMeta>
+          </DropdownMenuItem>
+        ))
+      )}
+
+      <DropdownMenuSeparator />
+      {/* Where the excludes, always-include lists and size budgets that shape
+          every copy actually live. Without this the menu is a dead end for
+          someone who opened it wanting to change what a copy contains. */}
+      <DropdownMenuItem onSelect={onOpenContextSettings}>Context settings</DropdownMenuItem>
+    </>
   );
 }

@@ -25,6 +25,7 @@ import type {
   AgentSubagentTranscriptResult,
   SubagentProvider,
 } from "@shared/types/ipc/agentSubagents";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 const TONE_CLASSES: Record<"error" | "active" | "muted", string> = {
   error: "text-status-error",
@@ -140,7 +141,10 @@ function SubagentRow({
         onClick={() => setIsOpen((open) => !open)}
         aria-expanded={isOpen}
         aria-controls={panelId}
-        className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-overlay-subtle transition-colors"
+        className={cn(
+          "w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-overlay-subtle transition-colors",
+          PALETTE_ROW_FOCUS_CLASS
+        )}
       >
         <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
         <span className="flex-1 min-w-0 flex flex-col gap-0.5">

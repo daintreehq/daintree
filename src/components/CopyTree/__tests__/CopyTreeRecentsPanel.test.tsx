@@ -1,31 +1,24 @@
 // @vitest-environment jsdom
 /**
- * CopyTreeRecentsPanel — the copy-tree toolbar dropdown body (#11733).
+ * CopyTreeMenuContent — the copy-context toolbar menu body (#11733).
  *
- * The panel is what turned a silent one-click full copy into a two-stage
- * interaction, so what matters here is that the primary action stays reachable
- * at all times, that the recents list faithfully reflects the project history
- * it is a shortcut into, and that a hydrating history never flashes chrome the
- * Doherty gate exists to suppress.
+ * The menu is what turned a silent one-click full copy into a two-stage
+ * interaction, so what matters here is that the pinned entry stays reachable
+ * at all times, that the recents faithfully reflect the project history they
+ * are a shortcut into, and that the entry the menu anchors is never repeated
+ * beneath itself.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
-
-// jsdom ships no ResizeObserver; ScrollShadow's shadow hook constructs one.
-class ResizeObserverStub {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-beforeAll(() => {
-  if (typeof globalThis.ResizeObserver === "undefined") {
-    globalThis.ResizeObserver = ResizeObserverStub as typeof ResizeObserver;
-  }
-});
+import { render, screen, act, cleanup, fireEvent } from "@testing-library/react";
 
 import type { CopyTreeHistoryRecord } from "@shared/types";
-import { CopyTreeRecentsPanel, formatRecentMeta } from "../CopyTreeRecentsPanel";
+import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { primeRadix } from "@/components/ui/radix-loader";
+import {
+  CopyTreeMenuContent,
+  formatRecentMeta,
+  formatRecentTrailing,
+} from "../CopyTreeRecentsPanel";
 import {
   useCopyTreeHistoryStore,
   _resetCopyTreeHistoryStoreForTest,
@@ -53,13 +46,21 @@ vi.mock("@/store/copyTreeHistoryStore", async () => {
   };
 });
 
+beforeAll(async () => {
+  await primeRadix();
+});
+
 function makeRecord(overrides: Partial<CopyTreeHistoryRecord> = {}): CopyTreeHistoryRecord {
   const id = overrides.id ?? "r1";
   return {
     id,
     dedupeKey: `key-${id}`,
     name: `Run ${id}`,
-    options: {},
+    // A recent worth listing is one that differs from the pinned action.
+    // A record with no options IS the pinned "Copy full context" run, and the
+    // menu drops it rather than listing the entry twice — so a fixture that
+    // used `{}` here would be testing the filtered-out case by accident.
+    options: { scopePaths: [`scope-${id}`] },
     source: "toolbar",
     worktreeId: "wt-1",
     stats: { fileCount: 3, totalSize: 2048 },
@@ -78,204 +79,227 @@ function seed(records: CopyTreeHistoryRecord[]) {
 
 const noop = () => {};
 
-describe("CopyTreeRecentsPanel", () => {
+/**
+ * Mounted open inside a real menu root: the content is a Radix
+ * `DropdownMenuContent`, which only exists while its root is open.
+ */
+function renderMenu(props: Partial<React.ComponentProps<typeof CopyTreeMenuContent>> = {}) {
+  return render(
+    <DropdownMenu open>
+      <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+      <CopyTreeMenuContent
+        onCopyFullContext={noop}
+        onRunRecent={noop}
+        onOpenContextSettings={noop}
+        {...props}
+      />
+    </DropdownMenu>
+  );
+}
+
+/** The recent entries only — never the pinned entry or the settings entry. */
+function listedRecents(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-copy-tree-recent]"));
+}
+
+describe("CopyTreeMenuContent", () => {
   beforeEach(() => {
     initSpy.mockClear();
     _resetCopyTreeHistoryStoreForTest();
   });
 
   afterEach(() => {
+    cleanup();
     vi.useRealTimers();
   });
 
   it("initializes the history mirror on mount", () => {
-    // The store has no other consumer in the app, so if the panel stops calling
-    // init() the recents list is permanently empty rather than merely stale.
+    // The store has no other consumer in the app, so if the menu stops calling
+    // init() the recents are permanently empty rather than merely stale.
     seed([]);
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
+    renderMenu();
     expect(initSpy).toHaveBeenCalled();
   });
 
   it("offers the full copy while history is still hydrating", () => {
-    // The primary row is the old one-click behavior. Gating it behind the
-    // history pull would make the panel slower than the button it replaced.
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
-    expect(screen.getByRole("button", { name: "Copy full context" })).toBeTruthy();
+    // The pinned entry is the old one-click behavior. Gating it behind the
+    // history read would make the menu strictly slower than the button it
+    // replaced.
+    renderMenu();
+    const pinned = screen.getByRole("menuitem", { name: /copy full context/i });
+    expect(pinned.getAttribute("data-disabled")).toBeNull();
   });
 
-  it("shows no loading chrome before the Doherty threshold, then skeleton rows", () => {
-    vi.useFakeTimers();
-    const { unmount } = render(
-      <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />
-    );
-
-    // A fast hydration must resolve without ever having painted a placeholder.
-    expect(screen.queryByRole("status")).toBeNull();
-
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    // Unmount before restoring real timers so the gate's pending timeout cannot
-    // fire against a torn-down tree.
-    unmount();
+  it("shows the keybinding beside the pinned entry when one is bound", () => {
+    seed([]);
+    renderMenu({ shortcut: "⌘⇧C" });
+    const pinned = screen.getByRole("menuitem", { name: /copy full context/i });
+    expect(pinned.textContent).toContain("⌘⇧C");
   });
 
-  it("never falls back to a spinner while hydrating", () => {
-    // The panel's shape is predictable, so the loading rule is skeleton-or-
-    // nothing; a spinner here is the specific thing the issue ruled out.
-    // `.animate-spin` is what the shared Spinner actually renders — it carries
-    // no test id, so that is the only marker that would catch a regression.
-    vi.useFakeTimers();
-    const { container, unmount } = render(
-      <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />
-    );
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    expect(container.querySelector(".animate-spin")).toBeNull();
-    unmount();
-  });
-
-  it("tears the skeleton down once history resolves and does not bring it back", () => {
-    // The gate's timer is still pending when loading flips. Without the outer
-    // `loading` branch owning the swap, a late-firing gate would remount a
-    // skeleton over an already-populated list.
-    vi.useFakeTimers();
-    const { unmount } = render(
-      <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />
-    );
-
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    expect(screen.queryByRole("status")).not.toBeNull();
-
-    act(() => {
-      useCopyTreeHistoryStore.setState({ records: [makeRecord()], loading: false });
-    });
-    expect(screen.queryByRole("status")).toBeNull();
-
-    act(() => {
-      vi.advanceTimersByTime(2000);
-    });
-    expect(screen.queryByRole("status")).toBeNull();
-
-    unmount();
-  });
-
-  it("shows no skeleton at all when history resolves inside the gate", () => {
-    vi.useFakeTimers();
-    const { unmount } = render(
-      <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />
-    );
-
-    act(() => {
-      vi.advanceTimersByTime(200);
-      useCopyTreeHistoryStore.setState({ records: [makeRecord()], loading: false });
-    });
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-
-    expect(screen.queryByRole("status")).toBeNull();
-    unmount();
-  });
-
-  it("is a named dialog that takes focus so the rows are keyboard-reachable", () => {
-    // The trigger declares aria-haspopup="dialog" and the panel now owns the
-    // button's former action. Portaled to the end of <body>, an unfocused panel
-    // would leave a keyboard user tabbing through the whole app to reach it.
-    // The panel has no visible heading — the primary button is its header — so
-    // the dialog's name must come from an aria-label instead. Resolved through
-    // the accessibility tree rather than read off the attribute.
-    seed([makeRecord()]);
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
-
-    expect(screen.getByRole("dialog", { name: /copy context/i })).toBeTruthy();
-
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Copy full context" }));
-  });
-
-  it("builds every row as a real button so Enter and Space work natively", () => {
-    // Asserting the element type rather than firing Enter: jsdom does not
-    // synthesize a click from Enter, so a keydown test would prove nothing
-    // about activation. Native button semantics are the thing this component
-    // actually controls — a regression to a clickable div would fail here,
-    // and it is what makes the panel operable without a roving-tabindex system.
+  it("renders every entry as a menuitem", () => {
+    // The whole reason this is a DropdownMenu and not a panel: the primitive
+    // owns arrow-key navigation, typeahead and close-time focus. A regression
+    // to a plain button list would silently lose all three.
     seed([makeRecord({ name: "authentication stuff" })]);
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
-
-    const rows = [
-      screen.getByRole("button", { name: "Copy full context" }),
-      screen.getByRole("button", { name: /authentication stuff/ }),
-    ];
-    for (const row of rows) {
-      expect(row.tagName).toBe("BUTTON");
-      // Without an explicit type, a button inside a form defaults to submit.
-      expect(row.getAttribute("type")).toBe("button");
-      expect(row.hasAttribute("disabled")).toBe(false);
-      expect(row.getAttribute("tabindex")).toBeNull();
-    }
+    renderMenu();
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Copy full context"),
+        expect.stringContaining("authentication stuff"),
+        expect.stringContaining("Context settings"),
+      ])
+    );
   });
 
   it("names the next action when the project has no history yet", () => {
     seed([]);
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
-    // Empty-state convention: point at what to do, not at what is missing.
-    const emptyText = screen.getByText(/copy a context/i).textContent ?? "";
-    expect(emptyText.toLowerCase()).not.toContain("no recent");
+    renderMenu();
+    // Empty-state convention: point at what to do, not at what is missing —
+    // and at an action that can actually populate the list.
+    const empty = screen.getByRole("menuitem", { name: /copy a folder to reuse/i });
+    expect(empty.getAttribute("data-disabled")).not.toBeNull();
+    expect((empty.textContent ?? "").toLowerCase()).not.toContain("no recent");
   });
 
   it("surfaces only the five newest runs, in the order Main sent them", () => {
-    // Main already sorts newest-first and caps the durable list; re-sorting here
-    // would fight that, so the contract is "take the first five, unchanged".
-    const records = Array.from({ length: 8 }, (_, i) => makeRecord({ id: `r${i}` }));
-    seed(records);
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
+    // Main already sorts newest-first and caps the durable list; re-sorting
+    // here would fight that, so the contract is "take the first five".
+    seed(Array.from({ length: 8 }, (_, i) => makeRecord({ id: `r${i}` })));
+    renderMenu();
 
-    const rendered = screen
-      .getAllByRole("button")
-      .map((b) => b.textContent ?? "")
-      .filter((t) => t.startsWith("Run "));
-
-    expect(rendered).toHaveLength(5);
-    expect(rendered[0]).toContain("Run r0");
-    expect(rendered[4]).toContain("Run r4");
+    const listed = listedRecents().map((el) => el.textContent ?? "");
+    expect(listed).toHaveLength(5);
+    expect(listed[0]).toContain("Run r0");
+    expect(listed[4]).toContain("Run r4");
     expect(screen.queryByText("Run r5")).toBeNull();
   });
 
-  it("hands the clicked record back untouched so its stored options replay intact", () => {
-    // The whole point of the recents list: whatever was captured — including
-    // fields the flat `worktree.copyTree` schema would strip — comes back out.
-    const record = makeRecord({
-      id: "curated",
-      name: "authentication stuff",
-      options: { filter: ["src/auth/**"], format: "markdown", sort: "size", withLineNumbers: true },
-    });
-    seed([record]);
-    const onRunRecent = vi.fn();
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={onRunRecent} />);
+  it("does not repeat the pinned action as the first recent", () => {
+    // A full-context run records no options, so it is the entry above it,
+    // not a separate thing to choose between.
+    seed([
+      makeRecord({ id: "d", name: "Full context", options: {} }),
+      makeRecord({ id: "s", name: "src", options: { scopePaths: ["src"] } }),
+    ]);
+    renderMenu();
 
-    fireEvent.click(screen.getByRole("button", { name: /authentication stuff/ }));
-
-    expect(onRunRecent).toHaveBeenCalledWith(record);
-    expect(onRunRecent.mock.calls[0]![0].options).toBe(record.options);
+    const listed = listedRecents().map((el) => el.textContent ?? "");
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toContain("src");
   });
 
-  it("routes the primary row to the full-copy callback", () => {
-    seed([makeRecord()]);
-    const onCopyFullContext = vi.fn();
-    const onRunRecent = vi.fn();
-    render(
-      <CopyTreeRecentsPanel onCopyFullContext={onCopyFullContext} onRunRecent={onRunRecent} />
+  it("keeps a run that only shares the default's NAME", () => {
+    // The guard against deduplicating by label: a record called "Full context"
+    // that carries a format or a filter is a genuinely different run.
+    seed([makeRecord({ id: "m", name: "Full context", options: { modified: true } })]);
+    renderMenu();
+    expect(listedRecents()).toHaveLength(1);
+  });
+
+  it("spends the five-row cap on runs it will actually show", () => {
+    // Filtering before the cap rather than after it: a default run among the
+    // newest records must not consume a slot and leave the list one short.
+    seed([
+      makeRecord({ id: "d", options: {} }),
+      ...Array.from({ length: 6 }, (_, i) => makeRecord({ id: `s${i}` })),
+    ]);
+    renderMenu();
+
+    const listed = listedRecents().map((el) => el.textContent ?? "");
+    expect(listed).toHaveLength(5);
+    expect(listed[0]).toContain("Run s0");
+  });
+
+  it("keeps a run whose empty exclude or always list switches off the project defaults", () => {
+    // `mergeCopyTreeOptions` backfills these two from project settings only
+    // when they are undefined — an explicit `[]` is an override, not a default.
+    seed([
+      makeRecord({ id: "x", name: "no excludes", options: { exclude: [] } }),
+      makeRecord({ id: "a", name: "no always", options: { always: [] } }),
+    ]);
+    renderMenu();
+    expect(listedRecents()).toHaveLength(2);
+  });
+
+  it("treats a false flag the same as an absent one", () => {
+    // The generator ignores `modified: false`, so a record carrying it is the
+    // default run and must not be listed beneath the pinned entry.
+    seed([makeRecord({ id: "f", options: { modified: false, scopeIgnoresIgnoreFiles: false } })]);
+    renderMenu();
+    expect(listedRecents()).toHaveLength(0);
+  });
+
+  it("pulls the history snapshot on first open, not while the menu is closed", () => {
+    // The toolbar mounts the content component whether or not the menu is
+    // open; only Radix's presence boundary keeps the store out of app start.
+    seed([]);
+    const { rerender } = render(
+      <DropdownMenu open={false}>
+        <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+        <CopyTreeMenuContent
+          onCopyFullContext={noop}
+          onRunRecent={noop}
+          onOpenContextSettings={noop}
+        />
+      </DropdownMenu>
     );
+    expect(initSpy).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy full context" }));
+    rerender(
+      <DropdownMenu open>
+        <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+        <CopyTreeMenuContent
+          onCopyFullContext={noop}
+          onRunRecent={noop}
+          onOpenContextSettings={noop}
+        />
+      </DropdownMenu>
+    );
+    expect(initSpy).toHaveBeenCalledTimes(1);
+  });
 
+  it("puts the file count in the accessible name, not only the trailing slot", () => {
+    // The trailing meta is aria-hidden by the primitive's design, so the
+    // count would otherwise be invisible to assistive tech.
+    seed([makeRecord({ name: "src", stats: { fileCount: 12, totalSize: 4096 } })]);
+    renderMenu();
+    const row = listedRecents()[0]!;
+    expect(row.getAttribute("aria-label")).toContain("12 files");
+  });
+
+  it("hands the clicked record back untouched so its stored options replay intact", () => {
+    // The whole point of the recents: whatever was captured — including nested
+    // option objects — is what gets replayed. A copy or a re-derivation here
+    // would be a silent behaviour change.
+    const record = makeRecord({
+      name: "scoped",
+      options: { scopePaths: ["src", "docs"], format: "markdown", exclude: ["*.log"] },
+    });
+    const onRunRecent = vi.fn();
+    seed([record]);
+    renderMenu({ onRunRecent });
+
+    fireEvent.click(listedRecents()[0]!);
+    expect(onRunRecent).toHaveBeenCalledTimes(1);
+    expect(onRunRecent.mock.calls[0]![0]).toBe(record);
+  });
+
+  it("routes the pinned entry to the full-copy callback", () => {
+    const onCopyFullContext = vi.fn();
+    seed([]);
+    renderMenu({ onCopyFullContext });
+    fireEvent.click(screen.getByRole("menuitem", { name: /copy full context/i }));
     expect(onCopyFullContext).toHaveBeenCalledTimes(1);
-    expect(onRunRecent).not.toHaveBeenCalled();
+  });
+
+  it("routes the settings entry to the settings callback", () => {
+    const onOpenContextSettings = vi.fn();
+    seed([]);
+    renderMenu({ onOpenContextSettings });
+    fireEvent.click(screen.getByRole("menuitem", { name: /context settings/i }));
+    expect(onOpenContextSettings).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -307,8 +331,43 @@ describe("formatRecentMeta", () => {
     expect(many.startsWith("2 files")).toBe(true);
   });
 
-  it("reports the last run time relative to now", () => {
-    const meta = formatRecentMeta(makeRecord({ lastUsedAt: 0 }), 3 * 60 * 60 * 1000);
-    expect(meta).toContain("hours ago");
+  it("agrees with the relative-time formatter the rest of the app uses", async () => {
+    // Asserting agreement rather than a wording: the row deliberately uses the
+    // compact formatter the branch picker uses, and pinning the literal string
+    // here would just be a copy of the implementation.
+    const { formatTimeAgo } = await import("@/utils/timeAgo");
+    const now = 3 * 60 * 60 * 1000;
+    const meta = formatRecentMeta(makeRecord({ lastUsedAt: 0 }), now);
+    expect(meta.endsWith(formatTimeAgo(0, now))).toBe(true);
+  });
+
+  it("names a non-default output format, and stays silent about the default one", async () => {
+    const { DEFAULT_COPYTREE_FORMAT } = await import("@/lib/copyTreeFormat");
+    const other = formatRecentMeta(makeRecord({ options: { format: "markdown" } }), 1_000);
+    const dflt = formatRecentMeta(
+      makeRecord({ options: { format: DEFAULT_COPYTREE_FORMAT } }),
+      1_000
+    );
+    expect(other).toContain("markdown");
+    expect(dflt).not.toContain(DEFAULT_COPYTREE_FORMAT);
+    expect(other.split(" · ")).toHaveLength(dflt.split(" · ").length + 1);
+  });
+
+  it("keeps the trailing slot to what fits on one menu line", async () => {
+    // The file count belongs to the accessible name; the visible slot carries
+    // the size (what changes the decision) and the age (how a run is
+    // recognised), and nothing that the full description does not also say.
+    const record = makeRecord({
+      stats: { fileCount: 3, totalSize: 2048 },
+      options: { format: "markdown" },
+    });
+    const trailing = formatRecentTrailing(record, 1_000);
+    const full = formatRecentMeta(record, 1_000);
+    const { formatBytes } = await import("@/lib/formatBytes");
+    expect(trailing).not.toContain("files");
+    expect(trailing).not.toContain("markdown");
+    expect(trailing.startsWith(formatBytes(2048))).toBe(true);
+    // Everything the slot shows, the full description also says.
+    for (const token of trailing.split(" · ")) expect(full).toContain(token);
   });
 });

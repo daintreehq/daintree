@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { RunCommand } from "@/types";
 import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 interface QuickRunProps {
   projectId: string;
@@ -523,6 +524,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           aria-selected={index === focusedSuggestionIndex}
                           className={cn(
                             "group flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-mono transition-colors",
+                            PALETTE_ROW_FOCUS_CLASS,
                             index === focusedSuggestionIndex
                               ? "bg-accent-soft text-text-primary"
                               : "text-text-secondary hover:bg-overlay-soft"

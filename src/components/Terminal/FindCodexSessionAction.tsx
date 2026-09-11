@@ -18,6 +18,7 @@ import type {
   CodexFolderSession,
   CodexFolderSessionsResult,
 } from "@shared/types/ipc/agentSubagents";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 // Only the reasons `listCodexSessionsForCwd` can actually surface: it queries
 // the app-server directly rather than resolving a terminal, so the
@@ -255,7 +256,10 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
                 <button
                   type="button"
                   onClick={() => void openSession(session)}
-                  className="w-full flex flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-overlay-subtle transition-colors"
+                  className={cn(
+                    "w-full flex flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-overlay-subtle transition-colors",
+                    PALETTE_ROW_FOCUS_CLASS
+                  )}
                 >
                   <span className="text-xs text-text-primary truncate w-full">
                     {firstLine(session.preview).slice(0, 80) || session.id.slice(0, 8)}
