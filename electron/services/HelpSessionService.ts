@@ -485,6 +485,17 @@ export class HelpSessionService {
     return this.panelVisibleByProjectId.get(projectId) === true;
   }
 
+  /**
+   * Whether this workspace's assistant panel is open, as last reported by its
+   * renderer. The native engine's teardown reads it to decide whether a view
+   * coming back cold should reopen the panel (#12365) — the question the PTY
+   * capture answers from the same map.
+   */
+  isPanelOpen(projectId: string): boolean {
+    if (!projectId) return false;
+    return this.panelOpenByProjectId.get(projectId) === true;
+  }
+
   validateToken(token: string): HelpAssistantTier | false {
     if (!token) return false;
     const record = this.sessionsByToken.get(token);

@@ -33,10 +33,12 @@ import {
 /**
  * Whether a native lane holds something a restart, a stop or a close would destroy.
  *
- * Two readings, because a lane can be worth protecting before anybody has said
- * anything: `turns` is the conversation, and the lane state is the engine mid-flight —
- * a wake's first phase lands BEFORE its turn opens, so a transcript test alone would
- * wave through a Stop on a lane that is actively working.
+ * Three readings, because a lane can be worth protecting before anybody has said
+ * anything here: `turns` is the conversation, and the lane state is the engine
+ * mid-flight — a wake's first phase lands BEFORE its turn opens, so a transcript test
+ * alone would wave through a Stop on a lane that is actively working. `resumed` is a
+ * conversation the transcript cannot show: an engine that picked one back up after its
+ * view was lost (#12365) holds it in context behind an empty panel.
  *
  * The same test for all three controls on purpose. They discard the same thing, and
  * three answers to one question is how "+ New session" ended up asking while Stop did
@@ -44,7 +46,7 @@ import {
  */
 function nativeLaneHasSomethingToLose(slot: number): boolean {
   const state = assistantStoreForSlot(slot).getState();
-  return state.turns.length > 0 || selectAssistantLaneState(state) !== null;
+  return state.turns.length > 0 || state.resumed || selectAssistantLaneState(state) !== null;
 }
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import {
@@ -1417,6 +1419,43 @@ export function HelpPanel({
     };
   }, [activeWorkspaceId, openSlots.length, terminalId, useNativeAssistant]);
 
+  // Bring back the native lanes whose engines went down with this view (#12365).
+  //
+  // Main records which conversation each lane was having and continues it on the lane's
+  // next start, but a cold view knows nothing of either: lanes 1+ have no tab, and the
+  // panel comes back closed. So put the tabs back, and when the panel was open as the view
+  // was lost, reopen it on the first lane that was — the arm effect above then starts that
+  // lane, and main hands it its conversation. Lanes nobody selects start nothing.
+  //
+  // The native half of the restore above, under the same conditions: once per workspace,
+  // and only while the view is genuinely cold, so it never fights the user's own tabs.
+  const restoredNativeWorkspaceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeWorkspaceId || restoredNativeWorkspaceRef.current === activeWorkspaceId) return;
+    if (!useNativeAssistant) return;
+    if (openSlots.length > 1 || terminalId) return;
+    const listing = window.electron.assistantHost.listResumable?.(activeWorkspaceId);
+    if (!listing) return;
+    let cancelled = false;
+    void listing
+      .then((lanes) => {
+        if (cancelled || restoredNativeWorkspaceRef.current === activeWorkspaceId) return;
+        restoredNativeWorkspaceRef.current = activeWorkspaceId;
+        const store = useHelpPanelStore.getState();
+        for (const { slot } of lanes) store.ensureSlot(slot);
+        const reopen = lanes.find((lane) => lane.panelWasOpen);
+        if (!reopen || store.isOpen) return;
+        store.setActiveSlot(reopen.slot);
+        setOpen(true);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to list resumable native lanes", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, openSlots.length, terminalId, useNativeAssistant, setOpen]);
+
   const handleOpenParallelSession = useCallback(() => {
     const slot = useHelpPanelStore.getState().openSlot();
     if (slot === null) return;
@@ -1445,6 +1484,20 @@ export function HelpPanel({
       if (!laneUsesNativeAssistant(slot)) useHelpPanelStore.getState().requestFocus();
     },
     [laneUsesNativeAssistant]
+  );
+
+  /**
+   * Forgets a native lane's recorded conversation, so its next start is a new one
+   * (#12365). Stop and closing the lane mean that. A view merely going away does not, and
+   * never reaches here — which is what lets main bring that conversation back.
+   */
+  const discardNativeConversation = useCallback(
+    (slot: number) => {
+      if (!activeWorkspaceId) return;
+      const discarded = window.electron.assistantHost.discardResume?.(activeWorkspaceId, slot);
+      if (discarded) safeFireAndForget(discarded, { context: "HelpPanel.discardResume" });
+    },
+    [activeWorkspaceId]
   );
 
   const closeSlotNow = useCallback(
@@ -1476,9 +1529,11 @@ export function HelpPanel({
 
       // The native half, which has no PTY and no controller session to end. Disarming
       // is what stops its engine — through the same effect cleanup a project change
-      // uses — and releasing its store is what stops the next occupant of this slot
-      // number inheriting a conversation. Both are no-ops for a lane that never ran the
-      // native assistant, so this needs no mode test of its own.
+      // uses — and releasing its store and forgetting its recorded conversation are what
+      // stop the next occupant of this slot number inheriting one, from this renderer or
+      // from main (#12365). All three are no-ops for a lane that never ran the native
+      // assistant, so this needs no mode test of its own.
+      discardNativeConversation(slot);
       setArmedWorkspaceBySlot((prev) => {
         if (!(slot in prev)) return prev;
         const next = { ...prev };
@@ -1501,7 +1556,7 @@ export function HelpPanel({
       }
       state.closeSlot(slot);
     },
-    [setOpen]
+    [setOpen, discardNativeConversation]
   );
 
   // Same "something to lose" gate the Stop control uses, but evaluated against
@@ -1575,16 +1630,18 @@ export function HelpPanel({
 
   /** Stop the lane on screen. Disarms THIS LANE only: a parallel session the user did
    *  not stop keeps running, exactly as "Stop" reads. Disarming ends the engine through
-   *  the same effect cleanup a project change uses; re-selecting the tab arms it again. */
+   *  the same effect cleanup a project change uses; re-selecting the tab arms it again,
+   *  on a new conversation, because Stop also forgets this one (#12365). */
   const stopNativeLane = useCallback(() => {
     setOperationsOpen(false);
+    discardNativeConversation(activeSlot);
     setArmedWorkspaceBySlot((prev) => {
       if (!(activeSlot in prev)) return prev;
       const next = { ...prev };
       delete next[activeSlot];
       return next;
     });
-  }, [activeSlot]);
+  }, [activeSlot, discardNativeConversation]);
 
   const handleNewSession = useCallback(() => {
     if (useNativeAssistant) {

@@ -188,6 +188,14 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "assistant-host:discard-resume": {
+    args: [projectId: string, slot: number];
+    result: { discarded: boolean };
+  };
+  "assistant-host:list-resumable": {
+    args: [projectId: string];
+    result: import("./assistantHostIpc.js").AssistantHostResumableLane[];
+  };
   "assistant-host:send": {
     args: [raw: unknown];
     result: { delivered: boolean };

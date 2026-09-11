@@ -61,6 +61,26 @@ export interface AssistantHostStartPayload {
    * project used to have.
    */
   slot?: number;
+  /**
+   * Start a new conversation instead of continuing the lane's recorded one (#12365).
+   *
+   * Every other start continues it, which is what brings a view back to the conversation
+   * it lost to an eviction or a crash; only "+ New session" sets this. The id being
+   * continued never crosses the bridge — main looks it up — so a renderer can decline a
+   * conversation but never name one.
+   */
+  fresh?: boolean;
+}
+
+/** A lane with a conversation main would continue on its next start (#12365). */
+export interface AssistantHostResumableLane {
+  slot: number;
+  /**
+   * Whether the assistant panel was open when this lane's engine went down with its
+   * view. Only ever true in the app run that lost it: the flag is not persisted, so a
+   * restart never reopens a panel on its own.
+   */
+  panelWasOpen: boolean;
 }
 
 /**
