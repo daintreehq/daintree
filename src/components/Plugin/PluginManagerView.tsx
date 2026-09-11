@@ -89,6 +89,18 @@ function rowStatusFor(plugin: LoadedPluginInfo): RowStatus | null {
   return null;
 }
 
+/**
+ * Whether a project plugin is broken in the sense the health summary means.
+ *
+ * Deliberately one predicate shared by the count and the filter behind it: when
+ * they were written separately the count keyed on `invalid` alone, so a plugin
+ * that loaded and then threw was both missing from the total and excluded by
+ * the filter the total links to.
+ */
+function isProjectPluginBroken(plugin: { state: string; loadError?: unknown }): boolean {
+  return plugin.state === "invalid" || plugin.loadError != null;
+}
+
 // Operator chips surfaced below the search input so the filter syntax is
 // discoverable instead of hidden. Categories are the headline filters; the
 // provenance/state tokens (`@builtin`, `@installed`, `@enabled`) and
@@ -135,11 +147,14 @@ interface PluginRowProps {
  * drops the composite widget's promise of single-tab-stop arrow navigation —
  * a promise this list never kept.
  *
- * Selected styling follows the master-detail precedent (`bg-overlay-soft` + a
- * single 2px accent bar via `before:*`), reserving the accent for the one
- * load-bearing selection signal. The bar is a pseudo-element background, which
- * forced-colors drops, so selection additionally claims a `Highlight` border
- * there — without it the selected row was indistinguishable in high contrast.
+ * Selection is `bg-overlay-soft` + a neutral 2px bar via `before:*`. The bar is
+ * deliberately NOT the accent: selection persists while focus moves, so an
+ * accent stripe on one row and an accent focus ring on another put two accents
+ * in the same focus region, which the accent-restraint rule forbids. The accent
+ * belongs to whatever currently has focus. The bar is a pseudo-element
+ * background, which forced-colors drops, so selection additionally claims a
+ * `Highlight` border there — without it the selected row was indistinguishable
+ * in high contrast.
  *
  * A deep-link `open` (#9559) scrolls the row into view via `innerRef` and flags
  * it with a transient neutral `highlighted` outline — distinct from the accent
@@ -179,7 +194,7 @@ function PluginRow({
         // still painted as an opaque system colour and gave every row a box it
         // never asked for, nested inside the button's own.
         selected
-          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-[''] forced-colors:border-[Highlight] forced-colors:border-2"
+          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-text-primary before:content-[''] forced-colors:border-[Highlight] forced-colors:border-2"
           : highlighted
             ? "border-daintree-text/40 bg-overlay-subtle forced-colors:border-0"
             : "border-transparent hover:bg-overlay-subtle forced-colors:border-0"
@@ -403,7 +418,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     if (parsed.operators.length > 0) {
       const onlyProblem = parsed.operators.every((op) => op.key === "problem");
       if (!onlyProblem) return [];
-      return projectPlugins.filter((p) => p.state === "invalid");
+      return projectPlugins.filter(isProjectPluginBroken);
     }
     const text = parsed.freeText.trim().toLowerCase();
     if (text.length === 0) return projectPlugins;
@@ -557,7 +572,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   const brokenInstalled = pm.plugins.filter(
     (p) => p.loadError != null || p.blocklisted === true
   ).length;
-  const brokenProject = projectPlugins.filter((p) => p.state === "invalid").length;
+  const brokenProject = projectPlugins.filter(isProjectPluginBroken).length;
   const brokenCount = brokenInstalled + brokenProject;
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
@@ -773,7 +788,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             {brokenCount > 0 && !isSearchActive && (
               <button
                 type="button"
-                onClick={() => setQuery("@problem")}
+                onClick={() => {
+                  setQuery("@problem");
+                  // This button unmounts the moment the filter applies, so it
+                  // hands focus to the control that now owns the query rather
+                  // than stranding the keyboard on document.body.
+                  searchInputRef.current?.focus();
+                }}
                 className="w-full flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20 text-left transition-colors hover:bg-status-danger/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               >
                 <AlertCircle
@@ -841,7 +862,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 action={
                   <button
                     type="button"
-                    onClick={() => setQuery("")}
+                    onClick={() => {
+                      setQuery("");
+                      searchInputRef.current?.focus();
+                    }}
                     className="text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
                   >
                     Clear search
@@ -909,7 +933,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                     <section key={id} aria-labelledby={headingId} className="space-y-1">
                       <h3 id={headingId} className={SECTION_HEADER_CLASS}>
                         {label}{" "}
-                        <span className="ml-1.5 normal-case tracking-normal text-text-placeholder">
+                        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
                           {groupPlugins.length}
                         </span>
                       </h3>

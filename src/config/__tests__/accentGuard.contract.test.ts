@@ -134,16 +134,11 @@ const DURABLE_ALLOWLIST = new Set([
   // Primary CTA (QuickRun button) + bg-accent-soft autocomplete + fill-daintree-accent Pin icon
   "src/components/Project/QuickRun.tsx",
 
-  // PluginManagerView selected-row left-edge accent stripe in the master-detail
-  // list, plus the detail subtab active-tab underline (single primary anchor per
-  // active focus region)
-  "src/components/Plugin/PluginManagerView.tsx",
-
-  // Project-plugin rows share the plugin manager's master list, so they carry the
-  // same selected-row left-edge accent stripe — one row is selected at a time
-  // across both sections, so it stays a single primary anchor per active focus
-  // region rather than a second signal beside PluginManagerView's
-  "src/components/Plugin/ProjectPluginSection.tsx",
+  // The plugin manager's two row components used to sit here for their
+  // selected-row accent stripe. Selection is neutral now: it persists while
+  // focus moves, so an accent stripe on one row plus an accent focus ring on
+  // another put two accents in the same focus region. The accent is the focus
+  // anchor alone, and both files came off this list.
 
   // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
   "src/components/Settings/PresetColorPicker.tsx",

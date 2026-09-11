@@ -38,12 +38,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           {disabled && <span className={CARD_BADGE_CLASS}>Disabled</span>}
         </span>
         {blurb && (
-          <span
-            className={cn(
-              "mt-1 block text-xs line-clamp-2",
-              disabled ? "text-text-placeholder" : "text-text-secondary"
-            )}
-          >
+          <span className={cn("mt-1 block text-xs line-clamp-2", "text-text-secondary")}>
             {blurb}
           </span>
         )}
@@ -90,7 +85,7 @@ export function PluginCatalog({
             <div className="flex items-center gap-2">
               <CategoryIcon className="w-4 h-4 text-text-secondary" aria-hidden="true" />
               <h4 className="text-sm font-medium text-text-primary">{category.label}</h4>
-              <span className="text-2xs text-text-placeholder">{sectionPlugins.length}</span>
+              <span className="text-2xs text-text-secondary">{sectionPlugins.length}</span>
             </div>
             <p className="text-xs text-text-secondary mt-0.5">{category.blurb}</p>
             <div className="mt-3 grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">

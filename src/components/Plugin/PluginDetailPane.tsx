@@ -27,6 +27,7 @@ import {
   type LoadedPluginInfo,
   type PanelContribution,
   type PluginActionContribution,
+  type PluginAgentContribution,
   type PluginAuthor,
   type PluginCapability,
   type PluginInstallSource,
@@ -179,6 +180,31 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
 }
 
 /**
+ * The agents a plugin registers. A plugin can earn the AI & agents category on
+ * the strength of these and then never name them anywhere — leaving the user
+ * with a new entry in the launcher and no way to trace it back to the plugin
+ * that put it there. Neutral styling: reference material, not a focus signal,
+ * and the manifest's own `color` is deliberately not used as a swatch here.
+ */
+function PluginContributedAgents({ agents }: { agents: PluginAgentContribution[] }) {
+  return (
+    <div className="space-y-2">
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Agents</h4>
+      <ul className="space-y-2">
+        {agents.map((agent) => (
+          <li key={agent.id} className="text-xs">
+            <div className="text-text-primary">{agent.name}</div>
+            <div className="text-2xs text-text-secondary mt-0.5">
+              Launch it from the new-terminal menu
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * Attribution credits (#10516) for the selected plugin. Each author's `name` is
  * plain text; `url` and `email` (when present) are clickable, routed through
  * `systemClient.openExternal` (the established external-navigation path) rather
@@ -282,6 +308,7 @@ export function PluginDetailPane({
   const granted = grantedCapabilities(plugin);
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
+  const agents = plugin.manifest.contributes.agents ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
   // Read here rather than inside the tab body: the Logs tab is earned by
   // content like every other tab past Overview (#11302), and the pane cannot
@@ -538,13 +565,18 @@ export function PluginDetailPane({
               source while withholding the one fact that makes it checkable —
               which host it was downloaded from. Selectable, because the useful
               thing to do with it is paste it somewhere. */}
-          {plugin.originalUrl && (
+          {(plugin.originalUrl || plugin.devMode) && (
             <div>
               <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">
                 Source
               </p>
+              {/* A dev plugin's origin is the checkout it is running from, and
+                  without it an author cannot tell WHICH working copy is loaded
+                  — the one fact the Dev badge implies but never states. A
+                  reload action would be the other half, and needs a runtime
+                  operation that does not exist yet. */}
               <p className="text-2xs text-text-secondary mt-0.5 break-all select-text font-mono">
-                {plugin.originalUrl}
+                {plugin.devMode ? plugin.dir : plugin.originalUrl}
               </p>
             </div>
           )}
@@ -552,6 +584,8 @@ export function PluginDetailPane({
           {commands.length > 0 && <PluginContributedCommands commands={commands} />}
 
           {panels.length > 0 && <PluginContributedPanels panels={panels} />}
+
+          {agents.length > 0 && <PluginContributedAgents agents={agents} />}
 
           {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
             <PluginContributors authors={plugin.manifest.authors} />
