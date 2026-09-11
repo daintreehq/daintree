@@ -29,6 +29,7 @@ import {
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { withTimeout } from "../../../utils/withTimeout.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -199,12 +200,30 @@ import { buildCommandLaunchShell } from "./commandLaunch.js";
 // is running and may serve it. Enablement is read first because it is a plain
 // store read, and an empty answer — every project that never turned a plugin
 // endpoint on — keeps the launch off the lazy PluginService load entirely.
+const PLUGIN_INIT_WAIT_MS = 5000;
+
 async function resolveEnabledPluginMcpEndpoints(
   projectId: string
 ): Promise<DeclaredAgentMcpEndpoint[]> {
   if (!isProjectWorkspaceId(projectId)) return [];
   if (listEnabledAgentMcpEndpoints(projectId).length === 0) return [];
   const pluginService = await getPluginService();
+  // PluginService initialises as a deferred task after first-interactive, so
+  // panes restored at startup would otherwise see no loaded plugins. Bounded so
+  // a slow init (blocklist fetch, activation) degrades to a launch without
+  // plugin tools instead of a hung pane.
+  try {
+    await withTimeout(
+      pluginService.waitForInit(),
+      PLUGIN_INIT_WAIT_MS,
+      "PluginService init did not settle"
+    );
+  } catch {
+    console.warn(
+      `[TerminalSpawn] Plugin service not ready after ${PLUGIN_INIT_WAIT_MS}ms; launching without plugin MCP endpoints`
+    );
+    return [];
+  }
   return listDeclaredAgentMcpEndpoints(pluginService.listPlugins(), projectId, (instanceId) =>
     pluginService.hasPlugin(instanceId)
   ).filter((endpoint) =>

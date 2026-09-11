@@ -150,15 +150,17 @@ vi.mock("../../../../services/McpServerService.js", () => ({
   },
 }));
 
-const { mockListPlugins, mockHasPlugin } = vi.hoisted(() => ({
+const { mockListPlugins, mockHasPlugin, mockWaitForInit } = vi.hoisted(() => ({
   mockListPlugins: vi.fn<() => unknown[]>(() => []),
   mockHasPlugin: vi.fn<(instanceId: string) => boolean>(() => true),
+  mockWaitForInit: vi.fn<() => Promise<void>>(() => Promise.resolve()),
 }));
 
 vi.mock("../../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: () => mockListPlugins(),
     hasPlugin: (instanceId: string) => mockHasPlugin(instanceId),
+    waitForInit: () => mockWaitForInit(),
     resolveSettingTemplate: vi.fn(),
   },
 }));
@@ -263,6 +265,7 @@ describe("terminal spawn handler - plugin MCP endpoints for Claude launches", ()
     mockValidateToken.mockReturnValue(false);
     mockListPlugins.mockReturnValue([plugin()]);
     mockHasPlugin.mockReturnValue(true);
+    mockWaitForInit.mockImplementation(() => Promise.resolve());
   });
 
   afterEach(async () => {
@@ -325,6 +328,55 @@ describe("terminal spawn handler - plugin MCP endpoints for Claude launches", ()
     expect(spawnArgs.command).toBe("claude");
     expect(pluginMcpGrantRegistry.listForTerminal("term-disabled")).toEqual([]);
     expect(mockListPlugins).not.toHaveBeenCalled();
+    expect(mockWaitForInit).not.toHaveBeenCalled();
+  });
+
+  it("waits for plugin init before resolving endpoints for a launch at cold start", async () => {
+    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+    let initialized = false;
+    let settleInit!: () => void;
+    mockWaitForInit.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleInit = () => {
+            initialized = true;
+            resolve();
+          };
+        })
+    );
+    mockListPlugins.mockImplementation(() => (initialized ? [plugin()] : []));
+    mockHasPlugin.mockImplementation(() => initialized);
+
+    const pending = spawn({ id: "term-cold" });
+    await vi.waitFor(() => expect(mockWaitForInit).toHaveBeenCalled());
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    settleInit();
+    await pending;
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    const servers = await readServers(configPathFromCommand(spawnArgs.command));
+    expect(Object.values(servers)).toHaveLength(1);
+    expect(pluginMcpGrantRegistry.listForTerminal("term-cold")).toHaveLength(1);
+  });
+
+  it("launches without plugin endpoints when plugin init does not settle in time", async () => {
+    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+    mockWaitForInit.mockImplementation(() => new Promise<void>(() => {}));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = spawn({ id: "term-init-timeout" });
+      await vi.waitFor(() => expect(mockWaitForInit).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(5000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+      warn.mockRestore();
+    }
+
+    expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
+    expect(mockListPlugins).not.toHaveBeenCalled();
+    expect(pluginMcpGrantRegistry.listForTerminal("term-init-timeout")).toEqual([]);
   });
 
   it("mints nothing for an enabled endpoint whose plugin is not running", async () => {

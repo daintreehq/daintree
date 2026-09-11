@@ -604,7 +604,7 @@ export interface StoreSchema {
 
   /**
    * Plugin MCP endpoints the user turned on per project, keyed
-   * `projectId → manifestId → endpointId → { decidedAt }`; presence means on.
+   * `projectId → pluginInstanceId → endpointId → { decidedAt }`; presence means on.
    * Read and written only through `services/pluginAgentMcp/projectEnablement.ts`.
    * Out of the repository for the same reason as `projectPluginVisibility`.
    * Same additive-key convention as `projectPluginTrust` above.
