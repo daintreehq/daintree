@@ -516,7 +516,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // above, measured at 212_336 B. Both wait tools are on the external tier, so
   // this is the same 355 B spend seen from the full surface, re-measured over
   // #12354's `forge.openRepo` landing underneath it.
-  const MAX_COHORT_PAYLOAD_BYTES = 212_400;
+  //
+  // 212_400 → 213_300 for `agentCapabilities.search`, measured at 213_273 B:
+  // 937 B on top of 212_336, being its 272 B description and 665 B input
+  // schema. It does not opt into `mcpOutputSchema`, so it advertises no output
+  // schema. It shipped with a published contract but on no tier, so
+  // `tools/list` never offered the lookup the assistant was told to use.
+  // Workbench only, beside `slashCommands.list`, so the external ceiling does
+  // not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 213_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
