@@ -1163,7 +1163,6 @@ export function FileBrowserPane({
           />
         ) : undefined
       }
-      headerContentPlacement="trailing"
       onToggleMaximize={onToggleMaximize}
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}

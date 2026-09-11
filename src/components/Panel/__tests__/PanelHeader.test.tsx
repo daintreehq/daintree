@@ -218,36 +218,113 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("headerContent slot", () => {
-    it("defaults to trailing placement — slot renders after the close button", () => {
-      render(
-        <PanelHeader
-          {...makeProps({ headerContent: <div data-testid="custom-header-content" /> })}
-        />
-      );
-      const content = screen.getByTestId("custom-header-content");
-      const closeButton = screen.getByTestId("panel-close");
-      // Trailing keeps the slot (e.g. the terminal Activity Indicator) all the
-      // way right, so the close button precedes it in document order.
-      expect(
-        closeButton.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING
-      ).toBeTruthy();
-    });
+  // #12374 — the header used to render kind-specific content after the close
+  // button, so every status pill that appeared or disappeared slid close and
+  // maximize sideways under the pointer. jsdom has no layout, so these pin the
+  // structure that makes the geometry stable: nothing variable lives inside or
+  // after the controls, and the status box stays mounted while it toggles.
+  describe("header content and status placement (#12374)", () => {
+    function FakeStatus({ active }: { active: boolean }) {
+      return active ? <span role="status" aria-label="Output paused" /> : null;
+    }
 
-    it("renders before the overflow menu when placement is leading", () => {
-      render(
+    function FakeMetadata({ count }: { count: number }) {
+      return (
+        <>
+          {Array.from({ length: count }, (_, i) => (
+            <span key={i}>metadata {i}</span>
+          ))}
+        </>
+      );
+    }
+
+    const tabGroup = [
+      {
+        id: "test-panel",
+        title: "Tab 1",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: true,
+      },
+      {
+        id: "t2",
+        title: "Tab 2",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: false,
+      },
+    ];
+
+    const layouts: Array<[string, Partial<PanelHeaderProps>]> = [
+      ["a single panel", {}],
+      ["a tab group", { tabs: tabGroup, onTabClick: vi.fn() }],
+    ];
+
+    it.each(layouts)(
+      "keeps metadata and status out of, and ahead of, the window controls in %s",
+      (_layout, extra) => {
+        render(
+          <PanelHeader
+            {...makeProps({
+              ...extra,
+              onToggleMaximize: vi.fn(),
+              headerContent: <span data-testid="custom-header-content" />,
+              headerStatus: <FakeStatus active />,
+            })}
+          />
+        );
+        const controls = screen.getByTestId("panel-header-controls");
+        const content = screen.getByTestId("custom-header-content");
+        const status = screen.getByRole("status", { name: "Output paused" });
+        for (const el of [content, status]) {
+          expect(controls.contains(el)).toBe(false);
+          expect(
+            el.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING
+          ).toBeTruthy();
+        }
+        // Close is the last control: anything after it would move it on arrival.
+        const buttons = controls.querySelectorAll("button");
+        expect(buttons[buttons.length - 1]).toBe(screen.getByTestId("panel-close"));
+      }
+    );
+
+    it("leaves the window controls untouched while status and metadata come and go", () => {
+      const onClose = vi.fn();
+      const onToggleMaximize = vi.fn();
+      const header = (active: boolean, count: number) => (
         <PanelHeader
           {...makeProps({
-            headerContent: <div data-testid="custom-header-content" />,
-            headerContentPlacement: "leading",
+            onClose,
+            onToggleMaximize,
+            headerContent: <FakeMetadata count={count} />,
+            headerStatus: <FakeStatus active={active} />,
           })}
         />
       );
-      const content = screen.getByTestId("custom-header-content");
-      const overflowButton = screen.getByLabelText("More panel actions");
-      expect(
-        content.compareDocumentPosition(overflowButton) & Node.DOCUMENT_POSITION_FOLLOWING
-      ).toBeTruthy();
+
+      const { rerender } = render(header(false, 0));
+      const statusBox = screen.getByTestId("panel-header-status");
+      const controlsMarkup = screen.getByTestId("panel-header-controls").innerHTML;
+
+      rerender(header(true, 6));
+      expect(screen.getByTestId("panel-header-status")).toBe(statusBox);
+      expect(statusBox.querySelector('[role="status"]')).not.toBeNull();
+      expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controlsMarkup);
+
+      rerender(header(false, 0));
+      expect(screen.getByTestId("panel-header-status")).toBe(statusBox);
+      expect(statusBox.childElementCount).toBe(0);
+      expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controlsMarkup);
+
+      fireEvent.click(screen.getByLabelText("Maximize"));
+      fireEvent.click(screen.getByTestId("panel-close"));
+      expect(onToggleMaximize).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("reserves no status box for a header without a status slot", () => {
+      render(<PanelHeader {...makeProps({ headerContent: <span /> })} />);
+      expect(screen.queryByTestId("panel-header-status")).toBeNull();
     });
   });
 
