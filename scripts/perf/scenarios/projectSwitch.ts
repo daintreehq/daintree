@@ -310,6 +310,8 @@ const PRESSURE_POLICY = { criticalMb: 500, warningMb: 2000 };
 const PRESSURE_SAMPLE_AVAILABLE_MB = 600;
 /** Comfortably above `warningMb`, so the ladder must decline to act. */
 const HEALTHY_AVAILABLE_MB = 8_000;
+/** Well past the ladder's one-minute floor on how recently a view was used. */
+const PRESSURE_VIEW_AGE_MS = 5 * 60_000;
 
 /** Includes a return to a project already in the burst, so the queue has to
  *  resolve both a cold start and a cache hit without draining in between. */
@@ -526,6 +528,7 @@ const projectViewScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: [
       "pressureLadderMisses",
+      "pressureConfirmationMisses",
       "pressureBudgetMisses",
       "healthyBandMisses",
       "forcedConvergenceMisses",
@@ -557,11 +560,25 @@ const projectViewScenarios: PerfScenario[] = [
         const evictedWcIds: number[] = [];
         const evictedProjects: string[] = [];
 
+        // The ladder takes nothing used within the last minute, and a scenario
+        // cannot wait that out — so the prefill is aged past it, in order
+        // (#12363). Done first, so no pass below can pass on recency alone.
+        harness.ageViews(PRESSURE_VIEW_AGE_MS);
+
         // A healthy reading must move nothing. Without this the whole ladder
         // could be firing unconditionally and every other number here would
-        // still look correct.
-        const healthyPass = harness.pressurePass(HEALTHY_AVAILABLE_MB);
-        const healthyBandMisses = healthyPass.evicted.length;
+        // still look correct. Two passes: one alone never evicts (#12363), so
+        // a single healthy pass would read clean even with the band ignored.
+        let healthyBandMisses = 0;
+        for (let pass = 0; pass < 2; pass++) {
+          healthyBandMisses += harness.pressurePass(HEALTHY_AVAILABLE_MB).evicted.length;
+        }
+
+        // The first reading deep in the band only starts the count: pressure
+        // has to still be there on the next tick (#12363). Anything taken here
+        // means the sampler is acting on a single reading again.
+        const pressureConfirmationMisses = harness.pressurePass(PRESSURE_SAMPLE_AVAILABLE_MB)
+          .evicted.length;
 
         // Two sampler ticks deep in the band. The settled target is ONE view,
         // but a periodic pass may only shed one per tick (#11477) — a pass
@@ -612,6 +629,7 @@ const projectViewScenarios: PerfScenario[] = [
             // deep inside the band — the #11469/#11926 failure mode, where
             // reclaim quietly becomes emergency-only.
             pressureLadderMisses: pressureEvictionCount > 0 ? 0 : 1,
+            pressureConfirmationMisses,
             pressureBudgetMisses,
             healthyBandMisses,
             forcedEvictionCount: forced.evicted.length,

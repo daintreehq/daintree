@@ -665,14 +665,20 @@ describe("ProcessMemoryMonitor", () => {
       }
     }
 
-    function stubSystemMemoryInfo(freeKb: number, purgeableKb = 0): void {
+    function stubSystemMemoryInfo(freeKb: number, purgeableKb = 0, fileBackedKb = 0): void {
       (
         process as {
-          getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+          getSystemMemoryInfo?: () => {
+            free: number;
+            purgeable?: number;
+            fileBacked?: number;
+            total: number;
+          };
         }
       ).getSystemMemoryInfo = () => ({
         free: freeKb,
         purgeable: purgeableKb,
+        fileBacked: fileBackedKb,
         total: EIGHT_GB / 1024,
       });
     }
@@ -704,6 +710,19 @@ describe("ProcessMemoryMonitor", () => {
       // 500 MB free + 500 MB purgeable = 1000 MB available, > 819 MB threshold.
       // Without the purgeable summation this would falsely trigger on macOS.
       stubSystemMemoryInfo(500 * 1024, 500 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+    });
+
+    it("counts the file cache toward available on macOS (#12363)", async () => {
+      // A 64 GB Mac with a warm cache: 600 MB free + purgeable is under the
+      // 1 GB critical edge on every poll, beside 24 GB of file-backed pages.
+      vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 * 1024 * 1024);
+      stubSystemMemoryInfo(400 * 1024, 200 * 1024, 24 * 1024 * 1024);
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
 
       stop = startAppMetricsMonitor(mockActions);

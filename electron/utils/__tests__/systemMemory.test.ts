@@ -34,10 +34,9 @@ describe("systemMemory thresholds", () => {
 
   it("holds the critical edge flat above the knee while the warning edge keeps widening", () => {
     // The asymmetry IS the fix. `criticalMb` gates tier-2 collapse, the
-    // efficiency latch and OOM classification, and is measured against a
-    // `free + purgeable` figure that omits Darwin's file cache — so it stays
-    // put. `warningMb` only starts the one-view-per-tick ladder, so it is the
-    // edge allowed to scale with the machine.
+    // efficiency latch and OOM classification, so it stays put. `warningMb`
+    // only starts the one-view-per-tick ladder, so it is the edge allowed to
+    // scale with the machine.
     const knee = getSystemMemoryThresholds(10 * 1024);
     let previousWarning = knee.warningMb;
     // Strictly increasing only up to the saturation point; past it the band is
@@ -143,7 +142,12 @@ describe("systemMemory thresholds", () => {
 
 describe("readSystemMemorySnapshot", () => {
   const proc = process as unknown as {
-    getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+    getSystemMemoryInfo?: () => {
+      free: number;
+      purgeable?: number;
+      fileBacked?: number;
+      total: number;
+    };
   };
   const original = proc.getSystemMemoryInfo;
 
@@ -161,7 +165,7 @@ describe("readSystemMemorySnapshot", () => {
   it("treats a zero total as an API artifact rather than critical pressure", () => {
     // A transiently zeroed struct must not read as "no memory available" — that
     // would collapse every cached view and downgrade the profile on a glitch.
-    stub(() => ({ free: 0, purgeable: 0, total: 8 * 1024 * 1024 }));
+    stub(() => ({ free: 0, purgeable: 0, fileBacked: 0, total: 8 * 1024 * 1024 }));
     expect(readAvailableSystemMemoryMb()).toBeNull();
   });
 
@@ -195,5 +199,42 @@ describe("readSystemMemorySnapshot", () => {
 
     stub(() => ({ free: 512 * 1024, purgeable: Number.NaN, total: 8 * 1024 * 1024 }));
     expect(readAvailableSystemMemoryMb()).toBe(512);
+  });
+
+  it("counts Darwin's file cache as available, so a warm-cache Mac is not read as short (#12363)", () => {
+    // The issue's machine: 64 GB with ~600 MB free, ~1 GB purgeable and ~24 GB
+    // of file cache. Free + purgeable alone sits under the 64 GB warning edge,
+    // which is what had the ladder evicting cached views on every tick.
+    const band = getSystemMemoryThresholds(64 * 1024);
+    stub(() => ({
+      free: 600 * 1024,
+      purgeable: 1024 * 1024,
+      fileBacked: 24 * 1024 * 1024,
+      total: 64 * 1024 * 1024,
+    }));
+    const snapshot = readSystemMemorySnapshot();
+    expect(snapshot).toMatchObject({ freeMb: 600, purgeableMb: 1024, fileBackedMb: 24 * 1024 });
+    expect(snapshot!.availableMb).toBe(600 + 1024 + 24 * 1024);
+    expect(snapshot!.freeMb + snapshot!.purgeableMb).toBeLessThan(band.warningMb);
+    expect(snapshot!.availableMb).toBeGreaterThan(band.warningMb);
+  });
+
+  it("ignores an absent or malformed fileBacked figure, as Windows and Linux report none", () => {
+    for (const fileBacked of [undefined, Number.NaN, Number.POSITIVE_INFINITY, -4096, "lots"]) {
+      stub(() => ({ free: 512 * 1024, purgeable: 256 * 1024, fileBacked, total: 8 * 1024 * 1024 }));
+      expect(readSystemMemorySnapshot()).toMatchObject({ fileBackedMb: 0, availableMb: 768 });
+    }
+  });
+
+  it("still rejects a malformed free reading however much file cache comes with it", () => {
+    // Same reasoning as a plausible purgeable: a component must not launder a
+    // broken reading into a healthy-looking one.
+    stub(() => ({
+      free: -1024,
+      purgeable: 0,
+      fileBacked: 24 * 1024 * 1024,
+      total: 8 * 1024 * 1024,
+    }));
+    expect(readAvailableSystemMemoryMb()).toBeNull();
   });
 });

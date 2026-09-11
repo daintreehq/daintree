@@ -246,6 +246,7 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { BACKGROUND_HYDRATION_TIMEOUT_MS } from "../ProjectViewRestoreController.js";
+import { MIN_PRESSURE_EVICTION_AGE_MS } from "../ProjectViewEvictionController.js";
 import { logWarn } from "../../utils/logger.js";
 import {
   registerAppView,
@@ -673,11 +674,14 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       // Free RAM collapses below the profile floor while the gate is open.
       manager.setLowMemoryFreeThresholdMb(1024);
       stubSystemMemoryInfo({ free: 100 * 1024, total: 8 * 1024 * 1024 });
-      // Two ticks, because the sampler sheds one view per pass at every band
-      // since #11477 — what matters here is WHICH views it is willing to take,
-      // not how fast, so drive it to its settled target.
+      // Three ticks: one to confirm the pressure (#12363), then one view per pass
+      // at every band since #11477 — what matters here is WHICH views it is
+      // willing to take, not how fast, so drive it to its settled target. Aged
+      // past the ladder's minimum so recency is not what spares a view.
+      for (const entry of manager.views.values()) entry.lastUsed -= MIN_PRESSURE_EVICTION_AGE_MS;
       const tick = (manager as unknown as { maybeEvictUnderPressure: () => void })
         .maybeEvictUnderPressure;
+      tick.call(manager);
       tick.call(manager);
       tick.call(manager);
 
@@ -713,12 +717,15 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       await coldSwitch(setup, "proj-d", "/d");
       expect(manager.getAllViews()).toHaveLength(3);
 
-      // Low-memory passes converge on 1 without rewriting the preference. Two
-      // ticks: the sampler sheds one view per pass at every band (#11477).
+      // Low-memory passes converge on 1 without rewriting the preference. Three
+      // ticks: one to confirm the pressure (#12363), then one view per pass at
+      // every band (#11477), with the views aged past the ladder's minimum.
       manager.setLowMemoryFreeThresholdMb(1024);
       stubSystemMemoryInfo({ free: 100 * 1024, total: 8 * 1024 * 1024 });
+      for (const entry of manager.views.values()) entry.lastUsed -= MIN_PRESSURE_EVICTION_AGE_MS;
       const tick = (manager as unknown as { maybeEvictUnderPressure: () => void })
         .maybeEvictUnderPressure;
+      tick.call(manager);
       tick.call(manager);
       tick.call(manager);
       expect(manager.getAllViews().map((entry) => entry.projectId)).toEqual(["proj-d"]);

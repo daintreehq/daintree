@@ -29,6 +29,23 @@ type EvictionCandidate = {
 };
 
 /**
+ * Consecutive sampler readings below the warning edge before a pressure pass
+ * may destroy anything (#12363). At the sampler's 30s cadence, two means the
+ * reading was still low half a minute later — enough to tell a dip from a trend
+ * while keeping the reaction to real pressure inside a minute.
+ */
+export const PRESSURE_SAMPLES_TO_CONFIRM = 2;
+
+/**
+ * How long a view must have sat unused before a gradual pressure pass may take
+ * it (#12363). The view the user just left is the likeliest next switch, so
+ * destroying it trades a ~60ms warm reveal for a cold reload exactly while they
+ * are moving between projects. Measured from `lastUsed`, the stamp LRU order
+ * already sorts on.
+ */
+export const MIN_PRESSURE_EVICTION_AGE_MS = 60_000;
+
+/**
  * workingSetSize is the only cross-platform field — privateBytes is
  * Windows-only and reports 0 (not undefined) on macOS/Linux, so a
  * `privateBytes ?? workingSetSize` fallback never fires there and silently
@@ -444,9 +461,26 @@ export function evictStaleViews(
 
   let evictedCount = 0;
   while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
+    const next = candidates[0];
+    const ageMs = Date.now() - next.entry.lastUsed;
+    // Ends the pass rather than skipping to the next candidate. The queue is
+    // tier-ordered, so passing over a young ordinary view would hand its
+    // eviction to an older one the tiers deliberately rank as costlier to lose
+    // — an agent's, a bound session's, or a workspace the user granted
+    // residency. Gradual passes only: the forced reclaim is the OOM escape
+    // hatch, and LRU and limit-change passes enforce a cap the user chose.
+    if (gradualPressure && ageMs < MIN_PRESSURE_EVICTION_AGE_MS) {
+      logInfo("projectview.eviction-deferred", {
+        projectId: next.projectId,
+        reason: effectiveReason,
+        ageMs,
+        minimumAgeMs: MIN_PRESSURE_EVICTION_AGE_MS,
+      });
+      break;
+    }
+    candidates.shift();
     const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession, keepResident } =
-      candidates.shift()!;
-    const ageMs = Date.now() - entry.lastUsed;
+      next;
     const memoryKb = memoryFor(entry);
     const guestMemoryKb = guestMemoryFor(entry);
     const ctx: Record<string, unknown> = {
@@ -608,29 +642,38 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
  * path that performs banded contraction, so gating it on `criticalMb` would
  * leave the graduated ladder unreachable (#11469).
  *
+ * One reading below that edge destroys nothing; it takes
+ * PRESSURE_SAMPLES_TO_CONFIRM consecutive ones (#12363). A reading is one
+ * instant of a figure the OS is constantly rebalancing, and acting on the first
+ * low one let a machine hovering near the edge shed a renderer on every tick it
+ * happened to dip. Once confirmed the streak holds, so sustained pressure still
+ * converges a view per tick rather than a view per confirmation. A tick that is
+ * not a readable low sample — at or above the edge, unreadable, unarmed, or
+ * with nothing cached to take — starts the count over.
+ *
  * Never escalates to a one-pass collapse, at any band. This sampler is
- * per-window and fires off an instantaneous availability reading with no
- * consecutive-poll count, no cooldown, and no view of whether a cheaper
+ * per-window, holds no cooldown, and has no view of whether a cheaper
  * mitigation is already in flight — the combination that let it destroy a
  * live assistant's view 560ms into a tier-1 pass that resolved the pressure
  * without it (#11477). Collapse is `ProcessMemoryMonitor`'s tier 2 alone,
  * which owns all of that state globally and arrives via `forcePressure`.
  */
 export function maybeEvictUnderPressure(host: ProjectViewManager): void {
-  if (host.views.size <= 1) return;
   const policy = host.memoryPressurePolicy;
-  if (policy == null) return;
-  const availableMb = getAvailableMemoryMb();
-  if (availableMb == null || availableMb >= policy.warningMb) return;
+  const availableMb = policy != null && host.views.size > 1 ? getAvailableMemoryMb() : null;
+  if (policy == null || availableMb == null || availableMb >= policy.warningMb) {
+    host.pressureSampleStreak = 0;
+    return;
+  }
+  host.pressureSampleStreak = Math.min(host.pressureSampleStreak + 1, PRESSURE_SAMPLES_TO_CONFIRM);
+  if (host.pressureSampleStreak < PRESSURE_SAMPLES_TO_CONFIRM) return;
   evictStaleViews(host, "pressure");
 }
 
 /**
- * Read system-wide available memory in MB. On macOS, "available" = free +
- * purgeable, because Darwin holds reclaimable pages as purgeable rather
- * than free — using `free` alone would fire false positives on every
- * healthy mac. On Windows/Linux, `free` alone is accurate. Returns null
- * when the Chromium API is unavailable (e.g., under test mocks).
+ * Read system-wide available memory in MB — see `readSystemMemorySnapshot` for
+ * what "available" counts on each platform. Returns null when the Chromium API
+ * is unavailable (e.g., under test mocks).
  */
 export function getAvailableMemoryMb(): number | null {
   return readAvailableSystemMemoryMb();
