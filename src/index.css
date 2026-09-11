@@ -1999,7 +1999,8 @@ label:focus-within .brand-mark,
   transition: opacity var(--duration-150) ease-out;
 }
 
-.palette-row[aria-selected="true"]::before {
+.palette-row[aria-selected="true"]::before,
+.palette-row[aria-current="true"]::before {
   opacity: 1;
 }
 
@@ -2455,7 +2456,8 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: Canvas;
   }
 
-  .palette-row[aria-selected="true"] {
+  .palette-row[aria-selected="true"],
+  .palette-row[aria-current="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
   }

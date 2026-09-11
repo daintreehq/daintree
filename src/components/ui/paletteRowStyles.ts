@@ -45,7 +45,14 @@ export const PALETTE_ROW_CLASS = cn(
   // `.palette-row::before` in `index.css` for why. The transparent border stays:
   // it holds the row's content box on the same column as the palette's other
   // families, and the `forced-colors` fallback still draws an outline there.
-  "aria-selected:bg-overlay-raised aria-selected:text-text-primary"
+  //
+  // `aria-current` rides alongside `aria-selected` because a list-detail browser
+  // that is NOT a composite listbox — a plain list of rows, which is what the
+  // ARIA content model forces once a row carries its own controls — spells the
+  // same fact that way. Both attributes mean "this is the row the detail pane is
+  // showing"; the CSS half of this treatment keys off both for the same reason.
+  "aria-selected:bg-overlay-raised aria-selected:text-text-primary",
+  "aria-[current=true]:bg-overlay-raised aria-[current=true]:text-text-primary"
 );
 
 /**

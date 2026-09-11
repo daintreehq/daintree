@@ -30,6 +30,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager } from "./usePluginManager";
@@ -147,14 +148,14 @@ interface PluginRowProps {
  * drops the composite widget's promise of single-tab-stop arrow navigation —
  * a promise this list never kept.
  *
- * Selection is `bg-overlay-soft` + a neutral 2px bar via `before:*`. The bar is
- * deliberately NOT the accent: selection persists while focus moves, so an
- * accent stripe on one row and an accent focus ring on another put two accents
- * in the same focus region, which the accent-restraint rule forbids. The accent
- * belongs to whatever currently has focus. The bar is a pseudo-element
- * background, which forced-colors drops, so selection additionally claims a
- * `Highlight` border there — without it the selected row was indistinguishable
- * in high contrast.
+ * Selection is `PALETTE_ROW_CLASS` — the app's single definition of "this is the
+ * row Enter will act on", which already owns the neutral leading rail, the
+ * reduce-motion handling, and the forced-colors outline that a pseudo-element
+ * background cannot survive. Hand-rolling those here made this the sixth
+ * spelling of a visual that file exists to keep at one, and the accent stripe it
+ * replaced also broke accent restraint: selection persists while focus moves, so
+ * an accent on one row and an accent focus ring on another put two in the same
+ * focus region.
  *
  * A deep-link `open` (#9559) scrolls the row into view via `innerRef` and flags
  * it with a transient neutral `highlighted` outline — distinct from the accent
@@ -187,17 +188,12 @@ function PluginRow({
   return (
     <li
       ref={innerRef}
+      aria-current={selected ? "true" : undefined}
       className={cn(
-        "relative flex items-center gap-2 rounded-[var(--radius-md)] border text-text-primary transition-colors",
-        // Zero WIDTH on the resting state, not a transparent colour: forced
-        // colours replace author colours wholesale, so `border-transparent` is
-        // still painted as an opaque system colour and gave every row a box it
-        // never asked for, nested inside the button's own.
-        selected
-          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-text-primary before:content-[''] forced-colors:border-[Highlight] forced-colors:border-2"
-          : highlighted
-            ? "border-daintree-text/40 bg-overlay-subtle forced-colors:border-0"
-            : "border-transparent hover:bg-overlay-subtle forced-colors:border-0"
+        PALETTE_ROW_CLASS,
+        "flex items-center gap-2 rounded-[var(--radius-md)] text-text-primary",
+        !selected && highlighted && "border-daintree-text/40 bg-overlay-subtle",
+        !selected && !highlighted && "hover:bg-overlay-subtle"
       )}
     >
       <button

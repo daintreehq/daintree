@@ -4,6 +4,7 @@ import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { PluginLogsSection, usePluginLogs } from "@/components/Plugin/PluginLogsSection";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type ProjectPluginInfo,
@@ -57,11 +58,11 @@ function ProjectPluginRow({
 
   return (
     <li
+      aria-current={selected ? "true" : undefined}
       className={cn(
-        "relative flex items-center gap-2 rounded-[var(--radius-md)] border text-text-primary transition-colors",
-        selected
-          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r-[var(--radius-sm)] before:bg-text-primary before:content-[''] forced-colors:border-[Highlight] forced-colors:border-2"
-          : "border-transparent hover:bg-overlay-subtle forced-colors:border-0"
+        PALETTE_ROW_CLASS,
+        "flex items-center gap-2 rounded-[var(--radius-md)] text-text-primary",
+        !selected && "hover:bg-overlay-subtle"
       )}
     >
       <button
