@@ -7,6 +7,7 @@
       "properties": {
         "query": { "type": "string", "maxLength": 256 },
         "kinds": {
+          "description": "Restrict results to these kinds, up to 4. Omit for all.",
           "maxItems": 4,
           "type": "array",
           "items": { "type": "string", "enum": ["command", "skill", "plugin", "app"] }

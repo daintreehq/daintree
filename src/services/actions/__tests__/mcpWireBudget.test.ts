@@ -629,6 +629,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   //
   // Then again for this branch's `closed` idle reason, the same spend the external
   // ceiling above carries, seen from the full surface.
+
+  //
+  // Then again for `agentCapabilities.search`, which shipped with its contract but on
+  // no tier, so the assistant was told to use an action `tools/list` never offered it.
+  // Workbench only, beside the `slashCommands.list` it extends, so the external total
+  // does not move. `agentCapabilities.get` stays off every tier until its source read
+  // is contained, and costs nothing here until then.
   const MAX_COHORT_PAYLOAD_BYTES = 226_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;

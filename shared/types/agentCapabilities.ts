@@ -23,7 +23,11 @@ export const CapabilityContextSchema = z.object({
 
 export const CapabilitySearchRequestSchema = CapabilityContextSchema.extend({
   query: z.string().max(256),
-  kinds: z.array(CapabilityKindSchema).max(4).optional(),
+  kinds: z
+    .array(CapabilityKindSchema)
+    .max(4)
+    .optional()
+    .describe("Restrict results to these kinds, up to 4. Omit for all."),
   limit: z.number().int().min(1).max(50).optional(),
   cursor: z.string().max(512).optional(),
   refresh: z.boolean().optional(),

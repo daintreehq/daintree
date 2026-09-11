@@ -434,6 +434,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // needs the user's setting, and that a read is what lets the next one go
   // out; a caller missing any of those reads the silence as a bug. The 1_101 B
   // is exactly their four descriptions.
+  //
+  // Then again for `agentCapabilities.search`, which shipped with its contract but on
+  // no tier, so the assistant was told to use an action `tools/list` never offered it.
+  // Workbench only, beside the `slashCommands.list` it extends, so the external total
+  // does not move. Its description predates this change and is the whole of the
+  // increase, not an allowance. `agentCapabilities.get` stays off every tier until its
+  // source read is contained, and costs nothing here until then.
   const MAX_COHORT_TOTAL_BYTES = 56_057;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
