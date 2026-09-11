@@ -198,6 +198,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   dispose();
   homedirSpy.mockRestore();
   await fs.rm(dir, { recursive: true, force: true });
@@ -507,8 +508,6 @@ describe("markdown-editor main (#12323)", () => {
       expect(await call(CHANNELS.draftGet, { identity })).toEqual({ record: null });
     });
 
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
     it("the recover action switches project when needed and retries until acknowledged", async () => {
       await call(CHANNELS.draftPut, {
         record: { ...record, identity: { ...identity, projectId: "p2" } },
@@ -516,18 +515,33 @@ describe("markdown-editor main (#12323)", () => {
       });
       fake.quickPick = (items) => items[0];
       fake.activeProjectId = "p1";
+      // Only the retry and give-up timers are faked. The draft listing before
+      // the first push is real fs I/O, and against a wall-clock sleep a slow
+      // disk or GC pause there left one push where the test expected two.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      const recoverPushes = () =>
+        fake.pushes.filter((p) => p.channel === PUSH_CHANNELS.recoverDraft);
       const run = fake.action!({});
-      await sleep(70);
+      while (recoverPushes().length === 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
       expect(fake.dispatched).toEqual([{ actionId: "project.switch", args: { projectId: "p2" } }]);
-      // One immediate push plus retries every 20ms until acknowledged.
-      const recoverPushes = fake.pushes.filter((p) => p.channel === PUSH_CHANNELS.recoverDraft);
-      expect(recoverPushes.length).toBeGreaterThanOrEqual(2);
-      const requestId = (recoverPushes[0]!.payload as { requestId: string }).requestId;
+      expect(recoverPushes()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(recoverPushes()).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(40);
+      expect(recoverPushes()).toHaveLength(4);
+      const requestId = (recoverPushes()[0]!.payload as { requestId: string }).requestId;
+      expect(
+        recoverPushes().every((p) => (p.payload as { requestId: string }).requestId === requestId)
+      ).toBe(true);
       expect(await call(CHANNELS.recoverAck, { requestId })).toEqual({ acknowledged: true });
       await expect(run).resolves.toEqual({ recovered: true });
       const after = fake.pushes.length;
-      await sleep(60);
+      // Past the 300ms give-up deadline too: acknowledging must clear both timers.
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(fake.pushes.length).toBe(after);
+      expect(fake.toasts).toEqual([]);
     });
 
     it("the recover action gives up after the timeout and says where the draft is", async () => {
