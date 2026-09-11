@@ -99,7 +99,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [deleteSettings, setDeleteSettings] = useState(false);
   const [isUninstalling, setIsUninstalling] = useState(false);
 
+  // The uninstall confirm and the URL dialog render the shared error inline as
+  // an alert, so opening either must drop an unrelated earlier failure rather
+  // than announce it as if the dialog's own action had failed.
   const armUninstall = (plugin: LoadedPluginInfo) => {
+    setError(null);
     setDeleteSettings(false);
     setPendingUninstall(plugin);
   };
@@ -111,6 +115,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [isInstalling, setIsInstalling] = useState(false);
+  const openUrlDialog = useCallback(() => {
+    setError(null);
+    setShowUrlDialog(true);
+  }, []);
   // `daintree://plugin/open` target — the dialog scrolls to and highlights the
   // matching row, then clears it. Held in a ref for the consumption effect so
   // `onConsumed` isn't a reactive dependency that re-fires the effect.
@@ -320,14 +328,18 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // mid-edit, and silently swapping in a fresh (attacker-supplied) URL is a
       // social-engineering risk. Skip the pre-fill; the user can paste it.
       if (!showUrlDialogRef.current) {
+        // The URL dialog and the uninstall confirm each render the shared
+        // error themselves, on the assumption that only one is ever open. A
+        // deep link is the one path that can open this one over the other.
+        setPendingUninstall(null);
         setUrlInput(deepLinkIntent.url);
-        setShowUrlDialog(true);
+        openUrlDialog();
       }
     } else {
       setFocusPluginId(deepLinkIntent.pluginId);
     }
     deepLinkConsumedRef.current?.();
-  }, [isOpen, deepLinkIntent]);
+  }, [isOpen, deepLinkIntent, openUrlDialog]);
 
   // A `daintree://plugin/open` for a plugin that isn't installed gets a quiet
   // inline notice rather than a silent no-op. Waits for the list to settle so a
@@ -722,6 +734,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     // confirm for a plugin that may no longer exist.
     const startKey = refreshKeyRef.current;
     const available: PendingUpdate[] = [];
+    // A check that FAILED is not a check that found nothing. Counting only
+    // `available` meant a run where every request errored still reported "All
+    // plugins are up to date" — the most reassuring possible summary of a total
+    // failure. Failures are counted separately and reported.
+    let failed = 0;
     try {
       for (const plugin of targets) {
         try {
@@ -729,17 +746,42 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           if (refreshKeyRef.current !== startKey) return;
           if (result.status === "available") {
             available.push({ plugin, result });
+          } else if (result.status !== "up-to-date") {
+            // `fetch-failed` / `invalid-id` arrive as data, not as a throw.
+            failed += 1;
           }
         } catch (err) {
           // Isolate per plugin — one failed check never aborts the batch.
+          failed += 1;
           logError("Failed to check plugin for update (Update all)", err);
         }
       }
       if (refreshKeyRef.current !== startKey) return;
       const [first, ...rest] = available;
       if (!first) {
-        setNotice("All plugins are up to date.");
+        if (failed === targets.length) {
+          setError(
+            failed === 1
+              ? "Couldn't check for updates. Check your connection and try again."
+              : `Couldn't check any of the ${failed} plugins for updates. Check your connection and try again.`
+          );
+        } else if (failed > 0) {
+          setNotice(
+            `No updates found. ${failed} ${failed === 1 ? "plugin" : "plugins"} couldn't be checked.`
+          );
+        } else {
+          setNotice("All plugins are up to date.");
+        }
         return;
+      }
+      // Some checks failed AND some found updates: the confirmations open now,
+      // so say it here rather than dropping it. Nothing clears `notice` until
+      // the next bulk check, so it is waiting in the column when the last
+      // confirmation closes.
+      if (failed > 0) {
+        setNotice(
+          `${failed} ${failed === 1 ? "plugin" : "plugins"} couldn't be checked for updates.`
+        );
       }
       pendingQueueRef.current = rest;
       isBatchActiveRef.current = true;
@@ -835,7 +877,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     closeUninstall,
     confirmUninstall,
     showUrlDialog,
-    setShowUrlDialog,
+    openUrlDialog,
     closeUrlDialog,
     urlInput,
     setUrlInput,

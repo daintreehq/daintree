@@ -6,8 +6,11 @@ import {
   Download,
   AlertCircle,
   AlertTriangle,
+  ArrowUpCircle,
   ChevronLeft,
+  CircleSlash,
   RefreshCw,
+  RotateCw,
   X,
 } from "lucide-react";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
@@ -24,8 +27,10 @@ import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager } from "./usePluginManager";
@@ -39,14 +44,63 @@ import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSear
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 
+// Provenance badge — where the archive came from. Deliberately the quietest
+// thing in the row: it is trivia next to whether the plugin is actually running.
 const ROW_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
 
-// Disabled-option separator class for section headers inside the listbox.
-// role="group" inside role="listbox" is broken under Chromium 146 + VoiceOver
-// (LESSON #9006), so headers masquerade as non-interactive options instead.
 const SECTION_HEADER_CLASS =
   "px-3 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none";
+
+/**
+ * The row's operational state, in precedence order — only the worst one shows.
+ *
+ * State and provenance were one undifferentiated pill vocabulary, so "this
+ * plugin is switched off" carried exactly the same visual weight as "this
+ * archive arrived over a URL". They answer different questions and only one of
+ * them is ever urgent, so they now render as two tiers: status leads the line
+ * with an icon and a colour, provenance trails it as a quiet pill.
+ */
+type RowStatus = {
+  label: string;
+  icon: typeof AlertCircle;
+  /** Tailwind text colour for the whole chip. */
+  tone: string;
+};
+
+function rowStatusFor(plugin: LoadedPluginInfo): RowStatus | null {
+  if (plugin.blocklisted === true) {
+    return { label: "Blocked", icon: AlertCircle, tone: "text-status-danger" };
+  }
+  // A load failure outranks the user's own off switch: "I turned this off" and
+  // "this could not start" have completely different recoveries, and only the
+  // second one is a surprise.
+  if (plugin.loadError) {
+    return { label: "Failed to load", icon: AlertCircle, tone: "text-status-danger" };
+  }
+  // Ahead of `disabled` deliberately: a pending restart means the switch the
+  // user just flipped has NOT taken effect yet. Reporting a plain "Off" for a
+  // plugin that is still loaded is precisely the toggle-that-lies failure.
+  if (plugin.pendingRestart === true) {
+    return { label: "Restart required", icon: RotateCw, tone: "text-status-warning" };
+  }
+  if (plugin.disabled === true) {
+    return { label: "Disabled", icon: CircleSlash, tone: "text-text-secondary" };
+  }
+  return null;
+}
+
+/**
+ * Whether a project plugin is broken in the sense the health summary means.
+ *
+ * Deliberately one predicate shared by the count and the filter behind it: when
+ * they were written separately the count keyed on `invalid` alone, so a plugin
+ * that loaded and then threw was both missing from the total and excluded by
+ * the filter the total links to.
+ */
+function isProjectPluginBroken(plugin: { state: string; loadError?: unknown }): boolean {
+  return plugin.state === "invalid" || plugin.loadError != null;
+}
 
 // Operator chips surfaced below the search input so the filter syntax is
 // discoverable instead of hidden. Categories are the headline filters; the
@@ -68,7 +122,7 @@ interface PluginRowProps {
   onSelect: () => void;
   onToggle: () => void;
   /** Attached to the row root so a deep-link `open` (#9559) can scroll it into view. */
-  innerRef?: (el: HTMLDivElement | null) => void;
+  innerRef?: (el: HTMLLIElement | null) => void;
   /** Transient neutral highlight when a deep-link `open` targets this row. */
   highlighted?: boolean;
 }
@@ -86,11 +140,22 @@ interface PluginRowProps {
  * was the old #9554 behavior. Provenance only earns a badge when it differs
  * from the catalog's default (non-builtin sources: file / URL / catalog).
  *
- * The selection target is a `<button role="option">` covering the info area;
- * the enable toggle is a sibling control (not nested) so it keeps its own click
- * target. Selected styling follows the master-detail precedent (`bg-overlay-soft`
- * + a single 2px accent bar via `before:*`), reserving the accent for the one
- * load-bearing selection signal.
+ * The row is an `<li>` in a plain list, NOT an option in a composite listbox.
+ * The selection target is a `<button aria-current>` covering the info area and
+ * the enable toggle is a sibling control, which a `listbox` may not own: its
+ * required owned elements are `option`/`group`, so the switch was an ARIA
+ * content-model violation that screen readers prune or skip. A plain list also
+ * drops the composite widget's promise of single-tab-stop arrow navigation —
+ * a promise this list never kept.
+ *
+ * Selection is `PALETTE_ROW_CLASS` — the app's single definition of "this is the
+ * row Enter will act on", which already owns the neutral leading rail, the
+ * reduce-motion handling, and the forced-colors outline that a pseudo-element
+ * background cannot survive. Hand-rolling those here made this the sixth
+ * spelling of a visual that file exists to keep at one, and the accent stripe it
+ * replaced also broke accent restraint: selection persists while focus moves, so
+ * an accent on one row and an accent focus ring on another put two in the same
+ * focus region.
  *
  * A deep-link `open` (#9559) scrolls the row into view via `innerRef` and flags
  * it with a transient neutral `highlighted` outline — distinct from the accent
@@ -107,81 +172,93 @@ function PluginRow({
 }: PluginRowProps) {
   const label = pluginLabel(plugin);
   const blocklisted = plugin.blocklisted === true;
-  // Blocklisted plugins render as not-enabled (dimmed, switch off) even though
-  // their user `disabled` state is false — the block is host-decided.
+  // The switch reflects the user's INTENT, which is the only thing it controls.
+  // Whether the plugin actually runs is a separate fact and gets its own line —
+  // conflating them is what made a failed plugin wear a confident "on" switch.
   const enabled = plugin.disabled !== true && !blocklisted;
-  const restartRequired = plugin.pendingRestart === true;
+  const healthy = !blocklisted && !plugin.loadError;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
-  const tagline = plugin.manifest.tagline;
+  // Only the two forge built-ins actually set a tagline, so a row keyed solely
+  // on it renders a bare name for almost every third-party plugin. `PluginCard`
+  // already falls back to the description; the list now agrees with it.
+  const blurb = plugin.manifest.tagline ?? plugin.manifest.description;
+  const status = rowStatusFor(plugin);
+  const update = plugin.updateAvailable;
 
   return (
-    <div
+    <li
       ref={innerRef}
+      data-selected={selected ? "true" : undefined}
       className={cn(
-        "relative flex items-center gap-2 rounded-[var(--radius-md)] border text-text-primary transition-colors",
-        selected
-          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-['']"
-          : highlighted
-            ? "border-daintree-text/40 bg-overlay-subtle"
-            : "border-transparent hover:bg-overlay-subtle"
+        PALETTE_ROW_CLASS,
+        "flex items-center gap-2 rounded-[var(--radius-md)] text-text-primary",
+        !selected && highlighted && "border-daintree-text/40 bg-overlay-subtle",
+        !selected && !highlighted && "hover:bg-overlay-subtle"
       )}
     >
       <button
         type="button"
-        role="option"
-        aria-selected={selected}
+        // A plain list of interactive rows, not a composite listbox: the enable
+        // switch is a sibling of this button, and a `listbox` may only own
+        // `option`/`group` (WAI-ARIA required owned elements), which pruned the
+        // switch from the AX tree and promised arrow-key navigation that never
+        // existed. `aria-current` carries selection without that promise.
+        aria-current={selected ? "true" : undefined}
         onClick={onSelect}
-        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
       >
-        <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled} />
-        <span className="min-w-0">
+        <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled || !healthy} />
+        <span className="min-w-0 flex-1">
+          {/* No `flex-wrap`: a long display name used to push the version onto a
+              line of its own, which made that one row twice the height of its
+              neighbours. The name truncates instead and keeps its full text in
+              the title attribute. */}
           <span
             className={cn(
-              "text-sm font-medium flex items-center gap-1.5 flex-wrap",
+              "text-sm font-medium flex items-baseline gap-1.5",
               !enabled && "text-text-secondary"
             )}
           >
-            <span className="truncate">{label}</span>
-            <span className="text-2xs font-normal text-text-secondary">
+            <span className="truncate" title={label}>
+              {label}
+            </span>
+            {/* Capped rather than `shrink-0`: a prerelease-and-build semver is
+                long enough to claim the whole line and starve the name down to
+                a single letter, which is a worse trade than an elided version. */}
+            <span
+              className="text-2xs font-normal text-text-secondary shrink-0 max-w-[45%] truncate"
+              title={`v${plugin.manifest.version}`}
+            >
               v{plugin.manifest.version}
             </span>
           </span>
-          {tagline && (
-            <span
-              className={cn(
-                "mt-0.5 block text-2xs truncate",
-                enabled ? "text-text-secondary" : "text-text-placeholder"
-              )}
-            >
-              {tagline}
+          {blurb && (
+            <span className={cn("mt-0.5 block text-2xs truncate", "text-text-secondary")}>
+              {blurb}
             </span>
           )}
-          {(!enabled ||
-            !plugin.isBuiltin ||
-            plugin.devMode ||
-            restartRequired ||
-            plugin.loadError ||
-            blocklisted) && (
-            <span className="mt-1 flex items-center gap-1 flex-wrap">
-              {blocklisted && (
-                <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                  Blocked
+          {(status || update || !plugin.isBuiltin || plugin.devMode) && (
+            <span className="mt-1 flex items-center gap-1.5 min-w-0">
+              {status && (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-0.5 text-3xs font-medium uppercase tracking-wide shrink-0",
+                    status.tone
+                  )}
+                >
+                  <status.icon className="w-3 h-3" aria-hidden="true" />
+                  {status.label}
                 </span>
               )}
-              {!blocklisted && plugin.disabled === true && (
-                <span className={ROW_BADGE_CLASS}>Disabled</span>
+              {update && (
+                <span className="inline-flex items-center gap-0.5 min-w-0 text-3xs font-medium uppercase tracking-wide text-status-warning">
+                  <ArrowUpCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{update.version}</span>
+                </span>
               )}
-              {!plugin.isBuiltin && <span className={ROW_BADGE_CLASS}>{sourceLabel}</span>}
               {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
-              {restartRequired && (
-                <span className={`${ROW_BADGE_CLASS} text-text-secondary`}>Restart required</span>
-              )}
-              {plugin.loadError && (
-                <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                  Failed
-                </span>
+              {!plugin.isBuiltin && (
+                <span className={cn(ROW_BADGE_CLASS, "truncate")}>{sourceLabel}</span>
               )}
             </span>
           )}
@@ -196,7 +273,7 @@ function PluginRow({
           aria-label={`Enable ${label}`}
         />
       </span>
-    </div>
+    </li>
   );
 }
 
@@ -258,6 +335,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // the view is open, and wire Escape-to-close through the shared LIFO stack.
   useOverlayClaim("plugin-manager", isOpen);
   useEscapeStack(isOpen, close);
+  const skipMotion = useShouldSkipMotion();
 
   // This view is `fixed inset-0` at z-modal, so it paints over the Toolbar and
   // its OS-window-control reservations. Mirror the Toolbar's traffic-light /
@@ -273,6 +351,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     intent: deepLinkIntent ?? null,
     onConsumed: onDeepLinkConsumed,
   });
+  // Install-from-URL and uninstall both keep their dialog open on a correctable
+  // failure, and both wrote the reason to the one error slot in the master
+  // column — behind the dialog's own scrim. Each now renders the message
+  // itself, and this stops the sidebar showing a second, hidden copy.
+  const errorOwnedByDialog = pm.showUrlDialog || pm.pendingUninstall !== null;
+
   // Selection is pure UI state owned by the view — `usePluginManager` stays
   // data/IPC only. The detail pane derives from the selected id.
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
@@ -295,7 +379,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
   // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
   // scroll its target into view.
-  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const rowRefs = useRef<Map<string, HTMLLIElement>>(new Map());
   const [highlightedPluginId, setHighlightedPluginId] = useState<string | null>(null);
 
   // Free-text + operator filter (#9557). The input binds to the immediate
@@ -309,6 +393,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     () => isQueryActive(parsePluginQuery(deferredQuery)),
     [deferredQuery]
   );
+  // The health summary hides itself the moment a query is typed. It keys off
+  // the LIVE query, not the deferred one the results use: under deferral an
+  // intermediate render can show the typed text with the summary still up.
+  const isLiveQueryActive = useMemo(() => isQueryActive(parsePluginQuery(query)), [query]);
   const filteredPlugins = useMemo(
     () => (isSearchActive ? filterPlugins(pm.plugins, deferredQuery) : pm.plugins),
     [isSearchActive, pm.plugins, deferredQuery]
@@ -322,10 +410,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // neither — matching one against them would be a wrong answer, not a narrow one.
   const filteredProjectPlugins = useMemo(() => {
     const parsed = parsePluginQuery(deferredQuery);
-    if (parsed.operators.length > 0) return [];
+    // Project plugins answer to free text only — the provenance and state
+    // operators describe an installed plugin's record, which they don't have.
+    // `@problem` is the exception: the health summary counts an unreadable
+    // project plugin as broken, so the filter behind that count has to be able
+    // to show it, or the summary would promise rows it then hides.
+    let pool = projectPlugins;
+    if (parsed.operators.length > 0) {
+      const onlyProblem = parsed.operators.every((op) => op.key === "problem");
+      if (!onlyProblem) return [];
+      pool = projectPlugins.filter(isProjectPluginBroken);
+    }
+    // Free text narrows whatever the operators left, exactly as it does for
+    // installed plugins — `@problem notes` used to return every broken project
+    // plugin because the operator branch returned before reading the text.
     const text = parsed.freeText.trim().toLowerCase();
-    if (text.length === 0) return projectPlugins;
-    return projectPlugins.filter(
+    if (text.length === 0) return pool;
+    return pool.filter(
       (p) =>
         p.displayName.toLowerCase().includes(text) ||
         p.id.toLowerCase().includes(text) ||
@@ -408,6 +509,20 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     }
   }, [isSearchActive, filteredPlugins, selectedPluginId]);
 
+  // The same reconciliation for the project inventory, which had none: a
+  // project plugin could be selected and then filtered out of the list while
+  // its detail pane carried on rendering — the "search hides the thing you are
+  // inspecting" trap, and `filteredProjectPlugins` returns [] for ANY operator
+  // query, so it took only a chip click to get there.
+  useEffect(() => {
+    if (
+      selectedProjectPluginId !== null &&
+      !filteredProjectPlugins.some((p) => p.id === selectedProjectPluginId)
+    ) {
+      setSelectedProjectPluginId(null);
+    }
+  }, [filteredProjectPlugins, selectedProjectPluginId]);
+
   // When the hook resolves a deep-link `open` target to an installed plugin
   // (#9559), select it, scroll its row into view, and apply a transient neutral
   // highlight, then clear the focus request so it doesn't re-trigger on the next
@@ -424,10 +539,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     const row = rowRefs.current.get(focusPluginId);
     if (!row) return; // Row not rendered yet — leave focusPluginId set so a
     // subsequent list/filter refresh retries the scroll.
-    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    // Honour reduced motion: a deep link can land anywhere in the list, so the
+    // smooth scroll is an arbitrarily long animation the user never asked for.
+    row.scrollIntoView({ block: "center", behavior: skipMotion ? "auto" : "smooth" });
     setHighlightedPluginId(focusPluginId);
     clearFocusPluginId();
-  }, [focusPluginId, clearFocusPluginId, pm.plugins]);
+  }, [focusPluginId, clearFocusPluginId, pm.plugins, skipMotion]);
 
   // Fade the deep-link highlight after a beat. Kept separate from the consume
   // effect above: clearing focusPluginId there flips that effect's own
@@ -449,6 +566,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // its plugin flagged `pendingRestart`. Surface a single header bar while at
   // least one is outstanding — the changes only load or unload on relaunch.
   const restartRequired = pm.plugins.some((p) => p.pendingRestart === true);
+
+  // "Is anything broken?" is the first question this screen exists to answer,
+  // and it was the one it answered last: a plugin that failed to load looked
+  // healthy until you scrolled to its row. Counted across BOTH inventories,
+  // because a project plugin that can't be read is just as broken and had no
+  // signal of its own at all. Restart-pending is deliberately excluded — it
+  // already owns the header banner below and is not a fault.
+  const brokenInstalled = pm.plugins.filter(
+    (p) => p.loadError != null || p.blocklisted === true
+  ).length;
+  const brokenProject = projectPlugins.filter(isProjectPluginBroken).length;
+  const brokenCount = brokenInstalled + brokenProject;
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   // Synchronous mutex: `isRestarting` lags a render, so a same-frame double
@@ -510,7 +639,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           >
             <ChevronLeft />
           </Button>
-          <Package className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
+          <Package className="w-5 h-5 text-text-secondary shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-medium text-text-primary truncate">Plugins</h2>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -574,7 +703,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       >
         {pm.isDragOverFiles && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-daintree-bg/80 border-2 border-dashed border-border-default pointer-events-none">
-            <Download className="w-6 h-6 text-daintree-text/60" aria-hidden="true" />
+            <Download className="w-6 h-6 text-text-secondary" aria-hidden="true" />
             <p className="text-sm font-medium text-text-primary">Drop a .dntr file to install</p>
           </div>
         )}
@@ -584,9 +713,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           <div className="p-4 border-b border-border-default shrink-0 space-y-3">
             <div>
               <h3 className="text-sm font-medium text-text-primary">All plugins</h3>
+              {/* One line, not three. The detail of what "off" does belongs on
+                  the plugin you are switching off, not above every list. */}
               <p className="text-xs text-text-secondary mt-1 select-text">
-                Extend Daintree with panels, commands, and integrations. Turn one off to keep its
-                settings without loading it. Plugins this project ships are listed first.
+                Turn one off to keep its settings without loading it.
               </p>
             </div>
             <div className="flex flex-col gap-2">
@@ -599,7 +729,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 <FilePlus />
                 Install from file
               </Button>
-              <Button variant="outline" size="sm" onClick={() => pm.setShowUrlDialog(true)}>
+              <Button variant="outline" size="sm" onClick={pm.openUrlDialog}>
                 <Link2 />
                 Install from URL
               </Button>
@@ -623,7 +753,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search plugins"
                 aria-label="Search plugins"
-                className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               />
               <div className="flex flex-wrap gap-1">
                 {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
@@ -635,10 +765,17 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                       aria-pressed={active}
                       onClick={() => toggleFilterToken(token)}
                       className={cn(
+                        // The ring's colour is component-owned, and this
+                        // component did not own it: with no `focus-visible`
+                        // outline declared, the chips fell back to Chromium's
+                        // default blue — a colour that appears nowhere else on
+                        // this surface, while every sibling control declares the
+                        // accent ring.
                         "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
                         active
                           ? "bg-overlay-strong border-border-default text-text-primary"
-                          : "bg-overlay-subtle border-daintree-border/50 text-text-secondary hover:text-text-primary hover:border-border-default"
+                          : "bg-overlay-subtle border-border-default/50 text-text-secondary hover:text-text-primary hover:border-border-default"
                       )}
                     >
                       {label}
@@ -647,13 +784,47 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 })}
               </div>
             </div>
+            {/* The health summary. Deliberately a filter, not a re-sort: the
+                list keeps its category order and its spatial memory, and this
+                is the one control that narrows to the trouble. It disappears
+                entirely when nothing is wrong, so a healthy install pays no
+                permanent chrome for it. */}
+            {brokenCount > 0 && !isLiveQueryActive && (
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery("@problem");
+                  // This button unmounts the moment the filter applies, so it
+                  // hands focus to the control that now owns the query rather
+                  // than stranding the keyboard on document.body.
+                  searchInputRef.current?.focus();
+                }}
+                className="w-full flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20 text-left transition-colors hover:bg-status-danger/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              >
+                <AlertCircle
+                  className="w-3.5 h-3.5 text-status-danger shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="text-2xs text-status-danger min-w-0 flex-1">
+                  {brokenCount === 1
+                    ? "1 plugin needs attention"
+                    : `${brokenCount} plugins need attention`}
+                </span>
+                <span className="text-2xs text-status-danger underline underline-offset-2 shrink-0">
+                  Show
+                </span>
+              </button>
+            )}
             {pm.notice && (
               <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default">
-                <Info className="w-3.5 h-3.5 text-daintree-text/50 shrink-0 mt-0.5" />
+                <Info className="w-3.5 h-3.5 text-text-secondary shrink-0 mt-0.5" />
                 <p className="text-2xs text-text-secondary">{pm.notice}</p>
               </div>
             )}
-            {pm.error && (
+            {/* Suppressed while a dialog is showing the same error inside
+                itself — otherwise the message renders twice, once of them
+                underneath the scrim. */}
+            {pm.error && !errorOwnedByDialog && (
               <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
                 <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
                 <p className="text-2xs text-status-danger">{pm.error}</p>
@@ -682,15 +853,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             filteredPlugins.length === 0 &&
             filteredProjectPlugins.length === 0 ? (
             // Filtered to nothing — offer a one-tap escape back to the full list.
-            <div className="flex-1 min-h-0 flex items-center justify-center">
+            // Anchored near the top rather than centred in the column: the
+            // search box is what caused this, and floating the message halfway
+            // down leaves it a long way from its own cause. The width floor
+            // stops a three-word phrase stacking onto three lines.
+            <div className="flex-1 min-h-0 flex items-start justify-center pt-8 px-3">
               <EmptyState
+                className="w-full max-w-[16rem]"
                 variant="filtered-empty"
                 scale="sidebar"
                 title="No matching plugins"
                 action={
                   <button
                     type="button"
-                    onClick={() => setQuery("")}
+                    onClick={() => {
+                      setQuery("");
+                      searchInputRef.current?.focus();
+                    }}
                     className="text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
                   >
                     Clear search
@@ -702,8 +881,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             <ScrollShadow
               className="flex-1 min-h-0"
               scrollClassName="p-2 space-y-4"
-              role="listbox"
               aria-label="All plugins"
+              data-testid="plugin-list"
             >
               {/* The project's own plugins lead the list: a folder inside the
                   repository the user just opened is the least expected thing
@@ -717,11 +896,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   setSelectedProjectPluginId(id);
                 }}
               />
-              {isSearchActive
-                ? // Flat filtered list — grouping is meaningless across filters
-                  // like @installed, and a flat list keeps the listbox free of
-                  // section labels.
-                  filteredPlugins.map((plugin) => (
+              {isSearchActive ? (
+                // Flat filtered list — grouping is meaningless across filters
+                // like @installed.
+                <ul role="list" aria-label="Matching plugins" className="space-y-1">
+                  {filteredPlugins.map((plugin) => (
                     <PluginRow
                       key={plugin.manifest.name}
                       plugin={plugin}
@@ -740,29 +919,29 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                         else rowRefs.current.delete(plugin.manifest.name);
                       }}
                     />
-                  ))
-                : PLUGIN_CATEGORIES.map(({ id, label }) => {
-                    const groupPlugins = groupedPlugins.get(id);
-                    if (!groupPlugins || groupPlugins.length === 0) return null;
-                    // role="presentation" makes this wrapper transparent to the
-                    // accessibility tree, so its option children re-parent to the
-                    // listbox. The header is a disabled option, not a role="group"
-                    // label (LESSON #9006 — group labels drop under Chromium 146 +
-                    // VoiceOver); arrow-key nav still skips it.
-                    return (
-                      <div key={id} role="presentation" className="space-y-1">
-                        <div
-                          className={SECTION_HEADER_CLASS}
-                          role="option"
-                          aria-disabled="true"
-                          aria-selected="false"
-                          aria-label={label}
-                        >
-                          {label}
-                          <span className="ml-1.5 normal-case tracking-normal text-text-placeholder">
-                            {groupPlugins.length}
-                          </span>
-                        </div>
+                  ))}
+                </ul>
+              ) : (
+                PLUGIN_CATEGORIES.map(({ id, label }) => {
+                  const groupPlugins = groupedPlugins.get(id);
+                  if (!groupPlugins || groupPlugins.length === 0) return null;
+                  // A real heading over a real list, replacing the old
+                  // disabled-option-inside-a-listbox hack: `role="group"` inside
+                  // `role="listbox"` drops its label under Chromium + VoiceOver
+                  // (LESSON #9006), which is what forced the hack — but the hack
+                  // only existed because this was a listbox at all. As a plain
+                  // list the categories can be sections with headings, which
+                  // screen readers expose in the rotor for free.
+                  const headingId = `plugin-category-${id}`;
+                  return (
+                    <section key={id} aria-labelledby={headingId} className="space-y-1">
+                      <h3 id={headingId} className={SECTION_HEADER_CLASS}>
+                        {label}{" "}
+                        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
+                          {groupPlugins.length}
+                        </span>
+                      </h3>
+                      <ul role="list" className="space-y-1">
                         {groupPlugins.map((plugin) => (
                           <PluginRow
                             key={plugin.manifest.name}
@@ -783,21 +962,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                             }}
                           />
                         ))}
-                      </div>
-                    );
-                  })}
+                      </ul>
+                    </section>
+                  );
+                })
+              )}
             </ScrollShadow>
           )}
-
-          {/* Reserved footer for the browse/discovery catalog (#9305). The
-              network-backed catalog ships separately; the slot keeps its place
-              in the master column so the layout doesn't shift when it lands. */}
-          <div className="px-4 py-3 border-t border-border-default shrink-0">
-            <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary select-none">
-              Browse
-            </p>
-            <p className="text-2xs text-text-secondary mt-1">Online plugin catalog coming soon.</p>
-          </div>
         </div>
 
         {/* Detail: selected plugin's metadata, actions, and settings. The key
@@ -811,6 +982,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             (selectedProjectPlugin ? `project:${selectedProjectPlugin.id}` : "catalog")
           }
           className="flex-1 min-h-0"
+          // A named landmark for whatever is selected, so assistive technology
+          // can jump straight to the detail for a plugin instead of hunting for
+          // an unlabelled scroll container. Selection does NOT move focus here —
+          // that would break sequential exploration of the list.
+          role="region"
+          aria-label={
+            selectedPlugin
+              ? `Details for ${pluginLabel(selectedPlugin)}`
+              : selectedProjectPlugin
+                ? `Details for ${selectedProjectPlugin.displayName}`
+                : "Installed plugins"
+          }
           // The readable-width caps are left-pinned, which is right for the
           // detail content and the catalog grid but would push the centered
           // no-plugins placeholder off-center in the wide pane — so that case
@@ -843,7 +1026,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             // No plugins at all — a roomy centered prompt rather than an empty
             // catalog shell; the master column owns the install CTAs.
             <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <Package className="w-8 h-8 text-daintree-text/30" aria-hidden="true" />
+              <Package className="w-8 h-8 text-text-placeholder" aria-hidden="true" />
               <p className="text-base font-medium text-text-primary">No plugin selected</p>
               <p className="text-sm text-text-secondary max-w-sm">
                 Install a plugin to view its details and settings here.
@@ -875,6 +1058,21 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           />
           Also delete this plugin's saved settings
         </label>
+        {/* A failed uninstall leaves this dialog open and sets the error, which
+            the master column no longer renders while the dialog owns it — so
+            without this the failure would be invisible in both places. */}
+        {pm.error && (
+          <div
+            className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
+            role="alert"
+          >
+            <AlertCircle
+              className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
+              aria-hidden="true"
+            />
+            <p className="text-2xs text-status-danger break-words">{pm.error}</p>
+          </div>
+        )}
       </ConfirmDialog>
 
       <ConfirmDialog
@@ -952,10 +1150,36 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         </AppDialog.Header>
         <AppDialog.Body className="space-y-3">
           <AppDialog.Description>
-            Enter the URL of a Daintree plugin archive (.dntr). It's downloaded, validated, and
-            installed. Plugins run with full Node.js privileges — there's no sandbox, no signature
-            check, and no capability prompt before install. Only install from sources you trust.
+            Enter the URL of a Daintree plugin archive (.dntr). It&rsquo;s downloaded, validated,
+            and installed.
           </AppDialog.Description>
+          {/* The security note is the reason to hesitate, so it stops sharing a
+              paragraph — and a weight — with the mechanics of the field above. */}
+          <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+            <AlertTriangle
+              className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5"
+              aria-hidden="true"
+            />
+            <p className="text-2xs text-status-warning">
+              Plugins run with full Node.js privileges — no sandbox, no signature check, and no
+              capability prompt before install. Only install from sources you trust.
+            </p>
+          </div>
+          {/* A correctable failure keeps this dialog open, but the only error
+              slot was the master column behind the scrim — so the user sat in an
+              open dialog with the explanation hidden underneath it. */}
+          {pm.error && (
+            <div
+              className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
+              role="alert"
+            >
+              <AlertCircle
+                className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
+                aria-hidden="true"
+              />
+              <p className="text-2xs text-status-danger break-words">{pm.error}</p>
+            </div>
+          )}
           <input
             type="url"
             value={pm.urlInput}
@@ -964,7 +1188,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               if (e.key === "Enter" && pm.urlInput.trim()) void pm.handleInstallFromUrl();
             }}
             placeholder="https://example.com/plugin.dntr"
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             aria-label="Plugin URL"
           />
         </AppDialog.Body>

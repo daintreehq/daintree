@@ -11,6 +11,8 @@ function makePlugin(overrides: {
   isBuiltin?: boolean;
   disabled?: boolean;
   capabilities?: PluginCapability[];
+  blocklisted?: boolean;
+  loadError?: { message: string; at: number };
 }): LoadedPluginInfo {
   return {
     instanceId: overrides.name,
@@ -49,12 +51,12 @@ function makePlugin(overrides: {
     installedAt: 0,
     archiveHash: null,
     originalUrl: null,
-    loadError: null,
     disabled: overrides.disabled ?? false,
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
-    blocklisted: false,
+    blocklisted: overrides.blocklisted ?? false,
+    loadError: overrides.loadError ?? null,
   };
 }
 
@@ -126,17 +128,25 @@ describe("filterPlugins operators", () => {
     makePlugin({ name: "core.builtin-off", isBuiltin: true, disabled: true }),
     makePlugin({ name: "third.party" }),
     makePlugin({ name: "third.party-off", disabled: true }),
+    makePlugin({ name: "third.blocked", blocklisted: true }),
   ];
 
-  it("@builtin returns only enabled builtins", () => {
-    expect(names(filterPlugins(plugins, "@builtin"))).toEqual(["core.builtin"]);
+  it("@builtin selects by provenance alone, whatever the plugin's state", () => {
+    expect(names(filterPlugins(plugins, "@builtin"))).toEqual(["core.builtin", "core.builtin-off"]);
   });
 
-  it("@installed returns only enabled non-builtins", () => {
-    expect(names(filterPlugins(plugins, "@installed"))).toEqual(["third.party"]);
+  it("@installed selects by provenance alone, whatever the plugin's state", () => {
+    expect(names(filterPlugins(plugins, "@installed"))).toEqual([
+      "third.party",
+      "third.party-off",
+      "third.blocked",
+    ]);
   });
 
-  it("@enabled returns everything not disabled", () => {
+  it("@enabled means what the row's switch means, so a blocked plugin is not enabled", () => {
+    // The row computes `disabled !== true && !blocklisted`. A blocklisted plugin
+    // renders with its switch off, so matching it here would return a row that
+    // visibly contradicts the filter that found it.
     expect(names(filterPlugins(plugins, "@enabled"))).toEqual(["core.builtin", "third.party"]);
   });
 
@@ -148,8 +158,51 @@ describe("filterPlugins operators", () => {
   });
 
   it("AND-combines multiple operators", () => {
-    expect(names(filterPlugins(plugins, "@builtin @disabled"))).toEqual([]);
     expect(names(filterPlugins(plugins, "@enabled @builtin"))).toEqual(["core.builtin"]);
+    expect(names(filterPlugins(plugins, "@installed @disabled"))).toEqual(["third.party-off"]);
+  });
+
+  it("keeps provenance and state independent, so every combination is reachable", () => {
+    // The invariant, not the values: provenance (@builtin/@installed) and state
+    // (@enabled/@disabled) are orthogonal axes. These used to AND an implicit
+    // `!disabled` into the provenance operators, which made "@builtin @disabled"
+    // — the obvious way to ask which built-ins you had switched off —
+    // unsatisfiable, because it reduced to `!disabled && disabled`.
+    for (const provenance of ["@builtin", "@installed"]) {
+      const all = names(filterPlugins(plugins, provenance));
+      const enabled = names(filterPlugins(plugins, `${provenance} @enabled`));
+      const disabled = names(filterPlugins(plugins, `${provenance} @disabled`));
+      expect(disabled.length).toBeGreaterThan(0);
+      // Each state partition is a subset of the provenance set, and together
+      // they never exceed it.
+      for (const name of [...enabled, ...disabled]) expect(all).toContain(name);
+      expect(enabled.filter((n) => disabled.includes(n))).toEqual([]);
+    }
+  });
+
+  it("@problem finds what the user would call broken, whatever the switch says", () => {
+    // The rule, not the list: a plugin the user did not switch off but which
+    // cannot run is the case the row's switch cannot express, so the filter
+    // behind the health summary has to key off runtime facts rather than the
+    // `disabled` flag.
+    const broken = [
+      makePlugin({ name: "a.failed", loadError: { message: "boom", at: 1 } }),
+      makePlugin({ name: "a.blocked", blocklisted: true }),
+      makePlugin({ name: "a.fine" }),
+      makePlugin({ name: "a.off", disabled: true }),
+    ];
+    expect(names(filterPlugins(broken, "@problem"))).toEqual(["a.failed", "a.blocked"]);
+    // Switched off on purpose is not a problem.
+    expect(names(filterPlugins(broken, "@problem"))).not.toContain("a.off");
+  });
+
+  it("@problem still narrows by free text, like every other operator", () => {
+    const broken = [
+      makePlugin({ name: "a.alpha", displayName: "Alpha", loadError: { message: "x", at: 1 } }),
+      makePlugin({ name: "a.beta", displayName: "Beta", loadError: { message: "x", at: 1 } }),
+    ];
+    expect(names(filterPlugins(broken, "@problem alpha"))).toEqual(["a.alpha"]);
+    expect(names(filterPlugins(broken, "@problem zzz"))).toEqual([]);
   });
 
   it("returns all plugins for a blank query", () => {

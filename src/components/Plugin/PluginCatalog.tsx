@@ -6,7 +6,7 @@ import { pluginLabel } from "./PluginDetailPane";
 import { groupPluginsByCategory } from "./pluginGrouping";
 
 const CARD_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
 
 function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: () => void }) {
   const disabled = plugin.disabled === true;
@@ -27,7 +27,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           <span
             className={cn(
               "text-sm font-medium truncate",
-              disabled ? "text-daintree-text/50" : "text-text-primary"
+              disabled ? "text-text-secondary" : "text-text-primary"
             )}
           >
             {pluginLabel(plugin)}
@@ -38,12 +38,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           {disabled && <span className={CARD_BADGE_CLASS}>Disabled</span>}
         </span>
         {blurb && (
-          <span
-            className={cn(
-              "mt-1 block text-xs line-clamp-2",
-              disabled ? "text-text-placeholder" : "text-text-secondary"
-            )}
-          >
+          <span className={cn("mt-1 block text-xs line-clamp-2", "text-text-secondary")}>
             {blurb}
           </span>
         )}
@@ -73,9 +68,12 @@ export function PluginCatalog({
   return (
     <div className="space-y-8">
       <div>
-        <h3 className="text-lg font-semibold text-text-primary">Explore plugins</h3>
+        {/* This grid is built from every INSTALLED plugin, whatever its
+            source — it said "First-party plugins that ship with Daintree" while
+            listing things the user had sideloaded from a URL. */}
+        <h3 className="text-lg font-semibold text-text-primary">Installed plugins</h3>
         <p className="text-sm text-text-secondary mt-1">
-          First-party plugins that ship with Daintree, with more on the way
+          Pick one to see what it adds, what it can reach, and how to turn it off
         </p>
       </div>
       {PLUGIN_CATEGORIES.map((category) => {
@@ -85,9 +83,9 @@ export function PluginCatalog({
         return (
           <section key={category.id} aria-label={category.label}>
             <div className="flex items-center gap-2">
-              <CategoryIcon className="w-4 h-4 text-daintree-text/50" aria-hidden="true" />
+              <CategoryIcon className="w-4 h-4 text-text-secondary" aria-hidden="true" />
               <h4 className="text-sm font-medium text-text-primary">{category.label}</h4>
-              <span className="text-2xs text-daintree-text/40">{sectionPlugins.length}</span>
+              <span className="text-2xs text-text-secondary">{sectionPlugins.length}</span>
             </div>
             <p className="text-xs text-text-secondary mt-0.5">{category.blurb}</p>
             <div className="mt-3 grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">

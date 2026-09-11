@@ -44,8 +44,12 @@ async function openRichSettings(page: Page): Promise<void> {
   await openPluginManager(page);
   const option = page.locator(SEL.plugin.option).filter({ hasText: RICH_PLUGIN_LABEL }).first();
   await expect(option).toBeVisible({ timeout: T_MEDIUM });
-  if ((await option.getAttribute("aria-selected")) !== "true") {
-    await option.click();
+  // A row is a plain <li> holding a selection button and an enable switch.
+  // Selection lives on the button as aria-current, and clicking an already
+  // selected row deselects it, so guard on the button and click the button.
+  const select = option.locator("button").first();
+  if ((await select.getAttribute("aria-current")) !== "true") {
+    await select.click();
   }
 
   const settingsTab = page.locator(SEL.plugin.tabSettings);
