@@ -92,9 +92,23 @@ const noop = () => {};
 function renderPanel(props: Partial<React.ComponentProps<typeof CopyTreeRecentsPanel>> = {}) {
   return render(
     <TooltipProvider>
-      <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} {...props} />
+      <CopyTreeRecentsPanel
+        onCopyFullContext={noop}
+        onRunRecent={noop}
+        onOpenContextSettings={noop}
+        {...props}
+      />
     </TooltipProvider>
   );
+}
+
+/**
+ * The recent rows only. Scoped to the list rather than every button in the
+ * panel, so the pinned action and the settings footer cannot be miscounted as
+ * history entries.
+ */
+function listedRows(): string[] {
+  return Array.from(document.querySelectorAll("li button")).map((b) => b.textContent ?? "");
 }
 
 describe("CopyTreeRecentsPanel", () => {
@@ -235,7 +249,7 @@ describe("CopyTreeRecentsPanel", () => {
     seed([]);
     renderPanel({ onCopyFullContext: noop, onRunRecent: noop });
     // Empty-state convention: point at what to do, not at what is missing.
-    const emptyText = screen.getByText(/copy context to reuse/i).textContent ?? "";
+    const emptyText = screen.getByText(/copy a folder to reuse/i).textContent ?? "";
     expect(emptyText.toLowerCase()).not.toContain("no recent");
   });
 
@@ -246,10 +260,7 @@ describe("CopyTreeRecentsPanel", () => {
     seed(records);
     renderPanel({ onCopyFullContext: noop, onRunRecent: noop });
 
-    const rendered = screen
-      .getAllByRole("button")
-      .map((b) => b.textContent ?? "")
-      .filter((t) => t.startsWith("Run "));
+    const rendered = listedRows();
 
     expect(rendered).toHaveLength(5);
     expect(rendered[0]).toContain("Run r0");
@@ -267,10 +278,7 @@ describe("CopyTreeRecentsPanel", () => {
     ]);
     renderPanel();
 
-    const listed = screen
-      .getAllByRole("button")
-      .map((b) => b.textContent ?? "")
-      .filter((t) => !t.includes("Copy full context"));
+    const listed = listedRows();
 
     expect(listed).toHaveLength(1);
     expect(listed[0]).toContain("src");
@@ -295,10 +303,7 @@ describe("CopyTreeRecentsPanel", () => {
     ]);
     renderPanel();
 
-    const listed = screen
-      .getAllByRole("button")
-      .map((b) => b.textContent ?? "")
-      .filter((t) => t.startsWith("Run "));
+    const listed = listedRows();
 
     expect(listed).toHaveLength(5);
     expect(listed[0]).toContain("Run s0");

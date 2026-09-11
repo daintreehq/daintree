@@ -938,6 +938,17 @@ export function Toolbar({
     void handleCopyTreeClick();
   }, [closeCopyTreePanel, handleCopyTreeClick]);
 
+  // Project settings, on the Context tab — where the excludes, always-include
+  // lists and size budgets that shape every copy actually live. The panel is
+  // otherwise a dead end for someone who opened it wanting to change what a
+  // copy contains. Same CustomEvent the `project.settings.open` action uses.
+  const handleOpenContextSettings = useCallback(() => {
+    closeCopyTreePanel();
+    window.dispatchEvent(
+      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "project:context" } })
+    );
+  }, [closeCopyTreePanel]);
+
   // A recents row. Replayed against the ACTIVE worktree, never the worktree
   // stored on the record — the history dedupe key covers options alone, so a
   // record's worktree is whichever one ran it last rather than a stable target,
@@ -1416,6 +1427,7 @@ export function Toolbar({
                   <LazyCopyTreeRecentsPanel
                     onCopyFullContext={handleCopyTreeFullContext}
                     onRunRecent={handleCopyTreeRunRecent}
+                    onOpenContextSettings={handleOpenContextSettings}
                   />
                 </Suspense>
               )}

@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Folders, History } from "@/components/icons";
+import { useEffect, useId, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   PALETTE_ROW_FOCUS_CLASS,
   PALETTE_SECTION_LABEL_CLASS,
@@ -85,6 +84,44 @@ export function formatRecentMeta(record: CopyTreeHistoryRecord, now?: number): s
   return parts.join(" · ");
 }
 
+/**
+ * What a row will actually copy, spelled out for the tooltip.
+ *
+ * The row's name is derived from the option set and collapses it: two runs over
+ * different subtrees of the same folder, or the same scope with different
+ * excludes, can land on the same label. The name is what you scan; this is what
+ * you check before committing to a re-run.
+ *
+ * Phrased as what the run *was*, never as what the next one will be. Recents
+ * replay against the active worktree, so the stored counts describe a past run
+ * over a possibly different tree — stating them as a forecast would be a
+ * prediction this panel has no basis for.
+ */
+function describeRecentOptions(record: CopyTreeHistoryRecord): string[] {
+  const { options } = record;
+  const lines: string[] = [];
+  const list = (value: string | string[] | undefined) =>
+    Array.isArray(value) ? value.join(", ") : value;
+
+  if (options.scopePaths?.length) lines.push(`Scope: ${options.scopePaths.join(", ")}`);
+  if (options.includePaths?.length) lines.push(`Include: ${options.includePaths.join(", ")}`);
+  if (options.filter) lines.push(`Filter: ${list(options.filter)}`);
+  if (options.exclude) lines.push(`Exclude: ${list(options.exclude)}`);
+  if (options.always?.length) lines.push(`Always: ${options.always.join(", ")}`);
+  if (options.modified) lines.push("Changed files only");
+  if (options.format && options.format !== DEFAULT_COPYTREE_FORMAT) {
+    lines.push(`Format: ${options.format}`);
+  }
+  if (options.scopeIgnoresIgnoreFiles) lines.push("Ignores the ignore files above the scope");
+  if (lines.length === 0) lines.push("No filters — the whole worktree");
+
+  lines.push(`Last run: ${formatRecentMeta(record)}`);
+  return lines;
+}
+
+/** The section band's box, shared so the skeleton's reserved band cannot drift from the real one. */
+const SECTION_BAND_CLASS = "px-2 pt-2 pb-1";
+
 // Rows carry no accent except the focus ring, which is the panel's one emphasis
 // signal. Hover and focus deliberately no longer share a tone: they used to
 // both paint `overlay-raised`, so a hovered row and the focused row were
@@ -98,7 +135,7 @@ export function formatRecentMeta(record: CopyTreeHistoryRecord, now?: number): s
 // that declares none gets Chromium's default: a square, full-bleed rectangle
 // that ignores the panel's padding and collides with the divider above it.
 const rowClass = cn(
-  "w-full flex items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-left",
+  "w-full flex flex-col gap-0.5 rounded-[var(--radius-md)] px-2 py-1.5 text-left",
   "text-text-primary hover:bg-overlay-raised",
   "transition-colors",
   PALETTE_ROW_FOCUS_CLASS
@@ -109,6 +146,8 @@ interface CopyTreeRecentsPanelProps {
   onCopyFullContext: () => void;
   /** Re-run a stored option set against the active worktree. */
   onRunRecent: (record: CopyTreeHistoryRecord) => void;
+  /** Open Project settings on the Context tab, where excludes and budgets live. */
+  onOpenContextSettings: () => void;
 }
 
 /**
@@ -124,7 +163,9 @@ interface CopyTreeRecentsPanelProps {
 export function CopyTreeRecentsPanel({
   onCopyFullContext,
   onRunRecent,
+  onOpenContextSettings,
 }: CopyTreeRecentsPanelProps) {
+  const recentsLabelId = useId();
   const records = useCopyTreeHistoryStore((s) => s.records);
   const loading = useCopyTreeHistoryStore((s) => s.loading);
   const init = useCopyTreeHistoryStore((s) => s.init);
@@ -195,12 +236,14 @@ export function CopyTreeRecentsPanel({
           // field. Its apparent importance was coming entirely from the focus
           // ring, and vanished the moment focus moved to a row.
           //
-          // `px-2` rather than the size's own `px-4`, so the label sits in the
-          // same column as the row titles below it.
+          // `px-2` rather than the size's own `px-4`, and no leading glyph: the
+          // panel now has exactly one left edge, shared by this label, the
+          // section band, every row title and every skeleton bone. The copy
+          // concept still has its icon on the toolbar trigger this hangs from —
+          // repeating it here bought an indent and nothing else.
           variant="contrast"
-          className="w-full justify-start px-2 gap-2"
+          className="w-full justify-start px-2"
         >
-          <Folders className="w-4 h-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-left">
             Copy full context
           </span>
@@ -215,13 +258,20 @@ export function CopyTreeRecentsPanel({
             showSkeleton ? (
               <>
                 {/* The bones sit on the row grid they are previewing — same
-                    inset, same two-line pitch — so the list does not jump when
-                    the real rows arrive. */}
+                    inset, same two-line pitch — and the section band is
+                    reserved, so neither the indent nor the heading moves when
+                    the real rows arrive. The title bone is the wider of the
+                    pair: the meta line is the shorter one in the loaded state,
+                    and previewing it the other way round advertises a hierarchy
+                    the content then contradicts. */}
                 <Skeleton label="Loading recent copies" className="flex flex-col">
+                  <div className={cn(PALETTE_SECTION_LABEL_CLASS, SECTION_BAND_CLASS)}>
+                    <SkeletonBone immediate heightPx={8} className="w-12" />
+                  </div>
                   {Array.from({ length: SKELETON_ROWS }, (_, i) => (
                     <div key={i} className="flex flex-col gap-0.5 px-2 py-1.5">
-                      <SkeletonBone immediate heightPx={14} className="w-1/2" />
-                      <SkeletonBone immediate heightPx={10} className="w-2/3" />
+                      <SkeletonBone immediate heightPx={14} className="w-2/3" />
+                      <SkeletonBone immediate heightPx={10} className="w-1/2" />
                     </div>
                   ))}
                 </Skeleton>
@@ -233,16 +283,23 @@ export function CopyTreeRecentsPanel({
               </>
             ) : null
           ) : recents.length === 0 ? (
-            // Names what the next copy buys rather than what the list lacks.
-            // No description: `zero-data` at `popover` scale types it as
-            // `never`, so the pointer to where scoped and filtered copies are
-            // configured has nowhere to go at this scale and is deliberately
-            // left out rather than smuggled into the title.
+            // Names an action that can actually populate this list. "Copy
+            // context" could not: the button above records a run with no
+            // options, which is the pinned action itself and is filtered back
+            // out, so following that invitation left the list empty and the
+            // same message standing — reading as history that failed to save.
+            // Copying a folder (the file browser's row menu) stores a scope,
+            // and a scoped run does appear here.
+            //
+            // No icon: the glyph was the same `History` mark the rows use, so
+            // it read as a sixth row rather than an illustration, and it was
+            // the only centred thing in a panel that is otherwise one hard
+            // left edge. No description either — `zero-data` at `popover`
+            // scale types it as `never`.
             <EmptyState
               variant="zero-data"
               scale="popover"
-              title="Copy context to reuse it here"
-              icon={<History />}
+              title="Copy a folder to reuse it here"
               className="py-4"
             />
           ) : (
@@ -250,38 +307,53 @@ export function CopyTreeRecentsPanel({
               {/* The rows were previously unlabelled, on the reasoning that the
                   framed button above them was itself the heading. It could not
                   do both jobs: with no label, a row reads as ambiguous between
-                  a past run and a variant of the command above it. */}
-              <div className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1")} aria-hidden="true">
+                  a past run and a variant of the command above it.
+
+                  Named for assistive tech too, not `aria-hidden`: the whole
+                  point of the band is the distinction it draws, and hiding it
+                  from the accessibility tree withholds that distinction from
+                  exactly the users who cannot see the band. */}
+              <div
+                id={recentsLabelId}
+                className={cn(PALETTE_SECTION_LABEL_CLASS, SECTION_BAND_CLASS)}
+              >
                 Recent
               </div>
-              <ul className="flex flex-col">
+              <ul className="flex flex-col" aria-labelledby={recentsLabelId}>
                 {recents.map((record) => (
                   <li key={record.id}>
-                    <button type="button" onClick={() => onRunRecent(record)} className={rowClass}>
-                      {/* Gives the two-line row a baseline anchor and puts its
-                          title in the same column as the button's label above.
-                          `History` means one thing inside this panel — "a run
-                          that already happened" — which is also what the empty
-                          state uses it for. */}
-                      <History
-                        className="w-4 h-4 shrink-0 text-text-secondary"
-                        aria-hidden="true"
-                      />
-                      <span className="min-w-0 flex-1 flex flex-col gap-0.5">
-                        {/* Names are derived from the option set and run long —
-                            a two-path scoped copy truncates mid-token, which
-                            leaves the row unidentifiable. The tooltip measures
-                            the element itself and opens on keyboard focus as
-                            well as hover, so the rows stay distinguishable on
-                            the route that cannot point at them. */}
-                        <TruncatedTooltip content={record.name}>
+                    {/* On the row rather than the name, and unconditional
+                        rather than truncation-gated. A name that fits is still
+                        a lossy summary of its option set — two runs over
+                        different subtrees can derive the same label — so the
+                        thing worth disclosing is the options, and it is worth
+                        disclosing whether or not the title happens to clip.
+                        Radix opens it on keyboard focus as well as hover, so
+                        the route that cannot point at a row gets it too. */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onRunRecent(record)}
+                          className={rowClass}
+                        >
                           <span className="truncate text-sm">{record.name}</span>
-                        </TruncatedTooltip>
-                        <span className="truncate text-2xs text-text-secondary">
-                          {formatRecentMeta(record)}
+                          <span className="truncate text-2xs text-text-secondary">
+                            {formatRecentMeta(record)}
+                          </span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="left" align="start" className="max-w-[280px]">
+                        <span className="flex flex-col gap-0.5">
+                          <span className="font-medium break-words">{record.name}</span>
+                          {describeRecentOptions(record).map((line) => (
+                            <span key={line} className="text-text-secondary break-words">
+                              {line}
+                            </span>
+                          ))}
                         </span>
-                      </span>
-                    </button>
+                      </TooltipContent>
+                    </Tooltip>
                   </li>
                 ))}
               </ul>
@@ -289,6 +361,27 @@ export function CopyTreeRecentsPanel({
           )}
         </div>
       </ScrollShadow>
+
+      {/* Outside the ScrollShadow, so it stays put while the list scrolls.
+          Last in the tab order and visually quiet: the panel's job is the copy
+          at the top, and this only has to be findable by someone who came here
+          wanting to change what a copy includes. Without it the panel is a dead
+          end for that person — the excludes, budgets and always-include lists
+          all live in Project settings, and nothing here said so. */}
+      <div className="p-2 border-t border-divider">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onOpenContextSettings}
+          // No glyph: the panel's single left edge is the thing holding this
+          // layout together, and a leading icon here would reopen the indent
+          // the row glyphs were removed to close.
+          className="w-full justify-start px-2"
+        >
+          <span className="truncate">Context settings</span>
+        </Button>
+      </div>
     </div>
   );
 }

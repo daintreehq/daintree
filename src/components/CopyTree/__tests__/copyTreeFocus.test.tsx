@@ -77,7 +77,11 @@ function Harness() {
         }}
         anchorRef={triggerRef}
       >
-        <CopyTreeRecentsPanel onCopyFullContext={close} onRunRecent={close} />
+        <CopyTreeRecentsPanel
+          onCopyFullContext={close}
+          onRunRecent={close}
+          onOpenContextSettings={close}
+        />
       </FixedDropdown>
     </>
   );
