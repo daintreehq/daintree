@@ -29,6 +29,9 @@ export function useHostMemoryPauseSync(): void {
     let pushCount = 0;
     let latestPull = 0;
     let gateTimer: ReturnType<typeof setTimeout> | null = null;
+    // A pushed pause that showed while this view lacked focus, still owed its
+    // announcement.
+    let pauseAnnouncementHeld = false;
 
     const clearGate = () => {
       if (gateTimer !== null) {
@@ -37,11 +40,26 @@ export function useHostMemoryPauseSync(): void {
       }
     };
 
-    // Every window's active view receives the push, so only the view the user
-    // is actually in speaks — the rest would repeat it from the background.
-    const announce = (message: string) => {
-      if (!document.hasFocus()) return;
-      useAnnouncerStore.getState().announce(message, "polite");
+    // Every window's active view receives the push, so only a view holding focus
+    // speaks. One that doesn't — the Portal or another window has focus, or the
+    // view is still behind a switch's bridge — keeps the announcement until
+    // focus comes back rather than repeating it from the background.
+    const announcePause = () => {
+      const current = useHostMemoryPauseStore.getState().snapshot;
+      if (!current?.active) return;
+      if (!document.hasFocus()) {
+        pauseAnnouncementHeld = true;
+        return;
+      }
+      pauseAnnouncementHeld = false;
+      useAnnouncerStore
+        .getState()
+        .announce(
+          current.paused
+            ? HOST_MEMORY_PAUSE_COPY.announcePaused
+            : HOST_MEMORY_PAUSE_COPY.monitoring.title,
+          "polite"
+        );
     };
 
     const apply = (snapshot: HostMemoryPauseSnapshot, live: boolean) => {
@@ -50,9 +68,12 @@ export function useHostMemoryPauseSync(): void {
 
       if (!snapshot.active) {
         clearGate();
+        pauseAnnouncementHeld = false;
         if (!visible) return;
         setVisible(false);
-        if (live) announce(HOST_MEMORY_PAUSE_COPY.announceEnded);
+        if (live && document.hasFocus()) {
+          useAnnouncerStore.getState().announce(HOST_MEMORY_PAUSE_COPY.announceEnded, "polite");
+        }
         return;
       }
 
@@ -66,14 +87,9 @@ export function useHostMemoryPauseSync(): void {
       }
       gateTimer = setTimeout(() => {
         gateTimer = null;
-        const current = useHostMemoryPauseStore.getState().snapshot;
-        if (disposed || !current?.active) return;
+        if (disposed || !useHostMemoryPauseStore.getState().snapshot?.active) return;
         useHostMemoryPauseStore.getState().setVisible(true);
-        announce(
-          current.paused
-            ? HOST_MEMORY_PAUSE_COPY.announcePaused
-            : HOST_MEMORY_PAUSE_COPY.monitoring.title
-        );
+        announcePause();
       }, UI_DOHERTY_THRESHOLD);
     };
 
@@ -102,22 +118,31 @@ export function useHostMemoryPauseSync(): void {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") pull();
     };
+    const handleFocus = () => {
+      if (pauseAnnouncementHeld) announcePause();
+    };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
     // A cached project view is parked with `setVisible(false)`, which fires no
     // DOM lifecycle event, so main's view signals mark it current again: reveal
     // for a warm switch, warm activation alone for a failed switch rolled back
     // to a view that may never have left the screen.
     const offRevealed = window.electron?.app?.onViewRevealed?.(() => pull());
     const offWarmActivated = window.electron?.app?.onViewWarmActivated?.(() => pull());
-    // Parked mid-gate, this view is no longer where the user is. Its pending
-    // pause goes unannounced; the pull on its return shows it silently.
-    const offCached = window.electron?.app?.onViewCached?.(() => clearGate());
+    // Parked, this view is no longer where the user is. A pause it was still
+    // gating or holding goes unannounced; the pull on its return shows it
+    // silently.
+    const offCached = window.electron?.app?.onViewCached?.(() => {
+      clearGate();
+      pauseAnnouncementHeld = false;
+    });
 
     return () => {
       disposed = true;
       clearGate();
       offPush();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
       offRevealed?.();
       offWarmActivated?.();
       offCached?.();

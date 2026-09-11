@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { HostMemoryPauseSnapshot } from "@shared/types/pty-host";
@@ -38,20 +39,31 @@ interface PendingPull {
 
 type ViewSignal = "revealed" | "warmActivated" | "cached";
 
-let pushListener: ((snapshot: HostMemoryPauseSnapshot) => void) | null = null;
-let viewListeners: Partial<Record<ViewSignal, () => void>> = {};
+const pushListeners = new Set<(snapshot: HostMemoryPauseSnapshot) => void>();
+const viewListeners: Record<ViewSignal, Set<() => void>> = {
+  revealed: new Set(),
+  warmActivated: new Set(),
+  cached: new Set(),
+};
 let pulls: PendingPull[] = [];
 let hasFocus: MockInstance<() => boolean>;
 
 function push(snapshot: HostMemoryPauseSnapshot): void {
   act(() => {
-    pushListener?.(snapshot);
+    for (const listener of [...pushListeners]) listener(snapshot);
   });
 }
 
 function signalView(signal: ViewSignal): void {
   act(() => {
-    viewListeners[signal]?.();
+    for (const listener of [...viewListeners[signal]]) listener();
+  });
+}
+
+function focusView(): void {
+  hasFocus.mockReturnValue(true);
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
   });
 }
 
@@ -69,18 +81,27 @@ function advance(ms: number): void {
 
 function listenFor(signal: ViewSignal) {
   return (callback: () => void) => {
-    viewListeners[signal] = callback;
+    viewListeners[signal].add(callback);
     return () => {
-      delete viewListeners[signal];
+      viewListeners[signal].delete(callback);
     };
+  };
+}
+
+function listenerCounts() {
+  return {
+    push: pushListeners.size,
+    revealed: viewListeners.revealed.size,
+    warmActivated: viewListeners.warmActivated.size,
+    cached: viewListeners.cached.size,
   };
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
   pulls = [];
-  pushListener = null;
-  viewListeners = {};
+  pushListeners.clear();
+  for (const listeners of Object.values(viewListeners)) listeners.clear();
   announceMock.mockReset();
   hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
   useHostMemoryPauseStore.setState({ snapshot: null, visible: false });
@@ -94,9 +115,9 @@ beforeEach(() => {
   clientMock.onHostMemoryPause
     .mockReset()
     .mockImplementation((callback: (snapshot: HostMemoryPauseSnapshot) => void) => {
-      pushListener = callback;
+      pushListeners.add(callback);
       return () => {
-        pushListener = null;
+        pushListeners.delete(callback);
       };
     });
 
@@ -123,6 +144,15 @@ describe("useHostMemoryPauseSync", () => {
     const subscribedAt = clientMock.onHostMemoryPause.mock.invocationCallOrder[0]!;
     const pulledAt = clientMock.getHostMemoryPause.mock.invocationCallOrder[0]!;
     expect(subscribedAt).toBeLessThan(pulledAt);
+  });
+
+  it("subscribes exactly once under StrictMode and releases everything on unmount", () => {
+    const { unmount } = renderHook(() => useHostMemoryPauseSync(), { wrapper: StrictMode });
+
+    expect(listenerCounts()).toEqual({ push: 1, revealed: 1, warmActivated: 1, cached: 1 });
+
+    unmount();
+    expect(listenerCounts()).toEqual({ push: 0, revealed: 0, warmActivated: 0, cached: 0 });
   });
 
   it("shows a pause already under way at mount at once, and silently", async () => {
@@ -182,17 +212,19 @@ describe("useHostMemoryPauseSync", () => {
     expect(announceMock).toHaveBeenLastCalledWith(HOST_MEMORY_PAUSE_COPY.announceEnded, "polite");
   });
 
-  it("keeps a pushed pause's gate and announcement when a reconciling pull lands inside it", async () => {
+  it("keeps a pushed pause's original gate deadline and announcement when a reconciling pull lands inside it", async () => {
     renderHook(() => useHostMemoryPauseSync());
     await resolvePull(0, CLEAR);
 
+    const pulledAt = UI_DOHERTY_THRESHOLD / 4;
     push(PAUSED);
-    advance(UI_DOHERTY_THRESHOLD / 4);
+    advance(pulledAt);
     signalView("revealed");
     await resolvePull(1, PAUSED);
 
+    advance(UI_DOHERTY_THRESHOLD - pulledAt - 1);
     expect(useHostMemoryPauseStore.getState().visible).toBe(false);
-    advance(UI_DOHERTY_THRESHOLD);
+    advance(1);
     expect(useHostMemoryPauseStore.getState().visible).toBe(true);
     expect(announceMock).toHaveBeenCalledTimes(1);
   });
@@ -250,23 +282,22 @@ describe("useHostMemoryPauseSync", () => {
     visibility.mockRestore();
   });
 
-  it("lets a pause go unannounced when its view is cached mid-gate, then shows it silently on return", async () => {
+  it("lets a pause cached mid-gate go unannounced, even when the view returns before the deadline", async () => {
     renderHook(() => useHostMemoryPauseSync());
     await resolvePull(0, CLEAR);
 
     push(PAUSED);
     signalView("cached");
-    advance(UI_DOHERTY_THRESHOLD * 2);
-    expect(useHostMemoryPauseStore.getState().visible).toBe(false);
-
+    advance(UI_DOHERTY_THRESHOLD / 2);
     signalView("revealed");
     await resolvePull(1, PAUSED);
-
     expect(useHostMemoryPauseStore.getState().visible).toBe(true);
+
+    advance(UI_DOHERTY_THRESHOLD * 2);
     expect(announceMock).not.toHaveBeenCalled();
   });
 
-  it("stays silent in a view that doesn't hold focus, while still showing the pause", async () => {
+  it("holds the pause announcement while the view lacks focus and delivers it once focus returns", async () => {
     hasFocus.mockReturnValue(false);
     renderHook(() => useHostMemoryPauseSync());
     await resolvePull(0, CLEAR);
@@ -274,9 +305,27 @@ describe("useHostMemoryPauseSync", () => {
     push(PAUSED);
     advance(UI_DOHERTY_THRESHOLD);
     expect(useHostMemoryPauseStore.getState().visible).toBe(true);
+    expect(announceMock).not.toHaveBeenCalled();
 
+    focusView();
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    expect(announceMock).toHaveBeenCalledWith(HOST_MEMORY_PAUSE_COPY.announcePaused, "polite");
+
+    focusView();
+    expect(announceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent when the pause ends before an unfocused view gets focus back", async () => {
+    hasFocus.mockReturnValue(false);
+    renderHook(() => useHostMemoryPauseSync());
+    await resolvePull(0, CLEAR);
+
+    push(PAUSED);
+    advance(UI_DOHERTY_THRESHOLD);
     push(CLEAR);
     expect(useHostMemoryPauseStore.getState().visible).toBe(false);
+
+    focusView();
     expect(announceMock).not.toHaveBeenCalled();
   });
 
@@ -288,8 +337,7 @@ describe("useHostMemoryPauseSync", () => {
     unmount();
     advance(UI_DOHERTY_THRESHOLD * 2);
 
-    expect(pushListener).toBeNull();
-    expect(viewListeners).toEqual({});
+    expect(listenerCounts()).toEqual({ push: 0, revealed: 0, warmActivated: 0, cached: 0 });
     expect(useHostMemoryPauseStore.getState().visible).toBe(false);
     expect(announceMock).not.toHaveBeenCalled();
   });
