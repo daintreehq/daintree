@@ -316,8 +316,15 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                   disabled={commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0}
                   data-testid="fleet-picker-cold-start-confirm"
                   className={cn(
-                    "rounded-sm border border-category-amber-border bg-category-amber-subtle px-2.5 py-1 text-xs leading-[inherit] text-category-amber-text",
-                    "transition-[filter,opacity] duration-150 hover:brightness-110",
+                    // Neutral high-contrast, the house primary treatment
+                    // (`AppDialog.Footer` hard-codes `variant="contrast"`). The
+                    // amber category fill this used to carry was the only
+                    // category-coloured confirm in ~111 dialogs. Fleet keeps its
+                    // amber identity where it belongs — the arming ribbon, the
+                    // drafting pill, the pane header — and this surface is left
+                    // with exactly one gold, the Waiting badge.
+                    "rounded-sm bg-text-primary px-2.5 py-1 text-xs leading-[inherit] text-text-inverse ring-1 ring-tint/15",
+                    "transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))]",
                     // The label changes width with the count, and it sits at the
                     // end of the row, so every change dragged Cancel sideways
                     // with it. A floor wide enough for the longest common label

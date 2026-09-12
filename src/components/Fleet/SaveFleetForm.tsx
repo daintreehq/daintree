@@ -158,7 +158,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
           onPointerDown={(e) => e.stopPropagation()}
           disabled={!canSave}
           data-testid="fleet-save-form-submit"
-          className="rounded bg-category-amber-subtle border border-category-amber-border px-2 py-1 text-2xs text-category-amber-text transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-sm bg-text-primary px-2 py-1 text-2xs text-text-inverse ring-1 ring-tint/15 transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))] disabled:cursor-not-allowed disabled:opacity-40"
         >
           Save
         </button>
