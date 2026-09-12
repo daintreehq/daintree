@@ -26,6 +26,12 @@ import type * as React from "react";
  * So the row's own `focus` is decorated for the length of the pointer event
  * instead. Radix keeps every decision about whether to focus at all; only the
  * options it asks with change.
+ *
+ * Known edge: because the state is decided per focus transition, a keystroke
+ * that lands on the row already under the pointer — Home on the first row, an
+ * unlooped Arrow at either end — leaves it ringless until focus actually moves.
+ * Restoring the ring there needs document-wide modality tracking, which is a
+ * much bigger mechanism than one dead keypress is worth.
  */
 export function menuRowPointerMove<T extends HTMLElement>(
   event: React.PointerEvent<T>,
