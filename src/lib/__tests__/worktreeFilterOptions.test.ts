@@ -84,7 +84,14 @@ describe("describeActiveFacets", () => {
         }
       }
     }
-    for (const title of ["Status", "Branch type", "Issues & PRs", "Sessions", "Activity", "Dev server"]) {
+    for (const title of [
+      "Status",
+      "Branch type",
+      "Issues & PRs",
+      "Sessions",
+      "Activity",
+      "Dev server",
+    ]) {
       expect(out).toContain(`${title}:`);
     }
   });
