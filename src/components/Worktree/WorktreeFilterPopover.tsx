@@ -230,24 +230,31 @@ function ChipGrid<T extends string>({
 }: ChipGridProps<T>) {
   const [showAll, setShowAll] = useState(false);
 
-  const { shown, hiddenCount } = useMemo(() => {
+  const { shown, hiddenCount, hiddenAllDead } = useMemo(() => {
     if (!counts || overflowAfter === undefined || options.length <= overflowAfter) {
-      return { shown: options, hiddenCount: 0 };
+      return { shown: options, hiddenCount: 0, hiddenAllDead: true };
     }
-    const useful = options.filter((o) => counts[o.value] > 0 || isActive(o.value));
-    // Nothing matches anything — fold nothing rather than render an empty facet.
-    if (useful.length === 0) return { shown: options, hiddenCount: 0 };
-    // Matching is the first cut, but it is not a limit: a repository using a
-    // dozen branch prefixes would still get the wall this fold exists to stop.
-    // Selected values are always kept, so folding can never hide a live filter.
-    const capped =
-      useful.length > overflowAfter
-        ? useful
-            .filter((o) => isActive(o.value))
-            .concat(useful.filter((o) => !isActive(o.value)))
-            .slice(0, overflowAfter)
-        : useful;
-    return { shown: capped, hiddenCount: options.length - capped.length };
+    const selected = options.filter((o) => isActive(o.value));
+    const matching = options.filter((o) => !isActive(o.value) && counts[o.value] > 0);
+    // Nothing to show — fold nothing rather than render an empty facet.
+    if (selected.length + matching.length === 0) {
+      return { shown: options, hiddenCount: 0, hiddenAllDead: true };
+    }
+    // Selected values are never folded, whatever the cap: hiding a live filter
+    // is how a list ends up narrowed by something the user cannot see. The cap
+    // spends whatever room is left on values that would actually narrow it.
+    const room = Math.max(0, overflowAfter - selected.length);
+    const shownMatching = new Set(matching.slice(0, room));
+    const keep = new Set([...selected, ...shownMatching]);
+    return {
+      // Option order, so chips do not reorder as counts move.
+      shown: options.filter((o) => keep.has(o)),
+      hiddenCount: options.length - keep.size,
+      // Only claim "no matches" when that is true of everything folded away —
+      // past the cap some hidden values do match, and saying otherwise would
+      // tell the user there is nothing under there worth opening.
+      hiddenAllDead: matching.length - shownMatching.size === 0,
+    };
   }, [options, counts, overflowAfter, isActive]);
 
   const visible = showAll || hiddenCount === 0 ? options : shown;
@@ -270,7 +277,11 @@ function ChipGrid<T extends string>({
           aria-expanded={showAll}
           className="inline-flex items-center self-center py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
         >
-          {showAll ? "Show fewer" : `${hiddenCount} with no matches`}
+          {showAll
+            ? "Show fewer"
+            : hiddenAllDead
+              ? `${hiddenCount} with no matches`
+              : `${hiddenCount} more`}
         </button>
       )}
     </>

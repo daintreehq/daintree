@@ -168,6 +168,82 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     expect(chip(/^Detached/)).toBeDefined();
   });
 
+  it("never folds away a value the user has selected", () => {
+    // A filter narrowing the list from behind a fold is invisible state. The
+    // cap spends its room on unselected values; selections are not negotiable.
+    const many = {
+      ...COUNTS,
+      branchType: Object.fromEntries(
+        Object.keys((COUNTS as never as { branchType: Record<string, number> }).branchType).map(
+          (k) => [k, 0]
+        )
+      ),
+    } as never;
+    const store = useWorktreeFilterStore.getState();
+    const picked = [
+      "feature",
+      "bugfix",
+      "refactor",
+      "chore",
+      "docs",
+      "test",
+      "release",
+      "ci",
+      "deps",
+    ] as const;
+    for (const v of picked) store.toggleTypeFilter(v);
+    render(
+      <WorktreeFilterPopover
+        appearance="field"
+        hideSearchInput
+        open
+        onOpenChange={() => {}}
+        chipCounts={many}
+      />
+    );
+    const labels = screen.getAllByRole("button").map((b) => b.textContent ?? "");
+    for (const v of picked) {
+      const label = v === "ci" ? "CI" : v[0]!.toUpperCase() + v.slice(1);
+      expect(labels.some((l) => l.startsWith(label))).toBe(true);
+    }
+  });
+
+  it("only says 'no matches' when that is true of everything it folded", () => {
+    // Past the cap some hidden values do match; calling them "no matches" tells
+    // the user there is nothing under there worth opening.
+    const manyMatching = {
+      ...COUNTS,
+      branchType: {
+        feature: 1,
+        bugfix: 1,
+        refactor: 1,
+        chore: 1,
+        docs: 1,
+        test: 1,
+        release: 1,
+        ci: 1,
+        deps: 1,
+        perf: 1,
+        style: 1,
+        wip: 1,
+        main: 0,
+        detached: 0,
+        other: 0,
+      },
+    } as never;
+    render(
+      <WorktreeFilterPopover
+        appearance="field"
+        hideSearchInput
+        open
+        onOpenChange={() => {}}
+        chipCounts={manyMatching}
+      />
+    );
+    expect(screen.queryByText(/with no matches$/)).toBeNull();
+    expect(screen.getByText(/\d+ more$/)).toBeTruthy();
+  });
+
   it("names each chip's facet through a labelled group", () => {
     // A chip announced as "Working" alone does not say which axis it filters.
     openWithCounts();
