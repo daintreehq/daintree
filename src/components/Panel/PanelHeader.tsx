@@ -439,6 +439,25 @@ function PanelHeaderComponent({
   // The title prop is already variant-resolved by ContentPanel (identity-only
   // in the dock, task-composed in the grid) — render it verbatim.
   const displayTitle = title;
+  // What the title actually paints: the full composition, or under 420px of
+  // header the task alone — "fix flaky auth tests" tells panes apart where
+  // "Claud…" cannot, and the glyph carries identity. Shared by the static
+  // title and by the invisible copy that sizes the rename field, so the two
+  // measure identically.
+  const titleContent =
+    compactTitle && compactTitle !== displayTitle ? (
+      <>
+        <span className="@max-[420px]/header:hidden">{displayTitle}</span>
+        <span className="hidden @max-[420px]/header:inline">{compactTitle}</span>
+      </>
+    ) : (
+      displayTitle
+    );
+  // A truncated badge, or one hidden by the compact query, still has to give
+  // the branch back somewhere — the title tooltip carries it.
+  const titleTooltip = [title, worktreeBranch && worktreeAccentColor ? worktreeBranch : null]
+    .filter(Boolean)
+    .join(" · ");
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -880,9 +899,9 @@ function PanelHeaderComponent({
               <div className="grid min-w-0 shrink" data-testid="panel-title-edit-box">
                 <span
                   aria-hidden="true"
-                  className="invisible col-start-1 row-start-1 block h-6 min-w-[8ch] truncate text-xs font-medium leading-6"
+                  className="invisible col-start-1 row-start-1 block h-6 min-w-[6ch] truncate text-xs font-medium leading-6"
                 >
-                  {displayTitle}
+                  {titleContent}
                 </span>
                 {/* [data-no-dnd] opts the rename field out of the header drag
                     surface: without it, drag-selecting the title text travels
@@ -925,21 +944,13 @@ function PanelHeaderComponent({
                       aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
                       data-fleet-gesture-passthrough=""
                     >
-                      {compactTitle && compactTitle !== displayTitle ? (
-                        // Under 420px of header the identity prefix goes and
-                        // the task stays: "fix flaky auth tests" tells panes
-                        // apart where "Claud…" cannot. The glyph carries identity.
-                        <>
-                          <span className="@max-[420px]/header:hidden">{displayTitle}</span>
-                          <span className="hidden @max-[420px]/header:inline">{compactTitle}</span>
-                        </>
-                      ) : (
-                        displayTitle
-                      )}
+                      {titleContent}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {onTitleChange ? `${title} — Double-click or F2 to rename` : title}
+                    {onTitleChange
+                      ? `${titleTooltip} — Double-click or F2 to rename`
+                      : titleTooltip}
                   </TooltipContent>
                 </Tooltip>
               </div>
@@ -1054,20 +1065,27 @@ function PanelHeaderComponent({
               // The worktree colour carries identity through the wash and the
               // edge; the text itself stays on the readable token — the palette
               // measures under 4.5:1 as ink on either light or dark headers.
-              // min-w-0 (not shrink-0): the badge truncates before the title does.
-              <span
-                className="min-w-[7ch] max-w-[120px] inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none text-text-primary select-none @max-[420px]/header:hidden"
-                style={
-                  {
-                    backgroundColor: "color-mix(in oklab, var(--worktree-color) 18%, transparent)",
-                    borderColor: "color-mix(in oklab, var(--worktree-color) 45%, transparent)",
-                    "--worktree-color": worktreeAccentColor,
-                  } as React.CSSProperties
-                }
-                aria-label={`Branch: ${worktreeBranch}`}
-              >
-                <span className="truncate">{worktreeBranch}</span>
-              </span>
+              // min-w-[7ch] with truncate: the badge yields before the title
+              // does but never to a single letter; the tooltip has the rest.
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="min-w-[7ch] max-w-[120px] inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none text-text-primary select-none @max-[420px]/header:hidden"
+                    style={
+                      {
+                        backgroundColor:
+                          "color-mix(in oklab, var(--worktree-color) 18%, transparent)",
+                        borderColor: "color-mix(in oklab, var(--worktree-color) 45%, transparent)",
+                        "--worktree-color": worktreeAccentColor,
+                      } as React.CSSProperties
+                    }
+                    aria-label={`Branch: ${worktreeBranch}`}
+                  >
+                    <span className="truncate">{worktreeBranch}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{worktreeBranch}</TooltipContent>
+              </Tooltip>
             )}
 
             {/* Process runs somewhere other than the worktree this panel is filed

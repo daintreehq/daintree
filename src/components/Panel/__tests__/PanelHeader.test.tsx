@@ -1621,5 +1621,23 @@ describe("PanelHeader", () => {
       expect(title.textContent).toContain("Claude: fix flaky auth tests");
       expect(title.textContent).toContain("fix flaky auth tests");
     });
+
+    it("gives the branch badge a full-text surface for when it truncates or hides", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            worktreeBranch: "feature/billing-reconciliation-worker",
+            worktreeAccentColor: "var(--theme-category-blue)",
+            onTitleChange: vi.fn(),
+          })}
+        />
+      );
+      const tooltips = screen.getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      // The badge's own tooltip, and the title's tooltip for when the compact
+      // query has hidden the badge entirely.
+      expect(
+        tooltips.filter((t) => t.includes("feature/billing-reconciliation-worker")).length
+      ).toBeGreaterThanOrEqual(2);
+    });
   });
 });

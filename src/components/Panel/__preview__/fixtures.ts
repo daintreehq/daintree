@@ -20,7 +20,7 @@ export interface PanelHeaderFixture {
   width?: number;
   kind: PanelKind;
   title: string;
-  agentId?: string;
+  agentId?: NonNullable<PtyPanelData["detectedAgentId"]>;
   agentState?: AgentState;
   isFocused: boolean;
   isMaximized?: boolean;
@@ -56,7 +56,7 @@ export interface PanelHeaderFixture {
     id: string;
     title: string;
     kind: PanelKind;
-    agentId?: string;
+    agentId?: NonNullable<PtyPanelData["detectedAgentId"]>;
     agentState?: AgentState;
     isActive?: boolean;
     hasDangerousFlags?: boolean;
