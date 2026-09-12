@@ -643,6 +643,14 @@
   .toolbar-badge,
   .toolbar-overflow-badge,
   .toolbar-problems-badge {
-    outline: 1px solid Canvas;
+    outline: 2px solid Canvas;
+  }
+
+  /* The divider paints with background-color, which forced-colors resets to
+   * Canvas — every group boundary vanished and the icon runs read as one
+   * segmented control. CanvasText, like the badges above: a separator is
+   * structure, not disabled text, so not GrayText. */
+  .toolbar-divider {
+    background-color: CanvasText;
   }
 }

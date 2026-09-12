@@ -1102,7 +1102,14 @@ export function Toolbar({
     [getToolbarItems, syncToolbarTabStops]
   );
 
-  const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
+  // `shrink-0`: a 1px flex item is the first thing a squeezed row gives up,
+  // and a group boundary that silently goes to zero width is worse than one
+  // that costs the row a pixel.
+  const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1 shrink-0";
+  // The two fixed dividers sit in the outer groups, whose `gap-1.5` already
+  // supplies the 6px the measured rows' own `gap-0.5` + `mx-1` add up to;
+  // an `mx-1` on top gave the launcher 10px on one side and 6px on the other.
+  const toolbarFixedDividerClass = "toolbar-divider w-px h-5 shrink-0";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
 
@@ -2301,7 +2308,7 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
-            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-2 h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
+            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider"
           >
             {!isLinux() && <div className="window-resize-strip" />}
 
@@ -2336,7 +2343,7 @@ export function Toolbar({
               )}
               <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
 
-              <div className={toolbarDividerClass} />
+              <div className={toolbarFixedDividerClass} />
 
               <div
                 ref={leftGroupRef}
@@ -2549,7 +2556,7 @@ export function Toolbar({
                 </div>
               )}
 
-              <div className={toolbarDividerClass} />
+              <div className={toolbarFixedDividerClass} />
 
               <div className="app-no-drag flex items-center gap-0.5">
                 {buttonRegistry["assistant-toggle"]!.render()}

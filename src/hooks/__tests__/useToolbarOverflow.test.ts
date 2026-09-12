@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeOverflow, computeGuardedOverflow } from "../useToolbarOverflow";
+import { computeOverflow, computeGuardedOverflow, dividerFootprint } from "../useToolbarOverflow";
 import type { OverflowResult } from "../useToolbarOverflow";
 import type {
   AnyToolbarButtonId,
@@ -535,5 +535,81 @@ describe("computeOverflow — layout chrome (gaps and dividers)", () => {
       dividerWidth: 0,
     });
     expect(zero).toEqual(plain);
+  });
+});
+
+describe("computeOverflow — backfill after an oversized eviction", () => {
+  // forge-stats is priority 1 and four buttons wide; the utilities are 5.
+  const ids: ToolbarButtonId[] = ["forge-stats", "notification-center", "settings", "problems"];
+
+  it("refills the room a wide eviction leaves with narrower lower-priority buttons", () => {
+    const widths = new Map<string, number>([
+      ["forge-stats", 130],
+      ["notification-center", 32],
+      ["settings", 32],
+      ["problems", 32],
+    ]);
+    // 226 in 100: the utilities go first (226→194→162→130), then the pill
+    // (130 > 100) — leaving 100px with nothing in it. Three 32s fit in 96.
+    const { visibleIds, overflowIds } = computeOverflow(
+      100,
+      widths,
+      ids,
+      TOOLBAR_BUTTON_PRIORITIES
+    );
+    expect(overflowIds).toEqual(["forge-stats"]);
+    expect(visibleIds).toEqual(["notification-center", "settings", "problems"]);
+  });
+
+  it("backfills in row order within a tier and skips what still does not fit", () => {
+    const widths = new Map<string, number>([
+      ["forge-stats", 130],
+      ["notification-center", 32],
+      ["settings", 60],
+      ["problems", 32],
+    ]);
+    // 70px: notification-center (32) fits; settings (60) would not alongside
+    // it and is skipped rather than ending the pass; problems (32) then fits.
+    const { visibleIds } = computeOverflow(70, widths, ids, TOOLBAR_BUTTON_PRIORITIES, undefined, {
+      gap: 2,
+      dividerWidth: 0,
+    });
+    expect(visibleIds).toEqual(["notification-center", "problems"]);
+  });
+
+  it("never backfills past the container, gaps and dividers included", () => {
+    const widths = new Map<string, number>([
+      ["forge-stats", 130],
+      ["notification-center", 32],
+      ["settings", 32],
+      ["problems", 32],
+    ]);
+    const layout = { gap: 2, dividerWidth: 9 };
+    for (let container = 30; container <= 240; container += 1) {
+      const { visibleIds } = computeOverflow(
+        container,
+        widths,
+        ids,
+        TOOLBAR_BUTTON_PRIORITIES,
+        undefined,
+        layout
+      );
+      let total = 0;
+      visibleIds.forEach((id, i) => {
+        total += widths.get(id)!;
+        if (i > 0) total += layout.gap;
+      });
+      expect(total).toBeLessThanOrEqual(container);
+    }
+  });
+});
+
+describe("dividerFootprint", () => {
+  it("is the box plus its margins", () => {
+    expect(dividerFootprint({ width: 1, marginLeft: 4, marginRight: 4 })).toBe(9);
+  });
+
+  it("is null for a divider squeezed to nothing — margins alone are not a divider", () => {
+    expect(dividerFootprint({ width: 0, marginLeft: 4, marginRight: 4 })).toBeNull();
   });
 });

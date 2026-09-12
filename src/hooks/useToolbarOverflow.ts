@@ -33,6 +33,20 @@ export interface OverflowLayout {
 
 const NO_LAYOUT: OverflowLayout = { gap: 0, dividerWidth: 0 };
 
+/**
+ * What a divider costs the row, from its measured box. `null` for a divider
+ * that has been squeezed to nothing — its margins alone would otherwise pass
+ * a positive-width check and teach the budget a divider is 8px wide.
+ */
+export function dividerFootprint(box: {
+  width: number;
+  marginLeft: number;
+  marginRight: number;
+}): number | null {
+  if (!(box.width > 0)) return null;
+  return box.width + box.marginLeft + box.marginRight;
+}
+
 function footprint(
   visible: readonly AnyToolbarButtonId[],
   itemWidths: Map<string, number>,
@@ -111,6 +125,22 @@ export function computeOverflow(
     if (footprint(visibleIds, itemWidths, layout) <= containerWidth) break;
     overflowSet.add(item.id);
     visibleIds = visibleIds.filter((id) => id !== item.id);
+  }
+
+  // Backfill. Evicting a wide item — the forge pill is four buttons across —
+  // can leave room that several narrower, lower-priority buttons would fill,
+  // and without this pass that room sat empty while those commands hid
+  // behind the trigger. Candidates are tried highest priority first, earlier
+  // in the row first within a tier, each against the full ordered footprint;
+  // one that still does not fit is skipped, not a stopping point.
+  for (let i = sortedForRemoval.length - 1; i >= 0; i--) {
+    const item = sortedForRemoval[i]!;
+    if (!overflowSet.has(item.id)) continue;
+    const candidate = orderedIds.filter((id) => !overflowSet.has(id) || id === item.id);
+    if (footprint(candidate, itemWidths, layout) <= containerWidth) {
+      overflowSet.delete(item.id);
+      visibleIds = candidate;
+    }
   }
 
   const overflowIds = orderedIds.filter((id) => overflowSet.has(id));
@@ -243,11 +273,12 @@ export function useToolbarOverflow(
       const divider = container.querySelector<HTMLElement>(".toolbar-divider");
       if (divider) {
         const style = getComputedStyle(divider);
-        const width =
-          divider.getBoundingClientRect().width +
-          (parseFloat(style.marginLeft) || 0) +
-          (parseFloat(style.marginRight) || 0);
-        if (width > 0) dividerWidthRef.current = width;
+        const width = dividerFootprint({
+          width: divider.getBoundingClientRect().width,
+          marginLeft: parseFloat(style.marginLeft) || 0,
+          marginRight: parseFloat(style.marginRight) || 0,
+        });
+        if (width !== null) dividerWidthRef.current = width;
       }
       return { gap, dividerWidth: dividerWidthRef.current, resolveGroup };
     },

@@ -81,7 +81,15 @@ describe("Toolbar strip — composition invariants", () => {
         /@media \(forced-colors: active\) \{[\s\S]*?\.toolbar-badge,[\s\S]*?\n\}/
       );
       expect(block).not.toBeNull();
-      expect(block![0]).toMatch(/\.toolbar-badge,[\s\S]*?outline:\s*1px solid Canvas/);
+      expect(block![0]).toMatch(/\.toolbar-badge,[\s\S]*?outline:\s*\d+(\.\d+)?px solid Canvas/);
+    });
+
+    it("group dividers survive forced colours — their background is otherwise reset to Canvas", () => {
+      const block = css.match(
+        /@media \(forced-colors: active\) \{[\s\S]*?\.toolbar-divider\s*\{([^}]*)\}/
+      );
+      expect(block).not.toBeNull();
+      expect(block![1]).toMatch(/background-color:\s*CanvasText/);
     });
   });
 
@@ -103,6 +111,34 @@ describe("Toolbar strip — composition invariants", () => {
       const root = source.match(/role="toolbar"[\s\S]*?className="([^"]+)"/);
       expect(root).not.toBeNull();
       expect(root![1]).toMatch(/\bgap-x-\d/);
+    });
+
+    it("the strip's content is centred in its height — no top padding pushing it low", () => {
+      const root = source.match(/role="toolbar"[\s\S]*?className="([^"]+)"/);
+      expect(root).not.toBeNull();
+      expect(root![1]).toMatch(/\bh-12\b/);
+      expect(root![1]).toMatch(/\bitems-center\b/);
+      expect(root![1]).not.toMatch(/\bp[tby]-\d/);
+    });
+
+    it("dividers never shrink to nothing under width pressure", () => {
+      const classes = source.match(/const toolbar(?:Fixed)?DividerClass = "([^"]+)"/g) ?? [];
+      expect(classes.length).toBeGreaterThanOrEqual(2);
+      for (const c of classes) expect(c).toContain("shrink-0");
+    });
+
+    it("every divider gets the same clearance as its neighbours' gap", () => {
+      // Inside a measured row: gap-0.5 + mx-1 on each side. In the outer
+      // groups: gap-1.5 alone. Both come to the same 6px, so the fixed
+      // dividers carry no margin of their own.
+      const fixed = source.match(/const toolbarFixedDividerClass = "([^"]+)"/);
+      expect(fixed).not.toBeNull();
+      expect(fixed![1]).not.toMatch(/\bm[xlr]-\d/);
+      const inner = source.match(/const toolbarDividerClass = "([^"]+)"/);
+      expect(inner).not.toBeNull();
+      expect(inner![1]).toMatch(/\bmx-1\b/);
+      // And the two outer-group dividers use the fixed class.
+      expect(source.match(/className=\{toolbarFixedDividerClass\}/g)).toHaveLength(2);
     });
 
     it("a collapsed platform spacer folds its flex gap away too", () => {
