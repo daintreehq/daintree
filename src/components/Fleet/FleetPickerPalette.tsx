@@ -152,7 +152,11 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
   );
 
-  const selectedCount = picker.selectedIds.size;
+  // Confirmed, not raw selected: an id that drifted out of eligibility while
+  // the picker was open is not going to be armed, and counting it produced
+  // "3 of 2 selected" against a button that armed two. The drift notice in the
+  // hint strip is what reports the difference.
+  const selectedCount = picker.confirmedIds.length;
   const hiddenSelected = picker.hiddenSelectedCount;
 
   const selectionHelpers = (
@@ -305,7 +309,11 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                 <button
                   type="button"
                   onClick={picker.handleConfirm}
-                  disabled={picker.confirmedIds.length === 0}
+                  // In Append mode the live count is what would actually be
+                  // added; without this the button stayed enabled on a selection
+                  // that was already entirely armed, and closed having done
+                  // nothing.
+                  disabled={commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0}
                   data-testid="fleet-picker-cold-start-confirm"
                   className={cn(
                     "rounded-sm border border-category-amber-border bg-category-amber-subtle px-2.5 py-1 text-xs leading-[inherit] text-category-amber-text",

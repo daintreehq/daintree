@@ -67,7 +67,6 @@ export function FleetPickerContent({
     query,
     setQuery,
     selectedIds,
-    focusedId,
     eligibleTerminals,
     visibleTerminals,
     groupedVisible,
@@ -79,6 +78,8 @@ export function FleetPickerContent({
     focusFirstRow,
     setSelectedIds,
     clearSearch,
+    registerGroup,
+    rovingNavKey,
   } = picker;
 
   // First Esc clears the search query when non-empty; second Esc bubbles to
@@ -199,7 +200,8 @@ export function FleetPickerContent({
               key={group.worktreeId}
               group={group}
               selectedIds={selectedIds}
-              focusedId={focusedId}
+              rovingNavKey={rovingNavKey}
+              registerGroup={registerGroup}
               hideHeader={isSingleWorktree}
               snippetMap={snippetMap}
               onToggleId={handleToggleId}
@@ -338,7 +340,8 @@ function deriveGroupCheckedState(
 interface WorktreeGroupSectionProps {
   group: PickerWorktreeGroup;
   selectedIds: ReadonlySet<string>;
-  focusedId: string | null;
+  rovingNavKey: string | null;
+  registerGroup: (worktreeId: string) => (el: HTMLElement | null) => void;
   hideHeader: boolean;
   snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
   onToggleId: (id: string, event?: React.MouseEvent) => void;
@@ -350,7 +353,8 @@ interface WorktreeGroupSectionProps {
 function WorktreeGroupSection({
   group,
   selectedIds,
-  focusedId,
+  rovingNavKey,
+  registerGroup,
   hideHeader,
   snippetMap,
   onToggleId,
@@ -363,6 +367,20 @@ function WorktreeGroupSection({
     () => deriveGroupCheckedState(groupIds, selectedIds),
     [groupIds, selectedIds]
   );
+  // Two panes in one worktree routinely carry the same title ("Claude",
+  // "Terminal"), and the group heading only disambiguates BETWEEN worktrees —
+  // inside one, the rows were indistinguishable, so a user could not tell which
+  // of them they had just ticked.
+  const duplicateTitles = useMemo(() => {
+    const seen = new Set<string>();
+    const dupes = new Set<string>();
+    for (const t of group.terminals) {
+      if (seen.has(t.title)) dupes.add(t.title);
+      else seen.add(t.title);
+    }
+    return dupes;
+  }, [group.terminals]);
+
   const selectedInGroup = useMemo(() => {
     let n = 0;
     for (const id of groupIds) if (selectedIds.has(id)) n++;
@@ -387,7 +405,9 @@ function WorktreeGroupSection({
         >
           <button
             type="button"
-            data-group-header
+            ref={registerGroup(group.worktreeId)}
+            data-group-header={group.worktreeId}
+            tabIndex={rovingNavKey === `g:${group.worktreeId}` ? 0 : -1}
             role="treeitem"
             aria-level={1}
             aria-checked={groupState === "indeterminate" ? "mixed" : groupState}
@@ -429,7 +449,8 @@ function WorktreeGroupSection({
             terminal={t}
             checked={selectedIds.has(t.id)}
             snippet={snippetMap.get(t.id)}
-            isFocused={focusedId === t.id}
+            isRovingStop={rovingNavKey === `t:${t.id}`}
+            disambiguator={duplicateTitles.has(t.title) ? shortId(t.id) : undefined}
             onToggleId={onToggleId}
             registerRow={registerRow}
             testIdPrefix={testIdPrefix}
@@ -444,7 +465,9 @@ interface TerminalRowProps {
   terminal: PickerTerminal;
   checked: boolean;
   snippet?: SemanticSearchMatch;
-  isFocused: boolean;
+  isRovingStop: boolean;
+  /** Rendered beside the title when a worktree holds two terminals of the same name. */
+  disambiguator?: string;
   onToggleId: (id: string, event?: React.MouseEvent) => void;
   registerRow: (id: string) => (el: HTMLLabelElement | null) => void;
   testIdPrefix: string;
@@ -454,7 +477,8 @@ function TerminalRow({
   terminal,
   checked,
   snippet,
-  isFocused,
+  isRovingStop,
+  disambiguator,
   onToggleId,
   registerRow,
   testIdPrefix,
@@ -470,7 +494,8 @@ function TerminalRow({
     <li className="flex items-stretch">
       <label
         ref={rowRefCallback}
-        tabIndex={isFocused ? 0 : -1}
+        tabIndex={isRovingStop ? 0 : -1}
+        data-terminal-id={terminal.id}
         // `aria-checked` on a treeitem, not `aria-selected` on an option —
         // these rows carry a checkbox, and APG is explicit that the two
         // selection vocabularies must not be mixed on one node.
@@ -497,7 +522,13 @@ function TerminalRow({
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="truncate flex-1">{terminal.title}</span>
+            <span className="truncate">{terminal.title}</span>
+            {disambiguator && (
+              <span className="shrink-0 font-mono text-2xs text-text-secondary">
+                {disambiguator}
+              </span>
+            )}
+            <span className="flex-1" />
             {stateBadge}
           </div>
           {snippet && <SnippetLine snippet={snippet} testIdPrefix={testIdPrefix} />}
@@ -549,6 +580,11 @@ function SnippetLine({
  * be answered by looking. `renderPaneStateBadge` already had the answer; the
  * picker just wasn't using it.
  */
+/** Last six characters of the pane id — enough to tell two same-named panes apart. */
+function shortId(id: string): string {
+  return id.length <= 6 ? id : id.slice(-6);
+}
+
 function renderStateBadge(agentState: AgentState | undefined): ReactElement | null {
   if (agentState !== "waiting" && agentState !== "working") return null;
   const waiting = agentState === "waiting";
