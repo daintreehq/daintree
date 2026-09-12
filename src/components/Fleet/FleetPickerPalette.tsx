@@ -40,6 +40,7 @@ export interface FleetPickerPaletteProps {
 export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps): ReactElement {
   const armIds = useFleetArmingStore((s) => s.armIds);
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
+  const armedIds = useFleetArmingStore((s) => s.armedIds);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
   const thumbLayoutId = `${useId()}-segmented-thumb`;
   const uiMotionTransition = useUiMotionTransition();
@@ -54,13 +55,17 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const handleCommit = useCallback(
     (selected: string[]) => {
       if (commitMode === "append") {
+        // The button disables when nothing would actually be added, but Enter
+        // from the search input or a row reaches this path directly. Guard
+        // here too, or the dialog closes having appended nothing.
+        if (!selected.some((id) => !armedIds.has(id))) return;
         addToFleet(selected);
       } else {
         armIds(selected);
       }
       onClose();
     },
-    [armIds, addToFleet, commitMode, onClose]
+    [armIds, addToFleet, armedIds, commitMode, onClose]
   );
 
   const picker = useFleetPicker({
@@ -69,6 +74,14 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
     onCommit: handleCommit,
     owner: "cold-start",
   });
+
+  // In Append mode the hook stays frozen in `cold-start`, so already-armed
+  // terminals remain selectable — and `addToFleet` silently skips them. "Add 3"
+  // could therefore add one. Count only what would actually be new.
+  const appendCount = useMemo(
+    () => picker.confirmedIds.filter((id) => !armedIds.has(id)).length,
+    [picker.confirmedIds, armedIds]
+  );
 
   const allVisibleSelected = useMemo(
     () =>
@@ -90,34 +103,37 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   );
 
   const hasQuery = picker.query.trim() !== "";
-  const selectAllLabel = allVisibleSelected
-    ? hasQuery
-      ? "Deselect visible"
-      : "Deselect all"
-    : hasQuery
-      ? "Select all visible"
-      : "Select all";
+  // One label per action, fixed. This was a single button whose text cycled
+  // through four different strings ("Select all" / "Deselect all" /
+  // "Select all visible" / "Deselect visible"), each a different width, which
+  // reflowed its neighbour every time the selection changed — and meant the
+  // same control reversed its own meaning under the pointer. Scope is stated
+  // by the label when a filter is narrowing the target set.
+  const selectLabel = hasQuery ? "Select all visible" : "Select all";
+  const canSelect = picker.visibleIds.length > 0 && !allVisibleSelected;
+  const canClear = picker.selectedIds.size > 0;
 
   // Select → replace visible (matches Cmd+A in useFleetPicker).
   // Deselect when filtered → scoped removal so picks for filtered-out
   // terminals survive. Deselect when unfiltered → full clear, otherwise
   // drifted (transiently-ineligible) ids would sneak back into the
   // selection after re-eligibility, contradicting the "Deselect all" label.
-  const handleToggleAllVisible = useCallback(() => {
-    if (!allVisibleSelected) {
-      picker.setSelectedIds(new Set(picker.visibleIds));
-      return;
-    }
-    if (hasQuery) {
-      picker.setSelectedIds((prev) => {
-        const next = new Set(prev);
-        for (const id of picker.visibleIds) next.delete(id);
-        return next;
-      });
-    } else {
-      picker.setSelectedIds(new Set());
-    }
-  }, [allVisibleSelected, hasQuery, picker]);
+  // Union, never replace — a pick the filter is hiding stays picked, because
+  // it is still going to be armed on commit.
+  const handleSelectAllVisible = useCallback(() => {
+    picker.setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of picker.visibleIds) next.add(id);
+      return next;
+    });
+  }, [picker]);
+
+  // Clears everything, including picks outside the current filter. That is the
+  // point of a separate control: the scoped-removal behaviour the old toggle
+  // had was invisible, and "clear" that leaves things selected is a trap.
+  const handleClearSelection = useCallback(() => {
+    picker.setSelectedIds(new Set());
+  }, [picker]);
 
   // Additive — preserves existing picks (including non-agent terminals).
   const handleSelectAgents = useCallback(() => {
@@ -133,44 +149,74 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   // footer — they act on the list, and the footer is reserved for commit
   // controls (mode toggle + Cancel + Arm). Passed to `FleetPickerContent` as a
   // slot so the layer-agnostic component stays unaware of palette concerns.
+  const helperClass = cn(
+    "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
+    "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
+    "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
+    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+  );
+
+  // Confirmed, not raw selected: an id that drifted out of eligibility while
+  // the picker was open is not going to be armed, and counting it produced
+  // "3 of 2 selected" against a button that armed two. The drift notice in the
+  // hint strip is what reports the difference.
+  const selectedCount = picker.confirmedIds.length;
+  const hiddenSelected = picker.hiddenSelectedCount;
+
   const selectionHelpers = (
-    <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5 pt-2">
-      <button
-        type="button"
-        onClick={handleToggleAllVisible}
-        disabled={picker.visibleIds.length === 0}
-        data-testid="fleet-picker-cold-start-select-all"
-        className={cn(
-          "rounded px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
-          "hover:bg-tint/[0.08] hover:text-text-primary",
-          "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-        )}
+    <div className="flex items-center justify-between gap-2 pt-2">
+      <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={handleSelectAllVisible}
+          disabled={!canSelect}
+          data-testid="fleet-picker-cold-start-select-all"
+          className={helperClass}
+        >
+          {selectLabel}
+        </button>
+        <button
+          type="button"
+          onClick={handleSelectAgents}
+          disabled={agentVisibleIds.length === 0}
+          data-testid="fleet-picker-cold-start-select-agents"
+          className={helperClass}
+        >
+          Select agents
+        </button>
+        <button
+          type="button"
+          onClick={handleClearSelection}
+          disabled={!canClear}
+          data-testid="fleet-picker-cold-start-clear-selection"
+          className={helperClass}
+        >
+          Clear
+        </button>
+      </div>
+      {/*
+        The running total, where the convention puts it. Until now the ONLY
+        statement of how many terminals were selected was the commit button —
+        and when a filter hid a pick, the button promised to arm a terminal the
+        user could neither see nor name. Say how many are hidden.
+      */}
+      <span
+        className="shrink-0 text-2xs tabular-nums text-text-secondary"
+        data-testid="fleet-picker-cold-start-selection-summary"
       >
-        {selectAllLabel}
-      </button>
-      <button
-        type="button"
-        onClick={handleSelectAgents}
-        disabled={agentVisibleIds.length === 0}
-        data-testid="fleet-picker-cold-start-select-agents"
-        className={cn(
-          "rounded px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
-          "hover:bg-tint/[0.08] hover:text-text-primary",
-          "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-        )}
-      >
-        Select agents
-      </button>
+        {selectedCount} of {picker.eligibleCount} selected
+        {hiddenSelected > 0 ? ` · ${hiddenSelected} hidden by search` : ""}
+      </span>
     </div>
   );
 
   // `FleetPickerFooterHint` collapses to nothing when the list is empty and
   // nothing has drifted — skip the bordered strip entirely in that case so
   // there's no empty bar between the list and the footer.
+  // The hint strip used to vanish whenever the list was empty, so the dialog
+  // dropped a whole band and the footer jumped up the screen mid-typing.
+  // Chrome that comes and goes is worse than chrome that stays.
   const hasVisibleRows = picker.visibleTerminals.length > 0;
-  const showFooterHint = hasVisibleRows || picker.driftCount > 0;
 
   return (
     <AppPaletteDialog
@@ -186,7 +232,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
             "text-text-primary"
           )}
         >
-          <Zap className="h-4 w-4 text-daintree-text/70" aria-hidden="true" />
+          <Zap className="h-4 w-4 text-text-secondary" aria-hidden="true" />
           <h2 className="text-sm leading-[inherit] font-semibold">Select terminals to arm</h2>
         </div>
 
@@ -201,19 +247,20 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
               />
             </div>
 
-            {showFooterHint && (
-              <div className="flex flex-wrap items-center gap-1.5 border-t border-daintree-border/50 px-3 py-1.5 text-2xs text-text-secondary">
-                <FleetPickerFooterHint
-                  confirmedCount={picker.confirmedIds.length}
-                  driftCount={picker.driftCount}
-                  hasVisibleRows={hasVisibleRows}
-                />
-              </div>
-            )}
+            <div className="flex min-h-7 flex-wrap items-center gap-1.5 border-t border-border-default px-3 py-1.5 text-2xs text-text-secondary">
+              <FleetPickerFooterHint
+                confirmedCount={picker.confirmedIds.length}
+                driftCount={picker.driftCount}
+                hasVisibleRows={hasVisibleRows}
+              />
+            </div>
 
             <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-border-default px-3 py-2">
               <div
-                className="relative isolate flex bg-tint/[0.04] rounded text-2xs"
+                // A visible track. Without one the inactive half is bare dim
+                // text beside a filled chip, so the pair reads as "a button and
+                // some grey words" rather than a two-position switch.
+                className="relative isolate flex rounded-sm border border-border-default bg-tint/[0.04] p-0.5 text-2xs"
                 role="radiogroup"
                 aria-label="Commit mode"
                 data-testid="fleet-picker-cold-start-commit-mode"
@@ -230,7 +277,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                       onClick={() => setCommitMode(mode)}
                       data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
                       className={cn(
-                        "relative rounded px-2 py-1 transition-colors",
+                        "relative rounded-xs px-2 py-1 transition-colors duration-150",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                         isActive ? "text-text-primary" : "text-text-secondary hover:bg-tint/[0.04]"
                       )}
@@ -242,7 +289,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                           layoutId={thumbLayoutId}
                           layoutCrossfade={false}
                           transition={thumbTransition}
-                          className="absolute inset-0 z-0 rounded bg-tint/[0.10] pointer-events-none"
+                          className="absolute inset-0 z-0 rounded-xs bg-tint/[0.10] pointer-events-none"
                           aria-hidden="true"
                         />
                       )}
@@ -256,8 +303,8 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                   type="button"
                   onClick={onClose}
                   className={cn(
-                    "rounded px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
-                    "hover:bg-tint/[0.08] hover:text-text-primary",
+                    "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
+                    "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
@@ -266,19 +313,37 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                 <button
                   type="button"
                   onClick={picker.handleConfirm}
-                  disabled={picker.confirmedIds.length === 0}
+                  // In Append mode the live count is what would actually be
+                  // added; without this the button stayed enabled on a selection
+                  // that was already entirely armed, and closed having done
+                  // nothing.
+                  disabled={
+                    commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0
+                  }
                   data-testid="fleet-picker-cold-start-confirm"
                   className={cn(
-                    "rounded border border-category-amber-border bg-category-amber-subtle px-2.5 py-1 text-xs leading-[inherit] text-category-amber-text transition",
-                    "hover:brightness-110",
+                    // Neutral high-contrast, the house primary treatment
+                    // (`AppDialog.Footer` hard-codes `variant="contrast"`). The
+                    // amber category fill this used to carry was the only
+                    // category-coloured confirm in ~111 dialogs. Fleet keeps its
+                    // amber identity where it belongs — the arming ribbon, the
+                    // drafting pill, the pane header — and this surface is left
+                    // with exactly one gold, the Waiting badge.
+                    "rounded-sm bg-text-primary px-2.5 py-1 text-xs leading-[inherit] text-text-inverse ring-1 ring-tint/15",
+                    "transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))]",
+                    // The label changes width with the count, and it sits at the
+                    // end of the row, so every change dragged Cancel sideways
+                    // with it. A floor wide enough for the longest common label
+                    // pins the pair in place.
+                    "min-w-[7.5rem] text-center tabular-nums",
                     "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   {commitMode === "append"
-                    ? picker.confirmedIds.length === 0
-                      ? "Add"
-                      : `Add ${picker.confirmedIds.length}`
+                    ? appendCount === 0
+                      ? "Add selected"
+                      : `Add ${appendCount}`
                     : picker.confirmedIds.length === 0
                       ? "Arm selected"
                       : `Arm ${picker.confirmedIds.length} selected`}

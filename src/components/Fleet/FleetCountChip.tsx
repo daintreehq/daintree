@@ -290,7 +290,11 @@ export function FleetCountChip({
               <span className="text-2xs tabular-nums text-text-secondary">
                 {picker.confirmedIds.length === 0
                   ? "Select panes to add"
-                  : `${picker.confirmedIds.length} selected`}
+                  : `${picker.confirmedIds.length} selected${
+                      picker.hiddenSelectedCount > 0
+                        ? ` · ${picker.hiddenSelectedCount} hidden by search`
+                        : ""
+                    }`}
               </span>
               <div className="flex items-center gap-1.5">
                 <button
@@ -310,8 +314,10 @@ export function FleetCountChip({
                   disabled={picker.confirmedIds.length === 0}
                   data-testid="fleet-picker-add-confirm"
                   className={cn(
-                    "rounded border border-category-amber-border bg-category-amber-subtle px-2 py-1 text-2xs text-category-amber-text transition",
-                    "hover:brightness-110",
+                    // Matches the cold-start picker's confirm: the house
+                    // neutral high-contrast primary, not a category fill.
+                    "rounded-sm bg-text-primary px-2 py-1 text-2xs text-text-inverse ring-1 ring-tint/15",
+                    "transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))]",
                     "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
