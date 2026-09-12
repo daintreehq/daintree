@@ -29,12 +29,20 @@ interface WorktreeSidebarSearchBarProps {
    */
   trailing?: React.ReactNode;
   /**
-   * Filter scope / sort status ("1 of 2 worktrees · Sorting disabled while
+   * Filter scope / reorder status ("1 of 2 worktrees · Drag to reorder is off while
    * searching") rendered under the field, sharing a row with "Clear all".
    * Visual-only — screen readers are served by the caller's debounced
    * announcer effects, not a live region here (#9665).
    */
   statusText?: string | null;
+  /**
+   * The active filters by name, e.g. `Status: Dirty · Branch type: Feature`.
+   * Separate from `statusText` rather than concatenated into it: on one line
+   * beside a non-shrinking "Clear all" the count ate the width and the filter
+   * names truncated away first — and the names are the part the count cannot
+   * substitute for. Given its own row it wraps instead.
+   */
+  filterSummaryText?: string | null;
 }
 
 // The visible filter updates instantly via `liveQuery`; only the persisted
@@ -55,6 +63,7 @@ export function WorktreeSidebarSearchBar({
   chipCounts,
   variant = "sidebar",
   statusText,
+  filterSummaryText,
   trailing,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
@@ -203,7 +212,12 @@ export function WorktreeSidebarSearchBar({
   const showClear = !!liveQuery;
   const activeAxisCount =
     (liveQuery.trim() ? 1 : 0) + (quickStateFilter !== "all" ? 1 : 0) + (hasFacetFilters ? 1 : 0);
-  const showClearAll = activeAxisCount >= 2;
+  // Facet filters are the ones with no other affordance out here: the query has
+  // its own X in the field and quick-state has its own bar, but a Status or
+  // Branch type chip is invisible once the popover closes. So any facet filter
+  // earns the bulk clear on its own; everything else still needs two axes
+  // before this line is worth the row it costs.
+  const showClearAll = hasFacetFilters || activeAxisCount >= 2;
 
   return (
     <div
@@ -236,11 +250,11 @@ export function WorktreeSidebarSearchBar({
             "flex h-7 flex-1 min-w-0 items-center gap-1.5 px-2 rounded-[var(--radius-md)]",
             // Fallback keeps themes without --worktree-search-input-bg byte-identical.
             "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] border border-border-default",
-            "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-accent-primary"
           )}
         >
           <Search
-            className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
+            className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
             aria-hidden="true"
           />
           <input
@@ -255,13 +269,13 @@ export function WorktreeSidebarSearchBar({
             // the full phrase stays the accessible name.
             placeholder="Search…"
             aria-label="Search worktrees"
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder-daintree-text/40 focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
           />
           {showClear && (
             <button
               type="button"
               onClick={handleClearSearch}
-              className="flex shrink-0 items-center justify-center w-5 h-5 rounded text-daintree-text/40 transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
+              className="flex shrink-0 items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
               aria-label="Clear search"
             >
               <X className="w-3 h-3" />
@@ -280,24 +294,34 @@ export function WorktreeSidebarSearchBar({
         />
         {trailing}
       </div>
-      {(statusText || showClearAll) && (
+      {(statusText || filterSummaryText || showClearAll) && (
         // pt-2, not pt-1: the rail's own bottom padding is 12px, so a 4px gap
         // above this line left it crowding the field it describes while
         // floating clear of the rule below.
-        <div className="flex items-center gap-2 pt-2">
-          {statusText && (
-            <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
-              {statusText}
-            </span>
-          )}
-          {showClearAll && (
-            <button
-              type="button"
-              onClick={handleClearAll}
-              className="ml-auto shrink-0 rounded text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
-            >
-              Clear all
-            </button>
+        <div className="pt-2">
+          <div className="flex items-center gap-2">
+            {statusText && (
+              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
+                {statusText}
+              </span>
+            )}
+            {showClearAll && (
+              <button
+                type="button"
+                onClick={handleClearAll}
+                className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          {filterSummaryText && (
+            // Its own row, and wrapping: at the 200px minimum width there is no
+            // room to share a line with the count and "Clear all", and a
+            // truncated "Status: Di…" answers nothing.
+            <div className="mt-0.5 text-2xs leading-snug text-text-secondary [overflow-wrap:anywhere]">
+              {filterSummaryText}
+            </div>
           )}
         </div>
       )}

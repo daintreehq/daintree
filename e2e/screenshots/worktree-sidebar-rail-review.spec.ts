@@ -37,7 +37,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
-import { addAndSwitchToProject } from "../helpers/workflows";
+import { ensureFilterSectionOpen, addAndSwitchToProject } from "../helpers/workflows";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
 import { SEL } from "../helpers/selectors";
@@ -243,7 +243,7 @@ async function collectMetrics(page: Page): Promise<unknown> {
     const input = aside.querySelector('[aria-label="Search worktrees"]');
     const field = input?.closest('[role="search"]') ?? null;
     const glyph = field?.querySelector("svg") ?? null;
-    const trigger = aside.querySelector('[aria-label="Filter and sort worktrees"]');
+    const trigger = aside.querySelector('[aria-label^="Filter and sort worktrees"]');
     const rail = trigger?.closest("div.shrink-0") ?? null;
     const firstCard = aside.querySelector("[data-worktree-is-main]");
     return {
@@ -593,7 +593,7 @@ test("worktrees sidebar rail — state matrix", async () => {
     // 8. One facet filter — the neutral count on the trigger, and the status line.
     await cap.step("filters-one", async () => {
       const popover = await openFilterPopover(page);
-      await popover.getByRole("button", { name: "Status" }).first().click();
+      await ensureFilterSectionOpen(popover, "Status");
       await settle(page, 300);
       await popover
         .getByRole("button", { name: /^Dirty/ })
@@ -610,7 +610,7 @@ test("worktrees sidebar rail — state matrix", async () => {
     // 9. Several axes — count, status line and "Clear all" all present at once.
     await cap.step("filters-many", async () => {
       const popover = await openFilterPopover(page);
-      await popover.getByRole("button", { name: "Branch Type" }).first().click();
+      await ensureFilterSectionOpen(popover, "Branch type");
       await settle(page, 300);
       await popover
         .getByRole("button", { name: /^Feature/ })
@@ -674,14 +674,9 @@ test("worktrees sidebar rail — state matrix", async () => {
     // 12. Popover expanded — chips, counts, and the zero-count dimming.
     await cap.step("popover-expanded", async () => {
       const popover = await openFilterPopover(page);
-      for (const section of ["Status", "Branch Type", "Sessions"]) {
-        const toggle = popover.getByRole("button", { name: section }).first();
-        // Click only when collapsed: these sections keep their own open state
-        // across a filter clear, so an unconditional click closes them instead.
-        if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-          await toggle.click();
-          await settle(page, 250);
-        }
+      for (const section of ["Status", "Branch type", "Sessions"]) {
+        await ensureFilterSectionOpen(popover, section);
+        await settle(page, 250);
       }
       await expect(popover.getByRole("button", { name: /^Feature/ })).toBeVisible();
       await cap.snapLocator("44-popover-expanded", popover);
@@ -700,6 +695,40 @@ test("worktrees sidebar rail — state matrix", async () => {
       await parkPointer(page);
       await cap.snapZone("51-width-200-typed");
       await clearQuery(page);
+
+      // The status zone's worst case: the narrowest supported sidebar with
+      // enough active facets that naming them cannot fit on the count's line.
+      // This is where a one-line summary truncated the filter names away and
+      // left only the number behind.
+      const narrowPopover = await openFilterPopover(page);
+      await ensureFilterSectionOpen(narrowPopover, "Status");
+      await narrowPopover
+        .getByRole("button", { name: /^Dirty/ })
+        .first()
+        .click();
+      await ensureFilterSectionOpen(narrowPopover, "Branch type");
+      await narrowPopover
+        .getByRole("button", { name: /^Feature/ })
+        .first()
+        .click();
+      await settle(page, 400);
+      await closeFilterPopover(page);
+      await parkPointer(page);
+      try {
+        await expect(page.locator(SIDEBAR)).toContainText("Status: Dirty");
+        await expect(page.locator(SIDEBAR)).toContainText("Branch type: Feature");
+        await cap.snapZone("55-width-200-filters-named");
+        await cap.snapLocator("56-width-200-popover", await openFilterPopover(page));
+        await closeFilterPopover(page);
+      } finally {
+        // `Capture.step` swallows a failure to keep the matrix going, so the
+        // facets have to come off regardless — the "rest" captures after this
+        // would otherwise inherit them.
+        await closeFilterPopover(page);
+        await page.locator(SIDEBAR).getByRole("button", { name: "Clear all" }).click();
+        await settle(page, 400);
+        await expect(page.locator(SEL.worktree.filterButton)).not.toContainText(/\d/);
+      }
     });
 
     // 14. Narrow + hover — the header cluster's worst case for crowding.

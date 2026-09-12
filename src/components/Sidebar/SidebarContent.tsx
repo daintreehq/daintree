@@ -84,6 +84,7 @@ import {
   type DerivedWorktreeMeta,
   type FilterState,
 } from "@/lib/worktreeFilters";
+import { describeActiveFacets } from "@/lib/worktreeFilterOptions";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type { WorktreeState } from "@/types";
@@ -878,9 +879,38 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return counts;
   }, [nonMainWorktrees, derivedMetaMap]);
 
+  /**
+   * The population the chip counts describe. It is deliberately WIDER than
+   * `nonMainWorktrees`: the main worktree is not a list row, but it is subject
+   * to the same facets (`mainMatchesFacetsPre` below), so leaving it out made
+   * every facet it alone satisfies read zero. "Main" is the clear case — the
+   * only worktree of that type is the main one, so the chip read (0) forever.
+   *
+   * Quick-state IS applied, and main is exempt from it, because that is exactly
+   * how the rows themselves are gated. The `alwaysShowActive` / `alwaysShowWaiting`
+   * bypasses are deliberately ignored: they only fire while no facet filter is
+   * active, so selecting any chip switches them off anyway — a count taken
+   * without them is the count that will actually apply once the chip is clicked.
+   *
+   * The counts gate `disabled` on a chip, so both directions of error cost
+   * something. Under-reporting takes a working filter away; over-reporting
+   * promises matches and hands back an empty list. This population is the set
+   * of rows a facet can actually reach, which is neither.
+   */
+  const countedWorktrees = useMemo(() => {
+    const eligible =
+      quickStateFilter === "all"
+        ? nonMainWorktrees
+        : nonMainWorktrees.filter((w) => {
+            const meta = derivedMetaMap.get(w.id);
+            return meta ? matchesQuickStateFilter(quickStateFilter, meta) : false;
+          });
+    return mainWorktree ? [mainWorktree, ...eligible] : eligible;
+  }, [mainWorktree, nonMainWorktrees, quickStateFilter, derivedMetaMap]);
+
   const chipCounts = useMemo(() => {
     return computeChipCounts(
-      nonMainWorktrees,
+      countedWorktrees,
       derivedMetaMap,
       activeWorktreeId,
       {
@@ -895,7 +925,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       devServerSessions
     );
   }, [
-    nonMainWorktrees,
+    countedWorktrees,
     derivedMetaMap,
     activeWorktreeId,
     deferredQuery,
@@ -1157,23 +1187,40 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // immediately rather than after the persisted-query debounce.
   const hasFilters =
     liveQuery.trim().length > 0 || hasFacetFiltersActive || quickStateFilter !== "all";
-  const filteredCount = filteredWorktrees.length;
-  const showScope = hasFilters && filteredCount !== totalCount;
+  // Main is a pinned card rather than a list row, but it is facet-filtered and
+  // it is on screen, so it belongs in both halves of the ratio. Without it,
+  // selecting "Main (1)" read "0 of 6 worktrees" directly above a visible main
+  // card. The quick-state bar keeps its own non-main scope.
+  const filteredCount = filteredWorktrees.length + (mainVisible ? 1 : 0);
+  const scopeTotal = totalCount + (mainWorktree ? 1 : 0);
+  const showScope = hasFilters && filteredCount !== scopeTotal;
+  // Names drag reorder, not sorting: `sortWorktreesByRelevance` still honours the
+  // chosen order as a tie-breaker within each relevance score, so "sorting
+  // disabled" described neither what stops nor what this flag actually gates.
   const dragDisabledReason = hasQuery
-    ? "Sorting disabled while searching"
+    ? "Drag to reorder is off while searching"
     : isGroupedByType
-      ? "Sorting disabled while grouped by type"
+      ? "Drag to reorder is off while grouped by type"
       : null;
   // Filter scope + sort-disabled status, rendered inside the search bar strip
   // so the feedback sits with the controls that produced it. Visual-only —
   // screen readers are served by the debounced announcer effects below, not a
   // live region, so the persistent sort-disabled text isn't re-announced on
   // every keystroke (#9665).
-  const scopeText = showScope ? `${filteredCount} of ${totalCount} worktrees` : null;
-  const filterStatusText =
-    scopeText && dragDisabledReason
-      ? `${scopeText} · ${dragDisabledReason}`
-      : (scopeText ?? dragDisabledReason);
+  const scopeText = showScope ? `${filteredCount} of ${scopeTotal} worktrees` : null;
+  // Which filters, not just how many. A count tells the user the list is cut
+  // down; it does not stop a sparse sidebar reading as an empty one.
+  const activeFacetText = describeActiveFacets({
+    statusFilters,
+    typeFilters,
+    prIssueFilters,
+    sessionFilters,
+    activityFilters,
+    devServerFilters,
+  });
+  // Identity outranks the reorder note: that note is a standing explanation
+  // rather than news, and it was eating the line and truncating the scope.
+  const filterStatusText = scopeText ?? dragDisabledReason;
 
   // Announce the filtered worktree count to screen readers, debounced so rapid
   // typing in the search box doesn't flood the AT speech queue. Routed through
@@ -1181,15 +1228,39 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // than a persistent aria-atomic live region — that region re-announced the
   // whole status line, including the persistent sort-disabled text, on every
   // keystroke (#9665).
+  // Silent on mount, so opening a project does not announce its own worktree
+  // count; from then on every transition speaks, including the one back to the
+  // full set. Bailing out on `!showScope` meant clearing the last filter — the
+  // moment the user most needs it confirmed — said nothing at all.
+  // Compares against the last narrowed state rather than counting effect runs:
+  // a "first run is mount" flag flips on the loading render, so the first real
+  // snapshot after it announced the project's own worktree count on open. The
+  // "All N" message fires only on the narrowed -> not-narrowed edge, and only
+  // once the deferred list has actually caught up (`filteredCount ===
+  // scopeTotal`) — `liveQuery` clears instantly while `deferredQuery` still
+  // drives the rows, so without that check it spoke "All 7" over a list of one
+  // and then again when the rows arrived.
+  const wasNarrowedRef = useRef(false);
   useEffect(() => {
-    if (!showScope) return;
+    let message: string | null = null;
+    if (showScope) {
+      message = `${filteredCount} of ${scopeTotal} worktrees`;
+      wasNarrowedRef.current = true;
+    } else if (wasNarrowedRef.current && filteredCount === scopeTotal) {
+      message = `All ${scopeTotal} worktrees shown`;
+      wasNarrowedRef.current = false;
+    }
+    if (message === null) return;
+    const spoken = message;
     const timer = window.setTimeout(() => {
-      useAnnouncerStore.getState().announce(`${filteredCount} of ${totalCount} worktrees`);
+      useAnnouncerStore.getState().announce(spoken);
     }, UI_DOHERTY_THRESHOLD);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [showScope, filteredCount, totalCount]);
+    // Keyed on the filter inputs as well as the count, so swapping to a
+    // different set of the same size still speaks.
+  }, [showScope, filteredCount, scopeTotal, activeFacetText, liveQuery, quickStateFilter]);
 
   // Announce the sort-disabled reason whenever it appears or changes — covers
   // null → reason (sorting becomes disabled) and reason → reason (e.g. switching
@@ -1789,6 +1860,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           inputRef={searchInputRef}
           chipCounts={chipCounts}
           statusText={filterStatusText}
+          filterSummaryText={activeFacetText || null}
         />
       )}
 

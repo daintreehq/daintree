@@ -612,9 +612,9 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder-daintree-text/40 focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 141 has `focus-within:border-accent-primary focus-within:ring-1`",
+      "Parent shows focus: the field wrapper carries `has-[input:focus-visible]:outline outline-2 outline-accent-primary`. Moved off the alpha-accent border + 1px alpha ring, which measured 2.61:1 and 1.47:1 against their grounds.",
   },
   {
     file: "src/components/Layout/LocalCommitsDropdown.tsx",

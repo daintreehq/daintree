@@ -2684,11 +2684,11 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   /* Inbox filter segments. Selection is carried by a fill, which the UA
      flattens to Canvas, so all four chips arrive as the same outlined pill and
      the panel stops saying which filter you are looking at — you cannot tell
-     Archived from All. Same shape of problem as the destructive button above,
+     Archived from All, or Dirty from Stale in the worktree filter popover. Same shape of problem as the destructive button above,
      and the same remedy: the selected one takes the heavier border. Not
      Highlight — this block already spends Highlight on `*:focus-visible`, and a
      chip can be both selected and focused. */
-  [data-notification-filter="true"][aria-pressed="true"] {
+  [data-filter-chip="true"][aria-pressed="true"] {
     border: 2px solid ButtonText;
   }
 
@@ -2836,7 +2836,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      it sits inside the pill rather than growing it. Separate from the
      forced-colors rule on purpose — author colours survive here, so the fill
      still does its job and only the outline is missing. */
-  [data-notification-filter="true"][aria-pressed="true"] {
+  [data-filter-chip="true"][aria-pressed="true"] {
     outline: 1px solid var(--color-border-strong);
     outline-offset: -1px;
   }

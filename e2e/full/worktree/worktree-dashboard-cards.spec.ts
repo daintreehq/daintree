@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createMultiProjectFixture, type MultiProjectFixture } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { addAndSwitchToProject } from "../../helpers/workflows";
+import { ensureFilterSectionOpen, addAndSwitchToProject } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
@@ -81,6 +81,7 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
 
     await openFilterPopover(window);
     const popover = window.locator(SEL.worktree.filterPopover);
+    await ensureFilterSectionOpen(popover, "Sort by");
 
     // Default sort is "Date created".
     await expect(popover.getByRole("radio", { name: "Date created" })).toBeChecked({
