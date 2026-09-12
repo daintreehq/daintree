@@ -27,11 +27,15 @@ import type * as React from "react";
  * instead. Radix keeps every decision about whether to focus at all; only the
  * options it asks with change.
  *
- * Known edge: because the state is decided per focus transition, a keystroke
- * that lands on the row already under the pointer — Home on the first row, an
- * unlooped Arrow at either end — leaves it ringless until focus actually moves.
- * Restoring the ring there needs document-wide modality tracking, which is a
- * much bigger mechanism than one dead keypress is worth.
+ * Known edge: an explicit `focusVisible: false` is a decision, not a heuristic
+ * reading, and it sticks to the element until focus actually moves. So a
+ * keystroke that resolves to the row already under the pointer — Home on the
+ * first row, an unlooped Arrow at either end, a typeahead match on the current
+ * row — leaves that row ringless, and in a single-item menu there is nowhere
+ * else for focus to go. The fill alone is weak as a keyboard indicator (see
+ * the note on the item styles), so this wants a menu-scoped keyboard indicator
+ * rather than a wider suppression; it is not worth document-wide modality
+ * tracking.
  */
 export function menuRowPointerMove<T extends HTMLElement>(
   event: React.PointerEvent<T>,

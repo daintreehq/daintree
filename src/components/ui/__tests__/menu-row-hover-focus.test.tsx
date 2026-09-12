@@ -253,6 +253,10 @@ describe("menu row hover focus — issue #12383", () => {
     const second = rowAt(1);
 
     hover(first);
+    // Asserted, not assumed: without it, plain Radix navigation satisfies
+    // everything below and the test stops noticing an unwired primitive.
+    expect(focusesOf(first)).toEqual([{ row: first, options: SUPPRESSED }]);
+
     await Promise.resolve();
     await pressKey(first, "ArrowDown");
     expect(document.activeElement).toBe(second);
@@ -302,9 +306,10 @@ describe("menu row hover focus — every row primitive", () => {
         </DropdownMenuPrimitive.RadioGroup>
       </>
     );
-    const targets = rows();
-    expect(targets).toHaveLength(4);
-    for (const target of targets) expectSuppressedHover(target, seen);
+    expect(rows()).toHaveLength(4);
+    // Re-queried per iteration: hovering a row re-renders it, and a snapshot
+    // taken up front would be asserting against nodes from before that.
+    for (let index = 0; index < 4; index += 1) expectSuppressedHover(rowAt(index), seen);
   });
 
   it("covers the context-menu item, sub-trigger, checkbox and radio rows", () => {
@@ -326,9 +331,10 @@ describe("menu row hover focus — every row primitive", () => {
         </ContextMenuPrimitive.RadioGroup>
       </>
     );
-    const targets = rows();
-    expect(targets).toHaveLength(4);
-    for (const target of targets) expectSuppressedHover(target, seen);
+    expect(rows()).toHaveLength(4);
+    // Re-queried per iteration: hovering a row re-renders it, and a snapshot
+    // taken up front would be asserting against nodes from before that.
+    for (let index = 0; index < 4; index += 1) expectSuppressedHover(rowAt(index), seen);
   });
 
   it("covers the select option row", () => {
@@ -370,9 +376,33 @@ describe("menu row hover focus — the decoration itself", () => {
     expect(asked).toEqual({ preventScroll: false, focusVisible: true });
   });
 
-  it("leaves a row that already owns a focus implementation alone", () => {
-    renderDropdown(<DropdownMenuItem>Copy full context</DropdownMenuItem>);
+  it("decorates the row the pointer is over, not the child it entered through", () => {
+    renderDropdown(
+      <DropdownMenuItem>
+        <span data-testid="label">Copy full context</span>
+      </DropdownMenuItem>
+    );
     const item = rowAt(0);
+    const label = must(document.querySelector<HTMLElement>("[data-testid='label']"), "label");
+    recorded = [];
+
+    hover(label);
+
+    // Rows carry icons and text spans, so `event.target` is routinely a child.
+    // The row is the thing Radix focuses, so the row is what must be decorated.
+    expect(focusesOf(item)).toEqual([{ row: item, options: SUPPRESSED }]);
+    expect(Object.hasOwn(label, "focus")).toBe(false);
+  });
+
+  it("leaves a row that already owns a focus implementation alone", async () => {
+    renderDropdown(
+      <>
+        <DropdownMenuItem>Overridden</DropdownMenuItem>
+        <DropdownMenuItem>Control</DropdownMenuItem>
+      </>
+    );
+    const item = rowAt(0);
+    const control = rowAt(1);
     const own = vi.fn();
     Object.defineProperty(item, "focus", { configurable: true, value: own });
     recorded = [];
@@ -380,12 +410,20 @@ describe("menu row hover focus — the decoration itself", () => {
     hover(item);
 
     // An instance override — a per-element spy, say — keeps its own behaviour
-    // rather than being silently swapped out and then deleted.
+    // rather than being silently swapped out.
     expect(own).toHaveBeenCalledWith({ preventScroll: true });
     expect(focusesOf(item)).toHaveLength(0);
+
+    // And it must survive the teardown too: a decoration that was never
+    // installed must not take someone else's property with it.
+    await Promise.resolve();
+    expect(Object.getOwnPropertyDescriptor(item, "focus")?.value).toBe(own);
+
+    hover(control);
+    expect(focusesOf(control)).toEqual([{ row: control, options: SUPPRESSED }]);
   });
 
-  it("keeps one decoration across repeated hovers in the same task", async () => {
+  it("decorates once per task and can decorate again on a later event", async () => {
     renderDropdown(<DropdownMenuItem>Copy full context</DropdownMenuItem>);
     const item = rowAt(0);
 
@@ -395,7 +433,6 @@ describe("menu row hover focus — the decoration itself", () => {
     hover(item);
     expect(Object.getOwnPropertyDescriptor(item, "focus")?.value).toBe(decorated);
 
-    // One teardown for one decoration, and a later event can decorate again.
     await Promise.resolve();
     expect(Object.hasOwn(item, "focus")).toBe(false);
     hover(item);
