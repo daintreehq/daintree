@@ -18,6 +18,7 @@ vi.mock("framer-motion", () => ({
 }));
 
 import { GridPlaceholder } from "../GridPlaceholder";
+import { DROP_SLOT_FRAME } from "../dropIndicator";
 
 const panel = {
   id: "p1",
@@ -46,6 +47,10 @@ describe("GridPlaceholder destination boundary", () => {
     const unknown = root(render(<GridPlaceholder />).container);
     expect(unknown.className).toBe(known.className);
     expect(unknown.children.length).toBe(known.children.length);
+    // Equal is not enough — both could be equally frameless.
+    for (const cls of DROP_SLOT_FRAME.split(/\s+/)) {
+      expect(known.className.split(/\s+/), cls).toContain(cls);
+    }
   });
 
   it("carries identity only when it has it", () => {

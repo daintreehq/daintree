@@ -29,11 +29,8 @@ type DropAnimationConfig = {
  * Must call getUiAnimationDuration() at invocation time so it reads the
  * live `document.body.dataset.performanceMode` flag.
  */
-function dropAnimation(
-  isCancelDrop: boolean,
-  prefersReducedMotion = false
-): DropAnimationConfig | null {
-  if (prefersReducedMotion) return null;
+function dropAnimation(isCancelDrop: boolean, prefersReducedMotion = false): DropAnimationConfig {
+  if (prefersReducedMotion) return { duration: 0, easing: EASE_SNAPPY, sideEffects: null };
   return isCancelDrop
     ? { duration: PANEL_RESTORE_DURATION, easing: EASE_OUT_EXPO, sideEffects: null }
     : { duration: getUiAnimationDuration(), easing: EASE_SNAPPY, sideEffects: null };
@@ -47,20 +44,32 @@ describe("DragOverlay dropAnimation config", () => {
   });
 
   // dnd-kit runs the drop animation through WAAPI, which CSS reduced-motion
-  // rules never reach — so the OS preference has to disable it here, for the
+  // rules never reach — so the OS preference has to collapse it here, for the
   // snap-back as well as the settle, the same way it already skips the entry
-  // spring.
-  it("disables the travelling ghost entirely under reduced motion", () => {
-    expect(dropAnimation(false, true)).toBeNull();
-    expect(dropAnimation(true, true)).toBeNull();
+  // spring. Zero duration rather than `null`: a null config makes dnd-kit skip
+  // scrolling the source back into view on cancel.
+  it("collapses the travelling ghost to zero duration under reduced motion", () => {
+    expect(dropAnimation(false, true)).toEqual({
+      duration: 0,
+      easing: EASE_SNAPPY,
+      sideEffects: null,
+    });
+    expect(dropAnimation(true, true)).toEqual({
+      duration: 0,
+      easing: EASE_SNAPPY,
+      sideEffects: null,
+    });
   });
 
   // The replica above cannot see the real prop, so pin the gate at the source:
-  // the DragOverlay's dropAnimation must short-circuit on the same reduced-motion
-  // flag the entry spring already reads.
+  // the DragOverlay's dropAnimation must branch on the same reduced-motion
+  // flag the entry spring already reads, and never hand dnd-kit a null.
   it("wires the reduced-motion gate onto the real DragOverlay", () => {
     const source = readFileSync(resolve(__dirname, "../DndProvider.tsx"), "utf8");
-    expect(source).toMatch(/dropAnimation=\{(?:\s|\/\/[^\n]*)*prefersReducedMotion\s*\?\s*null/);
+    expect(source).toMatch(
+      /dropAnimation=\{(?:\s|\/\/[^\n]*)*prefersReducedMotion\s*\?\s*\{\s*duration:\s*0\b/
+    );
+    expect(source).not.toMatch(/prefersReducedMotion\s*\?\s*null/);
   });
 
   it("uses Tier 1 snap motion (150ms EASE_SNAPPY) on successful drops", () => {

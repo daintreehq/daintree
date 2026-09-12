@@ -31,7 +31,7 @@
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
+import { mkdirSync, readdirSync, unlinkSync } from "fs";
 import path from "path";
 import {
   makeSnap,
@@ -43,7 +43,7 @@ import {
 const ENABLED = !!process.env.DAINTREE_SHOT_DRAGDROP;
 
 const OUT_DIR = path.resolve(
-  process.env.DAINTREE_SHOT_DIR ?? path.join(process.cwd(), "artifacts", "drag-drop-shots")
+  process.env.DAINTREE_SHOT_DIR || path.join(process.cwd(), "artifacts", "drag-drop-shots")
 );
 
 const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
@@ -111,8 +111,19 @@ test.beforeAll(async () => {
   // structured-skip annotation the repo requires cannot be attached. The test
   // body carries the skip; this hook simply does no work when the flag is unset.
   if (!ENABLED) return;
-  if (existsSync(OUT_DIR)) rmSync(OUT_DIR, { recursive: true, force: true });
+  // A stale PNG from an earlier round read as this round's output is the
+  // easiest way to review a screen that no longer exists, so the directory is
+  // emptied of frames first — only frames, never the directory itself: an empty
+  // or relative DAINTREE_SHOT_DIR resolves to the checkout, and a recursive
+  // delete there would be catastrophic.
+  const cwd = process.cwd();
+  if (OUT_DIR === cwd || cwd.startsWith(OUT_DIR + path.sep)) {
+    throw new Error(`DAINTREE_SHOT_DIR resolves to the checkout (${OUT_DIR}) — refusing`);
+  }
   mkdirSync(OUT_DIR, { recursive: true });
+  for (const f of readdirSync(OUT_DIR)) {
+    if (f.endsWith(".png")) unlinkSync(path.join(OUT_DIR, f));
+  }
   server = await startPreviewServer();
 });
 
@@ -169,17 +180,34 @@ async function glide(page: Page, to: { x: number; y: number }): Promise<void> {
 /**
  * A state indicator that compiled to nothing still exists in the DOM, so a
  * structural check would pass while the frame shows no line at all. Read the
- * painted colour and refuse anything transparent.
+ * painted colour and refuse anything transparent; a border also needs width.
  */
 async function expectPainted(target: Locator, property: "background-color" | "border-top-color") {
-  const value = await target.evaluate(
-    (el, prop) => getComputedStyle(el).getPropertyValue(prop),
-    property
-  );
-  const alpha = value.match(/rgba?\([^)]*,\s*([\d.]+)\)$/)?.[1];
-  const transparent = value === "transparent" || value === "rgba(0, 0, 0, 0)" || alpha === "0";
-  if (transparent)
+  const { value, width } = await target.evaluate((el, prop) => {
+    const style = getComputedStyle(el);
+    return { value: style.getPropertyValue(prop), width: style.borderTopWidth };
+  }, property);
+  if (alphaOf(value) === 0) {
     throw new Error(`${property} painted transparent (${value}) — refusing to write`);
+  }
+  if (property === "border-top-color" && !(parseFloat(width) > 0)) {
+    throw new Error(`border-top-width is ${width} — the frame is not drawn`);
+  }
+}
+
+/**
+ * Alpha of a computed colour in either legacy (`rgba(0, 0, 0, 0)`) or modern
+ * (`rgb(0 0 0 / 0)`, `color(srgb 1 0 0 / 0)`) serialisation.
+ */
+function alphaOf(value: string): number {
+  const m = value.trim().match(/^([a-z]+)\((.*)\)$/i);
+  if (!m) return value.trim() === "transparent" ? 0 : 1;
+  const [, fn, inner] = m;
+  const [main, slashAlpha] = inner!.split("/");
+  if (slashAlpha !== undefined) return Number(slashAlpha.trim());
+  const parts = main!.trim().split(/[\s,]+/);
+  if (fn!.toLowerCase() === "color") parts.shift();
+  return parts.length >= 4 ? Number(parts[3]) : 1;
 }
 
 async function expectActiveDrag(shell: Locator): Promise<void> {

@@ -505,10 +505,13 @@ function DragOverlayWithCursorTracking({
     <DragOverlay
       // Reduced motion drops the travelling ghost on release as well as the
       // entry spring — `getUiAnimationDuration()` only collapses for
-      // performance mode, not for the OS preference.
+      // performance mode, not for the OS preference. A zero-duration config
+      // rather than `null`: dnd-kit returns before its scroll-into-view when
+      // the config is null, and a cancelled drag whose source scrolled away
+      // still has to come back to it.
       dropAnimation={
         prefersReducedMotion
-          ? null
+          ? { duration: 0, easing: EASE_SNAPPY, sideEffects: null }
           : isCancelDrop
             ? { duration: PANEL_RESTORE_DURATION, easing: EASE_OUT_EXPO, sideEffects: null }
             : { duration: getUiAnimationDuration(), easing: EASE_SNAPPY, sideEffects: null }

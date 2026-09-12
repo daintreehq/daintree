@@ -63,11 +63,14 @@ describe("TerminalDragPreview group badge", () => {
     expect(extra.every((c) => c.startsWith("pr-"))).toBe(true);
   });
 
-  it("shows no badge for a single panel", () => {
-    const { container } = render(<TerminalDragPreview terminal={agentPanel()} />);
-    expect([...container.querySelectorAll("span")].some((el) => el.textContent === "3")).toBe(
-      false
-    );
+  it("shows a badge only when more than one tab is carried", () => {
+    const badge = (count?: number) =>
+      render(
+        <TerminalDragPreview terminal={agentPanel()} groupTabCount={count} />
+      ).container.querySelector('[data-slot="badge"]');
+    expect(badge()).toBeNull();
+    expect(badge(1)).toBeNull();
+    expect(badge(3)?.textContent).toBe("3");
   });
 });
 
