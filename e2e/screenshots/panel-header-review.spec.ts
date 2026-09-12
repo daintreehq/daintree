@@ -198,9 +198,11 @@ async function proveTitleSurvives(header: Locator): Promise<void> {
   const more = header.getByRole("button", { name: "More panel actions" });
   await expect(more).toBeVisible();
   const moreBox = (await more.boundingBox())!;
+  // The badge may be in the DOM but hidden by the compact container query —
+  // then it has no box and there is nothing to overlap.
   const badge = header.locator('[aria-label^="Branch:"]');
-  if ((await badge.count()) > 0) {
-    const badgeBox = (await badge.boundingBox())!;
+  const badgeBox = (await badge.count()) > 0 ? await badge.boundingBox() : null;
+  if (badgeBox) {
     if (badgeBox.x + badgeBox.width > moreBox.x) {
       throw new Error("branch badge overlaps the More-actions trigger — refusing to write");
     }
@@ -399,16 +401,24 @@ test("panel header — states, interactions and themes", async ({ page }) => {
       await page.waitForTimeout(150);
       written.push(await snap(pane, `focused-working--${theme}--focus-title.png`));
 
-      const close = header.getByTestId("panel-close");
-      await tabTo(page, close, "the close button");
-      await page.waitForTimeout(150);
-      written.push(await snap(pane, `focused-working--${theme}--focus-close.png`));
-
-      // Focus on the far-right agent glyph box's neighbour: the overflow trigger.
-      const more = header.getByRole("button", { name: "More panel actions" });
-      await tabTo(page, more, "the overflow trigger");
+      // The controls are one toolbar: Tab lands on its entry control, arrows
+      // move within it. Close is reached with the arrows, and the capture
+      // proves the roving stop actually moved.
+      const toolbar = header.getByRole("toolbar", { name: "Panel controls" });
+      await tabTo(page, toolbar, "the controls toolbar");
       await page.waitForTimeout(150);
       written.push(await snap(pane, `focused-working--${theme}--focus-more.png`));
+
+      const close = header.getByTestId("panel-close");
+      for (let i = 0; i < 6; i += 1) {
+        if (await close.evaluate((el) => el === document.activeElement)) break;
+        await page.keyboard.press("ArrowRight");
+      }
+      if (!(await close.evaluate((el) => el === document.activeElement))) {
+        throw new Error("arrows never reached the close control — refusing to write");
+      }
+      await page.waitForTimeout(150);
+      written.push(await snap(pane, `focused-working--${theme}--focus-close.png`));
     }
 
     // Inline rename, started with F2 on the focused title.
@@ -417,10 +427,21 @@ test("panel header — states, interactions and themes", async ({ page }) => {
       await proveState(page, "focused-working", header);
       const title = header.getByRole("button", { name: /Agent title/ });
       await tabTo(page, title, "the title");
+      // The field must take the title's box exactly: whatever sits after the
+      // title (the duplicate control, revealed by the header holding focus)
+      // must not move when editing starts.
+      const neighbour = header.getByRole("button", { name: "Duplicate panel as new tab" });
+      const before = (await neighbour.boundingBox())!;
       await page.keyboard.press("F2");
       const input = header.getByRole("textbox", { name: "Edit agent title" });
       await expect(input).toBeVisible();
       await page.waitForTimeout(300);
+      const after = (await neighbour.boundingBox())!;
+      if (Math.abs(after.x - before.x) > 0.5) {
+        throw new Error(
+          `entering rename moved the next control by ${after.x - before.x}px — refusing to write`
+        );
+      }
       written.push(await snap(pane, `focused-working--${theme}--title-editing.png`));
     }
 

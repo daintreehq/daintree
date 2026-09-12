@@ -61,6 +61,7 @@ import {
   STATE_ICONS,
   getEffectiveStateColor,
   getEffectiveStateIcon,
+  getEffectiveStateLabel,
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
@@ -74,6 +75,7 @@ import {
   useTabOverflow,
 } from "@/hooks";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenu,
@@ -101,6 +103,14 @@ import type { BrandMarkSurface } from "@/lib/brandIcon";
 export interface PanelHeaderProps {
   id: string;
   title: string;
+  /**
+   * The task-first form of the title for a narrow header. Swapped in by a
+   * container query at 420px of header width; the accessible name, the
+   * tooltip and the rename prefill always use the full title.
+   */
+  compactTitle?: string;
+  /** The id of the region the tab strip switches, for each tab's `aria-controls`. */
+  tabPanelId?: string;
   kind: PanelKind;
   agentId?: string;
   chrome: TerminalChromeDescriptor;
@@ -193,6 +203,8 @@ export interface PanelHeaderProps {
 function PanelHeaderComponent({
   id,
   title,
+  compactTitle,
+  tabPanelId,
   kind,
   agentId,
   chrome,
@@ -238,6 +250,11 @@ function PanelHeaderComponent({
   onTabReorder,
 }: PanelHeaderProps) {
   const dragHandle = useDragHandle();
+
+  // The window controls are one toolbar: one Tab stop per pane, arrows within.
+  // Six panes cost six presses to cross, not twenty-four.
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  const handleControlsKeyDown = useToolbarRoving(controlsRef);
 
   // Check if panel kind supports restart via registry
   const canRestart = panelKindCanRestart(kind);
@@ -475,7 +492,9 @@ function PanelHeaderComponent({
     const tabLeft = tabEl.offsetLeft;
     const tabRight = tabLeft + tabEl.offsetWidth;
 
-    if (tabLeft < containerLeft) {
+    // A tab wider than the strip cannot fit either way; show its start — the
+    // brand glyph and the first words are what identify it, not its close.
+    if (tabLeft < containerLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
       tabListEl.scrollTo({ left: tabLeft, behavior: "smooth" });
     } else if (tabRight > containerRight) {
       tabListEl.scrollTo({ left: tabRight - tabListEl.clientWidth, behavior: "smooth" });
@@ -576,11 +595,15 @@ function PanelHeaderComponent({
       const nextTab = tabs[nextIndex];
       if (nextTab) {
         onTabClick(nextTab.id);
-        // Focus the new tab button
-        const tabButton = tabListEl?.querySelector(
-          `[data-tab-id="${nextTab.id}"]`
-        ) as HTMLElement | null;
-        tabButton?.focus();
+        // Focus after the activation has rendered: a parked tab is
+        // `visibility: hidden` until it becomes active, and a hidden element
+        // refuses focus.
+        requestAnimationFrame(() => {
+          const tabButton = tabListEl?.querySelector(
+            `[data-tab-id="${nextTab.id}"]`
+          ) as HTMLElement | null;
+          tabButton?.focus();
+        });
       }
     },
     [tabs, onTabClick, tabListEl]
@@ -644,6 +667,9 @@ function PanelHeaderComponent({
               </span>
               <span className="truncate">{tab.title}</span>
               {StateIcon && tab.agentState && (
+                <span className="sr-only">, {getEffectiveStateLabel(tab.agentState)}</span>
+              )}
+              {StateIcon && tab.agentState && (
                 <StateIcon
                   className={cn(
                     "ml-auto h-3 w-3 shrink-0",
@@ -683,7 +709,7 @@ function PanelHeaderComponent({
         ? {
             surface: "surface-panel",
             extension: "panel-header-focus-bg",
-            lift: "overlay-subtle",
+            lift: "overlay-medium",
           }
         : { surface: "surface-panel", extension: "panel-header-bg" };
 
@@ -710,20 +736,21 @@ function PanelHeaderComponent({
       data-fleet-previewed={isFleetPreviewed || undefined}
       data-pane-chrome=""
       className={cn(
-        "text-xs transition-colors relative overflow-hidden group select-none",
+        "@container/header text-xs transition-colors relative overflow-hidden group select-none",
         isMaximized
           ? "h-10 bg-surface-sidebar border-border-default"
           : location === "dock"
             ? "bg-surface"
             : isFocused || isSelected
-              ? // Var fallbacks keep themes without the panel-header hooks
-                // byte-identical.
-                "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
-              : // Preview tint sits between transparent and bg-overlay-subtle so
-                // a previewed-but-unselected pane reads distinctly from both.
+              ? // The var hook lets a theme repaint the lifted bar; the fallback
+                // is the strongest neutral overlay step, so on a theme without
+                // the hook the pane you type into still reads as lifted.
+                "bg-[var(--panel-header-focus-bg,var(--color-overlay-medium))]"
+              : // Preview tint sits between transparent and the focus lift so a
+                // previewed-but-unselected pane reads distinctly from both.
                 // Neutral surface, no accent — accent restraint per CLAUDE.md.
                 isFleetPreviewed
-                ? "bg-tint/[0.05]"
+                ? "bg-overlay-subtle"
                 : "bg-[var(--panel-header-bg,transparent)]",
         // Mirror the fleet ribbon's 2px amber left stripe on follower panes.
         // The stripe sits in the title bar — fovea-adjacent when reading the
@@ -733,7 +760,7 @@ function PanelHeaderComponent({
           // Solid amber, not the ribbon's mixed border token: on the lifted header
           // that mix measures under 1.7:1 and the stripe is the follower's only
           // cue besides the glyph.
-          "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber before:z-[1]",
+          "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber before:z-[1] forced-colors:before:bg-[CanvasText]",
         dragListeners && "cursor-grab active:cursor-grabbing",
         isPinged && !isMaximized && "animate-terminal-header-ping",
         isDragging && "pointer-events-none"
@@ -781,6 +808,7 @@ function PanelHeaderComponent({
                       isUsingFallback={tab.isUsingFallback}
                       fallbackTooltip={tab.fallbackTooltip}
                       hasDangerousFlags={tab.hasDangerousFlags}
+                      tabPanelId={tabPanelId}
                       onClick={() => onTabClick?.(tab.id)}
                       onClose={() => onTabClose?.(tab.id)}
                       onRename={
@@ -815,6 +843,7 @@ function PanelHeaderComponent({
                   isUsingFallback={tab.isUsingFallback}
                   fallbackTooltip={tab.fallbackTooltip}
                   hasDangerousFlags={tab.hasDangerousFlags}
+                  tabPanelId={tabPanelId}
                   onClick={() => onTabClick?.(tab.id)}
                   onClose={() => onTabClose?.(tab.id)}
                   onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
@@ -825,7 +854,7 @@ function PanelHeaderComponent({
         ) : (
           // overflow-hidden is the hard edge: whatever this group cannot fit is
           // clipped here, never painted over the status box or the controls.
-          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+          <div className="flex items-center gap-2 min-w-0 self-stretch overflow-hidden">
             {/* The pane you are working in wears its agent's real brand colour;
               the ones you are not sit a step back. `data-brand-active` goes on
               the glyph's own wrapper rather than the header so it cannot leak
@@ -843,23 +872,33 @@ function PanelHeaderComponent({
             </span>
 
             {isEditingTitle ? (
-              // [data-no-dnd] opts the rename field out of the header drag
-              // surface: without it, drag-selecting the title text travels past
-              // DRAG_ACTIVATION_DISTANCE and picks the panel up instead.
-              <input
-                data-no-dnd
-                ref={titleInputRef}
-                type="text"
-                value={editingValue}
-                onChange={(e) => onEditingValueChange(e.target.value)}
-                onKeyDown={onTitleInputKeyDown}
-                onBlur={onTitleSave}
-                // Same box as the static title (h-6, leading-6); px-1 is given
-                // back by -mx-1 so the first glyph does not move when editing
-                // starts. Chrome-free by ruling (#7926): the lift is the cue.
-                className="-mx-1 h-6 w-full min-w-32 max-w-[40ch] rounded-sm border border-transparent bg-overlay-soft px-1 text-xs font-medium leading-6 text-text-primary select-text transition-colors focus:outline-hidden"
-                aria-label={getAriaLabel()}
-              />
+              // The field takes exactly the box the static title had: an
+              // invisible copy of the title sizes the cell and the input fills
+              // it, so nothing beside it moves when editing starts and ends.
+              // px-1 is paid back with -mx-1 so the first glyph stays put.
+              // Chrome-free by ruling (#7926): the lift is the cue.
+              <div className="grid min-w-0 shrink" data-testid="panel-title-edit-box">
+                <span
+                  aria-hidden="true"
+                  className="invisible col-start-1 row-start-1 block h-6 min-w-[8ch] truncate text-xs font-medium leading-6"
+                >
+                  {displayTitle}
+                </span>
+                {/* [data-no-dnd] opts the rename field out of the header drag
+                    surface: without it, drag-selecting the title text travels
+                    past DRAG_ACTIVATION_DISTANCE and picks the panel up instead. */}
+                <input
+                  data-no-dnd
+                  ref={titleInputRef}
+                  type="text"
+                  value={editingValue}
+                  onChange={(e) => onEditingValueChange(e.target.value)}
+                  onKeyDown={onTitleInputKeyDown}
+                  onBlur={onTitleSave}
+                  className="col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] rounded-sm border border-transparent bg-overlay-soft px-1 text-xs font-medium leading-6 text-text-primary select-text transition-colors focus:outline-hidden"
+                  aria-label={getAriaLabel()}
+                />
+              </div>
             ) : (
               <div className="flex items-center gap-2 min-w-0">
                 <Tooltip>
@@ -886,7 +925,17 @@ function PanelHeaderComponent({
                       aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
                       data-fleet-gesture-passthrough=""
                     >
-                      {displayTitle}
+                      {compactTitle && compactTitle !== displayTitle ? (
+                        // Under 420px of header the identity prefix goes and
+                        // the task stays: "fix flaky auth tests" tells panes
+                        // apart where "Claud…" cannot. The glyph carries identity.
+                        <>
+                          <span className="@max-[420px]/header:hidden">{displayTitle}</span>
+                          <span className="hidden @max-[420px]/header:inline">{compactTitle}</span>
+                        </>
+                      ) : (
+                        displayTitle
+                      )}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
@@ -987,7 +1036,7 @@ function PanelHeaderComponent({
                     onPointerDown={(e) => e.stopPropagation()}
                     // Revealed by hover or by keyboard focus anywhere in the
                     // header, so a keyboard user on the title can find it.
-                    className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                    className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 @max-[420px]/header:hidden"
                     aria-label="Duplicate panel as new tab"
                     aria-keyshortcuts={duplicateAriaShortcut}
                   >
@@ -1007,7 +1056,7 @@ function PanelHeaderComponent({
               // measures under 4.5:1 as ink on either light or dark headers.
               // min-w-0 (not shrink-0): the badge truncates before the title does.
               <span
-                className="min-w-0 max-w-[120px] inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none text-text-primary select-none"
+                className="min-w-[7ch] max-w-[120px] inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none text-text-primary select-none @max-[420px]/header:hidden"
                 style={
                   {
                     backgroundColor: "color-mix(in oklab, var(--worktree-color) 18%, transparent)",
@@ -1087,6 +1136,11 @@ function PanelHeaderComponent({
       )}
 
       <div
+        ref={controlsRef}
+        role="toolbar"
+        aria-label="Panel controls"
+        aria-orientation="horizontal"
+        onKeyDown={handleControlsKeyDown}
         data-testid="panel-header-controls"
         className="ml-1.5 flex shrink-0 items-center gap-1.5"
       >

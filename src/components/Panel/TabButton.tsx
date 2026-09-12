@@ -5,6 +5,7 @@ import { X, AlertTriangle } from "lucide-react";
 import type { PanelKind, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import {
   getEffectiveStateIcon,
@@ -48,6 +49,13 @@ export interface TabButtonProps {
   isUsingFallback?: boolean;
   fallbackTooltip?: string;
   hasDangerousFlags?: boolean;
+  /** The id of the region this tab switches — `aria-controls`, per the APG tabs pattern. */
+  tabPanelId?: string;
+}
+
+/** The DOM id a tab carries, so the panel it controls can name it back. */
+export function tabDomId(tabId: string): string {
+  return `panel-tab-${tabId}`;
 }
 
 const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function TabButtonComponent(
@@ -68,6 +76,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     isUsingFallback,
     fallbackTooltip,
     hasDangerousFlags,
+    tabPanelId,
   },
   ref
 ) {
@@ -271,8 +280,10 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
       <TooltipTrigger asChild>
         <div
           ref={ref}
+          id={tabDomId(id)}
           role="tab"
           aria-selected={isActive}
+          aria-controls={tabPanelId}
           tabIndex={isActive ? 0 : -1}
           onClick={handleClick}
           onKeyDown={handleKeyDown}
@@ -412,7 +423,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           {/* Close button - visible on hover */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={handleClose}
                 onKeyDown={handleCloseKeyDown}
                 onPointerDown={handleClosePointerDown}
@@ -422,17 +435,14 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                 // roves, and an inactive tab is reached with the arrows.
                 tabIndex={isActive ? undefined : -1}
                 className={cn(
-                  "-my-1 -mr-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition-[opacity,color,background-color,border-color]",
+                  "-my-1 -mr-1.5 shrink-0",
                   "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",
-                  "hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)]",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
-                  "text-text-secondary hover:text-status-error"
+                  "hover:bg-status-error/15 hover:text-status-error focus-visible:text-status-error"
                 )}
                 aria-label={`Close ${title}`}
-                type="button"
               >
-                <X className="w-3 h-3" aria-hidden="true" />
-              </button>
+                <X aria-hidden="true" />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Close tab</TooltipContent>
           </Tooltip>

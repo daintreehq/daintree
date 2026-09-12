@@ -164,4 +164,16 @@ describe("ContentPanel agent glyph placement", () => {
     render(panel({ agentState: "completed", completedWithNoChanges: true }));
     expect(screen.queryByText("Finished, no changes")).not.toBeNull();
   });
+
+  it("names the body as the tab panel of the active tab in a tab group", () => {
+    const tabs: TabInfo[] = [
+      { id: "t-1", title: "One", kind: "terminal", chrome, isActive: true },
+      { id: "t-2", title: "Two", kind: "terminal", chrome, isActive: false },
+    ];
+    render(panel({ tabs }));
+    const tabpanel = screen.getByRole("tabpanel");
+    const active = screen.getByRole("tab", { selected: true });
+    expect(tabpanel.getAttribute("aria-labelledby")).toBe(active.id);
+    expect(active.getAttribute("aria-controls")).toBe(tabpanel.id);
+  });
 });

@@ -111,11 +111,29 @@ function worktree(id: string, branch: string, extra: Partial<WorktreeSnapshot>):
  * pane mounts — every store here is a module singleton, so a single fixture per page
  * is the only way two states cannot leak into each other.
  */
+/**
+ * The app stores an agent pane's identity as `title` and the agent's reported
+ * task as `lastObservedTitle`; the header composes "Identity: task" from the
+ * two (and just the task when it is narrow). A fixture names the composed form
+ * because that is what a reader expects to see; this splits it back into the
+ * two fields the store actually holds.
+ */
+function splitTitle(title: string): { identity: string; task?: string } {
+  const at = title.indexOf(": ");
+  if (at < 0) return { identity: title };
+  return { identity: title.slice(0, at), task: title.slice(at + 2) };
+}
+
 function seedGlobalStores(fixture: PanelHeaderFixture): void {
+  const { identity, task } = splitTitle(fixture.title);
   const rows: Record<string, PtyPanelData> = {
     [PANE_ID]: ptyRow(PANE_ID, {
-      title: fixture.title,
-      launchAgentId: fixture.agentId as PtyPanelData["launchAgentId"],
+      title: identity,
+      lastObservedTitle: task,
+      // The composer only treats the observed title as a task once the agent
+      // has been detected on the PTY, as it would be in the app.
+      detectedAgentId: fixture.agentId,
+      launchAgentId: fixture.agentId,
       agentState: fixture.agentState,
       lastStateChange: Date.now() - 65_000,
       startedAt: Date.now() - 600_000,
@@ -218,7 +236,7 @@ function Pane({ name }: { name: FixtureName }) {
       <SeedWorktrees fixture={fixture}>
         <ContentPanel
           id={PANE_ID}
-          title={fixture.title}
+          title={splitTitle(fixture.title).identity}
           kind={fixture.kind}
           worktreeId={fixture.branch ? WORKTREE_ID : undefined}
           isFocused={fixture.isFocused}

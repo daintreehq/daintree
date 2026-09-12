@@ -37,8 +37,8 @@ vi.mock("framer-motion", () => {
     LazyMotion: passthrough,
     domAnimation: {},
     domMax: {},
-    m: { div: MotionDiv },
-    motion: { div: MotionDiv },
+    m: { div: MotionDiv, span: MotionDiv },
+    motion: { div: MotionDiv, span: MotionDiv },
   };
 });
 
@@ -932,8 +932,8 @@ describe("PanelHeader", () => {
       expect(header.getAttribute("data-selected")).toBe("true");
       // Selected header matches the focused overlay tint — one unified
       // "active" title bar treatment for both focus and selection.
-      expect(header.className).toContain(
-        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
+      expect(header.className).toMatch(
+        /bg-\[var\(--panel-header-focus-bg,var\(--color-overlay-[a-z]+\)\)\]/
       );
       expect(header.className).not.toContain("bg-[var(--panel-header-bg,transparent)]");
     });
@@ -956,9 +956,7 @@ describe("PanelHeader", () => {
         <PanelHeader {...makeProps({ isSelected: true, isMaximized: true })} />
       );
       const header = container.firstElementChild as HTMLElement;
-      expect(header.className).not.toContain(
-        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
-      );
+      expect(header.className).not.toMatch(/panel-header-focus-bg/);
     });
   });
 
@@ -1201,8 +1199,8 @@ describe("PanelHeader", () => {
       expect(overlay).not.toBeNull();
       const header = container.querySelector("[data-pane-chrome]");
       expect(header?.getAttribute("data-selected")).toBe("true");
-      expect(header?.className).toContain(
-        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
+      expect(header?.className).toMatch(
+        /bg-\[var\(--panel-header-focus-bg,var\(--color-overlay-[a-z]+\)\)\]/
       );
     });
 
@@ -1557,6 +1555,71 @@ describe("PanelHeader", () => {
         // word ("Lock input", not "Lock Input").
         expect(label, label).toMatch(/^[A-Z][^A-Z]*$/);
       }
+    });
+
+    it("makes the window controls one toolbar with a single Tab stop", () => {
+      render(<PanelHeader {...makeProps({ onMinimize: vi.fn(), onToggleMaximize: vi.fn() })} />);
+      const toolbar = screen.getByRole("toolbar", { name: "Panel controls" });
+      const controls = Array.from(toolbar.querySelectorAll<HTMLElement>("button")).filter(
+        (b) => b.closest('[data-testid="overflow-menu"]') === null
+      );
+      expect(controls.length).toBeGreaterThan(2);
+      // Roving tabindex: exactly one control is in the Tab order.
+      expect(controls.filter((b) => b.tabIndex === 0)).toHaveLength(1);
+    });
+
+    it("names a hidden tab's agent state in text, not only in a glyph", () => {
+      mockHiddenTabIds = new Set(["t2"]);
+      render(
+        <PanelHeader
+          {...makeProps({
+            tabs: [
+              {
+                id: "test-panel",
+                title: "Tab 1",
+                kind: "terminal",
+                chrome: deriveTerminalChrome(),
+                isActive: true,
+              },
+              {
+                id: "t2",
+                title: "Tab 2",
+                kind: "terminal",
+                chrome: deriveTerminalChrome(),
+                isActive: false,
+                agentState: "waiting",
+              },
+            ],
+            onTabClick: vi.fn(),
+          })}
+        />
+      );
+      const menu = screen
+        .getAllByTestId("overflow-menu")
+        .find((m) => m.textContent?.includes("Tab 2"))!;
+      const row = Array.from(menu.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Tab 2")
+      )!;
+      expect(row.textContent?.toLowerCase()).toContain("waiting");
+    });
+
+    it("keeps the full title as the accessible name when a compact title is shown", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            title: "Claude: fix flaky auth tests",
+            compactTitle: "fix flaky auth tests",
+            onTitleChange: vi.fn(),
+          })}
+        />
+      );
+      const title = screen.getByRole("button", {
+        name: /title: Claude: fix flaky auth tests/,
+      });
+      // Both compositions are rendered; the container query decides which
+      // paints. The name never compacts.
+      expect(title.textContent).toContain("Claude: fix flaky auth tests");
+      expect(title.textContent).toContain("fix flaky auth tests");
     });
   });
 });

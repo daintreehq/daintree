@@ -646,4 +646,13 @@ describe("TabButton", () => {
       expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(-1);
     });
   });
+
+  describe("tabs pattern relationships", () => {
+    it("carries an id and points aria-controls at the region it switches", () => {
+      render(<TabButton {...defaultProps} tabPanelId="panel-body-x" />);
+      const tab = screen.getByRole("tab");
+      expect(tab.id).not.toBe("");
+      expect(tab.getAttribute("aria-controls")).toBe("panel-body-x");
+    });
+  });
 });
