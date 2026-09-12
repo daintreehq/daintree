@@ -66,6 +66,7 @@ const config: KnipConfig = {
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
+    "src/components/DragDrop/__preview__/preview.tsx",
   ],
 
   // Project files Knip considers part of the graph. Includes root-level
