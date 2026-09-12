@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWindowControlsInset, useTitleBarSurface } from "@/components/ui/WindowControlsInset";
-import { restoreFocusTo } from "@/lib/accessibility";
+import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
 import { isLinux } from "@/lib/platform";
 import { BANNER_TINT_ALPHA, type BannerSeverity } from "@shared/config/windowChrome";
 
@@ -268,33 +268,49 @@ export function InlineStatusBanner({
 
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Whether focus is inside the banner, tracked so an unmount that takes the
-  // focused control with it — ×, an action that hides the banner, the
-  // auto-dismiss timer — can hand focus to the app shell instead of leaving
-  // it on <body>. Chromium fires no blur when a focused element is removed,
-  // so a blur with no target is checked a tick later: still mounted means the
-  // user clicked away; gone means the banner left with the focus.
+  // Whether focus is inside the banner's own DOM, tracked so an unmount that
+  // takes the focused control with it — ×, an action that hides the banner,
+  // the auto-dismiss timer — can hand focus somewhere sensible instead of
+  // leaving it on <body>. React focus events also arrive from portalled
+  // children (a Popover opened from trailingSlot), so only DOM containment
+  // counts. Chromium fires no blur when a focused element is removed, so a
+  // blur with no target is checked a tick later: focus back inside means a
+  // move within the banner, still mounted means the user clicked away, gone
+  // means the banner left with the focus.
   const focusWithinRef = useRef(false);
-  const handleFocusCapture = () => {
+  // Where focus should land if the banner disappears: the enclosing dialog,
+  // else the banner's own container (the pane, the sidebar), never the window
+  // chrome behind an open dialog. Captured on focus, since the ref is gone by
+  // the time the unmount cleanup runs.
+  const focusHomeRef = useRef<HTMLElement | null>(null);
+  const handleFocusCapture = (e: React.FocusEvent) => {
+    const root = rootRef.current;
+    if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
     focusWithinRef.current = true;
+    focusHomeRef.current =
+      root.closest<HTMLElement>("[role='dialog'], [role='alertdialog']") ?? root.parentElement;
   };
   const handleBlurCapture = (e: React.FocusEvent) => {
     const root = rootRef.current;
-    if (e.relatedTarget instanceof Node && root?.contains(e.relatedTarget)) return;
+    if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
+    if (e.relatedTarget instanceof Node && root.contains(e.relatedTarget)) return;
     if (e.relatedTarget) {
       focusWithinRef.current = false;
       return;
     }
     queueMicrotask(() => {
-      if (root?.isConnected) focusWithinRef.current = false;
+      if (!root.isConnected) return;
+      focusWithinRef.current = root.contains(document.activeElement);
     });
   };
   useEffect(
     () => () => {
       if (!focusWithinRef.current) return;
+      const home = focusHomeRef.current;
       requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
-        restoreFocusTo();
+        const nearest = home?.isConnected ? getVisibleTabbableElements(home)[0] : undefined;
+        restoreFocusTo(nearest);
       });
     },
     []
@@ -302,12 +318,15 @@ export function InlineStatusBanner({
   // A re-render can also replace the focused control without unmounting the
   // banner — Retry becoming Install once a re-check succeeds — which drops
   // focus on <body> just as an unmount would. Keep it on the banner's next
-  // control instead.
+  // action, and only fall back to the dismiss when there is none.
   useEffect(() => {
     const root = rootRef.current;
     if (!focusWithinRef.current || !root?.isConnected) return;
     if (document.activeElement && document.activeElement !== document.body) return;
-    root.querySelector<HTMLElement>("button:not([disabled]), [href], [tabindex]")?.focus();
+    const controls = root.querySelector<HTMLElement>("[data-banner-controls]");
+    const next =
+      (controls && getVisibleTabbableElements(controls)[0]) ?? getVisibleTabbableElements(root)[0];
+    next?.focus();
   });
 
   const actionList: BannerAction[] = actions ?? (action ? [action] : []);
@@ -408,6 +427,7 @@ export function InlineStatusBanner({
 
       {showControlsRow && (
         <div
+          data-banner-controls
           className={cn(
             "flex items-center shrink-0",
             hasDescription ? "gap-2 ml-6" : "gap-1",
@@ -415,6 +435,10 @@ export function InlineStatusBanner({
             // row, including nested popover triggers.
             isTitleBarSurface && "app-no-drag"
           )}
+          // A busy or disabled Button opts out of hit-testing, so a click on it
+          // lands on this row instead — and would otherwise bubble on to the
+          // pane and activate it. The controls never mean "select the pane".
+          onClick={(e) => e.stopPropagation()}
         >
           {actionList.map((action) => {
             const variant = BUTTON_VARIANT[action.variant ?? "primary"];

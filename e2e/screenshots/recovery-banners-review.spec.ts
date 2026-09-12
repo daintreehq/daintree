@@ -90,7 +90,7 @@ const ATTACH_TIMEOUT_MS = 30_000;
 let server: ViteDevServer | undefined;
 let baseURL = "";
 
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async () => {
   // No test.skip here: `test.info()` is unavailable in a beforeAll hook, so the
   // structured-skip annotation the repo requires cannot be attached. The test
   // body carries the skip; this hook simply does no work when the flag is unset.
@@ -106,15 +106,19 @@ test.beforeAll(async ({ browser }) => {
   const address = server.httpServer?.address();
   if (!address || typeof address === "string") throw new Error("vite gave no TCP address");
   baseURL = `http://127.0.0.1:${address.port}`;
-
-  // Vite discovers dependencies as it transforms, and a discovery mid-run
-  // re-bundles and force-reloads every open page — which under Playwright is a
-  // blank document at the exact moment the shell is asserted. Transform the
-  // entry graph up front, then hold a throwaway page open until the optimizer
-  // has stopped reloading it, so every capture that follows loads a settled
-  // server.
   await server.warmupRequest("/src/components/Recovery/__preview__/preview.tsx");
-  const page = await browser.newPage();
+});
+
+/**
+ * Vite discovers dependencies as it transforms, and a discovery mid-run
+ * re-bundles and force-reloads every open page — which under Playwright is a
+ * blank document at the exact moment the shell is asserted. Hold a throwaway
+ * page open until the optimizer has stopped reloading it, so every capture
+ * that follows loads a settled server. Runs inside the test, after the skip,
+ * so an opted-out run never opens a browser.
+ */
+async function settleDevServer(context: BrowserContext) {
+  const page = await context.newPage();
   let navigations = 0;
   page.on("framenavigated", () => navigations++);
   await page.goto(`${baseURL}/recovery-banners-preview.html?fixture=sheet`);
@@ -125,7 +129,7 @@ test.beforeAll(async ({ browser }) => {
     if (navigations === before && shellCount === 1) break;
   }
   await page.close();
-});
+}
 
 test.afterAll(async () => {
   await server?.close();
@@ -243,6 +247,7 @@ test("global banner family — every slot, every state, every theme", async ({ c
   });
   test.skip(!ENABLED, "set DAINTREE_SHOT_BANNERS=1 to run the capture");
 
+  await settleDevServer(context);
   const written: string[] = [];
 
   for (const theme of THEMES) {

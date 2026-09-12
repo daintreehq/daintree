@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { AlertTriangle, CheckCircle2, FileEdit, Info, XCircle } from "lucide-react";
@@ -661,8 +662,8 @@ describe("InlineStatusBanner family invariants", () => {
       // rule is that no text node carries an inline status colour.
       expect(title.getAttribute("style")).toBeNull();
       expect(description.getAttribute("style")).toBeNull();
-      expect(title.className).toMatch(/\btext-text-primary\b/);
-      expect(description.className).toMatch(/\btext-text-secondary\b/);
+      expect(title.className).not.toMatch(/status-/);
+      expect(description.className).not.toMatch(/status-/);
       const icon = container.querySelector("svg");
       expect(icon?.getAttribute("style")).toContain("--color-status-");
       unmount();
@@ -851,6 +852,151 @@ describe("InlineStatusBanner focus handoff on any removal", () => {
     fireEvent.click(retry);
     const install = screen.getByRole("button", { name: "Install Git" });
     expect(document.activeElement).toBe(install);
+  });
+
+  it("prefers the next action over the title-row dismiss when the focused action is replaced", () => {
+    function Host() {
+      const [phase, setPhase] = useState<"retry" | "install">("retry");
+      return (
+        <InlineStatusBanner
+          title="t"
+          description="d"
+          severity="warning"
+          animated={false}
+          onClose={() => {}}
+          actions={
+            phase === "retry"
+              ? [{ id: "retry", label: "Retry", onClick: () => setPhase("install") }]
+              : [{ id: "install", label: "Install Git", onClick: () => {} }]
+          }
+        />
+      );
+    }
+    render(<Host />);
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Install Git" }));
+  });
+
+  it("stays inside an open dialog when a banner in it is dismissed", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      const root = document.createElement("div");
+      root.id = "root";
+      document.body.appendChild(root);
+      const chrome = document.createElement("button");
+      chrome.textContent = "Toolbar";
+      root.appendChild(chrome);
+      function Host() {
+        const [open, setOpen] = useState(true);
+        return (
+          <div role="dialog">
+            <button type="button">Dialog primary</button>
+            {open && (
+              <InlineStatusBanner
+                title="t"
+                severity="error"
+                animated={false}
+                onClose={() => setOpen(false)}
+              />
+            )}
+          </div>
+        );
+      }
+      const view = render(<Host />, { container: root.appendChild(document.createElement("div")) });
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      dismiss.focus();
+      fireEvent.click(dismiss);
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Dialog primary" }));
+      view.unmount();
+      root.remove();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not arm the handoff from focus inside portalled popover content", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      const root = document.createElement("div");
+      root.id = "root";
+      document.body.appendChild(root);
+      const chrome = document.createElement("button");
+      chrome.textContent = "Toolbar";
+      root.appendChild(chrome);
+      const portalHost = document.createElement("div");
+      document.body.appendChild(portalHost);
+      function Host() {
+        const [open, setOpen] = useState(true);
+        return (
+          <>
+            <button type="button" onClick={() => setOpen(false)}>
+              Outside
+            </button>
+            {open && (
+              <InlineStatusBanner
+                title="t"
+                severity="warning"
+                animated={false}
+                trailingSlot={createPortal(<input aria-label="Portalled field" />, portalHost)}
+              />
+            )}
+          </>
+        );
+      }
+      const view = render(<Host />, { container: root.appendChild(document.createElement("div")) });
+      // React bubbles focus from the portal through the banner; the DOM does not.
+      const field = screen.getByLabelText("Portalled field");
+      field.focus();
+      field.blur();
+      fireEvent.click(screen.getByRole("button", { name: "Outside" }));
+      act(() => {
+        vi.runAllTimers();
+      });
+      // Focus was never in the banner's own DOM, so nothing is handed anywhere.
+      expect(document.activeElement).toBe(document.body);
+      view.unmount();
+      root.remove();
+      portalHost.remove();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a click on a busy control from reaching the surface behind the banner", () => {
+    const onPaneClick = vi.fn();
+    render(
+      <div onClick={onPaneClick}>
+        <InlineStatusBanner
+          title="t"
+          severity="warning"
+          animated={false}
+          actions={[{ id: "retry", label: "Retry", loading: true, onClick: () => {} }]}
+        />
+      </div>
+    );
+    const row = screen.getByRole("button", { name: "Retry" }).parentElement!;
+    // A busy Button opts out of hit-testing, so the pointer lands on the row.
+    fireEvent.click(row);
+    expect(onPaneClick).not.toHaveBeenCalled();
   });
 
   it("leaves focus alone when the banner unmounts without holding it", () => {

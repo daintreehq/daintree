@@ -68,11 +68,14 @@ function WindowControlsDecoration() {
       <div
         data-harness-decoration
         aria-hidden="true"
-        className="pointer-events-none absolute left-[13px] top-[18px] z-10 flex gap-2"
+        className="pointer-events-none absolute z-10 flex gap-2"
+        // Inline, not utilities: Tailwind scans this directory, and preview-only
+        // arbitrary values would otherwise land in the app's stylesheet.
+        style={{ left: 13, top: 18 }}
       >
-        <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-        <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-        <span className="h-3 w-3 rounded-full bg-[#28c840]" />
+        {["#ff5f57", "#febc2e", "#28c840"].map((color) => (
+          <span key={color} className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
+        ))}
       </div>
     );
   }
@@ -81,7 +84,8 @@ function WindowControlsDecoration() {
       <div
         data-harness-decoration
         aria-hidden="true"
-        className="pointer-events-none absolute right-0 top-0 z-10 flex h-12 w-[138px] items-center justify-around text-text-secondary"
+        className="pointer-events-none absolute right-0 top-0 z-10 flex h-12 items-center justify-around text-text-secondary"
+        style={{ width: 138 }}
       >
         <span>—</span>
         <span>▢</span>
