@@ -1049,12 +1049,21 @@ export function AppLayout({
       {themeBrowserOpen &&
         createPortal(
           <>
-            {/* Opacity-only scrim: a hover-animated backdrop-filter here forced
-                a full-viewport blur re-rasterization on every underlying frame
-                exactly while the live theme preview is repainting beneath it. */}
+            {/* Interaction shield. At rest it is tint-only so the live theme
+                preview stays crisp to judge. Parking the pointer on it blurs
+                the workspace, the cue that the app is not interactive while a
+                theme is being chosen. The blur is hover-only and SNAPS: the
+                transition list is deliberately colours-only, because the
+                animated backdrop-filter this replaces re-rasterized the whole
+                viewport every frame while the preview repainted beneath it
+                (8fb4b3e672). backdrop-filter still samples the live backdrop,
+                so this is not free while terminals repaint — performance mode
+                nulls every backdrop-blur app-wide for users who need that.
+                Clicking the shield cancels. */}
             <div
               aria-hidden="true"
-              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-colors duration-150 hover:bg-scrim-soft/45"
+              onClick={() => useThemeBrowserStore.getState().close()}
+              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-colors duration-150 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px]"
             />
             <ErrorBoundary
               variant="section"

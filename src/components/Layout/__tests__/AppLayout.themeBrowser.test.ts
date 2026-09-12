@@ -37,6 +37,20 @@ describe("AppLayout theme browser mount gate — issue #5738", () => {
 });
 
 describe("AppLayout theme browser overlay structure — issue #5791", () => {
+  /**
+   * The theme-browser shield element, from its opening `<div` to the `/>` that
+   * closes it. Assertions about the shield must read only this — the portal
+   * block around it contains a close() call and several other class strings.
+   */
+  function extractShield(src: string): string {
+    const start = src.indexOf('className="fixed inset-0 z-30 bg-scrim-soft');
+    expect(start, "theme-browser shield not found in AppLayout").toBeGreaterThan(-1);
+    const open = src.lastIndexOf("<div", start);
+    const end = src.indexOf("/>", start);
+    expect(end, "theme-browser shield is not a self-closing element").toBeGreaterThan(open);
+    return src.slice(open, end + 2);
+  }
+
   let source: string;
 
   beforeEach(async () => {
@@ -53,11 +67,38 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
   it("renders scrim as a sibling of the panel, not an ancestor", () => {
     // Bug 2: backdrop-filter on an ancestor creates a containing block for
     // position:fixed children (lesson #2574). The scrim must be a flat sibling
-    // of the panel. The hover cue is opacity-only (no backdrop-filter at all):
-    // an animated full-viewport blur re-rasterized on every frame of the live
-    // theme preview underneath.
+    // of the panel.
     expect(source).toMatch(/className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*"/);
-    expect(source).not.toMatch(/hover:backdrop-blur/);
+  });
+
+  it("blurs the workspace only on hover, and never animates the blur", () => {
+    // The rule is about HOW the blur is applied, not whether one exists. At
+    // rest the shield must be tint-only so the live theme preview stays sharp
+    // enough to judge. The blur may only appear under the pointer, and it must
+    // snap: an animated full-viewport backdrop-filter re-rasterized every
+    // frame while the preview repainted beneath it, which is why the original
+    // hover blur was removed (8fb4b3e672). Colours may transition; the filter
+    // may not.
+    const shield = extractShield(source);
+    expect(shield).toMatch(/hover:backdrop-blur/);
+    expect(shield).not.toMatch(/(?<!hover:)backdrop-blur/);
+    expect(shield).not.toMatch(
+      /transition-\[[^\]]*backdrop|transition-all|(?<![-\w])transition(?![-\w])/
+    );
+  });
+
+  it("cancels the preview when the shield is clicked", () => {
+    // Click-away must dismiss: the panel is modal, the app behind it is inert,
+    // and a click that lands on the shield with no effect reads as a frozen
+    // app. Closing unmounts ThemeBrowser, whose cleanup restores the committed
+    // theme — so dismissal and preview-revert are the same path.
+    //
+    // Scoped to the shield ELEMENT, not to a window of characters around it: a
+    // neighbourhood match here was satisfied by the ErrorBoundary's own close()
+    // call a few lines below and kept passing with the shield's handler deleted.
+    const shield = extractShield(source);
+    expect(shield).toMatch(/onClick=\{/);
+    expect(shield).toMatch(/close\(\)/);
   });
 
   it("anchors the panel with fixed positioning below the toolbar", () => {
