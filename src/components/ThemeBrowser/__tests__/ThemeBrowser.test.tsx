@@ -188,7 +188,7 @@ describe("ThemeBrowser", () => {
     fireEvent.click(findRowByName(target.name));
     expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
 
-    fireEvent.click(screen.getByRole("radio", { name: "Light" }));
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
 
     expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
   });
@@ -698,11 +698,20 @@ describe("ThemeBrowser navigation contract", () => {
 
   it("resumes arrow navigation from a row chosen with the pointer", () => {
     render(<Harness />);
-    const third = darkSchemeAt(2)!;
-    fireEvent.click(findRowByName(third.name));
-
     const input = screen.getByLabelText("Filter themes");
     act(() => input.focus());
+
+    const third = darkSchemeAt(2)!;
+    const row = findRowByName(third.name);
+    // Rows are not focusable, so a click must not be allowed to take focus off
+    // the field. Drive the real sequence — pointerdown then click — rather than
+    // restoring focus by hand, which is what previously hid this regression.
+    fireEvent.pointerDown(row);
+    fireEvent.click(row);
+
+    // The rule: clicking never costs the user their keyboard.
+    expect(document.activeElement).toBe(input);
+
     fireEvent.keyDown(input, { key: "ArrowDown" });
 
     // The rule: one cursor, shared by both input devices. After clicking row N,

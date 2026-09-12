@@ -14,6 +14,7 @@ import {
   resolveAppTheme,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Button } from "@/components/ui/button";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
@@ -85,14 +86,16 @@ function ThemeRow({
       // this one, but you are currently trying that one".
       aria-selected={isActive}
       aria-current={isCommitted ? "true" : undefined}
+      // Keep DOM focus in the filter field: these rows are not focusable, so a
+      // plain click would drop focus on document.body and the next arrow key
+      // would go nowhere.
+      onPointerDown={(e) => e.preventDefault()}
       onClick={() => onSelect(scheme.id)}
       className={cn(
+        PALETTE_ROW_CLASS,
         "w-full flex items-center gap-2.5 px-2.5 py-2 text-left cursor-pointer",
-        "transition-colors duration-150 ease-out",
-        isActive ? "bg-overlay-selected" : "hover:bg-surface-hover",
-        // The preview marker is a neutral inset rule, not an accent fill: the
-        // accent budget for this dialog is spent on the committed check.
-        isActive && "shadow-[inset_2px_0_0_0_var(--color-text-primary)]"
+        "duration-150 ease-out",
+        !isActive && "hover:bg-surface-hover"
       )}
     >
       {scheme.heroImage && !error ? (
@@ -394,14 +397,6 @@ export function ThemeBrowser() {
 
   const handleListKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
-      // Escape is a two-stage dismiss for the whole dialog, not just the field:
-      // clear the query first, cancel only once there is nothing left to clear.
-      if (e.key === "Escape" && query !== "") {
-        e.stopPropagation();
-        e.preventDefault();
-        setQuery("");
-        return;
-      }
       if (filteredThemes.length === 0) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -452,13 +447,12 @@ export function ThemeBrowser() {
         void handleCommit();
       }
     },
-    [filteredThemes, revealRow, handleCommit, handlePreview, keyboardIndex, activeSchemeId, query]
+    [filteredThemes, revealRow, handleCommit, handlePreview, keyboardIndex, activeSchemeId]
   );
 
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (
-        e.key === "Escape" ||
         e.key === "ArrowDown" ||
         e.key === "ArrowUp" ||
         e.key === "PageDown" ||
@@ -504,6 +498,13 @@ export function ThemeBrowser() {
       aria-modal="true"
       aria-label="Theme browser"
       aria-describedby={PREVIEW_HINT_ID}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && query !== "") {
+          e.stopPropagation();
+          e.preventDefault();
+          setQuery("");
+        }
+      }}
     >
       {/* Sticky hero */}
       <div className="relative h-[200px] shrink-0 overflow-hidden">
@@ -529,7 +530,7 @@ export function ThemeBrowser() {
           type="button"
           onClick={handleCancel}
           aria-label="Close theme browser"
-          className="absolute top-2 right-2 p-1 rounded-full bg-scrim-strong text-white hover:bg-overlay-strong transition-colors duration-150 ease-out"
+          className="absolute top-2 right-2 p-1 rounded-full bg-scrim-medium text-white hover:bg-scrim-strong transition-colors duration-150 ease-out"
         >
           <X className="w-4 h-4" />
         </button>
@@ -569,14 +570,12 @@ export function ThemeBrowser() {
           />
         </div>
         <div
-          role="radiogroup"
           aria-label="Appearance mode"
           className="flex rounded-[var(--radius-md)] border border-border-default overflow-hidden shrink-0"
         >
           <button
             type="button"
-            role="radio"
-            aria-checked={typeFilter === "dark"}
+            aria-pressed={typeFilter === "dark"}
             onClick={() => {
               if (typeFilter === "dark") return;
               // Switching filter away from the previewed type hides the
@@ -597,8 +596,7 @@ export function ThemeBrowser() {
           </button>
           <button
             type="button"
-            role="radio"
-            aria-checked={typeFilter === "light"}
+            aria-pressed={typeFilter === "light"}
             onClick={() => {
               if (typeFilter === "light") return;
               revertPreview();
@@ -627,6 +625,7 @@ export function ThemeBrowser() {
         id={LISTBOX_ID}
         role="listbox"
         aria-label="Theme list"
+        tabIndex={-1}
         onKeyDown={handleListKeyDown}
         className="shrink min-h-0 overflow-y-auto"
       >
@@ -663,7 +662,7 @@ export function ThemeBrowser() {
             interactive. Saying so is what the scrim alone cannot do — and it
             says it without tinting or blurring the very thing being judged. */}
         <p id={PREVIEW_HINT_ID} className="flex-1 min-w-0 text-2xs text-text-secondary">
-          Live preview — the app behind is paused while you choose
+          Live preview — pick a theme, or cancel to go back
         </p>
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel

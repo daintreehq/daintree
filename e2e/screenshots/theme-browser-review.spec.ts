@@ -179,7 +179,6 @@ test.describe("theme browser shots", () => {
         await dismissBlockingPalette(page);
 
         const list = page.locator(SEL.settings.themeListbox);
-        const rows = list.locator('[role="option"]');
         const search = page.locator('[aria-label="Filter themes"]');
 
         // 10. At rest, Dark filter — the default landing state.
@@ -211,16 +210,23 @@ test.describe("theme browser shots", () => {
         //     state that shows whether "what I run" and "what I'm trying" are
         //     distinguishable — capture the whole window, because the live
         //     preview repaints the app behind the panel too.
-        const committed = list.locator('[role="option"][aria-selected="true"]');
-        const committedId = await committed
-          .first()
-          .getAttribute("id")
-          .catch(() => null);
-        const otherRow = committedId
-          ? rows.filter({ hasNot: page.locator(`#${CSS.escape(committedId)}`) })
-          : rows;
-        await otherRow.nth(otherRow === rows ? 1 : 0).click();
+        const notCommitted = list.locator('[role="option"]:not([aria-current="true"])');
+        await notCommitted.first().click();
         await settle(page, 700);
+        // The point of this frame is committed != previewed. If they coincide
+        // the shot proves nothing, so fail rather than capture a useless state.
+        const committedName = await list
+          .locator('[role="option"][aria-current="true"]')
+          .first()
+          .innerText();
+        const previewedName = await list
+          .locator('[role="option"][aria-selected="true"]')
+          .first()
+          .innerText();
+        expect(
+          previewedName,
+          "preview-active shot needs a preview distinct from the committed theme"
+        ).not.toBe(committedName);
         await snap(page, outDir, "14-preview-active");
 
         // 15. Keyboard focus ring on an arrowed row.

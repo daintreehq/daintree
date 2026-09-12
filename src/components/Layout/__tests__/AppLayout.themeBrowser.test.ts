@@ -37,6 +37,20 @@ describe("AppLayout theme browser mount gate — issue #5738", () => {
 });
 
 describe("AppLayout theme browser overlay structure — issue #5791", () => {
+  /**
+   * The theme-browser shield element, from its opening `<div` to the `/>` that
+   * closes it. Assertions about the shield must read only this — the portal
+   * block around it contains a close() call and several other class strings.
+   */
+  function extractShield(src: string): string {
+    const start = src.indexOf('className="fixed inset-0 z-30 bg-scrim-soft');
+    expect(start, "theme-browser shield not found in AppLayout").toBeGreaterThan(-1);
+    const open = src.lastIndexOf("<div", start);
+    const end = src.indexOf("/>", start);
+    expect(end, "theme-browser shield is not a self-closing element").toBeGreaterThan(open);
+    return src.slice(open, end + 2);
+  }
+
   let source: string;
 
   beforeEach(async () => {
@@ -67,7 +81,7 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     // looks like. It also blurs the exact thing the user opened the panel to
     // judge. The non-interactive cue is carried by the dialog's own copy and by
     // click-away, both asserted below.
-    const shield = source.match(/className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*"/)?.[0] ?? "";
+    const shield = extractShield(source);
     expect(shield).not.toMatch(/backdrop-blur|backdrop-filter|backdrop-saturate/);
     expect(shield).not.toMatch(/transition-\[?backdrop/);
   });
@@ -77,9 +91,13 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     // and a click that lands on the shield with no effect reads as a frozen
     // app. Closing unmounts ThemeBrowser, whose cleanup restores the committed
     // theme — so dismissal and preview-revert are the same path.
-    expect(source).toMatch(
-      /className="fixed inset-0 z-30 bg-scrim-soft[\s\S]{0,400}?useThemeBrowserStore\.getState\(\)\.close\(\)|useThemeBrowserStore\.getState\(\)\.close\(\)[\s\S]{0,400}?className="fixed inset-0 z-30 bg-scrim-soft/
-    );
+    //
+    // Scoped to the shield ELEMENT, not to a window of characters around it: a
+    // neighbourhood match here was satisfied by the ErrorBoundary's own close()
+    // call a few lines below and kept passing with the shield's handler deleted.
+    const shield = extractShield(source);
+    expect(shield).toMatch(/onClick=\{/);
+    expect(shield).toMatch(/close\(\)/);
   });
 
   it("anchors the panel with fixed positioning below the toolbar", () => {
