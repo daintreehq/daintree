@@ -331,7 +331,21 @@ export function ThemeBrowser() {
     close();
   }, [close, revertPreview]);
 
-  useEscapeStack(true, handleCancel);
+  // Escape is two-stage for the whole dialog: undo the filter first, cancel
+  // only once there is nothing left to undo. It lives in the escape-stack
+  // callback rather than on any element, because the global dispatcher and
+  // keybinding layers handle Escape at the window before a React handler on
+  // the dialog ever sees it — a dialog-level onKeyDown was silently bypassed
+  // whenever focus sat on the mode toggle or the footer buttons.
+  const handleEscape = useCallback(() => {
+    if (query !== "") {
+      setQuery("");
+      return;
+    }
+    handleCancel();
+  }, [query, handleCancel]);
+
+  useEscapeStack(true, handleEscape);
 
   // On unmount (browser closed via either path), guarantee any lingering
   // preview is reverted and the DOM reflects the committed scheme. This is
@@ -498,13 +512,6 @@ export function ThemeBrowser() {
       aria-modal="true"
       aria-label="Theme browser"
       aria-describedby={PREVIEW_HINT_ID}
-      onKeyDown={(e) => {
-        if (e.key === "Escape" && query !== "") {
-          e.stopPropagation();
-          e.preventDefault();
-          setQuery("");
-        }
-      }}
     >
       {/* Sticky hero */}
       <div className="relative h-[200px] shrink-0 overflow-hidden">
