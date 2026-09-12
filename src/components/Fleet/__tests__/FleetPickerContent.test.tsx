@@ -725,6 +725,33 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect((document.activeElement as HTMLElement)?.getAttribute("role")).toBe("treeitem");
     });
 
+    it("ArrowDown in the search input lands on the first group heading", async () => {
+      // The hand-off enters at the same node the tree container's own ArrowDown
+      // does. Skipping straight to the first row would strand the heading above
+      // the only keyboard route into the list.
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-2" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main"), makeWorktreeSnap("wt-2", "feature")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      search.focus();
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "ArrowDown" });
+      });
+      await act(async () => {});
+
+      const active = document.activeElement as HTMLElement | null;
+      expect(active?.getAttribute("role")).toBe("treeitem");
+      expect(active?.getAttribute("data-group-header")).toBe("wt-1");
+    });
+
     it("Enter on the filtered-empty recovery button clears instead of committing", async () => {
       // That button lives inside the tree's key-handler container. Before the
       // guard, its Enter was swallowed and turned into a commit — so the user's

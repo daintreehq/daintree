@@ -75,7 +75,7 @@ export function FleetPickerContent({
     handleToggleId,
     handleListKeyDown,
     handleConfirm,
-    focusFirstRow,
+    focusFirstNode,
     setSelectedIds,
     clearSearch,
     registerGroup,
@@ -105,7 +105,7 @@ export function FleetPickerContent({
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        focusFirstRow();
+        focusFirstNode();
         return;
       }
       if (e.key === "Enter") {
@@ -113,7 +113,7 @@ export function FleetPickerContent({
         handleConfirm();
       }
     },
-    [focusFirstRow, handleConfirm]
+    [focusFirstNode, handleConfirm]
   );
 
   const handleGroupHeaderToggle = useCallback(
@@ -162,8 +162,10 @@ export function FleetPickerContent({
         // and this one held interactive group headers with checkboxes inside
         // them. APG's checkbox-treeview is the pattern this surface actually
         // implements — two levels, every node checkable.
+        // No `aria-multiselectable`: that attribute describes `aria-selected`
+        // multi-selection, and this tree checks nodes rather than selecting
+        // them.
         role="tree"
-        aria-multiselectable="true"
         aria-label="Terminals"
         className="flex-1 min-h-0 overflow-y-auto px-2 py-2 outline-hidden"
         data-testid={`${testIdPrefix}-list`}
@@ -385,6 +387,8 @@ function WorktreeGroupSection({
     return dupes;
   }, [group.terminals]);
 
+  const childListId = `${testIdPrefix}-group-${group.worktreeId}-children`;
+
   const selectedInGroup = useMemo(() => {
     let n = 0;
     for (const id of groupIds) if (selectedIds.has(id)) n++;
@@ -392,7 +396,7 @@ function WorktreeGroupSection({
   }, [groupIds, selectedIds]);
 
   return (
-    <section className="mb-1" role="group" aria-label={group.worktreeName}>
+    <section className="mb-1">
       {!hideHeader && (
         // ONE focusable control, not two. This was a Radix checkbox followed by
         // a separate button around the name — both tabbable, both firing the
@@ -414,6 +418,12 @@ function WorktreeGroupSection({
             tabIndex={rovingNavKey === `g:${group.worktreeId}` ? 0 : -1}
             role="treeitem"
             aria-level={1}
+            // The group lives beside this node, not inside it — a button may
+            // not contain a list — so the parent/child edge has to be drawn
+            // explicitly. No `aria-expanded`: the children are always shown and
+            // there is nothing to collapse, and claiming otherwise would
+            // announce a disclosure control that does not exist.
+            aria-owns={childListId}
             aria-checked={groupState === "indeterminate" ? "mixed" : groupState}
             aria-label={`Select all ${group.terminals.length} terminals in ${group.worktreeName}`}
             onClick={() => onToggleGroup(group)}
@@ -446,7 +456,15 @@ function WorktreeGroupSection({
           </button>
         </header>
       )}
-      <ul className="flex flex-col" role="presentation">
+      {/* A tree's `group` holds a treeitem's CHILDREN only — the heading that
+          owns them stays outside it. With one worktree the headings are hidden
+          and the rows are the top level, so there is no group to speak of. */}
+      <ul
+        className="flex flex-col"
+        id={hideHeader ? undefined : childListId}
+        role={hideHeader ? "presentation" : "group"}
+        aria-label={hideHeader ? undefined : group.worktreeName}
+      >
         {group.terminals.map((t) => (
           <TerminalRow
             key={t.id}
@@ -499,7 +517,7 @@ function TerminalRow({
   const handleCheckedChange = useCallback(() => onToggleId(terminal.id), [onToggleId, terminal.id]);
   const rowRefCallback = useMemo(() => registerRow(terminal.id), [registerRow, terminal.id]);
   return (
-    <li className="flex items-stretch">
+    <li className="flex items-stretch" role="none">
       <label
         ref={rowRefCallback}
         tabIndex={isRovingStop ? 0 : -1}
@@ -581,6 +599,11 @@ function SnippetLine({
   );
 }
 
+/** Last six characters of the pane id — enough to tell two same-named panes apart. */
+function shortId(id: string): string {
+  return id.length <= 6 ? id : id.slice(-6);
+}
+
 /**
  * The same `Badge` the arming ribbon uses, with the same waiting tone.
  *
@@ -590,11 +613,6 @@ function SnippetLine({
  * be answered by looking. `renderPaneStateBadge` already had the answer; the
  * picker just wasn't using it.
  */
-/** Last six characters of the pane id — enough to tell two same-named panes apart. */
-function shortId(id: string): string {
-  return id.length <= 6 ? id : id.slice(-6);
-}
-
 function renderStateBadge(agentState: AgentState | undefined): ReactElement | null {
   if (agentState !== "waiting" && agentState !== "working") return null;
   const waiting = agentState === "waiting";

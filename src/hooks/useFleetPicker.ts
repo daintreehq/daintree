@@ -123,7 +123,7 @@ export interface UseFleetPickerResult {
   handleConfirm: () => void;
   clearSearch: () => void;
   /** Move focus into the list. The search input calls this on ArrowDown. */
-  focusFirstRow: () => void;
+  focusFirstNode: () => void;
   /**
    * Stable callback-ref factory. Consumers attach `registerRow(id)` to each
    * row's `ref` so the hook's keyboard handler can move DOM focus to match
@@ -541,30 +541,6 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   );
 
   /**
-   * Move logical *and* DOM focus to one visible row by index, clamped. The two
-   * have to move together: `tabIndex={isFocused ? 0 : -1}` shifts the keyboard
-   * target, so leaving DOM focus behind strands the ring on the previous row.
-   *
-   * Exported as `focusFirstRow` so the search input can hand off on ArrowDown —
-   * the dialog autofocuses that input, and without a hand-off the footer's own
-   * "↑↓ Move" hint does nothing at all from the state the user actually starts in.
-   */
-  const focusRow = useCallback(
-    (index: number) => {
-      if (flatVisibleIds.length === 0) return;
-      const clamped = Math.max(0, Math.min(index, flatVisibleIds.length - 1));
-      const id = flatVisibleIds[clamped];
-      if (!id) return;
-      setFocusedId(id);
-      setFocusedNavKey(`t:${id}`);
-      rowRefs.current.get(id)?.focus();
-    },
-    [flatVisibleIds]
-  );
-
-  const focusFirstRow = useCallback(() => focusRow(0), [focusRow]);
-
-  /**
    * Headers and rows in one visual order. Arrowing through the list should walk
    * what the eye walks — a keyboard user passing a worktree heading can toggle
    * the whole worktree from there, which is the entire point of having headings
@@ -605,6 +581,16 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     },
     [navKeys]
   );
+
+  /**
+   * The search input's ArrowDown hand-off. It enters at the same node the tree
+   * container's own ArrowDown does — the first heading when there is more than
+   * one worktree — so Up and Down walk one unbroken sequence and the first
+   * heading is not stranded above the only way into the list. The dialog
+   * autofocuses the input, so without this the footer's "↑↓ Move" hint does
+   * nothing at all from the state the user actually starts in.
+   */
+  const focusFirstNode = useCallback(() => focusNavIndex(0), [focusNavIndex]);
 
   const handleConfirm = useCallback(() => {
     if (confirmedIds.length === 0) return;
@@ -793,7 +779,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     handleListKeyDown,
     handleConfirm,
     clearSearch,
-    focusFirstRow,
+    focusFirstNode,
     registerRow,
     registerGroup,
     rovingNavKey,
