@@ -65,7 +65,9 @@ export function PlaceholderContent({ kind, agentId, compact = false }: Placehold
   }
 
   return (
-    <div className="flex w-full flex-1 flex-col" style={tintVars(color)}>
+    // Compact art is content-sized so the dock slot can centre it; full art
+    // grows to fill the ghost or grid slot body.
+    <div className={cn("flex w-full flex-col", !compact && "flex-1")} style={tintVars(color)}>
       {body}
     </div>
   );
@@ -110,7 +112,7 @@ function TerminalPlaceholder({ compact }: PlaceholderProps) {
 /** Browser: address bar over a page with a row of controls and a content line. */
 function BrowserPlaceholder({ compact }: PlaceholderProps) {
   return (
-    <div className={cn("flex w-full flex-1 flex-col", compact ? "gap-1" : "gap-1.5")}>
+    <div className={cn("flex w-full flex-col", compact ? "gap-1" : "flex-1 gap-1.5")}>
       <div className={cn(INK, "w-[85%]", compact ? "h-1" : "h-1.5")} />
       {/* Page body — omitted in compact so the dock ghost stays within --dock-item-height */}
       {!compact && (
@@ -130,7 +132,7 @@ function BrowserPlaceholder({ compact }: PlaceholderProps) {
 /** Dev preview: address bar with a live dot, then a code column beside a preview. */
 function DevPreviewPlaceholder({ compact }: PlaceholderProps) {
   return (
-    <div className={cn("flex w-full flex-1 flex-col", compact ? "gap-1" : "gap-1.5")}>
+    <div className={cn("flex w-full flex-col", compact ? "gap-1" : "flex-1 gap-1.5")}>
       <div className={cn("flex items-center", compact ? "gap-1" : "gap-1.5")}>
         <div className={cn(INK, "flex-1", compact ? "h-1" : "h-1.5")} />
         <div

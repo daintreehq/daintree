@@ -166,6 +166,22 @@ async function glide(page: Page, to: { x: number; y: number }): Promise<void> {
   await page.waitForTimeout(300);
 }
 
+/**
+ * A state indicator that compiled to nothing still exists in the DOM, so a
+ * structural check would pass while the frame shows no line at all. Read the
+ * painted colour and refuse anything transparent.
+ */
+async function expectPainted(target: Locator, property: "background-color" | "border-top-color") {
+  const value = await target.evaluate(
+    (el, prop) => getComputedStyle(el).getPropertyValue(prop),
+    property
+  );
+  const alpha = value.match(/rgba?\([^)]*,\s*([\d.]+)\)$/)?.[1];
+  const transparent = value === "transparent" || value === "rgba(0, 0, 0, 0)" || alpha === "0";
+  if (transparent)
+    throw new Error(`${property} painted transparent (${value}) — refusing to write`);
+}
+
 async function expectActiveDrag(shell: Locator): Promise<void> {
   await expect(
     shell.locator("[data-sandbox-active]"),
@@ -202,6 +218,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
       const shell = await open(page, { theme, scene: "grid", kind });
       const target = shell.locator('[data-shot="grid-placeholder"]');
       await expect(target.locator(":scope > *"), `grid/${kind} rendered nothing`).toHaveCount(1);
+      await expectPainted(target.locator(":scope > *"), "border-top-color");
       written.push(await snap(shell, `grid-${kind}-${theme}.png`));
     }
 
@@ -210,6 +227,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
       const shell = await open(page, { theme, scene: "dock", kind, over: "1" });
       const target = shell.locator('[data-shot="dock-placeholder"]');
       await expect(target.locator(":scope > *"), `dock/${kind} rendered nothing`).toHaveCount(1);
+      await expectPainted(target.locator(":scope > *"), "border-top-color");
       written.push(await snap(shell, `dock-${kind}-${theme}.png`));
     }
 
@@ -245,6 +263,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
         await expectActiveDrag(shell);
         const indicator = shell.locator("[data-dock-drop-indicator]");
         await expect(indicator, "no dock insertion line rendered mid-drag").toHaveCount(1);
+        await expectPainted(indicator, "background-color");
         const direction = (await indicator.getAttribute("data-dock-drop-indicator")) ?? "unknown";
         if (!seen.has(direction)) {
           seen.add(direction);
@@ -278,6 +297,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
         await expectActiveDrag(shell);
         const indicator = shell.locator("[data-worktree-drop-indicator]");
         await expect(indicator, "no worktree insertion line rendered mid-drag").toHaveCount(1);
+        await expectPainted(indicator, "background-color");
         const direction =
           (await indicator.getAttribute("data-worktree-drop-indicator")) ?? "unknown";
         if (!seen.has(direction)) {
