@@ -81,6 +81,9 @@ import {
   setStopDiskSpaceMonitor,
   getMainProcessWatchdogClientRef,
 } from "./window/windowServices.js";
+// After windowServices on purpose: its IPC handlers already evaluate this module,
+// so importing it here adds no boot work and moves nothing in the init order.
+import { assistantHostService } from "./services/assistant-host/AssistantHostService.js";
 import { getMcpServerServiceRef, getResourceProfileService } from "./window/serviceRefs.js";
 import {
   setupPowerMonitor,
@@ -418,6 +421,11 @@ if (!gotTheLock) {
       // async, and a shard that times out comes back as an empty list, which
       // would read as "the assistant is gone" and unprotect a live one.
       isTerminalLive: (terminalId) => getPtyClient()?.hasTerminal(terminalId) === true,
+      // The native engine's half (#12364). It never binds a PTY, so the pair above
+      // cannot see it, and `onViewEvicted` below stops it outright. The service
+      // answers from the same rule its teardown applies, keyed by the view alone.
+      wouldEndNativeAssistant: (webContentsId) =>
+        assistantHostService.wouldEndLiveEngine(webContentsId),
       // Keeps a workspace an MCP session is bound to out of the freeze sweep,
       // and out of eviction entirely while a dispatch is in flight (#11790).
       // A bound session drives a *background* workspace by design, and a frozen
@@ -453,6 +461,17 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn("[main] revokeByWebContentsId failed during eviction:", err);
           });
+        // And stop the native assistant engine the view owned. Same reasoning as the
+        // bearer revoke above, but a heavier consequence: the engine is a real child
+        // process holding its project's state lease, and the renderer that would have
+        // stopped it no longer exists to be asked. It was reaped only lazily, on the
+        // next event it tried to deliver into the dead view — so a quiet engine was
+        // never reaped at all.
+        import("./services/assistant-host/AssistantHostService.js")
+          .then(({ assistantHostService }) => assistantHostService.stopByWebContents(wcId))
+          .catch((err) => {
+            console.warn("[main] assistant host stop failed during eviction:", err);
+          });
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view becomes
@@ -475,6 +494,17 @@ if (!gotTheLock) {
         }
       },
       onViewCrashed: (wc) => {
+        // The engine goes FIRST, before the window guard below. Everything after that
+        // guard is about restoring a live window, and correctly gives up when there is
+        // no window left to restore — but a crashed renderer's engine is a child process
+        // that must die either way, and a crash taking its window with it is exactly the
+        // case where nothing else is coming to reap it.
+        const crashedWcId = wc.id;
+        import("./services/assistant-host/AssistantHostService.js")
+          .then(({ assistantHostService }) => assistantHostService.stopByWebContents(crashedWcId))
+          .catch((err) => {
+            console.warn("[main] assistant host stop failed during crash:", err);
+          });
         // Tear down the per-window PTY MessagePort on renderer crash so the
         // pty-host's PortQueueManager can drop stale queue accounting before
         // reload re-issues a fresh port. Without this, a stale port keeps the
@@ -488,7 +518,6 @@ if (!gotTheLock) {
         // would silently no-op against the dead id. Mirrors the synchronous
         // eviction-hook revoke (lesson #5009); `wc.id` is the dead id the
         // session pinned at provision time.
-        const crashedWcId = wc.id;
         import("./services/HelpSessionService.js")
           .then(({ helpSessionService }) => helpSessionService.revokeByWebContentsId(crashedWcId))
           .catch((err) => {

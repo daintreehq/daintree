@@ -81,7 +81,11 @@ const {
     width: 380,
     terminalId: null as string | null,
     agentId: null as string | null,
-    preferredAgentId: null as string | null,
+    // "claude" rather than null: these suites exercise the PTY LAUNCH path, and the
+    // Daintree Assistant is now the default surface when no agent is chosen — a null
+    // preference renders the native panel and never launches a terminal at all. Naming
+    // a terminal-backed agent keeps each test about the thing it is testing.
+    preferredAgentId: "claude" as string | null,
     // Consent granted by default (#10699) so the existing auto-launch coverage
     // exercises the downstream launch wiring; the consent gate itself is
     // unit-tested in HelpSessionController.test.ts.
@@ -438,7 +442,9 @@ function resetState() {
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
-  helpPanelState.preferredAgentId = null;
+  // See the note on the initial state: null now means the NATIVE panel, so the
+  // PTY-launch suites reset to a terminal-backed agent.
+  helpPanelState.preferredAgentId = "claude";
   helpPanelState.autoLaunchEnabled = true;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
@@ -563,6 +569,19 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
+        // The native assistant panel mounts whenever no terminal-backed agent is
+        // chosen, so the HelpPanel harness has to model its IPC namespace. Without
+        // it the panel throws on subscribe and every test in the file fails for a
+        // reason that has nothing to do with what it asserts.
+        assistantHost: {
+          start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
+          send: vi.fn().mockResolvedValue({ delivered: true }),
+          stop: vi.fn().mockResolvedValue({ stopped: true }),
+          onEvent: vi.fn(() => () => {}),
+          onPeerPrompt: () => () => {},
+          onSequenceGap: vi.fn(() => () => {}),
+          onExit: vi.fn(() => () => {}),
+        },
         help: {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
@@ -624,8 +643,13 @@ beforeEach(() => {
 });
 
 describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () => {
-  it("renders the value-prop sentence and the two navigation links when no preferred agent and multiple supported agents installed", async () => {
-    helpPanelState.preferredAgentId = null;
+  it("renders the value-prop sentence and the two navigation links on the idle empty state", async () => {
+    // An EXPLICIT terminal-agent preference, with consent withheld. A null preference
+    // now renders the native Daintree Assistant instead of this empty state, so the
+    // empty-state hero is only reachable once the user has chosen a terminal agent;
+    // consent off is what keeps it idle rather than auto-launching straight past it.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
@@ -692,7 +716,21 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
-  it("renders the configure-in-settings fallback and no Start CTA when no single launchable agent (#10699)", () => {
+  // The counterpart to the #10699 fallback above, and the reason that one now needs a
+  // live `agentId` to reach. On a cold panel — nothing launched, nothing preferred —
+  // the same "several installed, none chosen" ambiguity used to produce a settings
+  // dead-end. It resolves to the native assistant instead, which needs no CLI at all.
+  // Asserted as a pair so the boundary between the two is pinned from both sides: the
+  // regression this names is the settings dead-end reappearing for someone the
+  // assistant would have served.
+  // REMOVED: "renders the configure-in-settings fallback ... when no single launchable
+  // agent (#10699)". Reaching that fallback needs `launchableAgentId` to be null while
+  // the panel is still on the terminal surface, which needs `agentId` set with no
+  // preference — a state `setTerminal`/`clearTerminal` cannot leave behind. The
+  // fallback stays in the code as a graceful degradation; what is gone is a test that
+  // could only reach it by hand-building a store the app never writes.
+
+  it("offers the native assistant, not a settings dead-end, when no agent is preferred", () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
@@ -701,13 +739,23 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     render(<HelpPanel width={380} />);
 
     expect(
-      screen.getByText(/Configure an assistant agent in settings to get started/i)
-    ).toBeTruthy();
+      screen.queryByText(/Configure an assistant agent in settings to get started/i)
+    ).toBeNull();
     expect(screen.queryByTestId("help-start-assistant")).toBeNull();
+    // The native panel is mounted. Asserted on the panel's own root rather than on the
+    // composer's placeholder: the composer is now the terminal's own HybridInputBar, so
+    // its wording belongs to that component and would drag this test along every time
+    // it changed. What this case is actually about is which SURFACE appears.
+    expect(document.querySelector(".assistant-panel")).toBeTruthy();
   });
 
   it("dispatches app.settings.openTab with tab='assistant' when the empty-state settings link is clicked", async () => {
-    helpPanelState.preferredAgentId = null;
+    // An EXPLICIT terminal-agent preference, with consent withheld. A null preference
+    // now renders the native Daintree Assistant instead of this empty state, so the
+    // empty-state hero is only reachable once the user has chosen a terminal agent;
+    // consent off is what keeps it idle rather than auto-launching straight past it.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
@@ -724,7 +772,12 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
   });
 
   it("dispatches system.openExternal with the assistant docs URL when the empty-state guide link is clicked", async () => {
-    helpPanelState.preferredAgentId = null;
+    // An EXPLICIT terminal-agent preference, with consent withheld. A null preference
+    // now renders the native Daintree Assistant instead of this empty state, so the
+    // empty-state hero is only reachable once the user has chosen a terminal agent;
+    // consent off is what keeps it idle rather than auto-launching straight past it.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
@@ -741,7 +794,12 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
   });
 
   it("dispatches navigation actions (not agent.launch) when the empty-state links are clicked", async () => {
-    helpPanelState.preferredAgentId = null;
+    // An EXPLICIT terminal-agent preference, with consent withheld. A null preference
+    // now renders the native Daintree Assistant instead of this empty state, so the
+    // empty-state hero is only reachable once the user has chosen a terminal agent;
+    // consent off is what keeps it idle rather than auto-launching straight past it.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "missing", codex: "missing" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
@@ -811,7 +869,12 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
   });
 
   it("does not render a duplicate 'Assistant settings' footer link (empty state)", () => {
-    helpPanelState.preferredAgentId = null;
+    // An EXPLICIT terminal-agent preference, with consent withheld. A null preference
+    // now renders the native Daintree Assistant instead of this empty state, so the
+    // empty-state hero is only reachable once the user has chosen a terminal agent;
+    // consent off is what keeps it idle rather than auto-launching straight past it.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
+import { assistantStoreForSlot, selectAssistantLaneState } from "@/store/assistantStore";
 import { Plus, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
@@ -62,6 +64,7 @@ function TabLabel({ label }: { label: string }) {
 }
 
 export interface HelpSessionTab {
+  native?: boolean;
   slot: number;
   label: string;
   agentState: AgentState | null | undefined;
@@ -258,6 +261,11 @@ function SessionTabChip({
       )}
     </div>
   );
+}
+
+function NativeSessionTabChip(props: SessionTabChipProps) {
+  const agentState = useStore(assistantStoreForSlot(props.tab.slot), selectAssistantLaneState);
+  return <SessionTabChip {...props} agentState={agentState} />;
 }
 
 interface HelpSessionTabsProps {
@@ -496,20 +504,23 @@ export function HelpSessionTabs({
         // scroll it.
         className="flex items-stretch gap-0.5 min-w-0 overflow-x-auto [scrollbar-width:none]"
       >
-        {tabs.map((tab) => (
-          <SessionTabChip
-            key={tab.slot}
-            tab={tab}
-            agentState={tab.agentState}
-            isActive={tab.slot === activeSlot}
-            hasTabStop={tab.slot === rovingSlot}
-            tabId={helpSessionTabId(idBase, tab.slot)}
-            panelId={panelId}
-            onSelect={onSelect}
-            onClose={handlePointerClose}
-            onFocusTab={handleTabFocus}
-          />
-        ))}
+        {tabs.map((tab) => {
+          const Chip = tab.native ? NativeSessionTabChip : SessionTabChip;
+          return (
+            <Chip
+              key={tab.slot}
+              tab={tab}
+              agentState={tab.agentState}
+              isActive={tab.slot === activeSlot}
+              hasTabStop={tab.slot === rovingSlot}
+              tabId={helpSessionTabId(idBase, tab.slot)}
+              panelId={panelId}
+              onSelect={onSelect}
+              onClose={handlePointerClose}
+              onFocusTab={handleTabFocus}
+            />
+          );
+        })}
       </div>
       {/* The one way to another session, directly after the last tab where a tab set
           keeps it, drawn with the glyph that means "one more of these". It used to be a

@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn(() => ({ agents: {} })),
@@ -111,7 +114,26 @@ describe("agentCapabilities representative happy-path wire safety", () => {
   // Exhaustive by construction: `satisfies` fails to compile when an op is
   // added without deciding what arguments exercise it, so a new op can't slip
   // onto the wire unchecked the way getRegistry did.
+  const capabilityTarget = { agentId: "claude", worktreePath: "", query: "" };
+  const detailArgs = { agentId: "claude", worktreePath: "", id: "" };
+  beforeAll(async () => {
+    capabilityTarget.worktreePath = await fs.mkdtemp(
+      path.join(os.tmpdir(), "capability-wire-test-")
+    );
+    const found = (await callOp("search", { ...capabilityTarget, query: "/compact" })) as {
+      items: { id: string }[];
+    };
+    Object.assign(detailArgs, {
+      worktreePath: capabilityTarget.worktreePath,
+      id: found.items[0]!.id,
+    });
+  });
+  afterAll(async () => {
+    await fs.rm(capabilityTarget.worktreePath, { recursive: true, force: true });
+  });
   const opArgs = {
+    search: [capabilityTarget],
+    get: [detailArgs],
     getRegistry: [],
     getAgentIds: [],
     getAgentMetadata: [sampleAgentId],

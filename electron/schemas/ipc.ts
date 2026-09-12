@@ -12,6 +12,7 @@ import {
   type AssistantHostEvent,
   type AssistantHostCommand,
   type AssistantHostSessionDescriptor,
+  type AssistantToolState,
 } from "../../shared/types/ipc/assistantHost.js";
 import type {
   McpAuditResult,
@@ -1037,10 +1038,22 @@ const TurnOutcomeClassSchema = z.enum([
   "tool-error",
   "reasoning-loop",
   "hibernate-resume-stale",
+  "cancelled",
   "unknown",
 ]);
 
 const AssistantTurnRoleSchema = z.enum(["user", "assistant"]);
+
+/** Lifecycle of one announced tool call. "waiting" means blocked on the USER. */
+const AssistantToolStateSchema = z.enum([
+  "queued",
+  "active",
+  "waiting",
+  "done",
+  "failed",
+  "cancelled",
+  "not-run",
+]);
 
 const AssistantHostShutdownReasonSchema = z.enum(["hibernate", "revoke", "error", "exit"]);
 
@@ -1062,6 +1075,7 @@ export type AssistantHostVocabularyParity = [
   AssertTrue<ExactlyEqual<z.infer<typeof McpAuditSeveritySchema>, McpAuditSeverity>>,
   AssertTrue<ExactlyEqual<z.infer<typeof McpConfirmationDecisionSchema>, McpConfirmationDecision>>,
   AssertTrue<ExactlyEqual<z.infer<typeof TurnOutcomeClassSchema>, TurnOutcomeClass>>,
+  AssertTrue<ExactlyEqual<z.infer<typeof AssistantToolStateSchema>, AssistantToolState>>,
 ];
 
 /**
@@ -1077,6 +1091,17 @@ const IdString = z.string().refine((s) => s.trim().length > 0, { message: "must 
  * `Infinity`, or a negative value slipping through the contract.
  */
 const Timestamp = z.number().finite().nonnegative();
+
+/**
+ * A string the engine does not bound, clipped instead of rejected.
+ *
+ * The difference matters on any surface a user ACTS from. A `.max()` makes the whole
+ * frame invalid, and a discriminated union has no way to drop one bad row — so a
+ * single over-long field turns a list into an empty list, which reads as "there is
+ * nothing here" rather than "something went wrong". Clipping keeps every other row.
+ */
+const clipped = (max: number) =>
+  z.string().transform((v) => (v.length > max ? v.slice(0, max) : v));
 
 /**
  * Non-secret descriptor handed to the host at fork. The bearer token and MCP
@@ -1096,36 +1121,177 @@ export const AssistantHostSessionDescriptorSchema = z
   })
   .strict();
 
+/**
+ * Every v3 event carries a monotonic `seq`. It is validated as a positive integer
+ * because the engine counts from 1, which lets a consumer treat 0 as "nothing seen
+ * yet" without ambiguity. Tracking it is how Daintree detects a lost frame: v2 shed
+ * frames silently under backpressure with no way to notice, which is unusable once
+ * the transcript is the product.
+ */
+const Seq = z.number().int().positive();
+
+/** Fields shared by every engine event. */
+const hostEventBase = { sessionId: IdString, seq: Seq };
+
+/**
+ * Scheduled-timer rows, shared by `operations:snapshot` and `timers:snapshot`.
+ *
+ * ONE schema for both on purpose. The engine encodes both arrays through the same
+ * builder, and two schemas here would be two chances to accept a row on one surface
+ * and reject the identical row on the other — which presents to a user as a timer
+ * manager that is empty while the deck shows three timers.
+ *
+ * Bounded at every level: the list is drawn from a project store that grows with use,
+ * and an unbounded array here becomes an unbounded render.
+ */
+const AssistantTimerRowsSchema = z
+  .array(
+    z.object({
+      id: IdString,
+      // CLIPPED, not bounded. Every string on this row is written by the engine with
+      // no length limit of its own — the model chooses a timer's title, and a worktree
+      // id is an absolute path, which is 4096 bytes on Linux. A `.max()` here would
+      // make one long title reject the WHOLE frame, and this is a control surface: the
+      // failure would present as "you have no timers" while a timer counts down to
+      // spawning an agent. A clipped label is a bad label; an empty list is a lie.
+      label: clipped(500),
+      // Non-negative is wrong for a fire time: the engine accepts any RFC3339 `fireAt`,
+      // so a pre-1970 date is a real (if silly) row, and rejecting the frame over it
+      // would again hide every OTHER timer. Ordering math tolerates a negative.
+      dueAt: z.number().int().finite(),
+      createdAt: z.number().int().finite(),
+      // The one field that must NOT be lenient: the UI branches on it, and an unknown
+      // kind should be caught rather than rendered as something it is not.
+      payloadKind: z.enum(["reminder", "message", "tool_call", "legacy"]),
+      toolName: clipped(256),
+      runCount: z.number().int().min(0),
+      repeatEveryMs: z.number().int().min(0),
+      repeatMaxRuns: z.number().int().min(0),
+      repeatUntilAt: z.number().int().min(0),
+      targetWorktreeId: clipped(4096),
+      targetTerminalId: clipped(512),
+      liveGrants: z.number().int().min(0),
+      grantsUnknown: z.boolean(),
+    })
+  )
+  // Generous rather than tight: the engine caps nothing, and the transport already
+  // bounds the frame, so this exists to stop an absurd render — not to be the number
+  // a real project trips over and loses its whole timer list to.
+  .max(2000);
+
 export const AssistantHostEventSchema = z.discriminatedUnion("type", [
   z.object({
+    ...hostEventBase,
     type: z.literal("host:ready"),
-    sessionId: IdString,
     protocolVersion: z.number().int().positive(),
     resumedSessionId: IdString.optional(),
+    version: z.string().optional(),
+    autoApprove: z.boolean(),
+    // Engine-resolved masthead facts. Bounded rather than bare `z.string()`: they are
+    // rendered into the panel chrome, and a pathological value should be refused at
+    // the boundary instead of laid out.
+    tier: z.string().max(64).optional(),
+    tierGloss: z.string().max(200).optional(),
+    backend: z.string().max(2048).optional(),
+    routing: z.string().max(500).optional(),
+    logFile: z.string().max(4096).optional(),
+    controlSocket: z.string().max(4096).optional(),
+    stateDir: z.string().max(4096).optional(),
+    commands: z
+      .array(
+        z.object({
+          name: z.string().max(64),
+          syntax: z.string().max(120),
+          palette: z.string().max(200),
+        })
+      )
+      .max(200)
+      .optional(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("turn:start"),
-    sessionId: IdString,
     turnId: IdString,
     role: AssistantTurnRoleSchema,
     startedAt: Timestamp,
+    wake: z.boolean().optional(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("turn:token"),
-    sessionId: IdString,
     turnId: IdString,
     chunk: z.string(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("turn:end"),
-    sessionId: IdString,
     turnId: IdString,
     endedAt: Timestamp,
     outcome: TurnOutcomeClassSchema.optional(),
+    // Authoritative final text. Absent (not "") when the turn produced none, so a
+    // tool-only round stays distinguishable from an empty answer.
+    content: z.string().optional(),
   }),
   z.object({
+    ...hostEventBase,
+    type: z.literal("turn:phase"),
+    wake: z.boolean().optional(),
+    turnId: IdString.optional(),
+    phase: z.string(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("turn:reasoning"),
+    turnId: IdString,
+    text: z.string(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("interject:retracted"),
+    retracted: z.boolean(),
+    // Bounded to the composer's own limit: it is a prompt coming back.
+    text: z.string().max(100_000).optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("turn:interjection"),
+    turnId: IdString.optional(),
+    text: z.string(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("tool:batch"),
+    turnId: IdString.optional(),
+    calls: z.array(
+      z.object({
+        toolCallId: IdString,
+        toolId: IdString,
+        argsSummary: z.string(),
+        danger: z.boolean(),
+        // Bounded like every other engine-authored string that reaches the renderer.
+        verb: z.string().max(64).optional(),
+        activeVerb: z.string().max(64).optional(),
+        target: z.string().max(256).optional(),
+      })
+    ),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("tool:state"),
+    toolCallId: IdString,
+    state: AssistantToolStateSchema,
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("tool:progress"),
+    toolCallId: IdString,
+    message: z.string(),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
     type: z.literal("tool:started"),
-    sessionId: IdString,
     toolCallId: IdString,
     toolId: IdString,
     argsSummary: z.string(),
@@ -1134,8 +1300,8 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     danger: z.boolean(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("tool:settled"),
-    sessionId: IdString,
     toolCallId: IdString,
     toolId: IdString,
     durationMs: Timestamp,
@@ -1143,32 +1309,233 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     severity: McpAuditSeveritySchema,
     errorCode: z.string().optional(),
     turnId: IdString.optional(),
+    asyncId: IdString.optional(),
+    asyncTitle: z.string().max(500).optional(),
+    summary: z.string().max(2000).optional(),
+    errorMessage: z.string().max(2000).optional(),
   }),
   z.object({
+    ...hostEventBase,
+    type: z.literal("usage"),
+    turnId: IdString.optional(),
+    promptTokens: z.number().int().nonnegative(),
+    completionTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    // Optional, never zero-filled: absent means the provider reported nothing, and a
+    // meter that shows 0% cache-hit is a claim rather than a gap.
+    cachedTokens: z.number().int().nonnegative().optional(),
+    cacheHitRatio: z.number().finite().optional(),
+    contextTokens: z.number().int().nonnegative(),
+    contextThreshold: z.number().int().nonnegative(),
+    contextWindow: z.number().int().nonnegative(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("cost"),
+    turnId: IdString.optional(),
+    total: z.number().finite().nonnegative(),
+    // `false` means `total` is a FLOOR. Render "≥ $x"; never present it as a receipt.
+    complete: z.boolean(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("notice"),
+    level: z.enum(["info", "warning"]),
+    message: z.string(),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("model:rate-limited"),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("operations:snapshot"),
+    // Bounded at every level: the deck is drawn from a project store that grows with
+    // use, and an unbounded array here becomes an unbounded render.
+    inbox: z
+      .array(
+        z.object({
+          id: IdString,
+          severity: z.string().max(32),
+          source: z.string().max(64),
+          summary: z.string().max(2000),
+          at: Timestamp,
+        })
+      )
+      .max(200),
+    workflows: z
+      .array(
+        z.object({
+          id: IdString,
+          goal: z.string().max(2000),
+          status: z.string().max(64),
+          progress: z.string().max(200),
+          next: z.string().max(200),
+          blocked: z.boolean(),
+        })
+      )
+      .max(200),
+    agents: z
+      .array(
+        z.object({
+          id: IdString,
+          title: z.string().max(500),
+          goal: z.string().max(2000),
+          badge: z.string().max(64),
+          agentState: z.string().max(64),
+          preview: z.string().max(4000),
+          startedAt: Timestamp,
+          needsAttention: z.boolean(),
+        })
+      )
+      .max(200),
+    async: z
+      .array(
+        z.object({
+          id: IdString,
+          title: z.string().max(500),
+          tool: z.string().max(128),
+          startedAt: Timestamp,
+        })
+      )
+      .max(200),
+    timers: AssistantTimerRowsSchema,
+    audit: z
+      .array(
+        z.object({
+          tool: z.string().max(128),
+          outcome: z.string().max(32),
+          durationMs: z.number().int().min(0),
+          at: Timestamp,
+        })
+      )
+      .max(200),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("timers:snapshot"),
+    timers: AssistantTimerRowsSchema,
+    outcomes: z
+      .array(
+        z.object({
+          eventId: IdString,
+          timerId: IdString,
+          severity: clipped(32),
+          // Clipped, not bounded, for the same reason as the row's strings: the
+          // summary can carry a tool's own error output, which the engine does not
+          // truncate, and rejecting the frame would cost every OTHER outcome.
+          title: clipped(500),
+          summary: clipped(4000),
+          createdAt: z.number().int().finite(),
+          updatedAt: z.number().int().finite(),
+          count: z.number().int().min(0),
+        })
+      )
+      .max(500),
+    takenAt: Timestamp,
+    readFailed: z.boolean(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("timer:fired"),
+    timerId: IdString,
+    firedAt: Timestamp,
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("timer:cancelled"),
+    timerId: IdString,
+    cancelled: z.boolean(),
+    alreadyInactive: z.boolean(),
+    priorStatus: z.string().max(32),
+    revokedGrants: z.number().int().min(0).max(100_000),
+    grantRevokeFailed: z.boolean(),
+    error: z.string().max(2000),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("mcp:status"),
+    connected: z.boolean(),
+    toolCount: z.number().int().min(0).max(10_000).optional(),
+    error: z.string().max(2000).optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("command:result"),
+    command: z.string().max(2000),
+    text: z.string().max(200_000),
+    quit: z.boolean().optional(),
+    unknown: z.boolean().optional(),
+    // Whether `/clear` ACTUALLY cleared. Optional here and only here because an engine
+    // older than this contract omits it; the panel treats absent as false, so a
+    // destructive reset never happens on an assumption. See the store's handling.
+    conversationCleared: z.boolean().optional(),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("question:requested"),
+    questionId: IdString,
+    toolCallId: IdString.optional(),
+    turnId: IdString.optional(),
+    question: z.string().max(4000),
+    // 2–26 matches the engine's own bound: labels are single letters A–Z.
+    options: z
+      .array(z.object({ label: z.string().max(4), text: z.string().max(500) }))
+      .min(2)
+      .max(26),
+    default: z.number().int().min(0).max(25),
+    requestedAt: Timestamp,
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("question:answered"),
+    questionId: IdString,
+    // -1 means dismissed. `cancelled` says the same thing explicitly rather than
+    // leaving it encoded in a sentinel index, so "the user closed the sheet" and
+    // "the user picked option -1" can never be confused for one another.
+    choiceIndex: z.number().int().min(-1).max(25),
+    cancelled: z.boolean(),
+    answeredAt: Timestamp,
+    label: z.string().max(4).optional(),
+    text: z.string().max(500).optional(),
+  }),
+  z.object({
+    ...hostEventBase,
     type: z.literal("approval:requested"),
-    sessionId: IdString,
     approvalId: IdString,
     toolId: IdString,
     summary: z.string(),
     requestedAt: Timestamp,
     turnId: IdString.optional(),
+    riskClass: z.string().optional(),
+    consequence: z.string().optional(),
+    argsSummary: z.string().optional(),
+    // REQUIRED, never defaulted. The safety layer's own verdict that this action is
+    // irreversible; a missing field would silently become "false" and let a click
+    // approve a git/system operation that must be typed.
+    needsTypedConfirm: z.boolean(),
+    rememberable: z.boolean().optional(),
+    toolKey: z.string().max(200).optional(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("approval:decided"),
-    sessionId: IdString,
     approvalId: IdString,
     decision: McpConfirmationDecisionSchema,
     decidedAt: Timestamp,
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("host:error"),
-    sessionId: IdString,
     code: IdString,
     message: z.string(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("host:shutdown"),
-    sessionId: IdString,
     reason: AssistantHostShutdownReasonSchema,
     resumeSessionId: IdString.optional(),
   }),
@@ -1179,12 +1546,51 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("prompt"),
     sessionId: IdString,
     text: z.string(),
+    worktree: z
+      .object({ id: IdString, path: z.string().min(1), branch: z.string() })
+      .nullable()
+      .optional(),
   }),
   z.object({
     type: z.literal("approval:decide"),
     sessionId: IdString,
     approvalId: IdString,
     decision: McpConfirmationDecisionSchema,
+  }),
+  z.object({
+    type: z.literal("command"),
+    sessionId: IdString,
+    line: z.string().min(1).max(2000),
+  }),
+  z.object({
+    type: z.literal("operations"),
+    sessionId: IdString,
+  }),
+  z.object({
+    type: z.literal("timers"),
+    sessionId: IdString,
+  }),
+  z.object({
+    type: z.literal("timer:cancel"),
+    sessionId: IdString,
+    // The engine refuses a blank id outright (it would go on to report
+    // TIMER_NOT_FOUND for something the host never meant to send), so it is refused
+    // at this boundary too rather than spending a round trip to be told.
+    timerId: IdString,
+  }),
+  z.object({
+    type: z.literal("interject:retract"),
+    sessionId: IdString,
+  }),
+  z.object({
+    type: z.literal("question:answer"),
+    sessionId: IdString,
+    questionId: IdString,
+    // -1 dismisses. Bounded to the engine's option ceiling so a nonsense index is
+    // refused at the boundary rather than parked against a live dispatch. REQUIRED:
+    // the engine refuses the command outright when it is missing or non-numeric,
+    // rather than defaulting to 0 and answering for a user who never chose.
+    choiceIndex: z.number().int().min(-1).max(25),
   }),
   z.object({
     type: z.literal("interrupt"),
@@ -1199,6 +1605,23 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
     sessionId: IdString,
   }),
 ]);
+
+/**
+ * WHOLE-UNION parity: the Zod validator and the declared TypeScript union must agree,
+ * member for member and field for field.
+ *
+ * This is the guard for the failure that actually happened. Daintree's half of this
+ * protocol sat at v1 while the engine moved to v2 and then v3, and nothing caught it
+ * because the two descriptions lived in different files with no assertion between
+ * them. A hand-maintained schema beside a hand-maintained type is not one contract,
+ * it is two — and they only look identical until someone edits one of them.
+ *
+ * If this line fails to compile, do not cast around it: one of the two is wrong, and
+ * the engine's `internal/host/events.go` decides which.
+ */
+export type AssistantHostEventSchemaParity = AssertTrue<
+  ExactlyEqual<z.infer<typeof AssistantHostEventSchema>, AssistantHostEvent>
+>;
 
 /** Parse an inbound host event, returning `null` for any invalid message. */
 export function parseAssistantHostEvent(value: unknown): AssistantHostEvent | null {

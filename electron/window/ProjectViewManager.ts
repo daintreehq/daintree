@@ -219,6 +219,14 @@ export interface ProjectViewManagerOptions {
    */
   isTerminalLive?: (terminalId: string) => boolean;
   /**
+   * Whether destroying the view with this WebContents would end a live native
+   * Daintree Assistant engine (#12364). The native engine is a child process of
+   * main that never binds a PTY, so the pair above cannot see it — and eviction
+   * stops it outright. Injected from the composition root for the same reason as
+   * that pair. Absent, no view reads as backing a native engine.
+   */
+  wouldEndNativeAssistant?: (webContentsId: number) => boolean;
+  /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
    * root for the same reason as `assistantBackendsForProject`: electron/window/
@@ -303,6 +311,7 @@ export class ProjectViewManager {
     webContentsId: number;
   }>;
   isTerminalLive?: (terminalId: string) => boolean;
+  wouldEndNativeAssistant?: (webContentsId: number) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
@@ -388,6 +397,7 @@ export class ProjectViewManager {
     this.onViewCrashed = opts.onViewCrashed;
     this.assistantBackendsForProject = opts.assistantBackendsForProject;
     this.isTerminalLive = opts.isTerminalLive;
+    this.wouldEndNativeAssistant = opts.wouldEndNativeAssistant;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {

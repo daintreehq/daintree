@@ -20,8 +20,12 @@ import {
 import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
+import {
+  DAINTREE_ASSISTANT_AGENT_ID,
+  getAssistantSupportedAgentIds,
+} from "@shared/config/agentRegistry";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
-import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
+import { assistantPlatformSupport } from "@shared/config/assistantPlatform";
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("help.shortcuts", () => ({
@@ -146,21 +150,36 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       const projectState = useProjectStore.getState();
       const workspace = projectState.currentProject ?? useScratchStore.getState().currentScratch;
       const isProjectStateSettled = projectState.isBootstrapped;
-      const folderPath = await window.electron.help.getFolderPath();
-      if (!folderPath) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Help Agent",
-          message: "Help folder not available. Please ensure the help workspace is configured.",
-        });
-        return;
-      }
 
       const parsed = args as { agentId?: string } | undefined;
+      // The assistant's OWN agent setting decides what the assistant runs.
+      //
+      // This used to resolve the GLOBAL default agent (Settings > CLI Agents), which is
+      // a different preference answering a different question — which agent a direct
+      // launch spawns. Two consequences, both of which read as "the assistant setting is
+      // ignored". A user whose global default is Codex got Codex in the assistant panel
+      // with Claude selected in assistant settings; and a user with no global default at
+      // all fell through to `getDefaultAgentId`, which favoured the native assistant, so
+      // the branch below then WROTE that back over their choice — the setting did not
+      // just lose the launch, it lost itself.
+      //
+      // Order mirrors the panel exactly (`HelpPanel.laneUsesNativeAssistant`), because
+      // both surfaces open the same panel and must never disagree about what is in it:
+      // an explicitly requested agent, then the assistant preference, then the native
+      // assistant as the default. The global default agent survives only as the
+      // last-resort pick on a platform the engine cannot run on, and even there it is
+      // held to the agents a help session can actually be provisioned for — main
+      // rejects anything outside `getAssistantSupportedAgentIds()`, so resolving a
+      // deprecated (gemini) or unwired (opencode) agent here would pick a launch that
+      // main then refuses.
+      const preferredAgentId = useHelpPanelStore.getState().preferredAgentId;
       let agentId: string;
       if (parsed?.agentId) {
         agentId = parsed.agentId;
+      } else if (preferredAgentId) {
+        agentId = preferredAgentId;
+      } else if (assistantPlatformSupport().supported) {
+        agentId = DAINTREE_ASSISTANT_AGENT_ID;
       } else {
         const { defaultAgent } = useAgentPreferencesStore.getState();
         const { availability, isInitialized } = useCliAvailabilityStore.getState();
@@ -179,6 +198,44 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             )
           : null;
         agentId = resolved ?? "claude";
+      }
+
+      // The native Daintree Assistant has no PTY form. Reaching the launch path below
+      // with it would provision a session, spawn its CLI into a terminal, and bind that
+      // terminal to the panel — at which point HelpPanel ALSO renders the native branch,
+      // and two engines race for the same project lease. This action is on a shipped
+      // keyboard shortcut and in the Help menu, so it is a route a user takes by
+      // accident, not a theoretical one. Opening the panel is the whole job here: the
+      // panel decides its own surface, and for this agent that surface is native.
+      //
+      // Answered BEFORE the help folder is resolved, because the native engine does not
+      // use it: it runs in the project root and reads its skills from the app bundle.
+      // Requiring it here refused to open the panel over an asset the branch never
+      // touches — and this is now the DEFAULT branch, not a rare one.
+      if (isAssistantOnlyAgentId(agentId)) {
+        // Recorded only when the caller NAMED this agent — that is a choice, and it
+        // belongs in the setting the assistant settings tab reads. A native assistant
+        // arrived at by default is not: an unset preference already means "the native
+        // assistant" everywhere, and stamping it in would freeze today's default into
+        // the user's settings behind their back.
+        if (parsed?.agentId) useHelpPanelStore.getState().setPreferredAgent(agentId);
+        useFocusStore.getState().clearAssistantGesture();
+        if (!useHelpPanelStore.getState().isOpen) {
+          suppressSidebarResizes();
+          useHelpPanelStore.getState().setOpen(true);
+        }
+        return;
+      }
+
+      const folderPath = await window.electron.help.getFolderPath();
+      if (!folderPath) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Help Agent",
+          message: "Help folder not available. Please ensure the help workspace is configured.",
+        });
+        return;
       }
 
       const helpPrompt =

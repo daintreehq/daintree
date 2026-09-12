@@ -408,7 +408,15 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // not have fit at any wording above the 120 B floor; this is the measured
   // total. What the prose has to carry is that the call opens a browser and
   // returns nothing, and that a provider with no repository page refuses it.
-  const MAX_COHORT_TOTAL_BYTES = 54_036;
+  // 54_036 → 54_300 for `agentCapabilities.search`, which shipped with its
+  // contract but on no tier, so the assistant was told to use an action
+  // `tools/list` never offered it. Workbench only, beside the
+  // `slashCommands.list` it extends, so the external total does not move. Its
+  // description predates this change and is the whole of the increase: measured
+  // at 54_263 B over #12354's `forge.openRepo` landing underneath it, not an
+  // allowance. `agentCapabilities.get` stays off every tier until its source
+  // read is contained, and costs nothing here until then.
+  const MAX_COHORT_TOTAL_BYTES = 54_300;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

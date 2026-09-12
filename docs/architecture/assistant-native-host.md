@@ -1,66 +1,66 @@
 # Assistant native-host boundary
 
-Status: **contract defined and the process wrapper landed; nothing spawns it yet.** This doc specifies the boundary between the `daintree-assistant` runtime and Daintree's main/renderer surfaces (#10649). The protocol types live in [`shared/types/ipc/assistantHost.ts`](../../shared/types/ipc/assistantHost.ts); their Zod validators live in the assistant-native-host section of [`electron/schemas/ipc.ts`](../../electron/schemas/ipc.ts). Since the contract landed, two more pieces have: `AssistantHostProcess` (`electron/services/assistant-host/AssistantHostProcess.ts`) — the `utilityProcess.fork()` wrapper that hands over the descriptor on `parentPort`, validates every inbound message against the shared schema before forwarding, and resolves `waitForReady()` on `host:ready` — and `resolveAssistantHostEntry` (`resolveHostEntry.ts`), which locates the package's `dist/host.js` by working outward from the CLI bin path, since the package is installed independently of Daintree and can't be `require.resolve()`d from the app's module graph. Neither has a caller: no IPC channel is registered and no session constructs the host. For the broader process topology this plugs into, see [process-and-window-model.md](./process-and-window-model.md); for the MCP event surfaces it reuses, see [mcp-server.md](./mcp-server.md).
+Status: wired, protocol 3. This doc specifies the boundary between the `daintree-assistant` engine and Daintree's main/renderer surfaces (#10649). The protocol types live in [`shared/types/ipc/assistantHost.ts`](../../shared/types/ipc/assistantHost.ts) and their Zod validators in the assistant-native-host section of [`electron/schemas/ipc.ts`](../../electron/schemas/ipc.ts) — **those are the source of truth for the event set**, not the summary tables below. The engine's own side of the boundary is `daintreehq/assistant` `internal/host/`, documented there in [`DAINTREE_HOST.md`](https://github.com/daintreehq/assistant/blob/main/docs/DAINTREE_HOST.md); a change to the contract belongs in both repos. For the strategy this came out of, see [native-assistant-transition.md](./native-assistant-transition.md); for the process topology it plugs into, [process-and-window-model.md](./process-and-window-model.md); for the MCP event surfaces it reuses, [mcp-server.md](./mcp-server.md).
 
-## Why this exists
+## Who owns what
 
-Today the assistant runs as a CLI/Ink child process spawned through `terminal.spawn` and wrapped in an xterm pane (`HelpPanel`). Conversation content — user prompts, model text, tool arguments and results — is only ever terminal bytes; the single structured signals are the MCP-server events in `mcpServer.ts` (tool-call started/settled, turn-outcome alerts, the figure rail), already pushed to the pinned renderer. To render conversation, tool calls, and approvals as native React — and reuse Daintree's own confirmation, grant, audit, and notification surfaces rather than rebuilding them — the runtime needs a structured boundary instead of a terminal. This doc is that boundary.
+The single most important thing in this document, because it is what every other decision here follows from. Four projects, four jobs, no overlap:
 
-The boundary is defined now and wired later. Two prerequisites named in #10649 are unbuilt: the workflow ledger, and the `@daintreehq/daintree-assistant` package emitting the structured turn events below. Landing the contract first lets the host plug in without a protocol redesign, and keeps the CLI/Ink path as the default and the fallback throughout.
+| Concern | Owner |
+| --- | --- |
+| Desktop sign-in, sign-out, refresh token, account status, backend selection | The assistant CLI — including the copy embedded in Daintree |
+| Browser sign-in, OAuth consent, account page, checkout, billing portal, grant revocation | The website |
+| Token verification, authorization, entitlement enforcement, paid-work attribution | The assistant backend |
+| Starting the engine and rendering its events and command results | Daintree |
+| Subscription truth | The website's server, exposed only through a bearer-only machine endpoint |
 
-## Runtime shape (decision)
+Daintree is a **host and a renderer**. It owns no account credential, no OAuth state, no account truth, no plan truth, and no backend selection. The one secret main does mint is the ephemeral MCP bearer the engine calls Daintree back with, which is a control-plane token for this session and never an identity. Those moved into the session: `/login`, `/logout`, `/account` and `/backend` are engine commands, advertised in the engine's `host:ready` catalog and dispatched down the ordinary command path. There is no Daintree Settings sign-in for this flow and none is planned — a second credential surface would be a second authority on billing that the backend never agreed to, and the first thing it would get wrong is telling a paying customer they have not paid.
 
-When the runtime is wired, the host is an Electron `utilityProcess.fork()` child — not a managed CLI, not an in-process embed, not a localhost sidecar. Rationale:
+The staging topology is `assistant.daintree.org` (backend) in front of `staging.daintree.org` (website). Which one a session is talking to is the engine's decision, reported back on `host:ready` and shown in the panel masthead — Daintree never infers it from a hostname and never sets it. The engine reports the endpoint on every session, the deployed default included, and omits it only when it cannot be sanitized; an absent one reads as unknown, never as the default.
 
-- Three existing precedents (`pty-host`, `workspace-host`, the plugin dev worker) already use `utilityProcess.fork()` with `parentPort` for structured IPC and a `MessageChannelMain` port handed to the renderer. The assistant host follows the same pattern rather than inventing a fourth.
-- A utility process gives a clean Node environment with no Chromium, carries structured JSON over the V8 structured clone (no PTY byte encoding), and is crash-supervised via `utilityProcess.on("exit")`.
-- In-process embedding is rejected — an assistant-SDK crash would take down the main process. A localhost HTTP/WebSocket sidecar is rejected — it adds port binding, collision risk, and socket overhead that a `MessagePort` does not.
+## Runtime shape
 
-The CLI/Ink form stays available for development via the existing `daintree-assistant` agent id and its env-only MCP injection (`tier: "experimental"`). The native host is a separate code branch, never a replacement for that path.
+The engine is a **`child_process.spawn` of a Go binary** speaking NDJSON over stdio — not a `utilityProcess.fork`, not an in-process embed, not a localhost sidecar.
+
+An earlier version of this document specified `utilityProcess.fork()`, matching the three existing precedents (`pty-host`, `workspace-host`, the plugin dev worker). That was written when the runtime was an npm package with a JavaScript entry point. `utilityProcess.fork` runs a Node script and cannot execute a Go binary, and its structured-clone transport is not the NDJSON the engine speaks. Holding the fork decision while the engine moved is a large part of how Daintree sat at protocol v1 while the engine reached v3. The reasoning is restated at the top of [`AssistantHostProcess.ts`](../../electron/services/assistant-host/AssistantHostProcess.ts) so the next person to reach for `utilityProcess` finds it there.
+
+The binary is vendored as the `vendor/daintree-assistant` submodule and built into `resources/assistant/` by `scripts/build-assistant.mjs`, stamped with the pinned SHA. `resolveAssistantBinary.ts` finds it, in order: `DAINTREE_ASSISTANT_BIN` (local engine development), the bundled copy under `process.resourcesPath`, then the repo's build output. There is deliberately **no `PATH` fallback** — a separately installed engine is free to be any version, which is the skew this whole scheme exists to prevent.
+
+The override outranks the bundled copy in a packaged app too — engine development against `npm run install:local` is real work and refusing it would leave no replacement — but it never does so silently. Resolution returns `{ path, source }` where source is `override`, `packaged` or `repo`, and `AssistantHostService` records that line once per engine start, saying so explicitly when a packaged app ran something other than what it ships. Only `source: "packaged"` is acceptance-grade: a `DAINTREE_ASSISTANT_BIN` left in a shell would otherwise substitute an unknown build into a packaged acceptance run, and the run would certify an artifact it never executed. The override is anchored with `path.resolve` before it is checked, because the child is spawned with the project as its cwd — a relative value would otherwise be validated as one file and executed as another.
+
+## Platform scope
+
+The built-in engine runs on **macOS and Linux only**. Before it opens its database it takes an exclusive per-project lease — a `flock`, chosen because the kernel releases it on process death, which is exactly the handover its supervisor listens for — and that lock has no Windows port: `internal/ipc/lock_other.go` fails loudly rather than pretending to exclude. This is not "Windows has no file locking", which it does; what has not been ported is _this engine's_ project lock. So on Windows the engine does not degrade, it fails to boot, reporting `ipc: file locks are not supported on this platform`, and the upstream engine's own release workflow excludes Windows for the same reason.
+
+This is about the **engine**, not the assistant panel. The panel remains available on Windows for Claude, Codex and the other supported agents; only Daintree's own engine is unavailable there, and its terminal path is no fallback — it takes the same lease.
+
+The decision is codified in [`shared/config/assistantPlatform.ts`](../../shared/config/assistantPlatform.ts). `SUPPORTED_PLATFORMS` is an allowlist of `darwin` and `linux` — a product decision rather than a transcription of the lock implementation's `unix` build tag, which is broader — and the user-facing copy sits beside it so the surfaces that show it cannot describe the limitation differently. `AssistantHostService.start` refuses to spawn on an unsupported platform even though the UI does not offer the launch, because the path is reachable by direct IPC; the assistant settings tab drops the engine from the agent picker and says why, and the help panel shows the same limitation in place of the launch.
 
 ## Message protocol
 
-Two discriminated unions, both versioned by `ASSISTANT_HOST_PROTOCOL_VERSION`. The host announces the version it speaks in `host:ready`; Daintree refuses a mismatch rather than guessing at an unknown shape. The main process validates every inbound host message against `AssistantHostEventSchema` before forwarding to the renderer — a malformed or unknown-`type` message is dropped, never partially applied.
+Two discriminated unions, both versioned by `ASSISTANT_HOST_PROTOCOL_VERSION` (3). The engine announces the version it speaks in `host:ready`; Daintree **refuses a mismatch** rather than guessing at an unknown shape, with a message naming the fix. `electron/services/assistant-host/__tests__/engineConformance.test.ts` boots the real vendored binary and validates its actual bytes against the same Zod schema the main process uses in production, so a rename, a retype or a protocol bump fails in a unit run rather than at a user's first turn.
 
-### Host → Daintree (`AssistantHostEvent`)
+Engine → Daintree (`AssistantHostEvent`) covers readiness, turn lifecycle and streamed tokens, tool dispatch and settlement, approvals, questions, operations snapshots, MCP status, cost, command results, errors and shutdown. Daintree → engine (`AssistantHostCommand`) covers `prompt`, `command` (any slash line), `approval:decide`, `question:answer`, `operations`, `interrupt`, `interject:retract`, `hibernate` and `shutdown`. Read the schema for the current field-level shapes.
 
-| Type | Meaning |
-| --- | --- |
-| `host:ready` | Booted, MCP-connected, ready for commands; carries the protocol version and any adopted resume handle. |
-| `turn:start` | A conversation turn began (`user` or `assistant`). |
-| `turn:token` | An incremental text chunk for an in-flight `assistant` turn. |
-| `turn:end` | A turn completed, with an optional audit-aligned `TurnOutcomeClass`. |
-| `tool:started` | A tool dispatch entered the call path; mirrors `McpToolCallStartedPayload` plus a stable `toolCallId`. |
-| `tool:settled` | A tool dispatch settled, with audit-aligned `result`/`severity`. |
-| `approval:requested` | The runtime is awaiting a `danger: "confirm"` decision; Daintree surfaces its own `ConfirmDialog`. |
-| `approval:decided` | A prior approval resolved (`approved`/`rejected`/`timeout`). |
-| `host:error` | A non-fatal error to surface, with a stable `code`. |
-| `host:shutdown` | The host is winding down (`hibernate`/`revoke`/`error`/`exit`), with a resume handle when hibernating. |
-
-### Daintree → host (`AssistantHostCommand`)
-
-| Type              | Meaning                                            |
-| ----------------- | -------------------------------------------------- |
-| `prompt`          | Submit a user prompt to start a turn.              |
-| `approval:decide` | Answer an outstanding `approval:requested`.        |
-| `interrupt`       | Stop the in-flight turn.                           |
-| `hibernate`       | Capture a resume handle and wind the runtime down. |
-| `shutdown`        | Tear the runtime down for good.                    |
-
-The fork-time `AssistantHostSessionDescriptor` is handed over once at spawn, not as a command, so every command is a post-handshake control signal.
+The fork-time `AssistantHostSessionDescriptor` is handed over once on the first stdin line, not as a command, so every command is a post-handshake control signal.
 
 ## Invariants
 
-These are the load-bearing rules every future wiring step must preserve. They encode hard-won lessons; breaking one reintroduces a known incident class.
+Load-bearing rules. Each encodes a lesson; breaking one reintroduces a known incident class.
 
-1. **Every event and command carries `sessionId`, and delivery is pinned, never broadcast** (#7003). The main process resolves the session's minting `WebContents` and sends only there, failing closed if the view is gone. The schemas reject any message missing `sessionId` so a message that cannot be pinned cannot exist.
-2. **Secrets travel via env, not messages.** The descriptor carries no bearer token and no MCP URL — those reach the host through `DAINTREE_MCP_URL` / `DAINTREE_MCP_TOKEN` / `DAINTREE_WINDOW_ID`, mirroring the existing env-only injection. `AssistantHostSessionDescriptorSchema` is `.strict()` and rejects a descriptor that smuggles a `token` or `mcpUrl` field, so a leaked port message can never carry the secret.
-3. **One backend per project** (#7522). When the runtime is wired, provisioning must displace both PTY-backed and host-backed sessions for the same project inside the existing provision lock, with a `markHostForSession` analog to `markTerminalForToken`, re-checking ownership after every `await` in teardown.
-4. **Outcome vocabularies stay audit-aligned.** `result`/`severity`/`decision`/`outcome` reuse the `mcpServer.ts` vocabularies (`McpAuditResult`, `McpAuditSeverity`, `McpConfirmationDecision`, `TurnOutcomeClass`) so the native timeline and the persisted audit log cannot drift.
-5. **The host bootstrap installs its error guard before any dynamic import** (#8833). The `utilityProcess` entry must call the bootstrap error guard synchronously before `await import(...)`; Electron 42 only warns on unhandled utility-process rejections, so a failed import otherwise hangs the readiness wait silently.
+1. **Every event and command carries `sessionId`, and delivery is pinned, never broadcast** (#7003). The main process resolves the session's minting `WebContents` and sends only there, failing closed if the view is gone. The schemas reject any message missing `sessionId`, so a message that cannot be pinned cannot exist.
+2. **Secrets travel via env, not messages** — and the env is filtered in both directions. The descriptor carries no bearer and no MCP URL; those reach the engine through `DAINTREE_MCP_URL` / `DAINTREE_MCP_TOKEN` / `DAINTREE_WINDOW_ID`, and `AssistantHostSessionDescriptorSchema` is `.strict()` so a leaked port message cannot carry one. Going the other way, [`assistantChildEnv.ts`](../../electron/services/assistant-host/assistantChildEnv.ts) **strips every engine knob the child could otherwise inherit** — the endpoint, the switch that authorizes a plaintext endpoint, the bearer, the tier, the auto-approve flag, the state directory, the routing policy, the control-socket root, the daemon switches and the boot trace. Most of those the engine reads through a door marked "the embedding host may set this, a bound repository may not", and a shell variable exported months ago is no more entitled to that door than a bound repository is. The rest — the socket root, the daemon controls, the trace path — never reach that door at all: the engine reads them with a bare `os.Getenv` because it documents them as test-only or operator-only, and both of those set their own environment deliberately. Neither category is safe to inherit, which is why the list is defined by what the engine READS rather than by which door it reads through.
+3. **One backend per project** (#7522). Provisioning displaces both PTY-backed and host-backed sessions for the same project inside the existing provision lock, re-checking ownership after every `await` in teardown.
+4. **Outcome vocabularies stay audit-aligned.** `result` / `severity` / `decision` / `outcome` reuse the `mcpServer.ts` vocabularies (`McpAuditResult`, `McpAuditSeverity`, `McpConfirmationDecision`, `TurnOutcomeClass`) so the native timeline and the persisted audit log cannot drift.
+5. **The host bootstrap installs its error guard before any dynamic import** (#8833). Electron 42 only warns on unhandled utility-process rejections, so a failed import otherwise hangs the readiness wait silently.
+6. **Daintree never reads account or plan state out of prose, and never pre-empts the engine.** Sign-in, plan and refusal all arrive as typed events — a `command:result` for a command, a failed phase plus a `host:error` for a turn the engine would not run. The panel boots the engine without pre-reading account state and caches none of it. A dependency that could not answer renders as unverified and retryable, never as signed-out or unsubscribed.
+7. **Every packaged app carries an engine built from exactly the pinned submodule commit.** `scripts/afterPack.cjs` matches the packaged binary's embedded version against the checked-out gitlink and fails the pack on a stale, dirty or unstamped one. It is enforced there because afterPack is the one hook every packaging path already runs — the `package:*` scripts, `package-local-dmg.mjs` and all three release workflows.
+8. **Rendered engine text may become navigable; it never becomes state.** [`noticeText.tsx`](../../src/components/AssistantPanel/noticeText.tsx) turns a bare `https://` address inside a notice into a link, and does nothing else with it: the address is not parsed for meaning, not stored, and not compared against anything Daintree knows. The panel cannot tell a subscribe link from an account link and does not try — which is invariant 6 holding, not an exception to it. What it does judge is narrower and entirely local: whether a string is safe to hand to the system browser. That judgement is real work, because the host written in the text has to be the host the browser actually reaches — `https:///evil.test`, `https://%65xample.com`, `https://2130706433/` and a userinfo `@` all name one host and resolve to another, so all of them stay inert text. Two things follow that are worth stating rather than discovering. The engine relays upstream diagnostics verbatim, so an address it never validated can still be rendered navigable; the origin check is what bounds that, since a link cannot claim one host and reach another, and the user still has to click. And the protocol carries no way to mark an address approved — a typed link action would be the stronger answer and is a deliberate cross-repository change, not something a renderer can grant itself.
 
-## What is not in scope yet
+## Deliberately out of scope for Daintree
 
-- **Nothing constructs `AssistantHostProcess`.** No session provisions a host, no IPC channel is registered, and no renderer surface subscribes. The wrapper and the entry resolver exist; the wiring does not.
-- No conversation transcript renders natively until the `@daintreehq/daintree-assistant` package emits `turn:start`/`turn:token`/`turn:end`. Until then the xterm pane remains the conversation surface, and the CLI/Ink path stays both the default and the fallback.
-- Workflow-ledger events are additive: when the ledger lands, its records layer onto this timeline without changing the event shapes above.
+Payment, subscription storage, quota calculation, Supabase integration, OAuth URL construction, loopback callback handling, and any settings-based login. Each would duplicate an authority that lives in one of the other three projects and reopen the boundary this design closed. Daintree never decides which address is the RIGHT one — it constructs no account URL, infers none from a hostname, substitutes none, and hard-codes none. It does decide whether an address the engine chose to say is safe to hand to the system browser, which is invariant 8 and is a navigation question rather than an account one.
+
+### Message worktree
+
+Each native prompt carries a worktree snapshot captured in the submitting project view before IPC (`id`, `path`, and `branch`; `null` for an absent or unresolved selection). The engine uses this snapshot as the default for new work until another message updates it at a completed tool-batch boundary, so opening the panel in another worktree or switching during generation cannot move its launches. Message metadata survives queued feedback and recovery. Feedback to an existing job continues to use that job's recorded terminals and worktree unless the user redirects it. An agent name selects an agent type for fresh work; it does not authorize borrowing an unrelated open terminal.

@@ -10,8 +10,54 @@ const mockMkdirSync = vi.fn();
 const mockCopyFileSync = vi.fn();
 const mockStatSync = vi.fn();
 const mockUnlinkSync = vi.fn();
+const mockReadFileSync = vi.fn();
 const mockSpawnSync = vi.fn();
 const mockGetRawHeader = vi.fn();
+
+/**
+ * The submodule commit the tests below pretend this repository pins, and the version
+ * string a binary built from it carries. The assistant guard compares the two, so both
+ * halves have to be scriptable — `git` for the pin, `readFileSync` for the binary.
+ */
+const PINNED_SHA = "abc1234";
+const PINNED_VERSION = `daintree-${PINNED_SHA}`;
+
+/**
+ * `git` output for a submodule that is checked out, matches the gitlink, and is clean.
+ *
+ * The submodule line carries its real shape — the leading space that marks "clean", then
+ * a FULL 40-character object id. Both are load-bearing: the guard refuses anything it
+ * cannot parse, because empty or unexpected output is what `git submodule status` gives
+ * for a path that is no longer a gitlink, and reading past it fabricates a pin.
+ */
+function cleanSubmoduleGit(args: string[]) {
+  const out = args.includes("submodule")
+    ? ` ${PINNED_SHA.padEnd(40, "0")} vendor/daintree-assistant (heads/develop)\n`
+    : args.includes("rev-parse")
+      ? PINNED_SHA
+      : ""; // `status --porcelain`: empty is clean
+  return { status: 0, error: null, stdout: out, stderr: "" };
+}
+
+/** An engine binary's bytes, stamped with `version` the way the Go linker leaves it. */
+function stampedEngine(version: string) {
+  return Buffer.from(`\x7fELF\x00go1.25${version}\x00runtime.main`, "latin1");
+}
+
+/**
+ * Whether the posix-pty-reaper supervisor was exec'd.
+ *
+ * Scanned by the executable it ran rather than asserted with `toHaveBeenCalled`, because
+ * the assistant guard shells out to `git` on every platform now — a bare called/not-called
+ * check answers "did anything spawn", which is always yes on a successful pack and always
+ * yes on one where the supervisor probe was skipped. Matching the first argument is what
+ * the assertion actually meant all along, and it does not depend on the call's arity.
+ */
+function supervisorProbed() {
+  return mockSpawnSync.mock.calls.some((call) =>
+    String(call[0] ?? "").includes("daintree_pty_supervisor")
+  );
+}
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -47,18 +93,30 @@ describe("afterPack", () => {
     consoleSpy.mockImplementation(() => {});
     warnSpy.mockImplementation(() => {});
 
-    // Default: posix-pty-reaper supervisor execs cleanly (status 0, no error).
-    mockSpawnSync.mockReturnValue({
-      status: 0,
-      error: null,
-      stdout: Buffer.from(""),
-      stderr: Buffer.from(""),
-    });
+    // Default: posix-pty-reaper supervisor execs cleanly (status 0, no error), and the
+    // assistant guard's `git` calls report a submodule that agrees with its gitlink.
+    //
+    // Reset first, because `clearAllMocks` keeps implementations: the reaper tests below
+    // install a FAILING return value, and without a reset it would survive into the git
+    // calls of every later test and read as an unresolvable pin.
+    mockSpawnSync.mockReset();
+    mockSpawnSync.mockImplementation((cmd: string, args: string[]) =>
+      cmd === "git"
+        ? cleanSubmoduleGit(args)
+        : { status: 0, error: null, stdout: Buffer.from(""), stderr: Buffer.from("") }
+    );
+
+    // Default: the packaged engine was built from the pinned commit. Only the assistant
+    // guard reads a file's contents, so this mock serves it alone.
+    mockReadFileSync.mockReset();
+    mockReadFileSync.mockReturnValue(stampedEngine(PINNED_VERSION));
 
     // Default: a well-formed app.asar of a plausible size. The guard reads it
     // through statSync (never existsSync), so the call-order chains the tests
     // below drive mockExistsSync with stay aligned.
-    mockStatSync.mockReturnValue({ size: 40 * 1024 * 1024 });
+    // mode is read by the assistant-engine guard (a non-executable binary fails at
+    // spawn with an unhelpful EACCES, so it is checked at pack time instead).
+    mockStatSync.mockReturnValue({ size: 40 * 1024 * 1024, mode: 0o755 });
     mockGetRawHeader.mockReturnValue(asarHeader());
 
     // clearAllMocks only clears call history — implementations and queued
@@ -90,6 +148,7 @@ describe("afterPack", () => {
           copyFileSync: mockCopyFileSync,
           statSync: mockStatSync,
           unlinkSync: mockUnlinkSync,
+          readFileSync: mockReadFileSync,
         };
       }
       if (id === "child_process" || id === "node:child_process") {
@@ -881,7 +940,7 @@ describe("afterPack", () => {
 
       await afterPack(createContext("darwin", "/build/mac", "Daintree", foreignArch));
 
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(supervisorProbed()).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("Skipping posix-pty-reaper exec check")
       );
@@ -894,7 +953,7 @@ describe("afterPack", () => {
 
       await afterPack(createContext("darwin", "/build/mac", "Daintree", Arch.universal));
 
-      expect(mockSpawnSync).toHaveBeenCalled();
+      expect(supervisorProbed()).toBe(true);
     });
 
     it("still execs the runner-native slice of a universal build", async () => {
@@ -905,7 +964,7 @@ describe("afterPack", () => {
 
       await afterPack(createContext("darwin", "/build/mac", "Daintree", nativeArch));
 
-      expect(mockSpawnSync).toHaveBeenCalled();
+      expect(supervisorProbed()).toBe(true);
     });
 
     it("probes rather than skips an arch it does not recognise", async () => {
@@ -925,7 +984,7 @@ describe("afterPack", () => {
         afterPack(createContext("linux", "/build/linux", "Daintree", unknownArch))
       ).rejects.toThrow(/does not recognise/);
 
-      expect(mockSpawnSync).toHaveBeenCalled();
+      expect(supervisorProbed()).toBe(true);
     });
 
     it("should not exec the supervisor on Windows", async () => {
@@ -933,7 +992,7 @@ describe("afterPack", () => {
 
       await afterPack(createContext("win32", "/build/win"));
 
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(supervisorProbed()).toBe(false);
     });
   });
 
@@ -1006,10 +1065,12 @@ describe("afterPack", () => {
       // rather than restating the number.
       mockExistsSync.mockReturnValue(true);
 
-      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES });
+      // mode rides along because the same stat mock also answers the
+      // assistant-engine guard, which checks the executable bit.
+      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES, mode: 0o755 });
       await afterPack(createContext("linux", "/build/linux"));
 
-      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES + 1 });
+      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES + 1, mode: 0o755 });
       await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(OVER_CEILING);
     });
 
@@ -1117,6 +1178,192 @@ describe("afterPack", () => {
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /onnxruntime-node not found/
       );
+    });
+  });
+
+  describe("assistant engine guard", () => {
+    // The engine ships as extraResources selected per platform by an `${arch}`
+    // template. These pin the two ways that selection can go wrong, neither of which
+    // is visible in a --dir build: shipping nothing, and shipping everything.
+    const linuxAssistant = "/build/linux/resources/assistant/daintree-assistant";
+
+    it("passes when exactly the platform's own binary is present", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant"] : []
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).resolves.toBeUndefined();
+    });
+
+    it("fails the pack when foreign-platform binaries were copied in", async () => {
+      // The regression this exists for: a widened glob or a directory copy puts all
+      // six targets in the installer. ~75MB of executables the app cannot run, and on
+      // macOS a pile of unsigned foreign-arch Mach-O binaries handed to notarization.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant")
+          ? [
+              "daintree-assistant",
+              "daintree-assistant-darwin-arm64",
+              "daintree-assistant-win32-x64.exe",
+            ]
+          : []
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /foreign assistant binaries/
+      );
+    });
+
+    it("ignores unrelated files sitting beside the binary", async () => {
+      // The guard matches on the assistant name prefix rather than "anything that is
+      // not the expected file", so a future resource layout cannot trip it by accident.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant", "README.txt"] : []
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).resolves.toBeUndefined();
+    });
+
+    it("fails the pack when the engine is missing entirely", async () => {
+      mockExistsSync.mockImplementation((p: string) => !String(p).includes("assistant"));
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /assistant engine/
+      );
+    });
+
+    it("fails the pack on a truncated binary", async () => {
+      // A placeholder or partial file passes the name check and would otherwise fail
+      // at first launch as an opaque spawn error.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant"] : []
+      );
+      mockStatSync.mockImplementation((p: string) =>
+        String(p) === linuxAssistant
+          ? { size: 1024, mode: 0o755 }
+          : { size: 40 * 1024 * 1024, mode: 0o755 }
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /implausibly small/
+      );
+    });
+
+    it("fails the pack when the binary lost its executable bit", async () => {
+      // Symptom at runtime is EACCES on spawn, which names neither the file nor the
+      // cause — so it is worth catching while the packager still has context.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant"] : []
+      );
+      mockStatSync.mockImplementation((p: string) =>
+        String(p) === linuxAssistant
+          ? { size: 15 * 1024 * 1024, mode: 0o644 }
+          : { size: 40 * 1024 * 1024, mode: 0o755 }
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /not executable/
+      );
+    });
+
+    // Every check above passes on a perfectly good engine that is simply the WRONG one.
+    // `resources/assistant/` is written only by an explicit `npm run build:assistant`, so
+    // moving the submodule and packaging ships the previous binary — right name, right
+    // arch, plausible size, executable, previous engine's bugs. It was live on this
+    // branch: the gitlink read `ffa9c05` while the built resource reported
+    // `daintree-e0e3f0b-dirty`, and nothing anywhere said so.
+    describe("pinned-commit verification", () => {
+      beforeEach(() => {
+        mockExistsSync.mockReturnValue(true);
+        mockReaddirSync.mockImplementation((dir: string) =>
+          String(dir).endsWith("assistant") ? ["daintree-assistant"] : []
+        );
+      });
+
+      it("checks the PACKAGED binary, not some other file that happens to be stamped", async () => {
+        await afterPack(createContext("linux", "/build/linux"));
+
+        // The exact path, because the double answers every path with a valid engine:
+        // reading the repo's source copy — which is current even when the packaged one
+        // is stale — would leave this whole block green while proving nothing.
+        expect(mockReadFileSync).toHaveBeenCalledWith(linuxAssistant);
+        expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining(PINNED_VERSION));
+      });
+
+      it("fails the pack on a binary left over from an earlier pin", async () => {
+        mockReadFileSync.mockReturnValue(stampedEngine("daintree-e0e3f0b"));
+
+        await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+          /e0e3f0b.*abc1234|abc1234.*e0e3f0b/s
+        );
+      });
+
+      it("fails the pack on a dirty build of the right commit", async () => {
+        // The trap a substring test falls into: `daintree-abc1234-dirty` CONTAINS
+        // `daintree-abc1234`, so a naive match ships the one build nobody can reproduce.
+        mockReadFileSync.mockReturnValue(stampedEngine(`${PINNED_VERSION}-dirty`));
+
+        await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+          new RegExp(`${PINNED_VERSION}-dirty`)
+        );
+      });
+
+      it("fails the pack when the submodule itself has uncommitted changes", async () => {
+        // Decided from the pin, without reading the binary: whatever is on disk, a build
+        // from an edited submodule cannot be reproduced from the source tree it ships in.
+        mockSpawnSync.mockImplementation((cmd: string, args: string[]) => {
+          if (cmd !== "git") {
+            return { status: 0, error: null, stdout: Buffer.from(""), stderr: Buffer.from("") };
+          }
+          const clean = cleanSubmoduleGit(args);
+          return args.includes("--porcelain")
+            ? { ...clean, stdout: " M internal/auth/oauth.go" }
+            : clean;
+        });
+
+        await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow();
+        // Decided from the pin alone. Asserting the read never happened is what proves
+        // that, rather than the wording of the message.
+        expect(mockReadFileSync).not.toHaveBeenCalled();
+      });
+
+      it("fails the pack when the submodule is not checked out", async () => {
+        mockSpawnSync.mockImplementation((cmd: string, args: string[]) =>
+          cmd === "git" && args.includes("submodule")
+            ? {
+                status: 0,
+                error: null,
+                stdout: ` -${"abc1234".padEnd(40, "0")} vendor/daintree-assistant`.trimStart(),
+                stderr: "",
+              }
+            : { status: 0, error: null, stdout: Buffer.from(""), stderr: Buffer.from("") }
+        );
+
+        await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+          /git submodule update/
+        );
+      });
+
+      it("fails the pack when the submodule is somewhere the repository does not pin", async () => {
+        mockSpawnSync.mockImplementation((cmd: string, args: string[]) =>
+          cmd === "git" && args.includes("submodule")
+            ? {
+                status: 0,
+                error: null,
+                stdout: `+${"deadbee".padEnd(40, "0")} vendor/daintree-assistant (develop)`,
+                stderr: "",
+              }
+            : { status: 0, error: null, stdout: Buffer.from(""), stderr: Buffer.from("") }
+        );
+
+        await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(/deadbee/);
+        expect(mockReadFileSync).not.toHaveBeenCalled();
+      });
     });
   });
 });

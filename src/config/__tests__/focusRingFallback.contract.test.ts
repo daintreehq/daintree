@@ -446,6 +446,15 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Section filter is a strip: the wrapper carries the border, focus-within and the forced-colors outline, so the bare input must not paint a second box inside it (that nested rectangle is exactly what #11984 removed)",
   },
   {
+    file: "src/components/AssistantPanel/AssistantQuestionCard.tsx",
+    fragment: "outline-hidden",
+    reason:
+      "Question sheet root is a tabIndex=-1 keyboard host, focused programmatically so ↑/↓ and " +
+      "letter keys work the moment it appears. It is not tab-reachable and never the focus " +
+      "target a user navigates to; the visible selection is the aria-selected option row, which " +
+      "carries its own highlight",
+  },
+  {
     file: "src/components/HelpPanel/HelpPanel.tsx",
     fragment: "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
     reason:
@@ -550,6 +559,15 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // suppresses its own default outline with `focus:outline-hidden` so the
   // wrapper's ring is the only focus indication. The scanner can't see the
   // sibling JSX parent, so these get per-occurrence allowlists.
+  {
+    file: "src/components/AssistantPanel/AssistantPanelView.tsx",
+    fragment: '"outline-hidden"',
+    reason:
+      "Assistant composer textarea — the wrapper owns focus chrome " +
+      "(`focus-within:border-border-interactive`). Deliberately NOT an accent ring: the " +
+      "accent already belongs to the send button, and two accent signals in one focus " +
+      "region is what the accent-restraint rule forbids.",
+  },
   {
     file: "src/components/Settings/KeyboardShortcutsTab.tsx",
     fragment:

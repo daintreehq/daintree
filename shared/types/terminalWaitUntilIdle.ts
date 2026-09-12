@@ -23,7 +23,7 @@ export const MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
  * silently desyncing.
  */
 export type WaitUntilIdleIdleReason =
-  "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+  "idle" | "waiting_for_user" | "completed" | "exited" | "closed" | "unknown";
 
 /** Literal values of {@link WaitUntilIdleIdleReason}, for the raw JSON schemas. */
 export const WAIT_UNTIL_IDLE_IDLE_REASONS: readonly WaitUntilIdleIdleReason[] = [
@@ -31,6 +31,7 @@ export const WAIT_UNTIL_IDLE_IDLE_REASONS: readonly WaitUntilIdleIdleReason[] = 
   "waiting_for_user",
   "completed",
   "exited",
+  "closed",
   "unknown",
 ];
 
@@ -143,7 +144,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       enum: [...WAIT_UNTIL_IDLE_IDLE_REASONS],
       description:
-        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'closed' when the user closed the terminal itself (the process is still tearing down, so no exit code yet — treat the terminal as gone), 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
     },
     trackingState: {
       type: "string",
@@ -275,4 +276,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
-  "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.";
+  "Block until the first of several agents stops working, or until all do; the fan-out primitive when agents stop at different times. Prefer it to waiting on each terminal in turn; to poll without blocking, use a status snapshot. Timing out means the predicate is unmet, not failed; a gone terminal settles too (idleReason 'closed' when the user closed it), so read `trackingState`.";
