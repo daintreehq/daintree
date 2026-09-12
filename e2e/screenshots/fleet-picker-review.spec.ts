@@ -95,12 +95,23 @@ const WORKTREES = [
   { branch: "fix/retry-backoff-jitter", slug: "retry-backoff" },
 ] as const;
 
-/** Agents launch here in order; the last one is driven to `waiting`. */
+/**
+ * Agents launch here in order; the last one is driven to `waiting`.
+ *
+ * The first worktree deliberately gets TWO agents. A group of one can never be
+ * partially selected, and the tri-state group checkbox is the single hardest
+ * glyph on this surface to get right — with one agent per worktree it would
+ * never render at all.
+ */
 const AGENT_BRANCHES = [
+  WORKTREES[0].branch,
   WORKTREES[0].branch,
   WORKTREES[1].branch,
   WORKTREES[2].branch,
 ] as const;
+
+/** A plain shell, so one row carries no state badge and "Select agents" means something. */
+const PLAIN_TERMINAL_BRANCH = WORKTREES[1].branch;
 
 function createRepo(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), "daintree-fleetpicker-shots-"));
@@ -185,17 +196,42 @@ async function step(name: string, fn: () => Promise<void>): Promise<void> {
   }
 }
 
+async function dispatch(page: Page, actionId: string): Promise<void> {
+  await page.evaluate(async (id) => {
+    const fn = window.__daintreeDispatchAction;
+    if (typeof fn !== "function") throw new Error("Action dispatch hook not available");
+    await fn(id, undefined, { source: "test" });
+  }, actionId);
+}
+
 /**
- * Switch the active worktree from the sidebar list. The picker groups by
- * worktree, and an agent is only launched into whichever worktree is active,
- * so this is how the fixture spreads sessions across groups.
+ * Switch the active worktree through the overview modal. The picker groups by
+ * worktree and an agent launches into whichever worktree is active, so this is
+ * what spreads sessions across groups — and grouping is the main thing being
+ * reviewed here.
+ *
+ * Going via the sidebar list looks simpler and is wrong: it is virtualized, and
+ * a click that lands on a card there selects it for the filter without making
+ * it active. The first version of this spec did that and put all three agents
+ * in one group, which collapsed the picker into its single-worktree layout and
+ * captured a surface with no hierarchy at all.
  */
 async function activateWorktree(page: Page, branch: string): Promise<void> {
+  await dismissBlockingPalette(page).catch(() => {});
+  await dispatch(page, "worktree.overview.open");
+  const modal = page.locator(SEL.worktree.overviewModal);
+  await modal.waitFor({ state: "visible", timeout: T_LONG });
+  // `data-worktree-branch` carries the DERIVED label, which drops the type
+  // prefix — `feature/theme-selector-design` renders as `theme-selector-design`.
+  // Match the suffix, or the locator can never resolve.
   const leaf = branch.split("/").pop() ?? branch;
-  const card = page.locator(`[data-worktree-branch$="${leaf}"]`).first();
-  await card.waitFor({ state: "visible", timeout: T_LONG });
-  await card.click();
-  await settle(page, 900);
+  const cell = page
+    .locator(`${SEL.worktree.overviewCell}:has([data-worktree-branch$="${leaf}"])`)
+    .first();
+  await cell.waitFor({ state: "visible", timeout: T_LONG });
+  await cell.click();
+  await modal.waitFor({ state: "hidden", timeout: T_LONG }).catch(() => {});
+  await settle(page, 800);
 }
 
 /**
@@ -250,11 +286,28 @@ async function launchAgentSession(page: Page): Promise<string | null> {
  */
 async function seedFleet(page: Page): Promise<void> {
   const launched: string[] = [];
+  let active = "";
   for (const branch of AGENT_BRANCHES) {
-    await activateWorktree(page, branch);
+    // Two agents in a row share a worktree; switching to the one already active
+    // round-trips the overview modal for nothing.
+    if (branch !== active) {
+      await activateWorktree(page, branch);
+      active = branch;
+    }
     const id = await launchAgentSession(page);
     if (id) launched.push(id);
   }
+
+  if (PLAIN_TERMINAL_BRANCH !== active) {
+    await activateWorktree(page, PLAIN_TERMINAL_BRANCH);
+  }
+  await dismissBlockingPalette(page).catch(() => {});
+  await page
+    .locator(SEL.toolbar.openTerminal)
+    .first()
+    .click()
+    .catch(() => {});
+  await settle(page, 1500);
 
   // The panel this launch actually produced, not whichever id sorts last —
   // `getGridPanelIds` is not launch-ordered, and idling the wrong pane leaves
@@ -369,6 +422,12 @@ test("fleet picker review — every state that carries design weight", async () 
     //    tree: one group checked, the rest empty. The headline state.
     await step("rest", async () => {
       await openPicker(page);
+      // The grouped, two-level layout IS the surface under review. When every
+      // terminal lands in one worktree the picker hides its group headers
+      // entirely (`isSingleWorktree`), and the sweep would quietly document a
+      // flat list as though that were the design. Fail loudly instead.
+      const groups = await page.locator(`[data-testid^="${TID}-group-"]`).count();
+      expect(groups, "fixture produced one group — the picker collapsed to its single-worktree layout").toBeGreaterThan(1);
       await snapSurface(page, "10-rest");
     });
 
@@ -401,10 +460,26 @@ test("fleet picker review — every state that carries design weight", async () 
       await reopenPicker(page);
       await page.locator(`[data-testid="${TID}-select-all"]`).click();
       await settle(page, 250);
-      // Deselect exactly one row, so its group falls to `indeterminate` while
-      // its siblings stay checked.
-      await page.locator(`[data-testid^="${TID}-row-"]`).first().click();
+      // Deselect one row inside a group that has siblings, so that group falls
+      // to `indeterminate`. Picking "the first row" would not do: if it belongs
+      // to a single-terminal group the group just goes unchecked and the
+      // tri-state glyph never renders.
+      const sections = page.locator(`[data-testid="${TID}-list"] section[role="group"]`);
+      const count = await sections.count();
+      let toggled = false;
+      for (let i = 0; i < count; i++) {
+        const rows = sections.nth(i).locator(`[data-testid^="${TID}-row-"]`);
+        if ((await rows.count()) > 1) {
+          await rows.first().click();
+          toggled = true;
+          break;
+        }
+      }
+      expect(toggled, "no group had two terminals — cannot produce an indeterminate checkbox").toBe(
+        true
+      );
       await settle(page, 300);
+      await expect(page.locator('[data-state="indeterminate"]').first()).toBeVisible();
       await snapSurface(page, "13-indeterminate");
     });
 
