@@ -51,6 +51,12 @@ export interface TabButtonProps {
   hasDangerousFlags?: boolean;
   /** The id of the region this tab switches — `aria-controls`, per the APG tabs pattern. */
   tabPanelId?: string;
+  /**
+   * The overflow observer could not fit this tab. It stays in layout so the
+   * observer keeps measuring it, but it is not painted — a clipped fragment at
+   * the strip's edge reads as a stray glyph. Never true for the active tab.
+   */
+  parked?: boolean;
 }
 
 /** The DOM id a tab carries, so the panel it controls can name it back. */
@@ -77,6 +83,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     fallbackTooltip,
     hasDangerousFlags,
     tabPanelId,
+    parked = false,
   },
   ref
 ) {
@@ -284,12 +291,14 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           role="tab"
           aria-selected={isActive}
           aria-controls={tabPanelId}
+          data-tab-parked={parked || undefined}
           tabIndex={isActive ? 0 : -1}
           onClick={handleClick}
           onKeyDown={handleKeyDown}
           className={cn(
             "relative flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
             "border-r border-divider transition-colors",
+            parked && "invisible",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
             isActive
               ? "bg-tint/[0.04] text-text-primary"

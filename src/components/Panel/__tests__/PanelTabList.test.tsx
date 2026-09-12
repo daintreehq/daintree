@@ -39,7 +39,11 @@ const baseProps = {
   onKeyDown: () => {},
   addTabTooltipContent: "Add",
   overflowTrigger: null,
-  renderTab: (tab: TabInfo) => <span data-testid={`tab-${tab.id}`}>{tab.title}</span>,
+  renderTab: (tab: TabInfo, parked: boolean) => (
+    <span data-testid={`tab-${tab.id}`} data-parked={parked || undefined}>
+      {tab.title}
+    </span>
+  ),
 };
 
 describe("PanelTabList", () => {
@@ -80,14 +84,27 @@ describe("PanelTabList", () => {
       { ...tabs[0]!, id: "tab-3", isActive: false },
     ];
     render(<PanelTabList {...baseProps} tabs={three} hiddenTabIds={new Set(["tab-2", "tab-3"])} />);
-    const wrapperOf = (id: string) => screen.getByTestId(`tab-${id}`).parentElement!;
-    // A tab that does not fit must not paint a fragment at the strip's edge —
-    // it stays in layout (the observer still measures it) but not on screen.
-    expect(wrapperOf("tab-3").classList.contains("invisible")).toBe(true);
-    expect(wrapperOf("tab-3").getAttribute("data-tab-parked")).toBe("true");
-    expect(wrapperOf("tab-1").classList.contains("invisible")).toBe(false);
+    const parked = (id: string) => screen.getByTestId(`tab-${id}`).getAttribute("data-parked");
+    // A tab that does not fit is handed to the renderer as parked — it stays in
+    // layout (the observer still measures it) but must not paint a fragment.
+    expect(parked("tab-3")).toBe("true");
+    expect(parked("tab-1")).toBeNull();
     // The active tab is scrolled into view and can be flagged mid-scroll; it
     // is never parked or the strip would blink.
-    expect(wrapperOf("tab-2").classList.contains("invisible")).toBe(false);
+    expect(parked("tab-2")).toBeNull();
+  });
+
+  it("wraps no tab in an extra box in performance mode — a sortable drag is clamped to its parent", () => {
+    document.body.dataset.performanceMode = "true";
+    try {
+      render(<PanelTabList {...baseProps} />);
+      const tab = screen.getByTestId("tab-tab-1");
+      // The tab's parent is the strip's own row, not a per-tab wrapper.
+      expect(tab.parentElement?.children.length).toBeGreaterThanOrEqual(1);
+      expect(tab.parentElement?.getAttribute("data-tab-parked")).toBeNull();
+      expect(tab.parentElement?.className).toContain("flex");
+    } finally {
+      delete document.body.dataset.performanceMode;
+    }
   });
 });

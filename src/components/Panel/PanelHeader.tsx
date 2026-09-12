@@ -253,8 +253,20 @@ function PanelHeaderComponent({
 
   // The window controls are one toolbar: one Tab stop per pane, arrows within.
   // Six panes cost six presses to cross, not twenty-four.
+  // Not in the dock: a dock preview is hosted inside a Radix popover, and the
+  // hook excludes controls under a popper wrapper (it means an open menu),
+  // which would leave a dock header with no Tab stop at all.
   const controlsRef = useRef<HTMLDivElement | null>(null);
-  const handleControlsKeyDown = useToolbarRoving(controlsRef);
+  const handleControlsKeyDown = useToolbarRoving(controlsRef, location !== "dock");
+  const pendingTabFocusRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (pendingTabFocusRef.current !== null) {
+        cancelAnimationFrame(pendingTabFocusRef.current);
+      }
+    },
+    []
+  );
 
   // Check if panel kind supports restart via registry
   const canRestart = panelKindCanRestart(kind);
@@ -617,7 +629,11 @@ function PanelHeaderComponent({
         // Focus after the activation has rendered: a parked tab is
         // `visibility: hidden` until it becomes active, and a hidden element
         // refuses focus.
-        requestAnimationFrame(() => {
+        if (pendingTabFocusRef.current !== null) {
+          cancelAnimationFrame(pendingTabFocusRef.current);
+        }
+        pendingTabFocusRef.current = requestAnimationFrame(() => {
+          pendingTabFocusRef.current = null;
           const tabButton = tabListEl?.querySelector(
             `[data-tab-id="${nextTab.id}"]`
           ) as HTMLElement | null;
@@ -813,10 +829,11 @@ function PanelHeaderComponent({
                   onAddTab={onAddTab}
                   addTabTooltipContent={addTabTooltipContent}
                   overflowTrigger={overflowTrigger}
-                  renderTab={(tab) => (
+                  renderTab={(tab, parked) => (
                     <SortableTabButton
                       key={tab.id}
                       id={tab.id}
+                      parked={parked}
                       title={tab.title}
                       fullTitle={tab.fullTitle}
                       chrome={tab.chrome}
@@ -848,10 +865,11 @@ function PanelHeaderComponent({
               onAddTab={onAddTab}
               addTabTooltipContent={addTabTooltipContent}
               overflowTrigger={overflowTrigger}
-              renderTab={(tab) => (
+              renderTab={(tab, parked) => (
                 <TabButton
                   key={tab.id}
                   id={tab.id}
+                  parked={parked}
                   title={tab.title}
                   fullTitle={tab.fullTitle}
                   chrome={tab.chrome}
@@ -873,7 +891,10 @@ function PanelHeaderComponent({
         ) : (
           // overflow-hidden is the hard edge: whatever this group cannot fit is
           // clipped here, never painted over the status box or the controls.
-          <div className="flex items-center gap-2 min-w-0 self-stretch overflow-hidden">
+          // px-1 -mx-1 reserves 4px inside the clip on both sides: the rename
+          // field extends that far past the title's box, and without the room its
+          // own edge is what gets clipped when the title is the last item.
+          <div className="-mx-1 flex min-w-0 items-center gap-2 self-stretch overflow-hidden px-1">
             {/* The pane you are working in wears its agent's real brand colour;
               the ones you are not sit a step back. `data-brand-active` goes on
               the glyph's own wrapper rather than the header so it cannot leak

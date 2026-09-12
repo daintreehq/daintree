@@ -84,8 +84,10 @@ vi.mock("@/store/panelStore", () => {
 let mockHasPty = false;
 let mockIsDockable = true;
 
+let mockCanRestart = false;
+
 vi.mock("@shared/config/panelKindRegistry", () => ({
-  panelKindCanRestart: () => false,
+  panelKindCanRestart: () => mockCanRestart,
   panelKindHasPty: () => mockHasPty,
   panelKindIsDockable: () => mockIsDockable,
   getPanelKindConfig: (kind: string) =>
@@ -196,6 +198,7 @@ describe("PanelHeader", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHasPty = false;
+    mockCanRestart = false;
     mockIsDockable = true;
     mockHiddenTabIds = new Set();
     mockStoreState = {
@@ -1511,14 +1514,18 @@ describe("PanelHeader", () => {
       const header = document.querySelector("[data-pane-chrome]")!;
       const focusable = Array.from(
         header.querySelectorAll<HTMLElement>("button, [tabindex]")
-      ).filter((el) => el.tabIndex >= 0 && el.closest('[data-testid="overflow-menu"]') === null);
+        // Every control, including the roving ones at tabIndex -1 — arrows reach
+        // them, so they need a ring just as much.
+      ).filter((el) => el.closest('[data-testid="overflow-menu"]') === null);
       expect(focusable.length).toBeGreaterThan(3);
       for (const el of focusable) {
         // Left to the UA default, a ring is whatever colour the browser
         // chooses — which on this bar was a third colour next to the accent
         // ring on the controls.
+        // A real ring: `outline-hidden`/`outline-none` after the variant does
+        // not count.
         expect(el.className, el.getAttribute("aria-label") ?? el.textContent ?? undefined).toMatch(
-          /focus-visible:outline/
+          /focus-visible:outline(?!-hidden|-none)/
         );
       }
       useFleetFailureStore.getState().clear();
@@ -1535,16 +1542,21 @@ describe("PanelHeader", () => {
       // is reserved for focus rings (the `focus-visible:` prefix) and nothing
       // else on this bar.
       const painted = Array.from(header.querySelectorAll<HTMLElement>("*")).filter((el) =>
-        /(^|\s)(text|bg|border)-accent-primary(\/|\s|$)/.test(el.className ?? "")
+        // getAttribute, not className: on an SVG that property is an
+        // SVGAnimatedString and would never match.
+        /(^|\s)(text|bg|border)-accent-primary(\/|\s|$)/.test(el.getAttribute("class") ?? "")
       );
       expect(painted.map((el) => el.className)).toEqual([]);
     });
 
     it("labels every menu item in sentence case", () => {
       mockHasPty = true;
+      mockCanRestart = true;
       mockStoreState = { ...mockStoreState, watchedPanels: new Set(["test-panel"]) };
       const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
       render(<PanelHeader {...makeProps({ chrome, agentId: "claude", onRestart: vi.fn() })} />);
+      // The restart row is part of the set under test, armed label included.
+      expect(screen.getByTestId("panel-restart")).toBeDefined();
       const menu = screen.getByTestId("overflow-menu");
       const labels = Array.from(menu.querySelectorAll("button")).map((b) =>
         (b.textContent ?? "").trim()
@@ -1616,10 +1628,11 @@ describe("PanelHeader", () => {
       const title = screen.getByRole("button", {
         name: /title: Claude: fix flaky auth tests/,
       });
-      // Both compositions are rendered; the container query decides which
-      // paints. The name never compacts.
-      expect(title.textContent).toContain("Claude: fix flaky auth tests");
-      expect(title.textContent).toContain("fix flaky auth tests");
+      // Both compositions are rendered as their own nodes; the container
+      // query decides which paints. The name never compacts.
+      const nodes = Array.from(title.querySelectorAll("span")).map((n) => n.textContent);
+      expect(nodes).toContain("Claude: fix flaky auth tests");
+      expect(nodes).toContain("fix flaky auth tests");
     });
 
     it("gives the branch badge a full-text surface for when it truncates or hides", () => {
@@ -1638,6 +1651,46 @@ describe("PanelHeader", () => {
       expect(
         tooltips.filter((t) => t.includes("feature/billing-reconciliation-worker")).length
       ).toBeGreaterThanOrEqual(2);
+    });
+
+    it("moves focus onto a parked tab only once its activation has painted it", async () => {
+      // jsdom has no frame loop; a frame is a macrotask here.
+      const raf = vi
+        .spyOn(globalThis, "requestAnimationFrame")
+        .mockImplementation((cb) => setTimeout(() => cb(0), 0) as unknown as number);
+      mockHiddenTabIds = new Set(["t2"]);
+      const mk = (active: string) => [
+        {
+          id: "test-panel",
+          title: "Tab 1",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: active === "test-panel",
+        },
+        {
+          id: "t2",
+          title: "Tab 2",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: active === "t2",
+        },
+      ];
+      function Host() {
+        const [active, setActive] = React.useState("test-panel");
+        return <PanelHeader {...makeProps({ tabs: mk(active), onTabClick: setActive })} />;
+      }
+      render(<Host />);
+      const tabs = () => screen.getAllByRole("tab", { hidden: true });
+      // Parked before activation: hidden from paint, so not focusable.
+      expect(tabs()[1]?.getAttribute("data-tab-parked")).toBe("true");
+      fireEvent.keyDown(screen.getByRole("tablist"), { key: "ArrowRight" });
+      // Activation repaints it first…
+      expect(tabs()[1]?.getAttribute("aria-selected")).toBe("true");
+      expect(tabs()[1]?.getAttribute("data-tab-parked")).toBeNull();
+      // …then the deferred focus lands on it.
+      await new Promise((r) => setTimeout(r, 5));
+      expect(document.activeElement).toBe(tabs()[1]);
+      raf.mockRestore();
     });
   });
 });

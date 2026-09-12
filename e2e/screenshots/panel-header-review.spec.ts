@@ -33,7 +33,7 @@
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
+import { mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import path from "path";
 import { createServer, type ViteDevServer } from "vite";
 import { BUILT_IN_THEME_SOURCES } from "@shared/theme/builtInThemeSources";
@@ -67,10 +67,20 @@ test.beforeAll(async () => {
   if (!path.isAbsolute(OUT_DIR)) {
     throw new Error("DAINTREE_SHOT_DIR must be an absolute directory outside the repo");
   }
-  // Fresh directory per run: a leftover PNG from an earlier round read as this round's
-  // output is the single easiest way to review a screen that no longer exists.
-  if (existsSync(OUT_DIR)) rmSync(OUT_DIR, { recursive: true, force: true });
+  // Outside the repo, resolved through symlinks so a path that merely spells the
+  // checkout differently cannot slip in.
+  const repoRoot = realpathSync(process.cwd());
   mkdirSync(OUT_DIR, { recursive: true });
+  const outReal = realpathSync(OUT_DIR);
+  if (outReal === repoRoot || outReal.startsWith(repoRoot + path.sep)) {
+    throw new Error(`DAINTREE_SHOT_DIR must be outside the repo (${OUT_DIR})`);
+  }
+  // Fresh captures per run: a leftover PNG from an earlier round read as this round's
+  // output is the single easiest way to review a screen that no longer exists. Only
+  // the PNGs go — this never removes a directory it did not create.
+  for (const file of readdirSync(OUT_DIR)) {
+    if (file.endsWith(".png")) rmSync(path.join(OUT_DIR, file), { force: true });
+  }
 
   // `strictPort: false` so the harness can run beside a live `npm run dev` — the
   // project config pins 5173 with strictPort, and a port collision surfaces as
@@ -253,11 +263,12 @@ async function proveState(page: Page, name: FixtureName, header: Locator): Promi
     case "hibernated":
       await expect(header.getByTestId("terminal-hibernated-badge")).toBeVisible({ timeout });
       break;
-    // `completed-cost` and `completed-no-changes` prove only the title: through
-    // ContentPanel a completed agent's display state coerces to `waiting`
-    // (getTerminalAgentDisplayState rule 3), so the settled trace those fixtures
-    // describe is what the metadata row would show, not what it does. The capture
-    // shows the real thing; the gap is the review's to weigh.
+    case "completed-cost":
+      await expect(header.getByText("$1.84")).toBeVisible({ timeout });
+      break;
+    case "completed-no-changes":
+      await expect(header.getByText("Finished, no changes")).toBeVisible({ timeout });
+      break;
     case "exited-plain":
       await expect(header.getByText("[exit 1]")).toBeVisible({ timeout });
       break;

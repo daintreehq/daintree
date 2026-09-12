@@ -23,7 +23,8 @@ export interface PanelTabListProps {
   onAddTab?: () => void;
   addTabTooltipContent: React.ReactNode;
   overflowTrigger: React.ReactNode | null;
-  renderTab: (tab: TabInfo) => React.ReactNode;
+  /** `parked` is true for a tab the overflow observer could not fit (never the active one). */
+  renderTab: (tab: TabInfo, parked: boolean) => React.ReactNode;
   className?: string;
 }
 
@@ -49,6 +50,10 @@ export function PanelTabList({
     // DndContext using PointerSensor, which ignores [data-no-dnd], so it still works.
     <div data-no-dnd className={cn("relative min-w-0 flex-1 flex", className)}>
       <div
+        // Keyed on the mode: the two branches below mount different tab
+        // elements, and the overflow observer only re-observes when the strip
+        // element changes — otherwise it keeps watching the old, detached tabs.
+        key={performanceMode ? "static" : "animated"}
         ref={tabListRef}
         className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none relative"
         role="tablist"
@@ -58,26 +63,18 @@ export function PanelTabList({
         <LayoutGroup id={layoutGroupId}>
           <div className="flex items-center">
             {performanceMode ? (
-              tabs.map((tab) => (
-                <div
-                  key={tab.id}
-                  className={cn(isParked(tab) && "invisible")}
-                  data-tab-parked={isParked(tab) || undefined}
-                >
-                  {renderTab(tab)}
-                </div>
-              ))
+              // No wrapper here: a sortable tab's drag is restricted to its
+              // parent element, and a per-tab box would pin it in place.
+              tabs.map((tab) => renderTab(tab, isParked(tab)))
             ) : (
               <AnimatePresence initial={false} mode="popLayout">
                 {tabs.map((tab) => (
                   <m.div
                     key={tab.id}
                     layout="position"
-                    className={cn(isParked(tab) && "invisible")}
-                    data-tab-parked={isParked(tab) || undefined}
                     transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
                   >
-                    {renderTab(tab)}
+                    {renderTab(tab, isParked(tab))}
                   </m.div>
                 ))}
               </AnimatePresence>
