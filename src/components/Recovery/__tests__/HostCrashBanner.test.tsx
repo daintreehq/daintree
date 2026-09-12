@@ -57,6 +57,18 @@ describe("HostCrashBanner", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it("announces an automatic restart politely; only the exhausted crash is an alert", () => {
+    vi.useFakeTimers();
+    usePanelStore.setState({ backendStatus: "recovering" });
+    render(<HostCrashBanner />);
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    vi.useRealTimers();
+  });
+
   it("renders recovering banner after Doherty threshold", () => {
     vi.useFakeTimers();
     usePanelStore.setState({ backendStatus: "recovering" });

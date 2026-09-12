@@ -82,12 +82,14 @@ describe("WorktreeLoadErrorBanner (#8400)", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
 
+    // While the retry is in flight the control is busy (aria, not native
+    // disabled, so focus stays on it); settling clears that.
+    expect(button.getAttribute("aria-busy")).toBe("true");
     resolveRetry();
     await waitFor(() =>
       expect(
-        (screen.getByRole("button", { name: "Retry loading worktrees" }) as HTMLButtonElement)
-          .disabled
-      ).toBe(false)
+        screen.getByRole("button", { name: "Retry loading worktrees" }).getAttribute("aria-busy")
+      ).toBeNull()
     );
   });
 });

@@ -155,7 +155,8 @@ describe("TerminalErrorBanner", () => {
       { isRestarting: true }
     );
     const retry = screen.getByRole("button", { name: /retry restart/i });
-    expect(retry.hasAttribute("disabled")).toBe(true);
+    // Loading keeps focus on the control (no native disabled) and blocks activation.
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
     expect(retry.getAttribute("aria-busy")).toBe("true");
   });
 });

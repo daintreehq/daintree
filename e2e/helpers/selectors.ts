@@ -573,7 +573,7 @@ export const SEL = {
     item: (id: string) => `[data-checklist-item="${id}"]`,
   },
   recovery: {
-    watchdogDisabledBanner: '[role="alert"]:has-text("Crash watchdog disabled")',
+    watchdogDisabledBanner: '[role="status"]:has-text("Crash watchdog disabled")',
     watchdogRestartButton: 'button:has-text("Restart watchdog")',
   },
 } as const;

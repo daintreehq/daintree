@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, cleanup, act } from "@testing-library/react";
+import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -27,6 +27,7 @@ import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
+import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 import type { PrerequisiteCheckResult } from "@shared/types";
 
 function missingGit(overrides: Partial<PrerequisiteCheckResult> = {}): PrerequisiteCheckResult {
@@ -109,6 +110,7 @@ function resetStores() {
   useForgeProviderHealthStore.setState({ providers: {} });
   useCloudSyncBannerStore.setState({ service: null, projectId: null });
   useRosettaBannerStore.setState({ visible: false });
+  useGlobalBannerDismissalStore.setState({ dismissed: new Set() });
   useMissingPrerequisiteStore.setState({
     missing: [],
     dismissed: false,
@@ -197,7 +199,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
   });
 
   it("treats a dismissed safe mode as inactive and promotes restore", () => {
@@ -206,7 +208,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
   });
 
@@ -254,7 +256,7 @@ describe("GlobalBannerCoordinator", () => {
   it("switches from restore to safe mode reactively via store subscription", async () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
     render(<GlobalBannerCoordinator />);
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
 
     act(() => {
       useSafeModeStore.setState({ safeMode: true, dismissed: false });
@@ -306,7 +308,7 @@ describe("GlobalBannerCoordinator", () => {
     act(() => {
       useSafeModeStore.setState({ dismissed: true });
     });
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
 
     act(() => {
       vi.advanceTimersByTime(10_000);
@@ -370,6 +372,45 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.getByText("GitHub token expired")).toBeTruthy();
   });
 
+  it("releases the slot to the next banner once the forge warning is dismissed", () => {
+    // The slot is claimed by the same predicate that renders: a dismissed
+    // token must not hold an empty band over cloud-sync.
+    setForgeTokenUnhealthy(true);
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+    expect(screen.getByText("GitHub token expired")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss GitHub token warning" }));
+
+    expect(screen.queryByText("GitHub token expired")).toBeNull();
+    expect(screen.getByText("Project in a cloud folder")).toBeTruthy();
+  });
+
+  it("lets a dismissed watchdog warning yield the slot, and shows it again on the next disable", () => {
+    usePanelStore.setState({
+      watchdogStatus: "disabled",
+      watchdogDisabledInfo: { attemptCount: 3, lastExitCode: null, timestamp: 0 },
+    });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss watchdog warning" }));
+    expect(screen.queryByText("Crash watchdog disabled")).toBeNull();
+    expect(screen.getByText("Project in a cloud folder")).toBeTruthy();
+
+    act(() => {
+      usePanelStore.setState({ watchdogStatus: "active", watchdogDisabledInfo: null });
+    });
+    act(() => {
+      usePanelStore.setState({
+        watchdogStatus: "disabled",
+        watchdogDisabledInfo: { attemptCount: 1, lastExitCode: null, timestamp: 1 },
+      });
+    });
+    expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
+  });
+
   it("renders the cloud sync banner when only a synced folder is detected", () => {
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
@@ -395,7 +436,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
     expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });

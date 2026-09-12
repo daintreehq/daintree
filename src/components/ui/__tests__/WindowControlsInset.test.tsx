@@ -48,7 +48,10 @@ describe("WindowControlsInsetProvider", () => {
     );
     // Constant, not env(titlebar-area-width): WCO variables never resolve in
     // the child WebContentsView the app renders in (electron/electron#34947).
-    expect(screen.getByTestId("probe").style.paddingRight).toBe(`${WINDOWS_CAPTION_WIDTH_PX}px`);
+    // At least the caption strip, so no control can sit under it; anything
+    // beyond that is the gutter that keeps the surface's own × off the strip.
+    const paddingRight = Number.parseInt(screen.getByTestId("probe").style.paddingRight, 10);
+    expect(paddingRight).toBeGreaterThanOrEqual(WINDOWS_CAPTION_WIDTH_PX);
     expect(screen.getByTestId("probe").style.paddingLeft).toBe("");
   });
 

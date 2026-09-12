@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-12",
-  "total": 391,
-  "files": 149,
+  "total": 389,
+  "files": 148,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -4907,36 +4907,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/Terminal/InlineStatusBanner.tsx",
-      "ordinal": 0,
-      "line": 270,
-      "start": 9877,
-      "end": 9898,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Terminal/InlineStatusBanner.tsx#9834",
-      "branch": "9675T",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/Terminal/InlineStatusBanner.tsx",
-      "ordinal": 1,
-      "line": 318,
-      "start": 12172,
-      "end": 12193,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Terminal/InlineStatusBanner.tsx#12048",
-      "branch": "",
-      "decision": "keep",
-      "category": "decorative-glyph",
-      "evidence": "aria-hidden with no text content — decorative"
     },
     {
       "file": "src/components/Terminal/LauncherQuickActions.tsx",

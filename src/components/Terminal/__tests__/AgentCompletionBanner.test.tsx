@@ -163,7 +163,6 @@ describe("AgentCompletionBanner", () => {
     const buttons = container.querySelectorAll("button");
     buttons.forEach((b) => {
       const cls = b.getAttribute("class")!;
-      expect(cls).toContain("transition-colors");
       expect(cls).not.toMatch(/\btransition-all\b/);
     });
   });

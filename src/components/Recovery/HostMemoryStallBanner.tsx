@@ -1,4 +1,3 @@
-import { MemoryStick } from "@/components/icons";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { actionService } from "@/services/ActionService";
@@ -20,12 +19,10 @@ export function HostMemoryStallBanner() {
 
   return (
     <InlineStatusBanner
-      icon={MemoryStick}
       title={title}
       description={description}
       severity="warning"
       role="status"
-      animated={false}
       actions={[
         {
           id: "why-slow",

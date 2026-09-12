@@ -82,11 +82,24 @@ describe("RosettaBanner", () => {
     );
   });
 
-  it("hides the banner and persists the dismissal on close", async () => {
+  it("× hides the banner for this session without persisting anything", async () => {
     useRosettaBannerStore.setState({ visible: true });
     render(<RosettaBanner />);
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Rosetta warning" }));
+
+    expect(useRosettaBannerStore.getState().visible).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
+    await Promise.resolve();
+    expect(dismissRosettaWarningMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("'Don't show again' hides the banner and persists the dismissal", async () => {
+    useRosettaBannerStore.setState({ visible: true });
+    render(<RosettaBanner />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Don't show again" }));
 
     expect(useRosettaBannerStore.getState().visible).toBe(false);
     expect(screen.queryByRole("status")).toBeNull();
@@ -101,7 +114,7 @@ describe("RosettaBanner", () => {
     useRosettaBannerStore.setState({ visible: true });
     render(<RosettaBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss Rosetta warning" }));
+    fireEvent.click(screen.getByRole("button", { name: "Don't show again" }));
 
     await waitFor(() => {
       expect(notifyMock).toHaveBeenCalledWith(

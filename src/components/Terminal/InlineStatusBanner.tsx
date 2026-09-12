@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, type CSSProperties } from "react";
-import { X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Spinner } from "@/components/ui/Spinner";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWindowControlsInset, useTitleBarSurface } from "@/components/ui/WindowControlsInset";
+import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
 import { isLinux } from "@/lib/platform";
 import { BANNER_TINT_ALPHA, type BannerSeverity } from "@shared/config/windowChrome";
 
@@ -30,8 +31,16 @@ export interface BannerAction {
  */
 export type InlineStatusBannerSeverity = BannerSeverity;
 
+type BannerIcon = React.ComponentType<{ className?: string; style?: CSSProperties }>;
+
 interface BaseInlineStatusBannerProps {
-  icon: React.ComponentType<{ className?: string; style?: CSSProperties }>;
+  /**
+   * The glyph is the severity's non-colour channel, so it defaults per
+   * severity to the same vocabulary the notification inbox uses. Pass one only
+   * when the glyph is the message itself — a spinner for "restarting", a file
+   * for "files changed" — never to restate the severity.
+   */
+  icon?: BannerIcon;
   title: React.ReactNode;
   description?: React.ReactNode;
   contextLine?: string;
@@ -42,11 +51,11 @@ interface BaseInlineStatusBannerProps {
   /** Accessible label for the dismiss button. Defaults to "Dismiss". */
   closeAriaLabel?: string;
   /**
-   * Non-button control rendered alongside the actions (e.g. a Popover
-   * trigger). Rendered first in the controls row, before the dismiss
-   * button and the primary action buttons. This is the escape hatch for
-   * surfacing secondary affordances on an error banner without breaking
-   * the single-action rule.
+   * Secondary control rendered after the action buttons and before the
+   * dismiss (e.g. a Popover trigger, a ghost link). This is the escape hatch
+   * for surfacing a secondary affordance on an error banner without breaking
+   * the single-action rule. Render it with `Button` so it shares the row's
+   * geometry; the primary action always leads the row.
    */
   trailingSlot?: React.ReactNode;
   /**
@@ -129,40 +138,38 @@ const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, strin
   success: "--color-status-success",
 };
 
-function getButtonClasses(variant: ButtonVariant): string {
-  switch (variant) {
-    case "primary":
-      return "bg-border-default text-text-primary hover:bg-daintree-border/80";
-    case "accent":
-      return "bg-status-info/10 text-status-info hover:bg-status-info/20";
-    case "dismiss":
-      return "text-text-secondary hover:text-text-primary hover:bg-daintree-border/50";
-    case "danger":
-    case "dangerFilled":
-      return "rounded transition-colors";
-  }
-}
+/**
+ * One glyph per severity, matching `NotificationCenterEntry` so a banner and
+ * the inbox row it may also produce read as the same event. Shape, not hue,
+ * is what tells a red banner from an amber one under forced colours.
+ */
+export const SEVERITY_ICON: Record<InlineStatusBannerSeverity, BannerIcon> = {
+  error: XCircle,
+  warning: AlertTriangle,
+  info: Info,
+  success: CheckCircle2,
+  neutral: Info,
+};
 
-function getButtonStyle(variant: ButtonVariant, colorVar: string): React.CSSProperties | undefined {
-  if (variant === "danger") {
-    return {
-      color: `color-mix(in oklab, var(${colorVar}) 70%, transparent)`,
-      ["--hover-color" as string]: `var(${colorVar})`,
-      ["--hover-bg" as string]: `color-mix(in oklab, var(${colorVar}) 10%, transparent)`,
-    };
-  }
-  if (variant === "dangerFilled") {
-    return {
-      backgroundColor: `color-mix(in oklab, var(${colorVar}) 10%, transparent)`,
-      color: `var(${colorVar})`,
-      ["--hover-bg" as string]: `color-mix(in oklab, var(${colorVar}) 20%, transparent)`,
-    };
-  }
-  return undefined;
-}
+/**
+ * Banner actions are ordinary `Button`s so the family shares one geometry
+ * with every other control in the app. The names here are the banner's own
+ * vocabulary — what the action *means* on a banner — mapped onto the
+ * primitive's variants; severity is carried by the band, so even the
+ * "primary" treatment is neutral.
+ */
+const BUTTON_VARIANT: Record<ButtonVariant, NonNullable<ButtonProps["variant"]>> = {
+  primary: "outline",
+  accent: "ghost-info",
+  dismiss: "ghost",
+  danger: "ghost-danger",
+  // Every caller uses this for the *fix* on an error banner — Retry, Reload,
+  // Restart — which is the primary action, not a destructive one.
+  dangerFilled: "outline",
+};
 
 export function InlineStatusBanner({
-  icon: IconComponent,
+  icon,
   title,
   description,
   contextLine,
@@ -179,6 +186,15 @@ export function InlineStatusBanner({
   descriptionExtras,
   autoDismissAfter,
 }: InlineStatusBannerProps) {
+  // Non-null only in the global banner host, where this banner owns the
+  // window's title-bar band: it has to supply the drag region and top-edge
+  // resize strip the toolbar normally provides (both get pushed below the
+  // caption buttons while a banner is up), and report its severity so the
+  // native caption strip can be tinted to match. Inline banners get none of
+  // this — a banner inside a terminal must never drag the window.
+  const reportSeverity = useTitleBarSurface();
+  const isTitleBarSurface = reportSeverity !== null;
+
   const prefersReducedMotion =
     typeof window !== "undefined" &&
     // `matchMedia` is guarded separately from `window`: the SSR check above only
@@ -192,26 +208,22 @@ export function InlineStatusBanner({
       (typeof document !== "undefined" &&
         (document.body.getAttribute("data-reduce-animations") === "true" ||
           document.body.getAttribute("data-performance-mode") === "true")));
-  const shouldAnimate = animated && !prefersReducedMotion;
+  // The title-bar surface never slides in: main tints the native caption strip
+  // the instant the severity is reported, and a banner easing in under an
+  // already-tinted strip reads as two surfaces disagreeing. Inline banners
+  // keep their entrance.
+  const shouldAnimate = animated && !prefersReducedMotion && !isTitleBarSurface;
 
   const [isVisible, setIsVisible] = useState(!shouldAnimate);
   const rafRef = useRef<number | null>(null);
   const isNeutral = severity === "neutral";
   const colorVar = isNeutral ? undefined : SEVERITY_VAR[severity];
+  const IconComponent = icon ?? SEVERITY_ICON[severity];
 
   // When hosted at the top of the window (global banner host), reserve space so
   // the title/icon and action buttons never sit under the OS window controls.
   // Empty for the common inline usage — see WindowControlsInset.
   const windowControlsInset = useWindowControlsInset();
-
-  // Non-null only in the global banner host, where this banner owns the
-  // window's title-bar band: it has to supply the drag region and top-edge
-  // resize strip the toolbar normally provides (both get pushed below the
-  // caption buttons while a banner is up), and report its severity so the
-  // native caption strip can be tinted to match. Inline banners get none of
-  // this — a banner inside a terminal must never drag the window.
-  const reportSeverity = useTitleBarSurface();
-  const isTitleBarSurface = reportSeverity !== null;
 
   useEffect(() => {
     if (!reportSeverity) return;
@@ -254,31 +266,95 @@ export function InlineStatusBanner({
     };
   }, [shouldAnimate]);
 
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Whether focus is inside the banner's own DOM, tracked so an unmount that
+  // takes the focused control with it — ×, an action that hides the banner,
+  // the auto-dismiss timer — can hand focus somewhere sensible instead of
+  // leaving it on <body>. React focus events also arrive from portalled
+  // children (a Popover opened from trailingSlot), so only DOM containment
+  // counts. Chromium fires no blur when a focused element is removed, so a
+  // blur with no target is checked a tick later: focus back inside means a
+  // move within the banner, still mounted means the user clicked away, gone
+  // means the banner left with the focus.
+  const focusWithinRef = useRef(false);
+  // Where focus should land if the banner disappears: the enclosing dialog,
+  // else the banner's own container (the pane, the sidebar), never the window
+  // chrome behind an open dialog. Captured on focus, since the ref is gone by
+  // the time the unmount cleanup runs.
+  const focusHomeRef = useRef<HTMLElement | null>(null);
+  const handleFocusCapture = (e: React.FocusEvent) => {
+    const root = rootRef.current;
+    if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
+    focusWithinRef.current = true;
+    focusHomeRef.current =
+      root.closest<HTMLElement>("[role='dialog'], [role='alertdialog']") ?? root.parentElement;
+  };
+  const handleBlurCapture = (e: React.FocusEvent) => {
+    const root = rootRef.current;
+    if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
+    if (e.relatedTarget instanceof Node && root.contains(e.relatedTarget)) return;
+    if (e.relatedTarget) {
+      focusWithinRef.current = false;
+      return;
+    }
+    queueMicrotask(() => {
+      if (!root.isConnected) return;
+      focusWithinRef.current = root.contains(document.activeElement);
+    });
+  };
+  useEffect(
+    () => () => {
+      if (!focusWithinRef.current) return;
+      const home = focusHomeRef.current;
+      requestAnimationFrame(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        const nearest = home?.isConnected ? getVisibleTabbableElements(home)[0] : undefined;
+        restoreFocusTo(nearest);
+      });
+    },
+    []
+  );
+  // A re-render can also replace the focused control without unmounting the
+  // banner — Retry becoming Install once a re-check succeeds — which drops
+  // focus on <body> just as an unmount would. Keep it on the banner's next
+  // action, and only fall back to the dismiss when there is none.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!focusWithinRef.current || !root?.isConnected) return;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const controls = root.querySelector<HTMLElement>("[data-banner-controls]");
+    const next =
+      (controls && getVisibleTabbableElements(controls)[0]) ?? getVisibleTabbableElements(root)[0];
+    next?.focus();
+  });
+
   const actionList: BannerAction[] = actions ?? (action ? [action] : []);
 
   const hasDescription = description || contextLine || descriptionExtras;
 
+  const handleClose = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClose?.();
+  };
+
   const closeButton = onClose ? (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onClose();
-      }}
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      onClick={handleClose}
       aria-label={closeAriaLabel}
-      className={cn(
-        "p-1 rounded text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary shrink-0",
-        isTitleBarSurface && "app-no-drag"
-      )}
+      className={cn("shrink-0", isTitleBarSurface && "app-no-drag")}
     >
-      <X className="h-3.5 w-3.5" aria-hidden="true" />
-    </button>
+      <X aria-hidden="true" />
+    </Button>
   ) : null;
 
   const showControlsRow = !!trailingSlot || (!hasDescription && !!onClose) || actionList.length > 0;
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         hasDescription
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
@@ -306,54 +382,33 @@ export function InlineStatusBanner({
         ...windowControlsInset,
       }}
       role={role}
+      onFocusCapture={handleFocusCapture}
+      onBlurCapture={handleBlurCapture}
       aria-live={ariaLive}
       aria-atomic={ariaLive && ariaLive !== "off" ? "true" : undefined}
     >
       {isTitleBarSurface && !isLinux() && <div className="window-resize-strip" />}
-      <div className={cn("flex", hasDescription ? "items-start" : "items-center", "gap-2 min-w-0")}>
+      {/* The band's tint and this glyph carry the severity; the text does not.
+          Severity-coloured type failed 4.5:1 on most themes, and a title that
+          is only legible on some of them is not a title. */}
+      <div className="flex items-start gap-2 min-w-0">
         <IconComponent
-          className={cn(
-            "w-4 h-4 shrink-0",
-            hasDescription && "mt-0.5",
-            isNeutral && "text-daintree-text/60"
-          )}
+          className={cn("w-4 h-4 shrink-0 mt-0.5", isNeutral && "text-text-secondary")}
           style={isNeutral ? undefined : { color: `var(${colorVar})` }}
           aria-hidden="true"
         />
         {hasDescription ? (
           <div className="flex-1 min-w-0">
             <div className="flex justify-between items-start gap-2">
-              <span
-                className={cn("text-sm font-medium", isNeutral && "text-text-primary")}
-                style={isNeutral ? undefined : { color: `var(${colorVar})` }}
-              >
-                {title}
-              </span>
-              {closeButton}
+              <span className="text-sm font-medium text-text-primary">{title}</span>
+              {closeButton && <div className="-mt-1 -mr-1">{closeButton}</div>}
             </div>
             {description && (
-              <p
-                className={cn("text-xs mt-0.5 break-words", isNeutral && "text-text-secondary")}
-                style={
-                  isNeutral
-                    ? undefined
-                    : { color: `color-mix(in oklab, var(${colorVar}) 80%, transparent)` }
-                }
-              >
-                {description}
-              </p>
+              <p className="text-xs mt-0.5 break-words text-text-secondary">{description}</p>
             )}
             {contextLine && (
               <p
-                className={cn(
-                  "text-xs font-mono mt-1 truncate",
-                  isNeutral && "text-text-secondary"
-                )}
-                style={
-                  isNeutral
-                    ? undefined
-                    : { color: `color-mix(in oklab, var(${colorVar}) 60%, transparent)` }
-                }
+                className="text-xs font-mono mt-1 truncate text-text-secondary"
                 title={contextLine}
               >
                 {contextLine}
@@ -366,17 +421,13 @@ export function InlineStatusBanner({
             )}
           </div>
         ) : (
-          <span
-            className={cn("text-sm", isNeutral && "text-text-primary")}
-            style={isNeutral ? undefined : { color: `var(${colorVar})` }}
-          >
-            {title}
-          </span>
+          <span className="text-sm font-medium text-text-primary">{title}</span>
         )}
       </div>
 
       {showControlsRow && (
         <div
+          data-banner-controls
           className={cn(
             "flex items-center shrink-0",
             hasDescription ? "gap-2 ml-6" : "gap-1",
@@ -384,47 +435,29 @@ export function InlineStatusBanner({
             // row, including nested popover triggers.
             isTitleBarSurface && "app-no-drag"
           )}
+          // A busy or disabled Button opts out of hit-testing, so a click on it
+          // lands on this row instead — and would otherwise bubble on to the
+          // pane and activate it. The controls never mean "select the pane".
+          onClick={(e) => e.stopPropagation()}
         >
-          {trailingSlot}
-          {!hasDescription && closeButton}
           {actionList.map((action) => {
-            const variant = action.variant ?? "primary";
-            const variantClasses = getButtonClasses(variant);
-            const variantStyle = colorVar ? getButtonStyle(variant, colorVar) : undefined;
-            const isDisabled = action.disabled || action.loading;
-            const iconClasses = action.iconOnly ? "w-3.5 h-3.5" : "w-3 h-3";
-            const spinnerSize = action.iconOnly ? "sm" : "xs";
+            const variant = BUTTON_VARIANT[action.variant ?? "primary"];
             const buttonEl = (
-              <button
+              <Button
                 key={action.id}
-                type="button"
-                disabled={isDisabled}
-                aria-busy={action.loading || undefined}
+                variant={variant}
+                size={action.iconOnly ? "icon-sm" : "sm"}
+                disabled={action.disabled}
+                loading={action.loading}
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (isDisabled) return;
                   action.onClick();
                 }}
-                className={cn(
-                  action.iconOnly
-                    ? "p-1"
-                    : "flex items-center gap-1.5 px-2 py-1 text-xs font-medium",
-                  "transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
-                  variantClasses,
-                  (variant === "danger" || variant === "dangerFilled") &&
-                    "hover:[color:var(--hover-color)] hover:[background:var(--hover-bg)]",
-                  isDisabled && "cursor-not-allowed opacity-60 hover:bg-transparent"
-                )}
-                style={variantStyle}
                 aria-label={action.ariaLabel}
               >
-                {action.loading ? (
-                  <Spinner size={spinnerSize} />
-                ) : (
-                  action.icon && <action.icon className={iconClasses} aria-hidden="true" />
-                )}
+                {action.icon && <action.icon aria-hidden="true" />}
                 {!action.iconOnly && action.label}
-              </button>
+              </Button>
             );
 
             return action.title ? (
@@ -436,6 +469,11 @@ export function InlineStatusBanner({
               <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
             );
           })}
+          {trailingSlot}
+          {/* Dismiss sits after every other control, at the row's end, in both
+              layouts — never between two controls, where it reads as a third
+              action. */}
+          {!hasDescription && closeButton}
         </div>
       )}
     </div>

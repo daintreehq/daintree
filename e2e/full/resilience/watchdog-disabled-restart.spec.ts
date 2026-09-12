@@ -9,7 +9,7 @@ import { T_LONG, T_SHORT } from "../../helpers/timeouts";
 // cycle. The real path requires three genuine watchdog-host crashes inside the
 // rapid-crash window; the fault-mode hook `__daintreeSimulateWatchdogDisabled`
 // fires the same `notifyDisabled()` → `watchdog:disabled` broadcast instead.
-// The banner (`WatchdogDisabledBanner`, role="alert") then drives the real
+// The banner (`WatchdogDisabledBanner`, role="status") then drives the real
 // `watchdog.restart` action, which broadcasts `watchdog:active` and resets the
 // once-per-cycle `disabledNotified` guard so a second cap-hit can re-fire.
 
@@ -66,8 +66,14 @@ test.describe.serial("Resilience: watchdog disabled banner + restart", () => {
     const banner = ctx.window.locator(SEL.recovery.watchdogDisabledBanner);
     await expect(banner).toBeVisible({ timeout: T_LONG });
 
-    // Title-Message-Action: a single contextual button, no "Dismiss".
-    await expect(banner.locator("button")).toHaveCount(1, { timeout: T_SHORT });
+    // One contextual action plus the session dismiss, nothing else.
+    await expect(banner.locator(SEL.recovery.watchdogRestartButton)).toHaveCount(1, {
+      timeout: T_SHORT,
+    });
+    await expect(banner.locator('button[aria-label="Dismiss watchdog warning"]')).toHaveCount(1, {
+      timeout: T_SHORT,
+    });
+    await expect(banner.locator("button")).toHaveCount(2, { timeout: T_SHORT });
     await expect(ctx.window.locator(SEL.recovery.watchdogRestartButton)).toBeVisible({
       timeout: T_SHORT,
     });
