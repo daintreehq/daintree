@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { Filter, X, ChevronDown } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
+import { Filter, X, ChevronDown, Check } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   useWorktreeFilterStore,
@@ -22,6 +23,17 @@ interface FilterSectionProps {
   defaultOpen?: boolean;
   activeCount?: number;
   onClear?: () => void;
+  /**
+   * Shown in the header while the section is closed — what the section is
+   * currently set to, so a collapsed section still answers its own question.
+   */
+  summary?: string;
+  /**
+   * Chip sections wrap their body in a `role="group"` labelled by the header,
+   * so a chip announces the facet it belongs to. The sort section's body is a
+   * radiogroup plus a checkbox, which carry their own semantics.
+   */
+  plainBody?: boolean;
 }
 
 function FilterSection({
@@ -30,34 +42,57 @@ function FilterSection({
   defaultOpen = false,
   activeCount = 0,
   onClear,
+  summary,
+  plainBody = false,
 }: FilterSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
-  const contentId = `filter-section-${title.toLowerCase().replace(/\s+/g, "-")}`;
+  const reactId = useId();
+  const contentId = `filter-section-content-${reactId}`;
+  const headerId = `filter-section-header-${reactId}`;
   const hasActive = activeCount > 0;
   const expandButtonRef = useRef<HTMLButtonElement>(null);
+
+  // `defaultOpen` is only an initial value, so a section that gains its first
+  // filter from outside the popover (the quick-state bar, a restored session)
+  // would stay shut over a filter the user cannot see. Open on the 0 -> n edge
+  // only, so this never fights a deliberate collapse.
+  const hadActive = useRef(hasActive);
+  useEffect(() => {
+    if (hasActive && !hadActive.current) setIsOpen(true);
+    hadActive.current = hasActive;
+  }, [hasActive]);
 
   return (
     <div className="flex flex-col border-b border-border-default last:border-b-0">
       <div className="flex items-center">
         <button
           ref={expandButtonRef}
+          id={headerId}
           type="button"
           onClick={() => setIsOpen(!isOpen)}
           aria-expanded={isOpen}
           aria-controls={contentId}
-          className="flex flex-1 items-center justify-between px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-overlay-soft"
+          className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary"
         >
-          <span className="flex items-center gap-1.5">
-            {title}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0">{title}</span>
             {hasActive && (
               <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
                 {activeCount}
               </span>
             )}
+            {!isOpen && summary && (
+              <span className="min-w-0 truncate text-2xs font-normal text-text-secondary">
+                {summary}
+              </span>
+            )}
           </span>
           <ChevronDown
             data-animated-chevron
-            className={cn("w-3.5 h-3.5 transition-transform", isOpen ? "transform rotate-180" : "")}
+            className={cn(
+              "w-3.5 h-3.5 shrink-0 transition-transform",
+              isOpen ? "transform rotate-180" : ""
+            )}
           />
         </button>
         {onClear && hasActive && (
@@ -71,7 +106,10 @@ function FilterSection({
               onClear();
             }}
             aria-label={`Clear ${title} filters`}
-            className="shrink-0 px-2 py-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary"
+            // Underlined rather than a bare colour step: at rest this sat at the
+            // same tone as the heading beside it, so nothing marked it as a
+            // control rather than a second label.
+            className="shrink-0 px-2 py-1.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
           >
             Clear
           </button>
@@ -91,7 +129,13 @@ function FilterSection({
       >
         <div className="overflow-hidden">
           <div id={contentId} className="px-3 pb-2.5 pt-0.5">
-            {children}
+            {plainBody ? (
+              children
+            ) : (
+              <div role="group" aria-labelledby={headerId} className="flex flex-wrap gap-1.5">
+                {children}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -106,25 +150,107 @@ interface FilterChipProps {
   count?: number;
 }
 
+/**
+ * Three tiers, and they have to be told apart at a glance while the pointer is
+ * somewhere in the grid:
+ *
+ *   unavailable — matches nothing right now. Shows its `(0)` and is disabled,
+ *     because selecting it can only empty the list.
+ *   available   — a subtle fill gives the pill a body; the border alone is far
+ *     below a perceptible step on every dark theme.
+ *   selected    — a check glyph, a stronger fill and a stronger border.
+ *
+ * The glyph is what actually carries selection. Hovering an available chip also
+ * raises its fill and takes its text to `text-text-primary`, so fill and text
+ * alone left hover and selected reading identically — you could not see what
+ * was selected while the pointer was in the grid. A glyph is not a colour, so
+ * it also survives `forced-colors: active`, where every author fill flattens.
+ */
 function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
-  const showCount = count !== undefined && (count > 0 || isActive);
-  const isDimmed = count === 0 && !isActive;
+  const isUnavailable = count === 0 && !isActive;
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={isActive}
+      disabled={isUnavailable}
       className={cn(
-        "inline-flex items-center px-2 py-0.5 text-2xs rounded-full border transition-colors",
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs transition-colors",
         isActive
-          ? "bg-filter-selected-bg-soft border-border-default text-text-primary"
-          : isDimmed
-            ? "bg-surface-canvas border-border-default text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
-            : "bg-surface-canvas border-border-default text-daintree-text/75 hover:bg-overlay-medium hover:text-text-primary"
+          ? "border-border-strong bg-filter-selected-bg-strong text-text-primary"
+          : isUnavailable
+            ? "cursor-not-allowed border-border-default bg-transparent text-text-secondary"
+            : "border-border-default bg-overlay-soft text-text-primary hover:bg-overlay-medium hover:border-border-strong"
       )}
     >
-      {showCount ? `${label} (${count})` : label}
+      {isActive && <Check className="-ml-0.5 w-3 h-3 shrink-0" aria-hidden="true" />}
+      {count === undefined ? label : `${label} (${count})`}
     </button>
+  );
+}
+
+interface ChipOption<T extends string> {
+  value: T;
+  label: string;
+}
+
+interface ChipGridProps<T extends string> {
+  options: readonly ChipOption<T>[];
+  isActive: (value: T) => boolean;
+  onToggle: (value: T) => void;
+  counts?: Record<T, number>;
+  /**
+   * Past this many options, values that match nothing are folded behind a
+   * "more" toggle. Branch type carries fifteen values and a real repository
+   * uses three or four of them, so the unfolded grid was four rows of mostly
+   * dead options sitting between the user and every facet below it.
+   */
+  overflowAfter?: number;
+}
+
+function ChipGrid<T extends string>({
+  options,
+  isActive,
+  onToggle,
+  counts,
+  overflowAfter,
+}: ChipGridProps<T>) {
+  const [showAll, setShowAll] = useState(false);
+
+  const { shown, hiddenCount } = useMemo(() => {
+    if (!counts || overflowAfter === undefined || options.length <= overflowAfter) {
+      return { shown: options, hiddenCount: 0 };
+    }
+    const useful = options.filter((o) => counts[o.value] > 0 || isActive(o.value));
+    // Nothing matches anything — fold nothing rather than render an empty facet.
+    if (useful.length === 0) return { shown: options, hiddenCount: 0 };
+    return { shown: useful, hiddenCount: options.length - useful.length };
+  }, [options, counts, overflowAfter, isActive]);
+
+  const visible = showAll || hiddenCount === 0 ? options : shown;
+
+  return (
+    <>
+      {visible.map((option) => (
+        <FilterChip
+          key={option.value}
+          label={option.label}
+          isActive={isActive(option.value)}
+          onClick={() => onToggle(option.value)}
+          count={counts?.[option.value]}
+        />
+      ))}
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          aria-expanded={showAll}
+          className="inline-flex items-center rounded-full px-2 py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
+        >
+          {showAll ? "Show fewer" : `${hiddenCount} with no matches`}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -198,6 +324,9 @@ const SORT_ARROW_STEPS: Record<string, number | undefined> = {
   ArrowLeft: -1,
 };
 
+/** Branch type is the only facet long enough to need folding. */
+const BRANCH_TYPE_OVERFLOW_AFTER = 8;
+
 interface WorktreeFilterPopoverProps {
   hideSearchInput?: boolean;
   chipCounts?: ChipCounts;
@@ -225,6 +354,7 @@ export function WorktreeFilterPopover({
   const [localQuery, setLocalQuery] = useState("");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const groupByTypeId = useId();
 
   const {
     query,
@@ -383,6 +513,11 @@ export function WorktreeFilterPopover({
   const filtersActive = showBadge;
   const hasAnyFilter = fullFilterCount > 0;
 
+  const sortSummary = useMemo(() => {
+    const label = ORDER_OPTIONS.find((option) => option.value === orderBy)?.label ?? "";
+    return groupByType ? `${label} · grouped` : label;
+  }, [orderBy, groupByType]);
+
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
@@ -404,7 +539,14 @@ export function WorktreeFilterPopover({
                 ? "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                 : "text-text-secondary hover:bg-tint/[0.06] hover:text-text-primary"
           )}
-          aria-label="Filter and sort worktrees"
+          // The count is rendered as text inside the button, and `aria-label`
+          // overrides contents when the accessible name is computed — so the
+          // number was visible and unspoken. It belongs in the name itself.
+          aria-label={
+            showBadge
+              ? `Filter and sort worktrees, ${filterCount} active`
+              : "Filter and sort worktrees"
+          }
           aria-haspopup="dialog"
         >
           <Filter className="w-3.5 h-3.5 shrink-0" />
@@ -413,64 +555,62 @@ export function WorktreeFilterPopover({
           )}
         </button>
       </PopoverTrigger>
+      {/* The footer is a sibling of the scroll container, not the last thing
+          inside it: with several sections open the only bulk escape from a
+          filtered list used to scroll out of sight. */}
       <PopoverContent
         ref={contentRef}
         align="start"
         sideOffset={8}
-        className="w-72 p-0 max-h-[70vh] overflow-y-auto"
+        className="flex w-72 max-h-[70vh] flex-col p-0"
         data-testid="worktree-filter-popover"
       >
-        <div className="flex flex-col">
-          {/* Search */}
-          {!hideSearchInput && (
-            <div className="p-3 border-b border-border-default">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={localQuery}
-                  onChange={(e) => handleQueryChange(e.target.value)}
-                  placeholder="Search worktrees..."
-                  aria-label="Search worktrees"
-                  className={cn(
-                    "w-full px-2.5 py-1.5 text-xs rounded",
-                    "bg-surface-canvas border border-border-default",
-                    "text-text-primary placeholder-daintree-text/40",
-                    "focus:outline-hidden focus:border-daintree-accent/50"
-                  )}
-                />
-                {localQuery && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (debounceRef.current) {
-                        clearTimeout(debounceRef.current);
-                      }
-                      setLocalQuery("");
-                      setQuery("");
-                    }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-text-primary"
-                    aria-label="Clear search"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
+        {/* Search */}
+        {!hideSearchInput && (
+          <div className="shrink-0 border-b border-border-default p-3">
+            <div className="relative">
+              <input
+                type="text"
+                value={localQuery}
+                onChange={(e) => handleQueryChange(e.target.value)}
+                placeholder="Search worktrees..."
+                aria-label="Search worktrees"
+                className={cn(
+                  "w-full rounded-[var(--radius-md)] px-2.5 py-1.5 text-xs",
+                  "border border-border-default bg-surface-canvas",
+                  "text-text-primary placeholder:text-text-secondary",
+                  "focus:outline-hidden focus:border-border-strong"
                 )}
-              </div>
+              />
+              {localQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (debounceRef.current) {
+                      clearTimeout(debounceRef.current);
+                    }
+                    setLocalQuery("");
+                    setQuery("");
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary"
+                  aria-label="Clear search"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Sort Order */}
-          <div className="px-3 pt-2.5 pb-2 border-b border-border-default">
-            <div
-              id="worktree-sort-by-label"
-              className="text-3xs font-medium text-text-secondary uppercase tracking-wide mb-1.5"
-            >
-              Sort by
-            </div>
-            <div
-              role="radiogroup"
-              aria-labelledby="worktree-sort-by-label"
-              className="flex flex-col"
-            >
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* Sort and grouping are one block, and they read as a peer of the
+              facets rather than a differently-styled preamble: same heading
+              treatment, same chevron column, same disclosure. Collapsed by
+              default with the current order in the header, so it answers its
+              own question without spending a quarter of the panel on four
+              radios the user set once. */}
+          <FilterSection title="Sort by" summary={sortSummary} plainBody>
+            <div role="radiogroup" aria-label="Sort worktrees by" className="flex flex-col">
               {sortOptions.map((option, index) => (
                 <button
                   key={option.value}
@@ -485,83 +625,69 @@ export function WorktreeFilterPopover({
                   // One tab stop for the whole group, arrows move within it.
                   tabIndex={index === tabbableSortIndex ? 0 : -1}
                   className={cn(
-                    "flex items-center gap-2 px-2 py-1 text-xs rounded",
+                    "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 text-xs",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                     orderBy === option.value
                       ? "bg-overlay-raised text-text-primary"
                       : "text-text-secondary hover:bg-overlay-medium"
                   )}
                 >
-                  <div
+                  <span
                     className={cn(
-                      "w-3 h-3 rounded-full border",
+                      "flex h-3 w-3 shrink-0 items-center justify-center rounded-full border",
                       orderBy === option.value
                         ? "border-text-primary bg-text-primary"
-                        : "border-border-default"
+                        : "border-border-strong"
                     )}
                   >
                     {orderBy === option.value && (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <div className="status-mark w-1.5 h-1.5 bg-text-inverse rounded-full" />
-                      </div>
+                      <span className="status-mark h-1.5 w-1.5 rounded-full bg-text-inverse" />
                     )}
-                  </div>
+                  </span>
                   {option.label}
                 </button>
               ))}
             </div>
-          </div>
-
-          {/* Group by Type Toggle */}
-          <div className="px-3 py-2 border-b border-border-default">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
+            <div className="mt-2 flex items-center gap-2 border-t border-border-default pt-2">
+              <Checkbox
+                id={groupByTypeId}
+                size="sm"
                 checked={groupByType}
-                onChange={(e) => setGroupByType(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-border-default text-accent-primary focus:ring-daintree-accent/30 focus:ring-offset-0 bg-surface-canvas"
+                onCheckedChange={(checked) => setGroupByType(checked === true)}
               />
-              <span className="text-xs text-text-secondary">Group by type</span>
-            </label>
-          </div>
-
-          {/* Filter Sections */}
-          <FilterSection
-            title="Status"
-            defaultOpen={statusFilters.size > 0}
-            activeCount={statusFilters.size}
-            onClear={clearStatusFilters}
-          >
-            <div className="flex flex-wrap gap-1.5">
-              {STATUS_OPTIONS.map((option) => (
-                <FilterChip
-                  key={option.value}
-                  label={option.label}
-                  isActive={statusFilters.has(option.value)}
-                  onClick={() => toggleStatusFilter(option.value)}
-                  count={chipCounts?.status[option.value]}
-                />
-              ))}
+              <label htmlFor={groupByTypeId} className="cursor-pointer text-xs text-text-secondary">
+                Group by type
+              </label>
             </div>
           </FilterSection>
 
           <FilterSection
+            title="Status"
+            defaultOpen
+            activeCount={statusFilters.size}
+            onClear={clearStatusFilters}
+          >
+            <ChipGrid
+              options={STATUS_OPTIONS}
+              isActive={(value) => statusFilters.has(value)}
+              onToggle={toggleStatusFilter}
+              counts={chipCounts?.status}
+            />
+          </FilterSection>
+
+          <FilterSection
             title="Branch type"
-            defaultOpen={typeFilters.size > 0}
+            defaultOpen
             activeCount={typeFilters.size}
             onClear={clearTypeFilters}
           >
-            <div className="flex flex-wrap gap-1.5">
-              {TYPE_OPTIONS.map((option) => (
-                <FilterChip
-                  key={option.value}
-                  label={option.label}
-                  isActive={typeFilters.has(option.value)}
-                  onClick={() => toggleTypeFilter(option.value)}
-                  count={chipCounts?.branchType[option.value]}
-                />
-              ))}
-            </div>
+            <ChipGrid
+              options={TYPE_OPTIONS}
+              isActive={(value) => typeFilters.has(value)}
+              onToggle={toggleTypeFilter}
+              counts={chipCounts?.branchType}
+              overflowAfter={BRANCH_TYPE_OVERFLOW_AFTER}
+            />
           </FilterSection>
 
           <FilterSection
@@ -570,17 +696,12 @@ export function WorktreeFilterPopover({
             activeCount={prIssueFilters.size}
             onClear={clearPrIssueFilters}
           >
-            <div className="flex flex-wrap gap-1.5">
-              {PR_ISSUE_OPTIONS.map((option) => (
-                <FilterChip
-                  key={option.value}
-                  label={option.label}
-                  isActive={prIssueFilters.has(option.value)}
-                  onClick={() => togglePrIssueFilter(option.value)}
-                  count={chipCounts?.prIssue[option.value]}
-                />
-              ))}
-            </div>
+            <ChipGrid
+              options={PR_ISSUE_OPTIONS}
+              isActive={(value) => prIssueFilters.has(value)}
+              onToggle={togglePrIssueFilter}
+              counts={chipCounts?.prIssue}
+            />
           </FilterSection>
 
           <FilterSection
@@ -589,17 +710,12 @@ export function WorktreeFilterPopover({
             activeCount={sessionFilters.size}
             onClear={clearSessionFilters}
           >
-            <div className="flex flex-wrap gap-1.5">
-              {SESSION_OPTIONS.map((option) => (
-                <FilterChip
-                  key={option.value}
-                  label={option.label}
-                  isActive={sessionFilters.has(option.value)}
-                  onClick={() => toggleSessionFilter(option.value)}
-                  count={chipCounts?.sessions[option.value]}
-                />
-              ))}
-            </div>
+            <ChipGrid
+              options={SESSION_OPTIONS}
+              isActive={(value) => sessionFilters.has(value)}
+              onToggle={toggleSessionFilter}
+              counts={chipCounts?.sessions}
+            />
           </FilterSection>
 
           <FilterSection
@@ -608,17 +724,12 @@ export function WorktreeFilterPopover({
             activeCount={activityFilters.size}
             onClear={clearActivityFilters}
           >
-            <div className="flex flex-wrap gap-1.5">
-              {ACTIVITY_OPTIONS.map((option) => (
-                <FilterChip
-                  key={option.value}
-                  label={option.label}
-                  isActive={activityFilters.has(option.value)}
-                  onClick={() => toggleActivityFilter(option.value)}
-                  count={chipCounts?.activity[option.value]}
-                />
-              ))}
-            </div>
+            <ChipGrid
+              options={ACTIVITY_OPTIONS}
+              isActive={(value) => activityFilters.has(value)}
+              onToggle={toggleActivityFilter}
+              counts={chipCounts?.activity}
+            />
           </FilterSection>
 
           <FilterSection
@@ -627,28 +738,23 @@ export function WorktreeFilterPopover({
             activeCount={devServerFilters.size}
             onClear={clearDevServerFilters}
           >
-            <div className="flex flex-wrap gap-1.5">
-              {DEV_SERVER_OPTIONS.map((option) => (
-                <FilterChip
-                  key={option.value}
-                  label={option.label}
-                  isActive={devServerFilters.has(option.value)}
-                  onClick={() => toggleDevServerFilter(option.value)}
-                  count={chipCounts?.devServer[option.value]}
-                />
-              ))}
-            </div>
+            <ChipGrid
+              options={DEV_SERVER_OPTIONS}
+              isActive={(value) => devServerFilters.has(value)}
+              onToggle={toggleDevServerFilter}
+              counts={chipCounts?.devServer}
+            />
           </FilterSection>
-
-          {/* Clear All */}
-          {hasAnyFilter && (
-            <div className="p-3 border-t border-border-default">
-              <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
-                Clear all filters
-              </Button>
-            </div>
-          )}
         </div>
+
+        {/* Clear All */}
+        {hasAnyFilter && (
+          <div className="shrink-0 border-t border-border-default p-3">
+            <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
+              Clear all filters
+            </Button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );

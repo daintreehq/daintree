@@ -29,7 +29,7 @@ interface WorktreeSidebarSearchBarProps {
    */
   trailing?: React.ReactNode;
   /**
-   * Filter scope / sort status ("1 of 2 worktrees · Sorting disabled while
+   * Filter scope / reorder status ("1 of 2 worktrees · Drag to reorder is off while
    * searching") rendered under the field, sharing a row with "Clear all".
    * Visual-only — screen readers are served by the caller's debounced
    * announcer effects, not a live region here (#9665).
@@ -203,7 +203,12 @@ export function WorktreeSidebarSearchBar({
   const showClear = !!liveQuery;
   const activeAxisCount =
     (liveQuery.trim() ? 1 : 0) + (quickStateFilter !== "all" ? 1 : 0) + (hasFacetFilters ? 1 : 0);
-  const showClearAll = activeAxisCount >= 2;
+  // Facet filters are the ones with no other affordance out here: the query has
+  // its own X in the field and quick-state has its own bar, but a Status or
+  // Branch type chip is invisible once the popover closes. So any facet filter
+  // earns the bulk clear on its own; everything else still needs two axes
+  // before this line is worth the row it costs.
+  const showClearAll = hasFacetFilters || activeAxisCount >= 2;
 
   return (
     <div

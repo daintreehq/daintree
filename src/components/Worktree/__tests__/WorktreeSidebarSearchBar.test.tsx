@@ -36,7 +36,7 @@ function getInput() {
 }
 
 function getFilterTrigger() {
-  return screen.getByRole("button", { name: "Filter and sort worktrees" });
+  return screen.getByRole("button", { name: /^Filter and sort worktrees/ });
 }
 
 describe("WorktreeSidebarSearchBar", () => {
@@ -149,14 +149,17 @@ describe("WorktreeSidebarSearchBar", () => {
     expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
   });
 
-  it("does not show 'Clear all' when only facets are non-default", () => {
+  it("shows 'Clear all' when only facets are non-default", () => {
     renderBar();
     act(() => {
       useWorktreeFilterStore.getState().toggleStatusFilter("active");
       useWorktreeFilterStore.getState().toggleTypeFilter("feature");
     });
-    // Two facet toggles count as a single "facet axis"; still one axis overall.
-    expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
+    // Facets are the only constraint with no affordance of its own out here:
+    // the query has the field's X and quick-state has its own bar, but a Status
+    // chip is invisible the moment the popover closes. So a facet earns the
+    // bulk clear on its own, even though it is one axis.
+    expect(screen.getByRole("button", { name: "Clear all" })).toBeTruthy();
   });
 
   it("does not show 'Clear all' when only quick-state is non-default", () => {
@@ -212,22 +215,23 @@ describe("WorktreeSidebarSearchBar", () => {
   it("whitespace-only query does not count as an active axis for 'Clear all'", () => {
     renderBar();
     act(() => {
-      useWorktreeFilterStore.getState().toggleStatusFilter("active");
+      useWorktreeFilterStore.getState().setQuickStateFilter("working");
     });
     fireEvent.change(getInput(), { target: { value: "   " } });
-    // Only one real axis is active (facets). The whitespace input should not
-    // inflate the count and surface "Clear all".
+    // Only one real axis is active (quick-state). The whitespace input should
+    // not inflate the count and surface "Clear all". Quick-state rather than a
+    // facet, because a facet now earns the button on its own.
     expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
   });
 
   it("'Clear all' disappears after a partial clear leaves only one axis", () => {
     renderBar();
     act(() => {
-      useWorktreeFilterStore.getState().toggleStatusFilter("active");
+      useWorktreeFilterStore.getState().setQuickStateFilter("working");
     });
     fireEvent.change(getInput(), { target: { value: "foo" } });
     expect(screen.getByRole("button", { name: "Clear all" })).toBeTruthy();
-    // The X button only clears query; one axis (facets) remains.
+    // The X button only clears query; one axis (quick-state) remains.
     fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
     expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
   });

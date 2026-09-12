@@ -40,11 +40,11 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   });
 
   it("renders drag-disabled reason for search", () => {
-    expect(source).toContain("Sorting disabled while searching");
+    expect(source).toContain("Drag to reorder is off while searching");
   });
 
   it("renders drag-disabled reason for group-by-type", () => {
-    expect(source).toContain("Sorting disabled while grouped by type");
+    expect(source).toContain("Drag to reorder is off while grouped by type");
   });
 
   it("separates scope and drag reason with a middle dot when both present", () => {
@@ -58,8 +58,10 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
 
   it("derives drag-disabled reason with query taking priority over group-by-type", () => {
     // Query-first precedence: hasQuery ? "searching" : isGroupedByType ? "grouped by type" : null
-    expect(source).toMatch(/hasQuery\s*\?[\s\S]*?Sorting disabled while searching/);
-    expect(source).toMatch(/isGroupedByType\s*\?[\s\S]*?Sorting disabled while grouped by type/);
+    expect(source).toMatch(/hasQuery\s*\?[\s\S]*?Drag to reorder is off while searching/);
+    expect(source).toMatch(
+      /isGroupedByType\s*\?[\s\S]*?Drag to reorder is off while grouped by type/
+    );
   });
 
   it("exports totalCount from the filter useMemo alongside filteredWorktrees", () => {

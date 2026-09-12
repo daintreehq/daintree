@@ -243,7 +243,7 @@ async function collectMetrics(page: Page): Promise<unknown> {
     const input = aside.querySelector('[aria-label="Search worktrees"]');
     const field = input?.closest('[role="search"]') ?? null;
     const glyph = field?.querySelector("svg") ?? null;
-    const trigger = aside.querySelector('[aria-label="Filter and sort worktrees"]');
+    const trigger = aside.querySelector('[aria-label^="Filter and sort worktrees"]');
     const rail = trigger?.closest("div.shrink-0") ?? null;
     const firstCard = aside.querySelector("[data-worktree-is-main]");
     return {

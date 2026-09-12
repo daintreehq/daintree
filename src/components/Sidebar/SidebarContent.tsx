@@ -1159,10 +1159,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     liveQuery.trim().length > 0 || hasFacetFiltersActive || quickStateFilter !== "all";
   const filteredCount = filteredWorktrees.length;
   const showScope = hasFilters && filteredCount !== totalCount;
+  // Names drag reorder, not sorting: `sortWorktreesByRelevance` still honours the
+  // chosen order as a tie-breaker within each relevance score, so "sorting
+  // disabled" described neither what stops nor what this flag actually gates.
   const dragDisabledReason = hasQuery
-    ? "Sorting disabled while searching"
+    ? "Drag to reorder is off while searching"
     : isGroupedByType
-      ? "Sorting disabled while grouped by type"
+      ? "Drag to reorder is off while grouped by type"
       : null;
   // Filter scope + sort-disabled status, rendered inside the search bar strip
   // so the feedback sits with the controls that produced it. Visual-only —

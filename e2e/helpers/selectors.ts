@@ -126,7 +126,9 @@ export const SEL = {
     // ReviewHub spec unable to open the hub. Note the button is ABSENT entirely
     // when there is nothing to review and nothing to push.
     reviewHubButton: '[aria-label^="Open Review &"]',
-    filterButton: '[aria-label="Filter and sort worktrees"]',
+    // Prefix-matched: the accessible name carries the active-filter count
+    // ("…, 3 active") so the number is spoken as well as drawn.
+    filterButton: '[aria-label^="Filter and sort worktrees"]',
     filterPopover: '[data-testid="worktree-filter-popover"]',
     openOverviewButton: '[aria-label="Open worktrees overview"]',
     // Keyed on the test id rather than `aria-labelledby`: the overview is
