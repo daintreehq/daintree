@@ -914,7 +914,9 @@ function PanelHeaderComponent({
                   onChange={(e) => onEditingValueChange(e.target.value)}
                   onKeyDown={onTitleInputKeyDown}
                   onBlur={onTitleSave}
-                  className="col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] rounded-sm border border-transparent bg-overlay-soft px-1 text-xs font-medium leading-6 text-text-primary select-text transition-colors focus:outline-hidden"
+                  // Focus is shown by the field itself, without accent (#7926):
+                  // the wash deepens and its edge appears while it has focus.
+                  className="col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] rounded-sm border border-transparent bg-overlay-soft px-1 text-xs font-medium leading-6 text-text-primary select-text transition-colors focus:outline-hidden focus-visible:border-divider focus-visible:bg-overlay-medium"
                   aria-label={getAriaLabel()}
                 />
               </div>

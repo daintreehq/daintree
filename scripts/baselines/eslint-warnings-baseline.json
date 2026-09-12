@@ -1,5 +1,5 @@
 {
-  "count": 2976,
+  "count": 2975,
   "byRule": {
     "@typescript-eslint/no-explicit-any": 51,
     "@typescript-eslint/no-floating-promises": 80,
@@ -8,7 +8,7 @@
     "component-contract/no-legacy-daintree-utilities": 854,
     "component-contract/no-raw-radius": 488,
     "component-contract/no-text-color-slash-alpha": 506,
-    "component-contract/no-unpaired-outline-suppression": 35,
+    "component-contract/no-unpaired-outline-suppression": 34,
     "no-restricted-imports": 5,
     "no-restricted-syntax": 367,
     "no-useless-assignment": 16,
@@ -16,5 +16,5 @@
     "react-compiler/react-compiler": 16,
     "react-hooks/exhaustive-deps": 34
   },
-  "updatedAt": "2026-09-12T08:36:50.200Z"
+  "updatedAt": "2026-09-12T09:20:58.656Z"
 }

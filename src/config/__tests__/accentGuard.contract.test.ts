@@ -185,7 +185,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Layout/Sidebar.tsx",
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
     "src/components/Onboarding/GettingStartedChecklist.tsx",
-    "src/components/Panel/PanelHeader.tsx",
     "src/components/Panel/PanelTransitionOverlay.tsx",
     "src/components/Panel/TabButton.tsx",
     "src/components/Portal/PortalDock.tsx",

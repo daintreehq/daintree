@@ -203,7 +203,7 @@ function TerminalLines() {
       <div className="text-text-muted">✓ refresh token rotates on expiry (41 ms)</div>
       <div className="text-text-muted">✓ rejects a replayed nonce (12 ms)</div>
       <div>
-        <span className="text-status-success">●</span> Reading src/auth/session.ts…
+        <span className="text-text-secondary">●</span> Reading src/auth/session.ts…
       </div>
     </div>
   );
