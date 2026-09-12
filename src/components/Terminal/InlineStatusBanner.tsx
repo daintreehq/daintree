@@ -299,6 +299,16 @@ export function InlineStatusBanner({
     },
     []
   );
+  // A re-render can also replace the focused control without unmounting the
+  // banner — Retry becoming Install once a re-check succeeds — which drops
+  // focus on <body> just as an unmount would. Keep it on the banner's next
+  // control instead.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!focusWithinRef.current || !root?.isConnected) return;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    root.querySelector<HTMLElement>("button:not([disabled]), [href], [tabindex]")?.focus();
+  });
 
   const actionList: BannerAction[] = actions ?? (action ? [action] : []);
 

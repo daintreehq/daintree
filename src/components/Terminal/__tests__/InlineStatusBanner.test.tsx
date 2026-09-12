@@ -829,6 +829,30 @@ describe("InlineStatusBanner focus handoff on any removal", () => {
     }
   });
 
+  it("keeps focus on the banner when the focused action is replaced in place", () => {
+    function Host() {
+      const [phase, setPhase] = useState<"retry" | "install">("retry");
+      return (
+        <InlineStatusBanner
+          title="t"
+          severity="warning"
+          animated={false}
+          actions={
+            phase === "retry"
+              ? [{ id: "retry", label: "Retry", onClick: () => setPhase("install") }]
+              : [{ id: "install", label: "Install Git", onClick: () => {} }]
+          }
+        />
+      );
+    }
+    render(<Host />);
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    const install = screen.getByRole("button", { name: "Install Git" });
+    expect(document.activeElement).toBe(install);
+  });
+
   it("leaves focus alone when the banner unmounts without holding it", () => {
     vi.useFakeTimers();
     const raf = vi
