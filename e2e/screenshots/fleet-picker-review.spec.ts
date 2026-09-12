@@ -298,16 +298,26 @@ async function seedFleet(page: Page): Promise<void> {
     if (id) launched.push(id);
   }
 
+  // TWO plain shells in one worktree. They do two jobs: a row with no state
+  // badge (so "Select agents" means something and the badge column has a gap
+  // to cope with), and — because they share a worktree — a group with siblings,
+  // which is the only way the tri-state group checkbox can ever render.
+  //
+  // Plain terminals rather than more agents on purpose: an agent launch is a
+  // CLI spawn plus a trust prompt plus an FSM settle, and the earlier ones in
+  // this fixture do not reliably survive to the end of the run.
   if (PLAIN_TERMINAL_BRANCH !== active) {
     await activateWorktree(page, PLAIN_TERMINAL_BRANCH);
   }
-  await dismissBlockingPalette(page).catch(() => {});
-  await page
-    .locator(SEL.toolbar.openTerminal)
-    .first()
-    .click()
-    .catch(() => {});
-  await settle(page, 1500);
+  for (let i = 0; i < 2; i++) {
+    await dismissBlockingPalette(page).catch(() => {});
+    await page
+      .locator(SEL.toolbar.openTerminal)
+      .first()
+      .click()
+      .catch(() => {});
+    await settle(page, 1500);
+  }
 
   // The panel this launch actually produced, not whichever id sorts last —
   // `getGridPanelIds` is not launch-ordered, and idling the wrong pane leaves
@@ -434,13 +444,10 @@ test("fleet picker review — every state that carries design weight", async () 
     // 2. Nothing selected — the disabled primary and its "Arm selected" copy.
     await step("empty-selection", async () => {
       await openPicker(page);
-      const selectAll = page.locator(`[data-testid="${TID}-select-all"]`);
-      // Click through to "Deselect all": the label flips once everything visible
-      // is selected, so two presses land on a guaranteed-empty selection.
-      await selectAll.click();
-      await settle(page, 250);
-      await selectAll.click();
-      await settle(page, 250);
+      // "Clear" is its own control now — the bulk actions no longer share one
+      // button whose label reverses, so there is nothing to click twice.
+      await page.locator(`[data-testid="${TID}-clear-selection"]`).click();
+      await settle(page, 300);
       await snapSurface(page, "11-empty-selection");
     });
 
