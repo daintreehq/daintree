@@ -5,6 +5,7 @@ import { X, AlertTriangle } from "lucide-react";
 import type { PanelKind, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import {
   getEffectiveStateIcon,
@@ -48,6 +49,19 @@ export interface TabButtonProps {
   isUsingFallback?: boolean;
   fallbackTooltip?: string;
   hasDangerousFlags?: boolean;
+  /** The id of the region this tab switches — `aria-controls`, per the APG tabs pattern. */
+  tabPanelId?: string;
+  /**
+   * The overflow observer could not fit this tab. It stays in layout so the
+   * observer keeps measuring it, but it is not painted — a clipped fragment at
+   * the strip's edge reads as a stray glyph. Never true for the active tab.
+   */
+  parked?: boolean;
+}
+
+/** The DOM id a tab carries, so the panel it controls can name it back. */
+export function tabDomId(tabId: string): string {
+  return `panel-tab-${tabId}`;
 }
 
 const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function TabButtonComponent(
@@ -68,6 +82,8 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     isUsingFallback,
     fallbackTooltip,
     hasDangerousFlags,
+    tabPanelId,
+    parked = false,
   },
   ref
 ) {
@@ -271,14 +287,18 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
       <TooltipTrigger asChild>
         <div
           ref={ref}
+          id={tabDomId(id)}
           role="tab"
           aria-selected={isActive}
+          aria-controls={tabPanelId}
+          data-tab-parked={parked || undefined}
           tabIndex={isActive ? 0 : -1}
           onClick={handleClick}
           onKeyDown={handleKeyDown}
           className={cn(
             "relative flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
             "border-r border-divider transition-colors",
+            parked && "invisible",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
             isActive
               ? "bg-tint/[0.04] text-text-primary"
@@ -412,22 +432,26 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           {/* Close button - visible on hover */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={handleClose}
                 onKeyDown={handleCloseKeyDown}
                 onPointerDown={handleClosePointerDown}
+                // A 24px target on a 24px tab: the button spans the tab's
+                // height and gives most of its width back with -mr-1.5. Only
+                // the active tab's close is a Tab stop — the strip already
+                // roves, and an inactive tab is reached with the arrows.
+                tabIndex={isActive ? undefined : -1}
                 className={cn(
-                  "shrink-0 p-0.5 -mr-1 rounded transition-[opacity,color,background-color,border-color]",
+                  "-my-1 -mr-1.5 shrink-0",
                   "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",
-                  "hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)]",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
-                  "text-daintree-text/40 hover:text-status-error"
+                  "hover:bg-status-error/15 hover:text-status-error focus-visible:text-status-error"
                 )}
                 aria-label={`Close ${title}`}
-                type="button"
               >
-                <X className="w-3 h-3" aria-hidden="true" />
-              </button>
+                <X aria-hidden="true" />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Close tab</TooltipContent>
           </Tooltip>

@@ -74,6 +74,7 @@ function panel(props: {
   agentState?: AgentState;
   kind?: "terminal" | "browser";
   tabs?: TabInfo[];
+  completedWithNoChanges?: boolean;
 }) {
   return (
     <ContentPanel
@@ -85,6 +86,7 @@ function panel(props: {
       onClose={() => {}}
       onToggleMaximize={() => {}}
       agentState={props.agentState}
+      completedWithNoChanges={props.completedWithNoChanges}
       tabs={props.tabs}
       onTabClick={props.tabs ? () => {} : undefined}
     >
@@ -153,5 +155,25 @@ describe("ContentPanel agent glyph placement", () => {
 
     expect(screen.queryByTestId("panel-header-status")).toBeNull();
     expect(screen.queryByTestId("panel-header-agent-indicator")).toBeNull();
+  });
+
+  it("hands the metadata row the lifecycle state, not the glyph's display state", () => {
+    // The glyph folds `completed` into `waiting` on purpose (the CLI is still
+    // alive and idle). The row's settled trace — cost, "Finished, no changes" —
+    // keys off the lifecycle state and must still be reachable.
+    render(panel({ agentState: "completed", completedWithNoChanges: true }));
+    expect(screen.queryByText("Finished, no changes")).not.toBeNull();
+  });
+
+  it("names the body as the tab panel of the active tab in a tab group", () => {
+    const tabs: TabInfo[] = [
+      { id: "t-1", title: "One", kind: "terminal", chrome, isActive: true },
+      { id: "t-2", title: "Two", kind: "terminal", chrome, isActive: false },
+    ];
+    render(panel({ tabs }));
+    const tabpanel = screen.getByRole("tabpanel");
+    const active = screen.getByRole("tab", { selected: true });
+    expect(tabpanel.getAttribute("aria-labelledby")).toBe(active.id);
+    expect(active.getAttribute("aria-controls")).toBe(tabpanel.id);
   });
 });

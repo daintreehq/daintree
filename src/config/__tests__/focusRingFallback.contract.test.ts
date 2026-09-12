@@ -650,13 +650,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason: "PRE-EXISTING #8940: preset rename input has no focus indicator — follow-up",
   },
   {
-    file: "src/components/Panel/PanelHeader.tsx",
-    fragment:
-      "text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-text-primary select-text transition-colors focus:outline-hidden",
-    reason:
-      "PRE-EXISTING #8940: inline panel title rename input has no focus indicator — follow-up",
-  },
-  {
     file: "src/components/Panel/TabButton.tsx",
     fragment:
       "text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-text-primary select-text focus:outline-hidden",

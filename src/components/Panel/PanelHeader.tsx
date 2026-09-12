@@ -25,6 +25,7 @@ import {
   PanelTopClose,
   Pencil,
   RefreshCw,
+  ShieldAlert,
   Trash2,
   Unlock,
 } from "lucide-react";
@@ -53,8 +54,15 @@ import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
-import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
+import {
+  STATE_COLORS,
+  STATE_ICONS,
+  getEffectiveStateColor,
+  getEffectiveStateIcon,
+  getEffectiveStateLabel,
+} from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { BellDot, FolderGit2 } from "@/components/icons";
@@ -67,6 +75,7 @@ import {
   useTabOverflow,
 } from "@/hooks";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenu,
@@ -94,6 +103,14 @@ import type { BrandMarkSurface } from "@/lib/brandIcon";
 export interface PanelHeaderProps {
   id: string;
   title: string;
+  /**
+   * The task-first form of the title for a narrow header. Swapped in by a
+   * container query at 420px of header width; the accessible name, the
+   * tooltip and the rename prefill always use the full title.
+   */
+  compactTitle?: string;
+  /** The id of the region the tab strip switches, for each tab's `aria-controls`. */
+  tabPanelId?: string;
   kind: PanelKind;
   agentId?: string;
   chrome: TerminalChromeDescriptor;
@@ -186,6 +203,8 @@ export interface PanelHeaderProps {
 function PanelHeaderComponent({
   id,
   title,
+  compactTitle,
+  tabPanelId,
   kind,
   agentId,
   chrome,
@@ -231,6 +250,23 @@ function PanelHeaderComponent({
   onTabReorder,
 }: PanelHeaderProps) {
   const dragHandle = useDragHandle();
+
+  // The window controls are one toolbar: one Tab stop per pane, arrows within.
+  // Six panes cost six presses to cross, not twenty-four.
+  // Not in the dock: a dock preview is hosted inside a Radix popover, and the
+  // hook excludes controls under a popper wrapper (it means an open menu),
+  // which would leave a dock header with no Tab stop at all.
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  const handleControlsKeyDown = useToolbarRoving(controlsRef, location !== "dock");
+  const pendingTabFocusRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (pendingTabFocusRef.current !== null) {
+        cancelAnimationFrame(pendingTabFocusRef.current);
+      }
+    },
+    []
+  );
 
   // Check if panel kind supports restart via registry
   const canRestart = panelKindCanRestart(kind);
@@ -415,6 +451,25 @@ function PanelHeaderComponent({
   // The title prop is already variant-resolved by ContentPanel (identity-only
   // in the dock, task-composed in the grid) — render it verbatim.
   const displayTitle = title;
+  // What the title actually paints: the full composition, or under 420px of
+  // header the task alone — "fix flaky auth tests" tells panes apart where
+  // "Claud…" cannot, and the glyph carries identity. Shared by the static
+  // title and by the invisible copy that sizes the rename field, so the two
+  // measure identically.
+  const titleContent =
+    compactTitle && compactTitle !== displayTitle ? (
+      <>
+        <span className="@max-[420px]/header:hidden">{displayTitle}</span>
+        <span className="hidden @max-[420px]/header:inline">{compactTitle}</span>
+      </>
+    ) : (
+      displayTitle
+    );
+  // A truncated badge, or one hidden by the compact query, still has to give
+  // the branch back somewhere — the title tooltip carries it.
+  const titleTooltip = [title, worktreeBranch && worktreeAccentColor ? worktreeBranch : null]
+    .filter(Boolean)
+    .join(" · ");
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -468,7 +523,9 @@ function PanelHeaderComponent({
     const tabLeft = tabEl.offsetLeft;
     const tabRight = tabLeft + tabEl.offsetWidth;
 
-    if (tabLeft < containerLeft) {
+    // A tab wider than the strip cannot fit either way; show its start — the
+    // brand glyph and the first words are what identify it, not its close.
+    if (tabLeft < containerLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
       tabListEl.scrollTo({ left: tabLeft, behavior: "smooth" });
     } else if (tabRight > containerRight) {
       tabListEl.scrollTo({ left: tabRight - tabListEl.clientWidth, behavior: "smooth" });
@@ -569,58 +626,97 @@ function PanelHeaderComponent({
       const nextTab = tabs[nextIndex];
       if (nextTab) {
         onTabClick(nextTab.id);
-        // Focus the new tab button
-        const tabButton = tabListEl?.querySelector(
-          `[data-tab-id="${nextTab.id}"]`
-        ) as HTMLElement | null;
-        tabButton?.focus();
+        // Focus after the activation has rendered: a parked tab is
+        // `visibility: hidden` until it becomes active, and a hidden element
+        // refuses focus.
+        if (pendingTabFocusRef.current !== null) {
+          cancelAnimationFrame(pendingTabFocusRef.current);
+        }
+        pendingTabFocusRef.current = requestAnimationFrame(() => {
+          pendingTabFocusRef.current = null;
+          const tabButton = tabListEl?.querySelector(
+            `[data-tab-id="${nextTab.id}"]`
+          ) as HTMLElement | null;
+          tabButton?.focus();
+        });
       }
     },
     [tabs, onTabClick, tabListEl]
   );
 
+  // A tab you cannot see can still be the one asking for you. The trigger wears
+  // the same waiting mark the hidden tab would, so the strip never hides an
+  // agent that needs input behind a bare chevron.
+  const hiddenWaitingCount = hiddenTabs.filter((t) => t.agentState === "waiting").length;
+  const hiddenTabsLabel =
+    hiddenWaitingCount > 0
+      ? `Show ${hiddenTabs.length} hidden tabs, ${hiddenWaitingCount} waiting for input`
+      : `Show ${hiddenTabs.length} hidden tabs`;
   const overflowTrigger = hiddenTabs.length > 0 && (
     <DropdownMenu>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onPointerDown={(e) => e.stopPropagation()}
-              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
-              aria-label="Show hidden tabs"
+              className="relative shrink-0"
+              aria-label={hiddenTabsLabel}
               aria-haspopup="menu"
               data-testid="panel-tabs-overflow"
             >
-              <ChevronDown className="w-3 h-3" aria-hidden="true" />
-              <span className="sr-only"> ({hiddenTabs.length} hidden)</span>
-            </button>
+              <ChevronDown aria-hidden="true" />
+              {hiddenWaitingCount > 0 && (
+                <span
+                  className="status-mark absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-state-waiting)]"
+                  data-testid="panel-tabs-overflow-waiting"
+                  aria-hidden="true"
+                />
+              )}
+            </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="bottom">Show hidden tabs</TooltipContent>
+        <TooltipContent side="bottom">{hiddenTabsLabel}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent
         align="end"
         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
       >
-        {hiddenTabs.map((tab) => (
-          <DropdownMenuItem
-            key={tab.id}
-            onSelect={() => onTabClick?.(tab.id)}
-            aria-current={tab.isActive ? "true" : undefined}
-            className={cn(tab.isActive && "font-medium")}
-          >
-            <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
-              <TerminalIcon
-                kind={tab.kind}
-                chrome={tab.chrome}
-                className="w-3.5 h-3.5"
-                brandColor={tab.presetColor ?? tab.chrome.color}
-              />
-            </span>
-            <span className="truncate">{tab.title}</span>
-          </DropdownMenuItem>
-        ))}
+        {hiddenTabs.map((tab) => {
+          const StateIcon = tab.agentState ? getEffectiveStateIcon(tab.agentState) : null;
+          return (
+            <DropdownMenuItem
+              key={tab.id}
+              onSelect={() => onTabClick?.(tab.id)}
+              aria-current={tab.isActive ? "true" : undefined}
+              className={cn(tab.isActive && "font-medium")}
+            >
+              <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
+                <TerminalIcon
+                  kind={tab.kind}
+                  chrome={tab.chrome}
+                  className="w-3.5 h-3.5"
+                  brandColor={tab.presetColor ?? tab.chrome.color}
+                />
+              </span>
+              <span className="truncate">{tab.title}</span>
+              {StateIcon && tab.agentState && (
+                <span className="sr-only">, {getEffectiveStateLabel(tab.agentState)}</span>
+              )}
+              {StateIcon && tab.agentState && (
+                <StateIcon
+                  className={cn(
+                    "ml-auto h-3 w-3 shrink-0",
+                    getEffectiveStateColor(tab.agentState),
+                    tab.agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                  )}
+                  aria-hidden="true"
+                />
+              )}
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -648,7 +744,7 @@ function PanelHeaderComponent({
         ? {
             surface: "surface-panel",
             extension: "panel-header-focus-bg",
-            lift: "overlay-subtle",
+            lift: "overlay-medium",
           }
         : { surface: "surface-panel", extension: "panel-header-bg" };
 
@@ -675,27 +771,31 @@ function PanelHeaderComponent({
       data-fleet-previewed={isFleetPreviewed || undefined}
       data-pane-chrome=""
       className={cn(
-        "text-xs transition-colors relative overflow-hidden group select-none",
+        "@container/header text-xs transition-colors relative overflow-hidden group select-none",
         isMaximized
           ? "h-10 bg-surface-sidebar border-border-default"
           : location === "dock"
             ? "bg-surface"
             : isFocused || isSelected
-              ? // Var fallbacks keep themes without the panel-header hooks
-                // byte-identical.
-                "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
-              : // Preview tint sits between transparent and bg-overlay-subtle so
-                // a previewed-but-unselected pane reads distinctly from both.
+              ? // The var hook lets a theme repaint the lifted bar; the fallback
+                // is the strongest neutral overlay step, so on a theme without
+                // the hook the pane you type into still reads as lifted.
+                "bg-[var(--panel-header-focus-bg,var(--color-overlay-medium))]"
+              : // Preview tint sits between transparent and the focus lift so a
+                // previewed-but-unselected pane reads distinctly from both.
                 // Neutral surface, no accent — accent restraint per CLAUDE.md.
                 isFleetPreviewed
-                ? "bg-tint/[0.05]"
+                ? "bg-overlay-subtle"
                 : "bg-[var(--panel-header-bg,transparent)]",
         // Mirror the fleet ribbon's 2px amber left stripe on follower panes.
         // The stripe sits in the title bar — fovea-adjacent when reading the
         // pane body — so users don't have to look up at the ribbon to verify
         // which panes will receive their keystrokes.
         isFleetFollower &&
-          "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)] before:z-[1]",
+          // Solid amber, not the ribbon's mixed border token: on the lifted header
+          // that mix measures under 1.7:1 and the stripe is the follower's only
+          // cue besides the glyph.
+          "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber before:z-[1] forced-colors:before:bg-[CanvasText]",
         dragListeners && "cursor-grab active:cursor-grabbing",
         isPinged && !isMaximized && "animate-terminal-header-ping",
         isDragging && "pointer-events-none"
@@ -723,15 +823,17 @@ function PanelHeaderComponent({
                 <PanelTabList
                   layoutGroupId={`panel-tabs-dnd-${id}`}
                   tabs={tabs}
+                  hiddenTabIds={hiddenTabIds}
                   tabListRef={setTabListEl}
                   onKeyDown={handleTabListKeyDown}
                   onAddTab={onAddTab}
                   addTabTooltipContent={addTabTooltipContent}
                   overflowTrigger={overflowTrigger}
-                  renderTab={(tab) => (
+                  renderTab={(tab, parked) => (
                     <SortableTabButton
                       key={tab.id}
                       id={tab.id}
+                      parked={parked}
                       title={tab.title}
                       fullTitle={tab.fullTitle}
                       chrome={tab.chrome}
@@ -742,6 +844,7 @@ function PanelHeaderComponent({
                       isUsingFallback={tab.isUsingFallback}
                       fallbackTooltip={tab.fallbackTooltip}
                       hasDangerousFlags={tab.hasDangerousFlags}
+                      tabPanelId={tabPanelId}
                       onClick={() => onTabClick?.(tab.id)}
                       onClose={() => onTabClose?.(tab.id)}
                       onRename={
@@ -756,15 +859,17 @@ function PanelHeaderComponent({
             <PanelTabList
               layoutGroupId={`panel-tabs-static-${id}`}
               tabs={tabs}
+              hiddenTabIds={hiddenTabIds}
               tabListRef={setTabListEl}
               onKeyDown={handleTabListKeyDown}
               onAddTab={onAddTab}
               addTabTooltipContent={addTabTooltipContent}
               overflowTrigger={overflowTrigger}
-              renderTab={(tab) => (
+              renderTab={(tab, parked) => (
                 <TabButton
                   key={tab.id}
                   id={tab.id}
+                  parked={parked}
                   title={tab.title}
                   fullTitle={tab.fullTitle}
                   chrome={tab.chrome}
@@ -775,6 +880,7 @@ function PanelHeaderComponent({
                   isUsingFallback={tab.isUsingFallback}
                   fallbackTooltip={tab.fallbackTooltip}
                   hasDangerousFlags={tab.hasDangerousFlags}
+                  tabPanelId={tabPanelId}
                   onClick={() => onTabClick?.(tab.id)}
                   onClose={() => onTabClose?.(tab.id)}
                   onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
@@ -783,7 +889,12 @@ function PanelHeaderComponent({
             />
           )
         ) : (
-          <div className="flex items-center gap-2 min-w-0">
+          // overflow-hidden is the hard edge: whatever this group cannot fit is
+          // clipped here, never painted over the status box or the controls.
+          // px-1 -mx-1 reserves 4px inside the clip on both sides: the rename
+          // field extends that far past the title's box, and without the room its
+          // own edge is what gets clipped when the title is the last item.
+          <div className="-mx-1 flex min-w-0 items-center gap-2 self-stretch overflow-hidden px-1">
             {/* The pane you are working in wears its agent's real brand colour;
               the ones you are not sit a step back. `data-brand-active` goes on
               the glyph's own wrapper rather than the header so it cannot leak
@@ -801,27 +912,48 @@ function PanelHeaderComponent({
             </span>
 
             {isEditingTitle ? (
-              // [data-no-dnd] opts the rename field out of the header drag
-              // surface: without it, drag-selecting the title text travels past
-              // DRAG_ACTIVATION_DISTANCE and picks the panel up instead.
-              <input
-                data-no-dnd
-                ref={titleInputRef}
-                type="text"
-                value={editingValue}
-                onChange={(e) => onEditingValueChange(e.target.value)}
-                onKeyDown={onTitleInputKeyDown}
-                onBlur={onTitleSave}
-                className="text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-text-primary select-text transition-colors focus:outline-hidden"
-                aria-label={getAriaLabel()}
-              />
+              // The field takes exactly the box the static title had: an
+              // invisible copy of the title sizes the cell and the input fills
+              // it, so nothing beside it moves when editing starts and ends.
+              // px-1 is paid back with -mx-1 so the first glyph stays put.
+              // Chrome-free by ruling (#7926): the lift is the cue.
+              <div className="grid min-w-0 shrink" data-testid="panel-title-edit-box">
+                <span
+                  aria-hidden="true"
+                  className="invisible col-start-1 row-start-1 block h-6 min-w-[6ch] truncate text-xs font-medium leading-6"
+                >
+                  {titleContent}
+                </span>
+                {/* [data-no-dnd] opts the rename field out of the header drag
+                    surface: without it, drag-selecting the title text travels
+                    past DRAG_ACTIVATION_DISTANCE and picks the panel up instead. */}
+                <input
+                  data-no-dnd
+                  ref={titleInputRef}
+                  type="text"
+                  value={editingValue}
+                  onChange={(e) => onEditingValueChange(e.target.value)}
+                  onKeyDown={onTitleInputKeyDown}
+                  onBlur={onTitleSave}
+                  // Focus is shown by the field itself, without accent (#7926):
+                  // the wash deepens and its edge appears while it has focus.
+                  className="col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] rounded-sm border border-transparent bg-overlay-soft px-1 text-xs font-medium leading-6 text-text-primary select-text transition-colors focus:outline-hidden focus-visible:border-divider focus-visible:bg-overlay-medium"
+                  aria-label={getAriaLabel()}
+                />
+              </div>
             ) : (
               <div className="flex items-center gap-2 min-w-0">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span
                       className={cn(
-                        "text-xs font-medium font-sans select-none transition-colors block truncate min-w-0 min-h-6 leading-6",
+                        // min-w-[6ch]: the title is the last thing to yield —
+                        // a badge or a queue count never squeezes it to nothing.
+                        // The ring is declared here rather than left to the UA
+                        // default so it matches the controls beside it.
+                        "text-xs font-medium font-sans select-none transition-colors block truncate min-w-[6ch] min-h-6 leading-6 rounded-sm",
+                        onTitleChange &&
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
                         isFocused || isSelected ? "text-text-primary" : "text-text-secondary",
                         onTitleChange && "cursor-text hover:text-text-primary",
                         isPinged &&
@@ -835,11 +967,13 @@ function PanelHeaderComponent({
                       aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
                       data-fleet-gesture-passthrough=""
                     >
-                      {displayTitle}
+                      {titleContent}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {onTitleChange ? `${title} — Double-click to edit` : title}
+                    {onTitleChange
+                      ? `${titleTooltip} — Double-click or F2 to rename`
+                      : titleTooltip}
                   </TooltipContent>
                 </Tooltip>
               </div>
@@ -849,9 +983,13 @@ function PanelHeaderComponent({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
+                    role="img"
+                    className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-status-danger"
                     aria-label="Launched with dangerous permissions"
-                  />
+                    data-testid="panel-dangerous-flags-mark"
+                  >
+                    <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   Launched with dangerous permissions — agent can modify files without prompting
@@ -871,8 +1009,15 @@ function PanelHeaderComponent({
                     onPointerDown={(e) => e.stopPropagation()}
                     aria-label="Last fleet broadcast failed on this terminal — click to acknowledge"
                     data-testid="panel-fleet-failure-dot"
-                    className="status-mark w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
-                  />
+                    // The mark stays an 8px dot; the button around it is the
+                    // 24px target. -mx-1 keeps its footprint in the row at 16px.
+                    className="-mx-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                  >
+                    <span
+                      className="status-mark h-2 w-2 rounded-full bg-status-error"
+                      aria-hidden="true"
+                    />
+                  </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
@@ -902,7 +1047,7 @@ function PanelHeaderComponent({
               <span
                 role="status"
                 aria-label="Watching — waiting for agent completion"
-                className="text-accent-primary cursor-default"
+                className="text-text-secondary cursor-default"
               >
                 <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
               </span>
@@ -915,19 +1060,22 @@ function PanelHeaderComponent({
             {onAddTab && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       onAddTab();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                    // Revealed by hover or by keyboard focus anywhere in the
+                    // header, so a keyboard user on the title can find it.
+                    className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 @max-[420px]/header:hidden"
                     aria-label="Duplicate panel as new tab"
                     aria-keyshortcuts={duplicateAriaShortcut}
-                    type="button"
                   >
-                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
+                    <Plus aria-hidden="true" />
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
@@ -937,19 +1085,30 @@ function PanelHeaderComponent({
 
             {/* Worktree branch badge — shown when multiple worktrees are active */}
             {worktreeBranch && worktreeAccentColor && (
-              <span
-                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium leading-none select-none max-w-[120px]"
-                style={
-                  {
-                    color: worktreeAccentColor,
-                    backgroundColor: "color-mix(in oklab, var(--worktree-color) 12%, transparent)",
-                    "--worktree-color": worktreeAccentColor,
-                  } as React.CSSProperties
-                }
-                aria-label={`Branch: ${worktreeBranch}`}
-              >
-                <span className="truncate">{worktreeBranch}</span>
-              </span>
+              // The worktree colour carries identity through the wash and the
+              // edge; the text itself stays on the readable token — the palette
+              // measures under 4.5:1 as ink on either light or dark headers.
+              // min-w-[7ch] with truncate: the badge yields before the title
+              // does but never to a single letter; the tooltip has the rest.
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="min-w-[7ch] max-w-[120px] inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none text-text-primary select-none @max-[420px]/header:hidden"
+                    style={
+                      {
+                        backgroundColor:
+                          "color-mix(in oklab, var(--worktree-color) 18%, transparent)",
+                        borderColor: "color-mix(in oklab, var(--worktree-color) 45%, transparent)",
+                        "--worktree-color": worktreeAccentColor,
+                      } as React.CSSProperties
+                    }
+                    aria-label={`Branch: ${worktreeBranch}`}
+                  >
+                    <span className="truncate">{worktreeBranch}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{worktreeBranch}</TooltipContent>
+              </Tooltip>
             )}
 
             {/* Process runs somewhere other than the worktree this panel is filed
@@ -1018,6 +1177,11 @@ function PanelHeaderComponent({
       )}
 
       <div
+        ref={controlsRef}
+        role="toolbar"
+        aria-label="Panel controls"
+        aria-orientation="horizontal"
+        onKeyDown={handleControlsKeyDown}
         data-testid="panel-header-controls"
         className="ml-1.5 flex shrink-0 items-center gap-1.5"
       >
@@ -1031,14 +1195,14 @@ function PanelHeaderComponent({
             <Tooltip open={overflowTooltipOpen} onOpenChange={setOverflowTooltipOpen}>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                     aria-label="More panel actions"
                   >
-                    <Ellipsis className="w-3 h-3" aria-hidden="true" />
-                  </button>
+                    <Ellipsis aria-hidden="true" />
+                  </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">More panel actions</TooltipContent>
@@ -1071,14 +1235,14 @@ function PanelHeaderComponent({
                   data-testid={armedRestartId === id ? "panel-restart-confirm" : "panel-restart"}
                   aria-label={
                     armedRestartId === id
-                      ? `Armed — click again to confirm restart. ${countdown !== null ? `${countdown} seconds remaining` : ""}`
-                      : "Restart Session"
+                      ? `Armed — click again to confirm restart. ${countdown !== null ? `Confirmation expires in ${countdown} seconds` : ""}`
+                      : "Restart session"
                   }
                 >
                   <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   {armedRestartId === id
-                    ? `Confirm Restart (${countdown ?? 0}s)`
-                    : "Restart Session"}
+                    ? `Confirm restart (${countdown ?? 0}s)`
+                    : "Restart session"}
                 </DropdownMenuItem>
               )}
 
@@ -1093,7 +1257,7 @@ function PanelHeaderComponent({
                   }
                 >
                   <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  Move to New Worktree…
+                  Move to new worktree…
                 </DropdownMenuItem>
               )}
 
@@ -1144,7 +1308,7 @@ function PanelHeaderComponent({
                   ) : (
                     <Lock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   )}
-                  {isInputLocked ? "Unlock Input" : "Lock Input"}
+                  {isInputLocked ? "Unlock input" : "Lock input"}
                 </DropdownMenuItem>
               )}
               {showWatchButton && (
@@ -1154,7 +1318,7 @@ function PanelHeaderComponent({
                   ) : (
                     <Bell className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   )}
-                  {isWatched ? "Cancel Watch" : "Watch"}
+                  {isWatched ? "Cancel watch" : "Watch"}
                 </DropdownMenuItem>
               )}
 
@@ -1185,19 +1349,20 @@ function PanelHeaderComponent({
         {showMoveToDock && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={(e) => {
                   e.stopPropagation();
                   onMinimize!();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                 aria-label="Move to dock"
                 aria-keyshortcuts={moveToDockAriaShortcut}
                 data-testid="panel-move-to-dock"
               >
-                <PanelBottomClose className="w-3 h-3" />
-              </button>
+                <PanelBottomClose aria-hidden="true" />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
               {createTooltipContent("Move to dock", moveToDockShortcut)}
@@ -1214,18 +1379,19 @@ function PanelHeaderComponent({
             {onRestore && showRestoreControl && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       onRestore();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                     aria-label="Move to grid"
                     data-testid="panel-move-to-grid"
                   >
-                    <PanelTopClose className="w-3 h-3" aria-hidden="true" />
-                  </button>
+                    <PanelTopClose aria-hidden="true" />
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Move to grid</TooltipContent>
               </Tooltip>
@@ -1234,42 +1400,44 @@ function PanelHeaderComponent({
         ) : onToggleMaximize && isMaximized ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={(e) => {
                   e.stopPropagation();
                   onFocus();
                   onToggleMaximize();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-text-secondary hover:text-text-primary transition-colors"
                 aria-label="Restore grid view"
                 aria-keyshortcuts={maximizeAriaShortcut}
               >
-                <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
-                <span className="font-medium">Restore</span>
-              </button>
+                <Minimize2 aria-hidden="true" />
+                Restore
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipContent("Restore Grid View", maximizeShortcut)}
+              {createTooltipContent("Restore grid view", maximizeShortcut)}
             </TooltipContent>
           </Tooltip>
         ) : (
           onToggleMaximize && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={(e) => {
                     e.stopPropagation();
                     onFocus();
                     onToggleMaximize();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                   aria-label="Maximize"
                   aria-keyshortcuts={maximizeAriaShortcut}
                 >
-                  <Maximize2 className="w-3 h-3" aria-hidden="true" />
-                </button>
+                  <Maximize2 aria-hidden="true" />
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 {createTooltipContent("Maximize", maximizeShortcut)}
@@ -1281,7 +1449,9 @@ function PanelHeaderComponent({
         {/* Close button */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={(e) => {
                 e.stopPropagation();
                 onClose(e.altKey);
@@ -1294,7 +1464,9 @@ function PanelHeaderComponent({
                 }
               }}
               onPointerDown={(e) => e.stopPropagation()}
-              className="p-1.5 rounded-sm hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-daintree-text/60 hover:text-status-error transition-colors"
+              // Quiet at rest like its neighbours; the destructive hue arrives
+              // only on hover and focus, where it names what the click does.
+              className="hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error focus-visible:outline-status-error"
               data-testid="panel-close"
               aria-label={formatShortcutForTooltip(
                 location === "dock"
@@ -1306,14 +1478,14 @@ function PanelHeaderComponent({
               // the way to dismiss the preview (#11186).
               aria-keyshortcuts={location === "dock" ? undefined : closeAriaShortcut}
             >
-              <X className="w-3 h-3" aria-hidden="true" />
-            </button>
+              <X aria-hidden="true" />
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
             <div className="flex flex-col gap-1">
               {location === "dock"
                 ? createTooltipContent("Dismiss preview")
-                : createTooltipContent("Close Session", closeShortcut)}
+                : createTooltipContent("Close session", closeShortcut)}
               <span className="text-text-secondary text-2xs">
                 {formatShortcutForTooltip("Alt+Click to force close")}
               </span>

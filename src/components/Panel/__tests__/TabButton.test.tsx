@@ -636,4 +636,34 @@ describe("TabButton", () => {
       expect(parentHandler).not.toHaveBeenCalled();
     });
   });
+
+  describe("close button in the Tab order", () => {
+    it("is a Tab stop only on the active tab — inactive tabs are reached with the arrows", () => {
+      const { unmount } = render(<TabButton {...defaultProps} isActive />);
+      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(0);
+      unmount();
+      render(<TabButton {...defaultProps} isActive={false} />);
+      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(-1);
+    });
+  });
+
+  describe("tabs pattern relationships", () => {
+    it("carries an id and points aria-controls at the region it switches", () => {
+      render(<TabButton {...defaultProps} tabPanelId="panel-body-x" />);
+      const tab = screen.getByRole("tab");
+      expect(tab.id).not.toBe("");
+      expect(tab.getAttribute("aria-controls")).toBe("panel-body-x");
+    });
+  });
+
+  describe("parked tabs", () => {
+    it("stays in layout but is not painted while parked", () => {
+      render(<TabButton {...defaultProps} isActive={false} parked />);
+      const tab = screen.getByRole("tab", { hidden: true });
+      // `visibility: hidden` keeps the box for the overflow observer to measure
+      // and keeps pointer and focus off a tab the user cannot see.
+      expect(tab.classList.contains("invisible")).toBe(true);
+      expect(tab.getAttribute("data-tab-parked")).toBe("true");
+    });
+  });
 });

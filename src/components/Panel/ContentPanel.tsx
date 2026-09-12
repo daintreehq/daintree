@@ -31,6 +31,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { tabDomId } from "./TabButton";
 import { isPtyPanel } from "@shared/types/panel";
 
 /**
@@ -140,6 +141,13 @@ export interface ContentPanelProps extends BasePanelProps {
   // and time-bounded.
   isVoiceArming?: boolean;
 
+  /**
+   * The task-first composition of `title` for a header too narrow to show the
+   * full one. Set by the outer wrapper from the same store read as `title`;
+   * the accessible name and the rename prefill stay on the full title.
+   */
+  compactTitle?: string;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -244,6 +252,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ambientAgentState,
     isSelected = false,
     isFleetFollower = false,
+    compactTitle,
     isHibernated = false,
     isVoiceArming = false,
     tabs,
@@ -349,6 +358,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   }, [titleEditing.isEditingTitle]);
 
   const showGridAttention = location === "grid" && !isMaximized && isMultiPanelGrid;
+  const tabPanelId = `panel-body-${id}`;
+  const activeTab = tabs && tabs.length > 1 ? tabs.find((t) => t.isActive) : undefined;
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
   // When the Daintree Assistant region owns focus, suppress the grid panel's
   // `terminal-selected` accent so the visual "active surface" follows where
@@ -357,7 +368,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // navigation and action-target resolution are unaffected; only the chrome
   // releases. Ambient agent-state borders (`panel-state-*`) still render.
   const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
-  const showSelectedChrome = (isFocused || isSelected) && !isAssistantActive;
+  // The frame follows focus alone. An armed follower keeps the title-bar lift
+  // and its stripe (PanelHeader), but not the focus frame — otherwise every
+  // receiver in a fleet looks like the pane the keystrokes go to.
+  const showSelectedChrome = isFocused && !isAssistantActive;
   // #11837: a lone grid pane has no sibling to contrast against, so it skips
   // `showGridAttention` entirely and renders bare in every state — including
   // while the Assistant holds the keystrokes. That leaves the two states
@@ -440,7 +454,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         <TerminalHeaderContent
           id={id}
           kind={kind}
-          agentState={headerAgentState}
+          // The lifecycle state, not the glyph's display state: the display
+          // state folds `completed` into `waiting` for the indicator, which
+          // would keep the row's settled trace (cost, "Finished, no changes")
+          // from ever rendering.
+          agentState={agentState}
           activityStatus={activityStatus}
           lastCommand={lastCommand}
           isExited={isExited}
@@ -457,7 +475,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isAutoTerminalHeader,
     kind,
     id,
-    headerAgentState,
+    agentState,
     activityStatus,
     lastCommand,
     isExited,
@@ -620,7 +638,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         (location === "dock" || location === "dialog" || isMaximized) && "bg-surface-canvas",
         location === "grid" &&
           !isMaximized &&
-          "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
+          "rounded-lg border shadow-[var(--theme-shadow-ambient)] transition-colors duration-150",
         location === "grid" &&
           !isMaximized &&
           resolveGridPanelChromeClass({
@@ -663,6 +681,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isDragging={isDragging}
           id={id}
           title={title}
+          compactTitle={compactTitle}
+          tabPanelId={tabPanelId}
           kind={kind}
           agentId={agentId}
           chrome={terminalChrome}
@@ -710,7 +730,16 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 
       {toolbar}
 
-      <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
+      {/* The tab strip's controlled region: every tab points here, and the
+          region is named by whichever tab is active. */}
+      <div
+        id={tabPanelId}
+        role={activeTab ? "tabpanel" : undefined}
+        aria-labelledby={activeTab ? tabDomId(activeTab.id) : undefined}
+        className="flex-1 min-h-0 relative flex flex-col"
+      >
+        {children}
+      </div>
 
       {showExitPulse ? <span className="fleet-exit-pulse-overlay" aria-hidden="true" /> : null}
     </div>
@@ -748,6 +777,15 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
         showTask: showAgentTaskTitles,
       });
     });
+    // The task alone, for a header with no room for the identity prefix. Only
+    // the grid composes tasks, and only when the compact form actually differs.
+    const compactTitle = usePanelStore((s) => {
+      const panel = s.panelsById[props.id];
+      if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
+      if (props.location === "dock") return undefined;
+      const compact = getTerminalDisplayTitle(panel, "compact", { showTask: showAgentTaskTitles });
+      return compact && compact !== composedTitle ? compact : undefined;
+    });
     const effectiveTitle = composedTitle ?? props.title;
     return (
       <TitleEditingProvider
@@ -755,7 +793,12 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
         title={effectiveTitle}
         onTitleChange={props.onTitleChange}
       >
-        <ContentPanelInner {...props} title={effectiveTitle} ref={ref} />
+        <ContentPanelInner
+          {...props}
+          title={effectiveTitle}
+          compactTitle={compactTitle}
+          ref={ref}
+        />
       </TitleEditingProvider>
     );
   }

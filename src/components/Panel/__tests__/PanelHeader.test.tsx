@@ -37,8 +37,8 @@ vi.mock("framer-motion", () => {
     LazyMotion: passthrough,
     domAnimation: {},
     domMax: {},
-    m: { div: MotionDiv },
-    motion: { div: MotionDiv },
+    m: { div: MotionDiv, span: MotionDiv },
+    motion: { div: MotionDiv, span: MotionDiv },
   };
 });
 
@@ -84,8 +84,10 @@ vi.mock("@/store/panelStore", () => {
 let mockHasPty = false;
 let mockIsDockable = true;
 
+let mockCanRestart = false;
+
 vi.mock("@shared/config/panelKindRegistry", () => ({
-  panelKindCanRestart: () => false,
+  panelKindCanRestart: () => mockCanRestart,
   panelKindHasPty: () => mockHasPty,
   panelKindIsDockable: () => mockIsDockable,
   getPanelKindConfig: (kind: string) =>
@@ -196,6 +198,7 @@ describe("PanelHeader", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHasPty = false;
+    mockCanRestart = false;
     mockIsDockable = true;
     mockHiddenTabIds = new Set();
     mockStoreState = {
@@ -439,11 +442,11 @@ describe("PanelHeader", () => {
       expect(findMenuButton(menu, "Duplicate")).toBeDefined();
     });
 
-    it("renders Lock Input for PTY panels", () => {
+    it("renders Lock input for PTY panels", () => {
       mockHasPty = true;
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Lock Input")).toBeDefined();
+      expect(findMenuButton(menu, "Lock input")).toBeDefined();
     });
 
     it("does not render View Terminal Info on any panel kind (#5957)", () => {
@@ -453,11 +456,11 @@ describe("PanelHeader", () => {
       expect(findMenuButton(menu, "View Terminal Info")).toBeUndefined();
     });
 
-    it("does not render Lock Input for non-PTY panels", () => {
+    it("does not render Lock input for non-PTY panels", () => {
       mockHasPty = false;
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Lock Input")).toBeUndefined();
+      expect(findMenuButton(menu, "Lock input")).toBeUndefined();
     });
 
     it("renders Watch for unwatched agent panels", () => {
@@ -471,10 +474,10 @@ describe("PanelHeader", () => {
       );
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Watch")).toBeDefined();
-      expect(findMenuButton(menu, "Cancel Watch")).toBeUndefined();
+      expect(findMenuButton(menu, "Cancel watch")).toBeUndefined();
     });
 
-    it("renders Cancel Watch when agent panel is watched", () => {
+    it("renders Cancel watch when agent panel is watched", () => {
       mockStoreState = {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
@@ -488,7 +491,7 @@ describe("PanelHeader", () => {
         />
       );
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Cancel Watch")).toBeDefined();
+      expect(findMenuButton(menu, "Cancel watch")).toBeDefined();
       expect(findMenuButton(menu, "Watch")).toBeUndefined();
     });
 
@@ -496,7 +499,7 @@ describe("PanelHeader", () => {
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Watch")).toBeUndefined();
-      expect(findMenuButton(menu, "Cancel Watch")).toBeUndefined();
+      expect(findMenuButton(menu, "Cancel watch")).toBeUndefined();
     });
 
     it("renders Trash with destructive styling", () => {
@@ -529,11 +532,11 @@ describe("PanelHeader", () => {
       );
     });
 
-    it("dispatches terminal.toggleInputLock when clicking Lock Input", () => {
+    it("dispatches terminal.toggleInputLock when clicking Lock input", () => {
       mockHasPty = true;
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      findMenuButton(menu, "Lock Input")?.click();
+      findMenuButton(menu, "Lock input")?.click();
       expect(mockDispatch).toHaveBeenCalledWith(
         "terminal.toggleInputLock",
         { terminalId: "test-panel" },
@@ -566,7 +569,7 @@ describe("PanelHeader", () => {
       expect(mockWatchPanel).toHaveBeenCalledWith("test-panel");
     });
 
-    it("calls unwatchPanel when clicking Cancel Watch on watched agent panel", () => {
+    it("calls unwatchPanel when clicking Cancel watch on watched agent panel", () => {
       mockStoreState = {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
@@ -580,11 +583,11 @@ describe("PanelHeader", () => {
         />
       );
       const menu = screen.getByTestId("overflow-menu");
-      findMenuButton(menu, "Cancel Watch")?.click();
+      findMenuButton(menu, "Cancel watch")?.click();
       expect(mockUnwatchPanel).toHaveBeenCalledWith("test-panel");
     });
 
-    it("shows Unlock Input when terminal is input locked", () => {
+    it("shows Unlock input when terminal is input locked", () => {
       mockHasPty = true;
       mockStoreState = {
         ...mockStoreState,
@@ -593,8 +596,8 @@ describe("PanelHeader", () => {
       };
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Unlock Input")).toBeDefined();
-      expect(findMenuButton(menu, "Lock Input")).toBeUndefined();
+      expect(findMenuButton(menu, "Unlock input")).toBeDefined();
+      expect(findMenuButton(menu, "Lock input")).toBeUndefined();
     });
 
     it("renders headerActions slot in the menu", () => {
@@ -741,11 +744,11 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("Restore Grid View tooltip", () => {
+  describe("Restore grid view tooltip", () => {
     it("does not include double-click header hint when maximized", () => {
       render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
       const tooltips = screen.getAllByTestId("tooltip-content");
-      const restoreTooltip = tooltips.find((el) => el.textContent?.includes("Restore Grid View"));
+      const restoreTooltip = tooltips.find((el) => el.textContent?.includes("Restore grid view"));
       expect(restoreTooltip).toBeDefined();
       expect(restoreTooltip!.textContent).not.toContain("double-click header");
     });
@@ -793,14 +796,14 @@ describe("PanelHeader", () => {
 
     it("does not render the overflow trigger when no tabs are hidden", () => {
       render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
-      expect(screen.queryByLabelText("Show hidden tabs")).toBeNull();
+      expect(screen.queryByLabelText(/Show \d+ hidden tabs/)).toBeNull();
       expect(screen.queryByTestId("panel-tabs-overflow")).toBeNull();
     });
 
     it("renders the overflow trigger when one or more tabs are hidden", () => {
       mockHiddenTabIds = new Set(["t2", "t3"]);
       render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
-      const trigger = screen.getByLabelText("Show hidden tabs");
+      const trigger = screen.getByLabelText(/Show \d+ hidden tabs/);
       expect(trigger).toBeDefined();
       expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
     });
@@ -932,8 +935,8 @@ describe("PanelHeader", () => {
       expect(header.getAttribute("data-selected")).toBe("true");
       // Selected header matches the focused overlay tint — one unified
       // "active" title bar treatment for both focus and selection.
-      expect(header.className).toContain(
-        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
+      expect(header.className).toMatch(
+        /bg-\[var\(--panel-header-focus-bg,var\(--color-overlay-[a-z]+\)\)\]/
       );
       expect(header.className).not.toContain("bg-[var(--panel-header-bg,transparent)]");
     });
@@ -956,9 +959,7 @@ describe("PanelHeader", () => {
         <PanelHeader {...makeProps({ isSelected: true, isMaximized: true })} />
       );
       const header = container.firstElementChild as HTMLElement;
-      expect(header.className).not.toContain(
-        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
-      );
+      expect(header.className).not.toMatch(/panel-header-focus-bg/);
     });
   });
 
@@ -1010,7 +1011,7 @@ describe("PanelHeader", () => {
   });
 
   describe("dangerous flags indicator", () => {
-    it("shows red dot indicator when agentLaunchFlags contain dangerous flag", () => {
+    it("shows the dangerous-permissions mark when agentLaunchFlags contain a dangerous flag", () => {
       render(
         <PanelHeader
           {...makeProps({
@@ -1021,10 +1022,28 @@ describe("PanelHeader", () => {
 
       const indicator = screen.getByLabelText("Launched with dangerous permissions");
       expect(indicator).toBeDefined();
-      expect(indicator.className).toContain("bg-status-danger");
     });
 
-    it("shows red dot indicator for all dangerous flag types", () => {
+    it("draws a different silhouette from the fleet-failure dot", () => {
+      // Two warnings beside one title must not share a shape: "launched with
+      // elevated permissions" is a property of the pane, "the last broadcast
+      // failed here" is an event to acknowledge. One is a glyph, the other a
+      // filled dot — whichever way round, they are told apart without colour.
+      useFleetFailureStore.getState().recordFailure("payload", ["test-panel"]);
+      render(
+        <PanelHeader {...makeProps({ agentLaunchFlags: ["--dangerously-skip-permissions"] })} />
+      );
+      const dangerous = screen.getByLabelText("Launched with dangerous permissions");
+      const failure = screen.getByTestId("panel-fleet-failure-dot");
+      const hasGlyph = (el: Element) => el.querySelector("svg") !== null;
+      const hasDot = (el: Element) =>
+        el.classList.contains("status-mark") || el.querySelector(".status-mark") !== null;
+      expect(hasGlyph(dangerous)).not.toBe(hasGlyph(failure));
+      expect(hasDot(dangerous)).not.toBe(hasDot(failure));
+      useFleetFailureStore.getState().clear();
+    });
+
+    it("shows the mark for all dangerous flag types", () => {
       const dangerousFlags = [
         ["--dangerously-skip-permissions"],
         ["--yolo"],
@@ -1183,8 +1202,8 @@ describe("PanelHeader", () => {
       expect(overlay).not.toBeNull();
       const header = container.querySelector("[data-pane-chrome]");
       expect(header?.getAttribute("data-selected")).toBe("true");
-      expect(header?.className).toContain(
-        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
+      expect(header?.className).toMatch(
+        /bg-\[var\(--panel-header-focus-bg,var\(--color-overlay-[a-z]+\)\)\]/
       );
     });
 
@@ -1451,6 +1470,227 @@ describe("PanelHeader", () => {
       } finally {
         mockDragHandle = null;
       }
+    });
+  });
+
+  // Design-review invariants. Each asserts a rule the header must keep, never
+  // the value that happens to satisfy it today.
+  describe("design invariants", () => {
+    it("builds every window control from the Button primitive", () => {
+      render(
+        <PanelHeader
+          {...makeProps({ onMinimize: vi.fn(), onToggleMaximize: vi.fn(), onAddTab: vi.fn() })}
+        />
+      );
+      const controls = screen.getByTestId("panel-header-controls");
+      // The mocked menu renders its items as bare buttons; the real one is
+      // Radix's, and its rows are not window controls.
+      const buttons = Array.from(controls.querySelectorAll("button")).filter(
+        (b) => b.closest('[data-testid="overflow-menu"]') === null
+      );
+      expect(buttons.length).toBeGreaterThan(2);
+      for (const button of buttons) {
+        // `data-variant` is stamped by Button and by nothing else — a
+        // hand-rolled <button> in the cluster has no way to carry it.
+        expect(
+          button.getAttribute("data-variant"),
+          button.getAttribute("aria-label") ?? undefined
+        ).not.toBeNull();
+      }
+    });
+
+    it("gives every focusable element its own focus-visible ring", () => {
+      useFleetFailureStore.getState().recordFailure("payload", ["test-panel"]);
+      render(
+        <PanelHeader
+          {...makeProps({
+            onMinimize: vi.fn(),
+            onToggleMaximize: vi.fn(),
+            onAddTab: vi.fn(),
+            onTitleChange: vi.fn(),
+          })}
+        />
+      );
+      const header = document.querySelector("[data-pane-chrome]")!;
+      const focusable = Array.from(
+        header.querySelectorAll<HTMLElement>("button, [tabindex]")
+        // Every control, including the roving ones at tabIndex -1 — arrows reach
+        // them, so they need a ring just as much.
+      ).filter((el) => el.closest('[data-testid="overflow-menu"]') === null);
+      expect(focusable.length).toBeGreaterThan(3);
+      for (const el of focusable) {
+        // Left to the UA default, a ring is whatever colour the browser
+        // chooses — which on this bar was a third colour next to the accent
+        // ring on the controls.
+        // A real ring: `outline-hidden`/`outline-none` after the variant does
+        // not count.
+        expect(el.className, el.getAttribute("aria-label") ?? el.textContent ?? undefined).toMatch(
+          /focus-visible:outline(?!-hidden|-none)/
+        );
+      }
+      useFleetFailureStore.getState().clear();
+    });
+
+    it("keeps accent colour off membership and status marks", () => {
+      mockStoreState = { ...mockStoreState, watchedPanels: new Set(["test-panel"]) };
+      const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
+      render(
+        <PanelHeader {...makeProps({ chrome, agentId: "claude", agentLaunchFlags: ["--yolo"] })} />
+      );
+      const header = document.querySelector("[data-pane-chrome]")!;
+      // The watch bell is a membership state, and the marks are status; accent
+      // is reserved for focus rings (the `focus-visible:` prefix) and nothing
+      // else on this bar.
+      const painted = Array.from(header.querySelectorAll<HTMLElement>("*")).filter((el) =>
+        // getAttribute, not className: on an SVG that property is an
+        // SVGAnimatedString and would never match.
+        /(^|\s)(text|bg|border)-accent-primary(\/|\s|$)/.test(el.getAttribute("class") ?? "")
+      );
+      expect(painted.map((el) => el.className)).toEqual([]);
+    });
+
+    it("labels every menu item in sentence case", () => {
+      mockHasPty = true;
+      mockCanRestart = true;
+      mockStoreState = { ...mockStoreState, watchedPanels: new Set(["test-panel"]) };
+      const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
+      render(<PanelHeader {...makeProps({ chrome, agentId: "claude", onRestart: vi.fn() })} />);
+      // The restart row is part of the set under test, armed label included.
+      expect(screen.getByTestId("panel-restart")).toBeDefined();
+      const menu = screen.getByTestId("overflow-menu");
+      const labels = Array.from(menu.querySelectorAll("button")).map((b) =>
+        (b.textContent ?? "").trim()
+      );
+      expect(labels.length).toBeGreaterThan(3);
+      for (const label of labels) {
+        // First character may be capital; nothing after it starts a capital
+        // word ("Lock input", not "Lock Input").
+        expect(label, label).toMatch(/^[A-Z][^A-Z]*$/);
+      }
+    });
+
+    it("makes the window controls one toolbar with a single Tab stop", () => {
+      render(<PanelHeader {...makeProps({ onMinimize: vi.fn(), onToggleMaximize: vi.fn() })} />);
+      const toolbar = screen.getByRole("toolbar", { name: "Panel controls" });
+      const controls = Array.from(toolbar.querySelectorAll<HTMLElement>("button")).filter(
+        (b) => b.closest('[data-testid="overflow-menu"]') === null
+      );
+      expect(controls.length).toBeGreaterThan(2);
+      // Roving tabindex: exactly one control is in the Tab order.
+      expect(controls.filter((b) => b.tabIndex === 0)).toHaveLength(1);
+    });
+
+    it("names a hidden tab's agent state in text, not only in a glyph", () => {
+      mockHiddenTabIds = new Set(["t2"]);
+      render(
+        <PanelHeader
+          {...makeProps({
+            tabs: [
+              {
+                id: "test-panel",
+                title: "Tab 1",
+                kind: "terminal",
+                chrome: deriveTerminalChrome(),
+                isActive: true,
+              },
+              {
+                id: "t2",
+                title: "Tab 2",
+                kind: "terminal",
+                chrome: deriveTerminalChrome(),
+                isActive: false,
+                agentState: "waiting",
+              },
+            ],
+            onTabClick: vi.fn(),
+          })}
+        />
+      );
+      const menu = screen
+        .getAllByTestId("overflow-menu")
+        .find((m) => m.textContent?.includes("Tab 2"))!;
+      const row = Array.from(menu.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Tab 2")
+      )!;
+      expect(row.textContent?.toLowerCase()).toContain("waiting");
+    });
+
+    it("keeps the full title as the accessible name when a compact title is shown", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            title: "Claude: fix flaky auth tests",
+            compactTitle: "fix flaky auth tests",
+            onTitleChange: vi.fn(),
+          })}
+        />
+      );
+      const title = screen.getByRole("button", {
+        name: /title: Claude: fix flaky auth tests/,
+      });
+      // Both compositions are rendered as their own nodes; the container
+      // query decides which paints. The name never compacts.
+      const nodes = Array.from(title.querySelectorAll("span")).map((n) => n.textContent);
+      expect(nodes).toContain("Claude: fix flaky auth tests");
+      expect(nodes).toContain("fix flaky auth tests");
+    });
+
+    it("gives the branch badge a full-text surface for when it truncates or hides", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            worktreeBranch: "feature/billing-reconciliation-worker",
+            worktreeAccentColor: "var(--theme-category-blue)",
+            onTitleChange: vi.fn(),
+          })}
+        />
+      );
+      const tooltips = screen.getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      // The badge's own tooltip, and the title's tooltip for when the compact
+      // query has hidden the badge entirely.
+      expect(
+        tooltips.filter((t) => t.includes("feature/billing-reconciliation-worker")).length
+      ).toBeGreaterThanOrEqual(2);
+    });
+
+    it("moves focus onto a parked tab only once its activation has painted it", async () => {
+      // jsdom has no frame loop; a frame is a macrotask here.
+      const raf = vi
+        .spyOn(globalThis, "requestAnimationFrame")
+        .mockImplementation((cb) => setTimeout(() => cb(0), 0) as unknown as number);
+      mockHiddenTabIds = new Set(["t2"]);
+      const mk = (active: string) => [
+        {
+          id: "test-panel",
+          title: "Tab 1",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: active === "test-panel",
+        },
+        {
+          id: "t2",
+          title: "Tab 2",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: active === "t2",
+        },
+      ];
+      function Host() {
+        const [active, setActive] = React.useState("test-panel");
+        return <PanelHeader {...makeProps({ tabs: mk(active), onTabClick: setActive })} />;
+      }
+      render(<Host />);
+      const tabs = () => screen.getAllByRole("tab", { hidden: true });
+      // Parked before activation: hidden from paint, so not focusable.
+      expect(tabs()[1]?.getAttribute("data-tab-parked")).toBe("true");
+      fireEvent.keyDown(screen.getByRole("tablist"), { key: "ArrowRight" });
+      // Activation repaints it first…
+      expect(tabs()[1]?.getAttribute("aria-selected")).toBe("true");
+      expect(tabs()[1]?.getAttribute("data-tab-parked")).toBeNull();
+      // …then the deferred focus lands on it.
+      await new Promise((r) => setTimeout(r, 5));
+      expect(document.activeElement).toBe(tabs()[1]);
+      raf.mockRestore();
     });
   });
 });
