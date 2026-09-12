@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
 import type { AgentState } from "@/types";
@@ -26,6 +27,8 @@ interface FleetCountChipProps {
 }
 
 type FleetChipPopoverMode = "list" | "picker";
+
+const EMPTY_WORKTREES: ReadonlyMap<string, { name: string }> = new Map();
 
 export function FleetCountChip({
   armedCount,
@@ -113,6 +116,7 @@ export function FleetCountChip({
     })
   );
   const colorMap = useWorktreeColorMap();
+  const worktrees = useWorktreeStoreOptional((state) => state.worktrees, EMPTY_WORKTREES);
   const focusedId = usePanelStore((state) => state.focusedId);
   const waitingReasonsByPane = usePanelStore(
     useShallow((state) => {
@@ -232,7 +236,13 @@ export function FleetCountChip({
                   );
                   const worktreeId = worktreeIdsByPane[id];
                   const dotColor = worktreeId && colorMap ? colorMap[worktreeId] : undefined;
+                  const worktreeName = worktreeId ? worktrees.get(worktreeId)?.name : undefined;
                   return (
+                    // Identity beyond the truncated title lives in the aria-label and
+                    // the native title. A focus-driven unwrap was tried and rejected:
+                    // Radix focuses the first row on open, so the row expanded every
+                    // time, and blurring it mid-click moved "Add panes…" between
+                    // mousedown and mouseup.
                     <li
                       key={id}
                       className="flex items-center gap-2 rounded-[var(--radius-md)] hover:bg-tint/[0.08]"
@@ -240,8 +250,10 @@ export function FleetCountChip({
                       <button
                         type="button"
                         onClick={() => focusArmedPane(id)}
-                        aria-label={`Focus ${title}`}
-                        title={title}
+                        aria-label={
+                          worktreeName ? `Focus ${title} in ${worktreeName}` : `Focus ${title}`
+                        }
+                        title={worktreeName ? `${title} · ${worktreeName}` : title}
                         className={cn(
                           "flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
                           PALETTE_ROW_FOCUS_CLASS

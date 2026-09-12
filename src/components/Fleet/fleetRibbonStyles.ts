@@ -10,7 +10,9 @@
  */
 export const FLEET_RIBBON_SHELL_CLASS =
   "relative flex h-9 items-center gap-3 border-b border-border-default bg-category-amber-subtle px-3 text-xs leading-[inherit] text-text-primary " +
-  "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]";
+  // The text token, not the border token: the border mix sits at ~1.3:1
+  // against the subtle fill on every theme, which is no cue at all.
+  "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber-text";
 
 /** 24×24 hit area for the ribbon's glyph-only controls (exit, dismiss, disarm, menu). */
 export const FLEET_RIBBON_ICON_BUTTON_CLASS =

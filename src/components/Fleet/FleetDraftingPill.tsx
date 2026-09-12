@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type KeyboardEvent, type ReactElement }
 import { RadioTower, ChevronDown, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -15,21 +16,28 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import type { FleetTargetPreview } from "./fleetExecution";
 
 export function FleetDraftingPill(): ReactElement | null {
-  const armedIds = useFleetArmingStore((s) => s.armedIds);
   const armOrder = useFleetArmingStore((s) => s.armOrder);
-  const fleetSize = armedIds.size;
   // What Enter will actually reach: the armed panes that pass the same
   // eligibility gate the broadcast applies at dispatch, minus this pane. A
   // membership count here overstated the fan-out whenever an armed pane had
   // lost its PTY.
-  const eligibleCount = usePanelStore((state) => {
+  const skippedIds = useFleetTargetOverridesStore((s) => s.skippedIds);
+  const peerCount = usePanelStore((state) => {
     let n = 0;
+    let primaryEligible = false;
     for (const id of armOrder) {
-      if (isTerminalFleetEligible(state.panelsById[id])) n += 1;
+      if (!isTerminalFleetEligible(state.panelsById[id])) continue;
+      if (id === state.focusedId) {
+        primaryEligible = true;
+        continue;
+      }
+      if (skippedIds.has(id)) continue;
+      n += 1;
     }
-    return n;
+    // This pane is the primary; if it is not the focused one (or focus sits
+    // elsewhere), the membership still includes it once.
+    return primaryEligible ? n : Math.max(n - 1, 0);
   });
-  const peerCount = Math.max(eligibleCount - 1, 0);
 
   const open = useFleetResolutionPreviewStore((s) => s.open);
   const hasVariables = useFleetResolutionPreviewStore((s) => s.hasVariables);
@@ -54,7 +62,12 @@ export function FleetDraftingPill(): ReactElement | null {
     }
   }, [open]);
 
-  if (peerCount < 1) return null;
+  const peerNoun = peerCount === 1 ? "peer" : "peers";
+  const reachLabel = `Mirroring to ${peerCount} ${peerNoun}`;
+
+  // Stay mounted while the preview is open even if exclusions bring the reach
+  // to zero — the user needs the popover to undo them.
+  if (peerCount < 1 && !open) return null;
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -66,7 +79,7 @@ export function FleetDraftingPill(): ReactElement | null {
         <PopoverTrigger asChild>
           <button
             type="button"
-            aria-label={`Drafting for ${fleetSize} agents`}
+            aria-label={reachLabel}
             data-testid="fleet-drafting-pill-trigger"
             className={cn(
               "inline-flex items-center gap-1 px-2 py-0.5 rounded-full",
@@ -76,9 +89,7 @@ export function FleetDraftingPill(): ReactElement | null {
             )}
           >
             <RadioTower className="h-3 w-3" aria-hidden="true" />
-            <span>
-              Mirroring to {peerCount} {peerCount === 1 ? "peer" : "peers"}
-            </span>
+            <span>{reachLabel}</span>
             {hasDivergence && (
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
@@ -116,9 +127,9 @@ export function FleetDraftingPill(): ReactElement | null {
             }
           }}
           data-testid="fleet-resolution-popover"
-          className="max-h-[400px] w-[400px] overflow-y-auto p-1"
+          className="flex max-h-[400px] w-[400px] flex-col overflow-hidden p-1"
         >
-          <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
+          <div className="shrink-0 px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
             Fleet broadcast preview
           </div>
           {previews.length === 0 ? (
@@ -129,11 +140,15 @@ export function FleetDraftingPill(): ReactElement | null {
               className="py-3"
             />
           ) : (
-            <ul className="flex flex-col gap-0.5">
-              {previews.map((p) => (
-                <FleetResolutionRow key={p.terminalId} preview={p} />
-              ))}
-            </ul>
+            // The list can run past the popover's cap; the shadow says so where
+            // an overlay scrollbar would not.
+            <ScrollShadow>
+              <ul className="flex flex-col gap-0.5">
+                {previews.map((p) => (
+                  <FleetResolutionRow key={p.terminalId} preview={p} />
+                ))}
+              </ul>
+            </ScrollShadow>
           )}
         </PopoverContent>
       </Popover>
@@ -218,7 +233,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       data-skipped={isSkipped ? "true" : undefined}
       className={cn("rounded-[var(--radius-md)] px-2 py-1.5", excluded && "opacity-50")}
     >
-      <div className="flex items-center gap-1.5 text-2xs font-medium text-text-secondary">
+      <div className="flex items-center gap-2 text-2xs font-medium text-text-secondary">
         {/* An ineligible row keeps a disabled box so the column stays aligned
             and the row reads as "cannot include" rather than "no control". */}
         <Checkbox

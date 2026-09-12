@@ -106,14 +106,16 @@ function FleetRunStatusLine({
       className="flex min-w-0 items-center gap-1 text-2xs tabular-nums text-text-secondary"
       data-testid="fleet-run-status"
     >
-      {status.failed && (
+      {/* The error glyph carries the tone; the words stay on a text token,
+          because the danger colour sits under 4.5:1 on the amber fill. */}
+      {status.segments.some((segment) => segment.tone === "error") && (
         <AlertCircle className="h-3 w-3 shrink-0 text-status-error" aria-hidden="true" />
       )}
       <span className="truncate">
         {status.segments.map((segment, index) => (
           <span
             key={segment.label}
-            className={segment.tone === "error" ? "text-status-error" : undefined}
+            className={segment.tone === "error" ? "font-medium text-text-primary" : undefined}
           >
             {index > 0 ? " · " : ""}
             {segment.label}
@@ -608,7 +610,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               >
                 Sending {progressCompleted}/{progressTotal}
                 {progressFailed > 0 && (
-                  <span className="text-status-error"> · {progressFailed} failed</span>
+                  <span className="font-medium text-text-primary"> · {progressFailed} failed</span>
                 )}
               </span>
             )}

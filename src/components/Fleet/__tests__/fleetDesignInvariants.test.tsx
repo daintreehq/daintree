@@ -320,6 +320,33 @@ describe("Fleet ribbon design invariants", () => {
     expect(rest.length).toBeGreaterThan(0);
     for (const seg of rest) expect(seg.className).toBe("");
     expect(failed[0]!.className).not.toBe("");
+    // The tone is carried by a glyph, not only by a colour on the words.
+    expect(status.querySelector("svg")).not.toBeNull();
+  });
+
+  it("a status line with no failures shows no error glyph", () => {
+    useFleetRunStore.setState({
+      run: {
+        runId: "r",
+        status: "watching",
+        isRetry: false,
+        draftPreview: "x",
+        startedAt: 0,
+        targets: [
+          {
+            terminalId: "a",
+            title: "a",
+            worktreeId: "wt-1",
+            submission: "sent",
+            agentState: "working",
+            settled: false,
+            gone: false,
+          },
+        ],
+      },
+    });
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-run-status").querySelector("svg")).toBeNull();
   });
 
   it("clearing the selection is not styled as destructive", () => {
@@ -346,6 +373,27 @@ describe("Fleet drafting preview invariants", () => {
     render(<FleetDraftingPill />);
     expect(screen.getByText(/Mirroring to 1 peer\b/)).toBeTruthy();
     expect(screen.queryByText(/Mirroring to 2 peers/)).toBeNull();
+  });
+
+  it("the pill's reach excludes a peer the user has skipped, and stays mounted while the preview is open", () => {
+    seed([makeAgent("p"), makeAgent("q"), makeAgent("r")]);
+    usePanelStore.setState({ focusedId: "p" });
+    useFleetArmingStore.getState().armIds(["p", "q", "r"]);
+    useFleetResolutionPreviewStore.getState().setDraft("fix {{issue_number}}");
+    render(<FleetDraftingPill />);
+    const trigger = () => screen.getByTestId("fleet-drafting-pill-trigger");
+    expect(trigger().textContent).toMatch(/Mirroring to 2 peers/);
+    // The accessible name says the same thing the pixels do.
+    expect(trigger().getAttribute("aria-label")).toMatch(/2 peers/);
+    act(() => {
+      useFleetTargetOverridesStore.getState().setSkipped("q", true);
+    });
+    expect(trigger().textContent).toMatch(/Mirroring to 1 peer\b/);
+    act(() => {
+      useFleetTargetOverridesStore.getState().setSkipped("r", true);
+    });
+    // Zero reach with the preview open: the pill must not vanish under the user.
+    expect(trigger().textContent).toMatch(/Mirroring to 0 peers/);
   });
 
   it("an override that drops a variable also drops its unresolved warning", () => {
