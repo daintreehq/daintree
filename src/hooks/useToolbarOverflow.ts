@@ -2,17 +2,55 @@ import { useState, useRef, useLayoutEffect, useCallback } from "react";
 import type { ToolbarButtonPriority, AnyToolbarButtonId } from "@shared/types/toolbar";
 import { TOOLBAR_BUTTON_PRIORITIES } from "@shared/types/toolbar";
 
-const OVERFLOW_TRIGGER_WIDTH = 0;
 // Restore is intentionally harder than remove: once an item is hidden, the
 // container must grow past its width plus this buffer before we surface it
 // again. Asymmetry kills the boundary flip-flop that symmetric thresholds
 // produce when clientWidth jitters by 1px at fractional zoom.
 const RESTORE_HYSTERESIS_BUFFER = 16;
 const DEFAULT_ITEM_WIDTH = 36;
+// `toolbar-divider w-px h-5 mx-1` until a real one has been measured.
+const DEFAULT_DIVIDER_WIDTH = 9;
 
 export interface OverflowResult {
   visibleIds: AnyToolbarButtonId[];
   overflowIds: AnyToolbarButtonId[];
+}
+
+/**
+ * What the row spends between items, on top of the items themselves. The
+ * buttons are laid out with a flex gap, and a divider — itself a flex child,
+ * so it costs a second gap — sits at every group boundary of the VISIBLE
+ * sequence. Budgeting the item widths alone under-counts the row by the sum
+ * of these, and at small deficits that under-count is the whole deficit: the
+ * engine decides everything fits, the row's overflow-hidden clips the last
+ * button, and no `…` trigger appears to say where it went.
+ */
+export interface OverflowLayout {
+  gap: number;
+  dividerWidth: number;
+  resolveGroup?: (id: AnyToolbarButtonId) => string;
+}
+
+const NO_LAYOUT: OverflowLayout = { gap: 0, dividerWidth: 0 };
+
+function footprint(
+  visible: readonly AnyToolbarButtonId[],
+  itemWidths: Map<string, number>,
+  layout: OverflowLayout
+): number {
+  let total = 0;
+  for (let i = 0; i < visible.length; i++) {
+    total += itemWidths.get(visible[i]!) ?? DEFAULT_ITEM_WIDTH;
+    if (i === 0) continue;
+    total += layout.gap;
+    if (
+      layout.resolveGroup &&
+      layout.resolveGroup(visible[i - 1]!) !== layout.resolveGroup(visible[i]!)
+    ) {
+      total += layout.dividerWidth + layout.gap;
+    }
+  }
+  return total;
 }
 
 /**
@@ -33,31 +71,19 @@ export function computeOverflow(
   itemWidths: Map<string, number>,
   orderedIds: AnyToolbarButtonId[],
   priorities: Record<string, ToolbarButtonPriority>,
-  pinnedIds?: ReadonlySet<AnyToolbarButtonId>
+  pinnedIds?: ReadonlySet<AnyToolbarButtonId>,
+  layout: OverflowLayout = NO_LAYOUT
 ): OverflowResult {
   if (orderedIds.length === 0) {
     return { visibleIds: [], overflowIds: [] };
   }
 
   const hasPinned = pinnedIds !== undefined && pinnedIds.size > 0;
+  // Pinned items are never removed, but they still take real DOM space: the
+  // footprint below counts them, so removable items absorb all the pressure.
   const removableIds = hasPinned ? orderedIds.filter((id) => !pinnedIds.has(id)) : orderedIds;
-  // Pinned items still take real DOM space, so they reduce the room available
-  // for removable items. Only count widths for IDs actually present in this
-  // side's order — pinned IDs that don't apply here contribute nothing.
-  const pinnedWidth = hasPinned
-    ? orderedIds.reduce(
-        (sum, id) => (pinnedIds.has(id) ? sum + (itemWidths.get(id) ?? DEFAULT_ITEM_WIDTH) : sum),
-        0
-      )
-    : 0;
-  const availableWidth = containerWidth - pinnedWidth;
 
-  const removableWidth = removableIds.reduce(
-    (sum, id) => sum + (itemWidths.get(id) ?? DEFAULT_ITEM_WIDTH),
-    0
-  );
-
-  if (removableWidth <= availableWidth) {
+  if (footprint(orderedIds, itemWidths, layout) <= containerWidth) {
     return { visibleIds: [...orderedIds], overflowIds: [] };
   }
 
@@ -72,17 +98,21 @@ export function computeOverflow(
       return b.index - a.index;
     });
 
+  // The `…` trigger costs nothing here: it is the row's sibling, not its
+  // child, so its appearance shrinks the row, the ResizeObserver reports the
+  // new width, and the next pass budgets against it — hysteresis keeps that
+  // second pass from oscillating.
   const overflowSet = new Set<AnyToolbarButtonId>();
-  let currentWidth = removableWidth;
-  const targetWidth = availableWidth - OVERFLOW_TRIGGER_WIDTH;
+  let visibleIds = [...orderedIds];
 
   for (const item of sortedForRemoval) {
-    if (currentWidth < targetWidth) break;
+    // Re-measured after every eviction rather than decremented: removing a
+    // button can also remove a divider, when it was the last of its group.
+    if (footprint(visibleIds, itemWidths, layout) <= containerWidth) break;
     overflowSet.add(item.id);
-    currentWidth -= itemWidths.get(item.id) ?? DEFAULT_ITEM_WIDTH;
+    visibleIds = visibleIds.filter((id) => id !== item.id);
   }
 
-  const visibleIds = orderedIds.filter((id) => !overflowSet.has(id));
   const overflowIds = orderedIds.filter((id) => overflowSet.has(id));
 
   return { visibleIds, overflowIds };
@@ -110,9 +140,17 @@ export function computeGuardedOverflow(
   priorities: Record<string, ToolbarButtonPriority>,
   previousWidth: number,
   previousResult: OverflowResult | null,
-  pinnedIds?: ReadonlySet<AnyToolbarButtonId>
+  pinnedIds?: ReadonlySet<AnyToolbarButtonId>,
+  layout: OverflowLayout = NO_LAYOUT
 ): OverflowResult {
-  const fresh = computeOverflow(containerWidth, itemWidths, orderedIds, priorities, pinnedIds);
+  const fresh = computeOverflow(
+    containerWidth,
+    itemWidths,
+    orderedIds,
+    priorities,
+    pinnedIds,
+    layout
+  );
 
   if (previousResult === null || previousResult.overflowIds.length === 0) {
     return fresh;
@@ -140,7 +178,9 @@ export function computeGuardedOverflow(
     return w < min ? w : min;
   }, Number.POSITIVE_INFINITY);
 
-  const restoreThreshold = previousWidth + smallestOverflowedItemWidth + RESTORE_HYSTERESIS_BUFFER;
+  // Restoring an item also restores the gap in front of it.
+  const restoreThreshold =
+    previousWidth + smallestOverflowedItemWidth + layout.gap + RESTORE_HYSTERESIS_BUFFER;
 
   if (containerWidth >= restoreThreshold) {
     return fresh;
@@ -158,7 +198,8 @@ export function useToolbarOverflow(
   rightContainerRef: React.RefObject<HTMLDivElement | null>,
   leftIds: AnyToolbarButtonId[],
   rightIds: AnyToolbarButtonId[],
-  pinnedIds?: ReadonlySet<AnyToolbarButtonId>
+  pinnedIds?: ReadonlySet<AnyToolbarButtonId>,
+  resolveGroup?: (id: AnyToolbarButtonId) => string
 ): {
   leftVisible: AnyToolbarButtonId[];
   leftOverflow: AnyToolbarButtonId[];
@@ -191,6 +232,28 @@ export function useToolbarOverflow(
   const leftPendingWidthRef = useRef<number>(0);
   const rightPendingWidthRef = useRef<number>(0);
 
+  // Read once a divider exists and kept: a row with no visible group boundary
+  // right now still needs to know what one would cost when eviction changes
+  // the visible sequence.
+  const dividerWidthRef = useRef<number>(DEFAULT_DIVIDER_WIDTH);
+
+  const measureLayout = useCallback(
+    (container: HTMLElement): OverflowLayout => {
+      const gap = parseFloat(getComputedStyle(container).columnGap) || 0;
+      const divider = container.querySelector<HTMLElement>(".toolbar-divider");
+      if (divider) {
+        const style = getComputedStyle(divider);
+        const width =
+          divider.getBoundingClientRect().width +
+          (parseFloat(style.marginLeft) || 0) +
+          (parseFloat(style.marginRight) || 0);
+        if (width > 0) dividerWidthRef.current = width;
+      }
+      return { gap, dividerWidth: dividerWidthRef.current, resolveGroup };
+    },
+    [resolveGroup]
+  );
+
   const measureItems = useCallback((container: HTMLElement, widthsCache: Map<string, number>) => {
     const elements = container.querySelectorAll<HTMLElement>("[data-toolbar-button-id]");
     for (const el of elements) {
@@ -221,7 +284,8 @@ export function useToolbarOverflow(
         TOOLBAR_BUTTON_PRIORITIES,
         leftPrevWidthRef.current,
         leftPrevResultRef.current,
-        pinnedIds
+        pinnedIds,
+        measureLayout(leftContainer)
       );
       // Ref writes inside the updater are safe under concurrent rendering:
       // `containerWidth` and `result` are captured in the enclosing closure,
@@ -251,7 +315,8 @@ export function useToolbarOverflow(
         TOOLBAR_BUTTON_PRIORITIES,
         rightPrevWidthRef.current,
         rightPrevResultRef.current,
-        pinnedIds
+        pinnedIds,
+        measureLayout(rightContainer)
       );
       setRightResult((prev) => {
         if (
@@ -265,7 +330,15 @@ export function useToolbarOverflow(
         return result;
       });
     }
-  }, [leftContainerRef, rightContainerRef, leftIds, rightIds, pinnedIds, measureItems]);
+  }, [
+    leftContainerRef,
+    rightContainerRef,
+    leftIds,
+    rightIds,
+    pinnedIds,
+    measureItems,
+    measureLayout,
+  ]);
 
   useLayoutEffect(() => {
     const leftContainer = leftContainerRef.current;

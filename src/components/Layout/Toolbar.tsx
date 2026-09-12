@@ -185,10 +185,12 @@ function ForgeStatsPlaceholder() {
   );
 }
 
+// The same box as the `size="icon"` button it stands in for, so the overflow
+// budget and the row height it reserves are the button's, not 4px more.
 function DevServerPlaceholder() {
   return (
     <div
-      className={cn(toolbarIconButtonClass, "h-9 w-9 opacity-0 pointer-events-none")}
+      className={cn(toolbarIconButtonClass, "h-8 w-8 opacity-0 pointer-events-none")}
       aria-hidden="true"
     />
   );
@@ -299,20 +301,33 @@ function OverflowMenu({
   // flag mutating a ref passed in as a prop.
   const overflowMenuPointerCloseRef = useRef(false);
 
-  // Keep the accessible name stable and terse: a comma-enumerated list
-  // re-announces the full set on every focus pass and goes stale as
-  // resize-driven overflow changes. Surface only the purpose plus a
-  // count, escalating the noun to "problem(s)" when severity is
-  // actionable (critical/warning) so screen-reader users still learn
-  // there's something to act on without the list churn.
+  // Keep the accessible name stable and terse: a comma-enumerated list of
+  // the hidden buttons re-announces the full set on every focus pass and goes
+  // stale as resize-driven overflow changes. The count is always a count of
+  // hidden items — it was once re-nouned to "problems" whenever the badge lit,
+  // which read five hidden commands as five problems. What the badge is
+  // actually reporting rides behind the count instead, as the observations
+  // themselves: the error count, the unread count, the agent states seen.
   const n = overflowIds.length;
-  const hasProblem = severity === "critical" || severity === "warning";
-  const tooltipText = hasProblem
-    ? `More — ${n} ${n === 1 ? "problem" : "problems"}`
-    : `More — ${n} ${n === 1 ? "item" : "items"}`;
-  const ariaLabel = hasProblem
-    ? `More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`
-    : `More toolbar items — ${n} hidden`;
+  const observations: string[] = [];
+  if (overflowIds.includes("problems") && errorCount > 0) {
+    observations.push(`${errorCount} ${errorCount === 1 ? "error" : "errors"}`);
+  }
+  if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
+    observations.push(`${notificationUnreadCount} unread`);
+  }
+  const agentsByState = new Map<AgentState, number>();
+  for (const id of overflowIds) {
+    if (!isBuiltInAgentId(id)) continue;
+    const state = agentDominantStates.get(id);
+    if (!state || !agentStateDotColor(state)) continue;
+    agentsByState.set(state, (agentsByState.get(state) ?? 0) + 1);
+  }
+  for (const [state, count] of agentsByState) {
+    observations.push(`${count} ${count === 1 ? "agent" : "agents"} ${state}`);
+  }
+  const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
+  const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
 
   const countSuffix = (id: AnyToolbarButtonId) => {
     if (id === "problems" && errorCount > 0) return ` (${errorCount})`;
@@ -1010,7 +1025,13 @@ export function Toolbar({
       // redirect below is skipped — but the ref must still be cleared so
       // a later unrelated re-render doesn't trigger a phantom redirect.
       prevFocusedToolbarItemRef.current = null;
-      if (document.activeElement === document.body) {
+      // Two shapes of "focus is about to be nowhere". The evicted button has
+      // just gone `visibility: hidden`, but the browser only drops focus from
+      // it at its next rendering update — after this layout effect — so at
+      // this point it is still `activeElement` and the redirect has to fire
+      // now, or focus lands on <body> with nothing left to catch it. The
+      // body case covers an eviction whose fixup already ran (an unmount).
+      if (document.activeElement === document.body || document.activeElement === prevFocused) {
         // Redirect to the overflow trigger on the SAME side as the
         // evicted item; falling back to the other side's trigger would
         // pull focus across the toolbar to the wrong group.
@@ -1744,7 +1765,11 @@ export function Toolbar({
     // replaced. Buttons the user already dragged into a side list keep that
     // position and are filtered on promotion below like any other id.
     const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
-    return [...base, ...extra];
+    // Grouped like the left (#11681): the default right set is all utilities,
+    // so this changes nothing until a user moves a panel or agent across the
+    // centre — at which point the divider rules have to mean the same thing
+    // on both sides.
+    return orderToolbarButtonsByGroup([...base, ...extra], resolveToolbarGroup);
   }, [
     toolbarLayout.rightButtons,
     toolbarLayout.leftButtons,
@@ -1753,6 +1778,7 @@ export function Toolbar({
     unpositionedLauncherItemPins,
     pluginButtonIds,
     pinnedButtons,
+    resolveToolbarGroup,
   ]);
 
   const effectiveRightButtons = useMemo(
@@ -1789,7 +1815,8 @@ export function Toolbar({
     rightGroupRef,
     availableLeftIds,
     availableRightIds,
-    pinnedIds
+    pinnedIds,
+    resolveToolbarGroup
   );
 
   // Voice recording reserves layout via an always-available slot but should
@@ -1858,28 +1885,7 @@ export function Toolbar({
     }
   }, [leftOverflow, rightOverflow]);
 
-  const renderButtons = (buttonIds: AnyToolbarButtonId[], visibleSet: Set<AnyToolbarButtonId>) => {
-    return buttonIds
-      .filter((id) => buttonRegistry[id]?.isAvailable)
-      .map((id) => (
-        <div
-          key={id}
-          data-toolbar-button-id={id}
-          className={cn(
-            "app-no-drag",
-            !visibleSet.has(id) && "invisible absolute pointer-events-none"
-          )}
-          aria-hidden={visibleSet.has(id) ? undefined : true}
-          data-toolbar-placeholder={
-            !currentProject && PROJECT_SCOPED_TOOLBAR_IDS.has(id) ? "true" : undefined
-          }
-        >
-          {buttonRegistry[id]!.render()}
-        </div>
-      ));
-  };
-
-  const renderLeftButtons = (
+  const renderGroupedButtons = (
     buttonIds: AnyToolbarButtonId[],
     visibleSet: Set<AnyToolbarButtonId>
   ) => {
@@ -2231,7 +2237,7 @@ export function Toolbar({
       <TooltipTrigger asChild>
         <button
           data-toolbar-item=""
-          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           data-testid="project-switcher-trigger"
           aria-label={workspaceIdentity.ariaLabel}
           role={workspaceIdentity.kind !== "none" ? "combobox" : undefined}
@@ -2295,7 +2301,7 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
-            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
+            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-2 h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
           >
             {!isLinux() && <div className="window-resize-strip" />}
 
@@ -2310,7 +2316,11 @@ export function Toolbar({
                   data-fullscreen={isFullscreen ? "true" : undefined}
                   className={cn(
                     "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                    isFullscreen ? "w-0" : "w-16"
+                    // A zero-width flex item still owns a gap on each side;
+                    // the negative margin folds the group's gap back in so
+                    // fullscreen's first button lands at the same inset a
+                    // spacer-less platform gives it.
+                    isFullscreen ? "w-0 -mr-1.5" : "w-16"
                   )}
                 />
               )}
@@ -2330,9 +2340,9 @@ export function Toolbar({
 
               <div
                 ref={leftGroupRef}
-                className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+                className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5"
               >
-                {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
+                {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
               <div className="app-no-drag">
                 {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
@@ -2522,9 +2532,9 @@ export function Toolbar({
             >
               <div
                 ref={rightGroupRef}
-                className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
+                className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5 justify-end"
               >
-                {renderButtons(effectiveRightButtons, rightVisibleSet)}
+                {renderGroupedButtons(effectiveRightButtons, rightVisibleSet)}
               </div>
               <div className="app-no-drag">
                 {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
@@ -2552,7 +2562,7 @@ export function Toolbar({
                   data-fullscreen={isFullscreen ? "true" : undefined}
                   className={cn(
                     "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                    isFullscreen && "w-0"
+                    isFullscreen && "w-0 -ml-1.5"
                   )}
                   style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
                 />

@@ -174,6 +174,20 @@
   background: var(--toolbar-divider, var(--theme-border-divider));
 }
 
+/* The two measured button rows. They have to clip: the overflow engine
+ * decides in a rAF after the ResizeObserver fires, and for that one frame a
+ * row that no longer fits would otherwise push into the project pill. But a
+ * bare clip also cuts the keyboard focus ring — the 2px outline sits 2px
+ * outside a button that already fills the row's height, so the ring rendered
+ * as two brackets with its top and bottom missing. The clip margin gives it
+ * exactly that 4px back on every edge, including the row's outer ends where
+ * the first and last button's ring would otherwise lose a side. `clip`
+ * rather than `hidden` so the row never becomes a scroll container. */
+.toolbar-measured-row {
+  overflow: clip;
+  overflow-clip-margin: 4px;
+}
+
 /* Split-button seam: persistent 1px hairline at rest so the chevron half
  * reads as a separate control. The color chain mirrors .toolbar-divider so
  * per-theme --toolbar-divider overrides apply identically. Suppressed when
@@ -609,17 +623,26 @@
 /* ── Forced colors / Windows High Contrast ──
  * Every pip — including the GitHub activity corner chips — paints state via
  * background-color, which the UA forces to Canvas (invisible). Repaint with
- * CanvasText so the dot stays visible. The overflow severity ring (box-shadow)
- * is stripped, but it only carved a background-colored moat to separate the pip
- * from overlapping chrome; against the high-contrast Canvas/CanvasText palette
- * the filled pip already separates cleanly, so no replacement is needed. The
- * per-severity shape tiers (border-radius — not a color property) survive and
- * remain the non-color WCAG 1.4.1 cue. */
+ * CanvasText so the dot stays visible. The rings (box-shadow) are stripped,
+ * and they carved the moat that keeps a dot apart from the glyph under it —
+ * without one, the dots that sit at the button corner land on the glyph's
+ * own CanvasText stroke and fuse with it (the problems dot became a filled
+ * quadrant of its circle). Re-declared as a Canvas outline, per the
+ * design-system rule for badge cut-outs. The corner chips are clipPath
+ * triangles, which an outline cannot follow, so they stay as they are. The
+ * per-severity shape tiers (border-radius — not a color property) survive
+ * and remain the non-color WCAG 1.4.1 cue. */
 @media (forced-colors: active) {
   .toolbar-badge,
   .toolbar-badge-chip,
   .toolbar-overflow-badge,
   .toolbar-problems-badge {
     background-color: CanvasText;
+  }
+
+  .toolbar-badge,
+  .toolbar-overflow-badge,
+  .toolbar-problems-badge {
+    outline: 1px solid Canvas;
   }
 }

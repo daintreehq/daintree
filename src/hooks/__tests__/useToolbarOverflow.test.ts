@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { computeOverflow, computeGuardedOverflow } from "../useToolbarOverflow";
 import type { OverflowResult } from "../useToolbarOverflow";
-import type { ToolbarButtonId, ToolbarButtonPriority } from "@shared/types/toolbar";
+import type {
+  AnyToolbarButtonId,
+  ToolbarButtonId,
+  ToolbarButtonPriority,
+} from "@shared/types/toolbar";
 import { TOOLBAR_BUTTON_PRIORITIES } from "@shared/types/toolbar";
 
 function makeWidths(ids: ToolbarButtonId[], width = 36): Map<string, number> {
@@ -444,5 +448,92 @@ describe("computeGuardedOverflow", () => {
       previous
     );
     expect(release).not.toBe(previous);
+  });
+});
+
+describe("computeOverflow — layout chrome (gaps and dividers)", () => {
+  // Widths chosen so the buttons alone fit but the row they actually form
+  // does not: this is the shape that clipped the last button silently.
+  const ids: ToolbarButtonId[] = ["launcher", "claude", "terminal", "browser"];
+  const groupOf = (id: AnyToolbarButtonId) =>
+    id === "launcher" ? "launcher" : id === "claude" ? "agents" : "panels";
+
+  function realFootprint(
+    visible: AnyToolbarButtonId[],
+    widths: Map<string, number>,
+    layout: { gap: number; dividerWidth: number }
+  ): number {
+    let total = 0;
+    for (let i = 0; i < visible.length; i++) {
+      total += widths.get(visible[i]!)!;
+      if (i === 0) continue;
+      total += layout.gap;
+      if (groupOf(visible[i - 1]!) !== groupOf(visible[i]!))
+        total += layout.dividerWidth + layout.gap;
+    }
+    return total;
+  }
+
+  it("evicts when the items fit but the items plus their gaps and dividers do not", () => {
+    const widths = makeWidths(ids, 30); // 120 of buttons
+    const layout = { gap: 2, dividerWidth: 9, resolveGroup: groupOf };
+    // 120 + 3 gaps (6) + 2 boundaries (2 × 11) = 148
+    const withoutChrome = computeOverflow(140, widths, ids, TOOLBAR_BUTTON_PRIORITIES);
+    const withChrome = computeOverflow(
+      140,
+      widths,
+      ids,
+      TOOLBAR_BUTTON_PRIORITIES,
+      undefined,
+      layout
+    );
+    expect(withoutChrome.overflowIds).toEqual([]);
+    expect(withChrome.overflowIds.length).toBeGreaterThan(0);
+  });
+
+  it("never leaves a visible set whose real footprint exceeds the container", () => {
+    const widths = makeWidths(ids, 30);
+    const layout = { gap: 2, dividerWidth: 9, resolveGroup: groupOf };
+    for (let container = 20; container <= 160; container += 1) {
+      const { visibleIds } = computeOverflow(
+        container,
+        widths,
+        ids,
+        TOOLBAR_BUTTON_PRIORITIES,
+        undefined,
+        layout
+      );
+      if (visibleIds.length === 0) continue;
+      expect(realFootprint(visibleIds, widths, layout)).toBeLessThanOrEqual(container);
+    }
+  });
+
+  it("credits a divider back when evicting the last button of its group", () => {
+    // launcher | claude | terminal browser — evicting `terminal` alone frees
+    // nothing but its width; evicting both panels also frees their divider.
+    const widths = makeWidths(ids, 30);
+    const layout = { gap: 2, dividerWidth: 9, resolveGroup: groupOf };
+    // launcher + claude = 30 + 2 + 11 + 30 = 73 fits in 80 only because the
+    // panels' boundary divider went with them.
+    const { visibleIds, overflowIds } = computeOverflow(
+      80,
+      widths,
+      ids,
+      TOOLBAR_BUTTON_PRIORITIES,
+      undefined,
+      layout
+    );
+    expect(visibleIds).toEqual(["launcher", "claude"]);
+    expect(overflowIds).toEqual(["terminal", "browser"]);
+  });
+
+  it("is unchanged by a zero layout", () => {
+    const widths = makeWidths(ids, 36);
+    const plain = computeOverflow(100, widths, ids, TOOLBAR_BUTTON_PRIORITIES);
+    const zero = computeOverflow(100, widths, ids, TOOLBAR_BUTTON_PRIORITIES, undefined, {
+      gap: 0,
+      dividerWidth: 0,
+    });
+    expect(zero).toEqual(plain);
   });
 });

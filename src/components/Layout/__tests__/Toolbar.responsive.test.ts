@@ -170,32 +170,50 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(source).toMatch(/data-severity=\{severity\}/);
     });
 
-    it("builds a terse count-only tooltip — no enumerated list (issue #8159)", () => {
+    it("builds a terse count-bearing tooltip — no enumerated list (issue #8159)", () => {
       // The enumerated list re-announced the full set on every focus pass
       // and went stale on resize; it must be gone entirely.
       expect(source).not.toContain("itemLabels");
       expect(source).not.toMatch(/\$\{overflowIds\.length\} more — /);
-      // Tooltip is "More — {n} item(s)" / "More — {n} problem(s)".
-      expect(source).toContain('`More — ${n} ${n === 1 ? "item" : "items"}`');
-      expect(source).toContain('`More — ${n} ${n === 1 ? "problem" : "problems"}`');
+      expect(source).toContain("`More — ${n} hidden");
     });
 
-    it("escalates tooltip/aria noun to 'problem' for actionable severity (issue #8159)", () => {
-      expect(source).toContain(
-        'const hasProblem = severity === "critical" || severity === "warning";'
+    it("never re-nouns the hidden count as 'problems' — the count is always of hidden items", () => {
+      // Severity used to swap the noun, so five hidden commands announced as
+      // five problems. The count is a count; the signal rides behind it.
+      expect(source).not.toMatch(/n === 1 \? "problem" : "problems"/);
+      expect(source).not.toContain("hasProblem");
+      expect(source).toContain("`More toolbar items — ${n} hidden");
+    });
+
+    it("appends what the badge reports, as observations, to both the tooltip and the name", () => {
+      const block = source.match(
+        /const observations: string\[\] = \[\];[\s\S]*?const ariaLabel = [^;]*;/
+      );
+      expect(block).not.toBeNull();
+      const text = block![0];
+      // Each signal the badge severity is derived from has a textual counterpart.
+      expect(text).toMatch(/overflowIds\.includes\("problems"\) && errorCount > 0/);
+      expect(text).toMatch(
+        /overflowIds\.includes\("notification-center"\) && notificationUnreadCount > 0/
+      );
+      expect(text).toMatch(/agentDominantStates\.get\(id\)/);
+      // Observed state names, never a verdict: the text says what was seen.
+      expect(text).toMatch(/\$\{state\}/);
+      expect(text).not.toMatch(/needs attention|requires attention/);
+      // The observations are joined into the tooltip and the aria-label.
+      expect(text).toMatch(/tooltipText = `More — \$\{n\} hidden\$\{observations\.length > 0 \?/);
+      expect(text).toMatch(
+        /ariaLabel = `More toolbar items — \$\{n\} hidden\$\{observations\.length > 0 \?/
       );
     });
 
-    it("uses a stable, count-bearing aria-label instead of the enumerated list (issue #8159)", () => {
-      // voice-recording special-casing is gone — the tooltip/aria-label no
-      // longer enumerate, so the count/list alignment hack is unnecessary.
+    it("keeps the count shape the overflow E2E parses (— N hidden)", () => {
+      // e2e/full/panels/core-toolbar-overflow.spec.ts reads the number out
+      // of the name with /—\s*(\d+)\s+(?:problems?\s+)?hidden/.
+      expect(source).toContain("`More toolbar items — ${n} hidden");
       expect(source).not.toContain('id === "voice-recording"');
       expect(source).not.toContain('"Voice recording"');
-      // aria-label is purpose-naming + count; severity escalates the noun.
-      expect(source).toContain("`More toolbar items — ${n} hidden`");
-      expect(source).toContain(
-        '`More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`'
-      );
     });
 
     it("pins voice-recording out of overflow while actively recording — issue #8158", () => {
@@ -207,7 +225,7 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(source).toContain("VOICE_RECORDING_PINNED");
       // Pin applies to whichever side the button lives on — passed as a
       // single pinnedIds set into useToolbarOverflow, not a right-only param.
-      expect(source).toMatch(/useToolbarOverflow\(\s*[\s\S]*?pinnedIds\s*\)/);
+      expect(source).toMatch(/useToolbarOverflow\(\s*[\s\S]*?pinnedIds\s*[,)]/);
       expect(source).not.toContain('id === "voice-recording"');
       expect(source).not.toContain("OVERFLOW_DROPDOWN_SKIP");
     });
