@@ -209,8 +209,21 @@ export function computeGuardedOverflow(
   }, Number.POSITIVE_INFINITY);
 
   // Restoring an item also restores the gap in front of it.
+  // What accepting the fresh result actually costs in width. After a backfill
+  // the only item still hidden can be the widest one — the forge pill — and
+  // restoring it evicts the narrower buttons that took its place, so the row
+  // needs far less than "the smallest hidden width" more room. Gate on
+  // whichever is smaller: the classic one-item restore, or the real footprint
+  // growth from the held result to the fresh one.
+  const footprintGrowth = Math.max(
+    0,
+    footprint(fresh.visibleIds, itemWidths, layout) -
+      footprint(previousResult.visibleIds, itemWidths, layout)
+  );
   const restoreThreshold =
-    previousWidth + smallestOverflowedItemWidth + layout.gap + RESTORE_HYSTERESIS_BUFFER;
+    previousWidth +
+    Math.min(smallestOverflowedItemWidth + layout.gap, footprintGrowth) +
+    RESTORE_HYSTERESIS_BUFFER;
 
   if (containerWidth >= restoreThreshold) {
     return fresh;

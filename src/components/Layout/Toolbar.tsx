@@ -146,7 +146,11 @@ import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
-import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
+import {
+  useOverflowAgentObservations,
+  useOverflowBadgeSeverity,
+  type OverflowBadgeSeverity,
+} from "./useOverflowBadgeSeverity";
 import { CopyTreeMenuContent } from "@/components/CopyTree/CopyTreeRecentsPanel";
 import { useCopyTreeCompletionNotice } from "@/hooks/useCopyTreeCompletionNotice";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
@@ -211,6 +215,9 @@ interface OverflowMenuProps {
   severity: OverflowBadgeSeverity;
   errorCount: number;
   notificationUnreadCount: number;
+  // Per-session agent states behind the badge, already worded — derived by
+  // the same rule as `severity`, so the name never says less than the dot.
+  agentObservations: readonly string[];
   agentDominantStates: Map<string, AgentState | null>;
   hasActiveWorktree: boolean;
   forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
@@ -252,6 +259,7 @@ function OverflowMenu({
   severity,
   errorCount,
   notificationUnreadCount,
+  agentObservations,
   agentDominantStates,
   hasActiveWorktree,
   forgeStatsRef,
@@ -316,16 +324,7 @@ function OverflowMenu({
   if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
     observations.push(`${notificationUnreadCount} unread`);
   }
-  const agentsByState = new Map<AgentState, number>();
-  for (const id of overflowIds) {
-    if (!isBuiltInAgentId(id)) continue;
-    const state = agentDominantStates.get(id);
-    if (!state || !agentStateDotColor(state)) continue;
-    agentsByState.set(state, (agentsByState.get(state) ?? 0) + 1);
-  }
-  for (const [state, count] of agentsByState) {
-    observations.push(`${count} ${count === 1 ? "agent" : "agents"} ${state}`);
-  }
+  observations.push(...agentObservations);
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
 
@@ -1852,6 +1851,8 @@ export function Toolbar({
 
   const leftOverflowSeverity = useOverflowBadgeSeverity(visibleLeftOverflow, errorCount);
   const rightOverflowSeverity = useOverflowBadgeSeverity(visibleRightOverflow, errorCount);
+  const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
+  const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
 
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
@@ -2121,7 +2122,8 @@ export function Toolbar({
   const renderOverflowMenu = (
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
-    severity: OverflowBadgeSeverity
+    severity: OverflowBadgeSeverity,
+    agentObservations: readonly string[]
   ) => (
     <OverflowMenu
       overflowIds={overflowIds}
@@ -2129,6 +2131,7 @@ export function Toolbar({
       severity={severity}
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
+      agentObservations={agentObservations}
       agentDominantStates={agentDominantStates}
       hasActiveWorktree={!!activeWorktree}
       forgeStatsRef={forgeStatsRef}
@@ -2356,7 +2359,12 @@ export function Toolbar({
               >
                 {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
-              {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
+              {renderOverflowMenu(
+                visibleLeftOverflow,
+                "left",
+                leftOverflowSeverity,
+                leftAgentObservations
+              )}
             </div>
 
             {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -2546,7 +2554,12 @@ export function Toolbar({
               >
                 {renderGroupedButtons(effectiveRightButtons, rightVisibleSet)}
               </div>
-              {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
+              {renderOverflowMenu(
+                visibleRightOverflow,
+                "right",
+                rightOverflowSeverity,
+                rightAgentObservations
+              )}
 
               {/* Fixed chrome outside the measured button row: it exists only
                   while a terminal host has output paused for memory (#12375),

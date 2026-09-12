@@ -68,7 +68,10 @@ vi.mock("@/utils/terminalType", () => ({
   getRuntimeOrBootAgentId: (panel: { agentId?: string }) => panel?.agentId,
 }));
 
-import { useOverflowBadgeSeverity } from "../useOverflowBadgeSeverity";
+import {
+  useOverflowAgentObservations,
+  useOverflowBadgeSeverity,
+} from "../useOverflowBadgeSeverity";
 
 function makePanel(overrides: {
   id: string;
@@ -294,5 +297,45 @@ describe("useOverflowBadgeSeverity", () => {
     );
     expect(left.current).toBe("warning");
     expect(right.current).toBe("info");
+  });
+});
+
+describe("useOverflowAgentObservations — per session, like the badge", () => {
+  beforeEach(() => {
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockActiveWorktreeId = "wt";
+  });
+
+  it("reports the waiting session even when a sibling of the same agent is working", () => {
+    mockPanelsById = {
+      a: makePanel({ id: "a", agentId: "claude", agentState: "working", worktreeId: "wt" }),
+      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
+    };
+    mockPanelIds = ["a", "b"];
+    const { result } = renderHook(() => useOverflowAgentObservations(["claude"]));
+    expect(result.current).toEqual(["1 agent waiting"]);
+    // And it agrees with the badge.
+    const severity = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
+    expect(severity.result.current).toBe("warning");
+  });
+
+  it("counts sessions, not agent types", () => {
+    mockPanelsById = {
+      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
+      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
+    };
+    mockPanelIds = ["a", "b"];
+    const { result } = renderHook(() => useOverflowAgentObservations(["claude"]));
+    expect(result.current).toEqual(["2 agents waiting"]);
+  });
+
+  it("says nothing for an agent that is not overflowed", () => {
+    mockPanelsById = {
+      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
+    };
+    mockPanelIds = ["a"];
+    const { result } = renderHook(() => useOverflowAgentObservations(["settings"]));
+    expect(result.current).toEqual([]);
   });
 });

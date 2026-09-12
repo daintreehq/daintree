@@ -104,9 +104,7 @@ describe("computeOverflow", () => {
     // broken. This asserts the resulting order, not the constant itself.
     const ordered: ToolbarButtonId[] = ["terminal", "browser", "file-browser", "dev-server"];
     const widths = makeWidths(ordered, 40);
-    // Total 160 in a 130 container. The removal loop stops only once the running
-    // width is *strictly* under target, so the container needs real slack past
-    // the three survivors (120) — at exactly 120 it evicts a second button.
+    // Total 160 in a 130 container: the three survivors (120) fit with slack.
     const result = computeOverflow(130, widths, ordered, TOOLBAR_BUTTON_PRIORITIES);
     expect(result.overflowIds).toEqual(["dev-server"]);
     expect(result.visibleIds).toContain("file-browser");
@@ -611,5 +609,122 @@ describe("dividerFootprint", () => {
 
   it("is null for a divider squeezed to nothing — margins alone are not a divider", () => {
     expect(dividerFootprint({ width: 0, marginLeft: 4, marginRight: 4 })).toBeNull();
+  });
+});
+
+describe("computeOverflow — post-eviction boundary", () => {
+  const ordered: ToolbarButtonId[] = ["terminal", "browser", "file-browser", "dev-server"];
+  const widths = makeWidths(ordered, 40);
+
+  it("keeps a set that fits exactly after eviction", () => {
+    expect(computeOverflow(120, widths, ordered, TOOLBAR_BUTTON_PRIORITIES).visibleIds).toEqual([
+      "terminal",
+      "browser",
+      "file-browser",
+    ]);
+  });
+
+  it("evicts one more the pixel below", () => {
+    expect(computeOverflow(119, widths, ordered, TOOLBAR_BUTTON_PRIORITIES).visibleIds).toEqual([
+      "terminal",
+      "browser",
+    ]);
+  });
+});
+
+describe("computeOverflow — backfill across a group boundary", () => {
+  // terminal (panels) | forge-stats (utilities) notification-center (utilities)
+  const ordered: ToolbarButtonId[] = ["terminal", "forge-stats", "notification-center"];
+  const widths = new Map<string, number>([
+    ["terminal", 32],
+    ["forge-stats", 130],
+    ["notification-center", 32],
+  ]);
+  const layout = {
+    gap: 2,
+    dividerWidth: 9,
+    resolveGroup: (id: AnyToolbarButtonId) => (id === "terminal" ? "panels" : "utilities"),
+  };
+  // After the pill is evicted, terminal + notification-center still straddle
+  // the boundary: 32 + 2 + (9 + 2) + 32 = 77.
+  it("keeps the boundary divider in the backfilled footprint", () => {
+    expect(
+      computeOverflow(77, widths, ordered, TOOLBAR_BUTTON_PRIORITIES, undefined, layout).visibleIds
+    ).toEqual(["terminal", "notification-center"]);
+    expect(
+      computeOverflow(76, widths, ordered, TOOLBAR_BUTTON_PRIORITIES, undefined, layout).visibleIds
+    ).toEqual(["terminal"]);
+  });
+});
+
+describe("computeGuardedOverflow — restoring a wide item after a backfill", () => {
+  // forge-stats (130, priority 1) plus three 32px utilities, gap 2.
+  const ids: ToolbarButtonId[] = ["forge-stats", "notification-center", "settings", "problems"];
+  const widths = new Map<string, number>([
+    ["forge-stats", 130],
+    ["notification-center", 32],
+    ["settings", 32],
+    ["problems", 32],
+  ]);
+  const layout = { gap: 2, dividerWidth: 0 };
+
+  it("does not wait for the whole row to fit before restoring the pill", () => {
+    // 138: the pill alone fits. The trigger appears and shrinks the row to
+    // 100 (shrinking → fresh): the pill goes, three utilities backfill.
+    const at138 = computeGuardedOverflow(
+      138,
+      widths,
+      ids,
+      TOOLBAR_BUTTON_PRIORITIES,
+      0,
+      null,
+      undefined,
+      layout
+    );
+    expect(at138.visibleIds).toEqual(["forge-stats"]);
+    const at100 = computeGuardedOverflow(
+      100,
+      widths,
+      ids,
+      TOOLBAR_BUTTON_PRIORITIES,
+      138,
+      at138,
+      undefined,
+      layout
+    );
+    expect(at100.visibleIds).toEqual(["notification-center", "settings", "problems"]);
+    // Growing to 150: fresh restores the pill (130) by evicting the 100px of
+    // utilities — 30px of real growth, well past the 16px buffer. The old gate
+    // wanted 100 + 130 + 2 + 16 = 248.
+    const at150 = computeGuardedOverflow(
+      150,
+      widths,
+      ids,
+      TOOLBAR_BUTTON_PRIORITIES,
+      100,
+      at100,
+      undefined,
+      layout
+    );
+    expect(at150.visibleIds).toEqual(["forge-stats"]);
+  });
+
+  it("still holds the previous result inside the buffer", () => {
+    const held = {
+      visibleIds: ["notification-center", "settings", "problems"],
+      overflowIds: ["forge-stats"],
+    } as OverflowResult;
+    // 140: growth needed is 30 → threshold 100 + 30 + 16 = 146 > 140.
+    const at140 = computeGuardedOverflow(
+      140,
+      widths,
+      ids,
+      TOOLBAR_BUTTON_PRIORITIES,
+      100,
+      held,
+      undefined,
+      layout
+    );
+    expect(at140).toBe(held);
   });
 });

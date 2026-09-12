@@ -178,7 +178,11 @@ async function dumpStripState(page: Page, slug: string): Promise<void> {
       const trigger = root.querySelector<HTMLElement>(
         `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"]`
       );
-      const row = trigger?.parentElement?.previousElementSibling as HTMLElement | null;
+      // The measured row sits directly before its side's trigger.
+      const row = trigger?.previousElementSibling as HTMLElement | null;
+      if (row && !row.classList.contains("toolbar-measured-row")) {
+        throw new Error(`expected the measured row before the ${side} trigger`);
+      }
       const rowRect = row ? rect(row) : null;
       const items = row
         ? Array.from(row.querySelectorAll<HTMLElement>("[data-toolbar-button-id]")).map((el) => {
@@ -264,7 +268,8 @@ async function snapStrip(page: Page, slug: string, padBottom = 14): Promise<void
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 const stepFailures: string[] = [];
 async function step(page: Page | null, name: string, fn: () => Promise<void>): Promise<void> {
-  if (ONLY.length > 0 && !ONLY.includes(name)) return;
+  // `-seed` steps are prerequisites the caller has already decided to run.
+  if (ONLY.length > 0 && !ONLY.includes(name) && !name.endsWith("-seed")) return;
   try {
     await fn();
   } catch (error) {
@@ -427,12 +432,17 @@ async function expectNoOverflow(page: Page): Promise<void> {
 }
 
 /** `navigator.platform` drives the mac/windows/linux branches; CDP can lie about it. */
+let originalUserAgent: string | null = null;
 async function overridePlatform(
   page: Page,
   platform: "Win32" | "Linux x86_64" | "MacIntel"
 ): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
-  const base = await page.evaluate(() => navigator.userAgent);
+  // From the ORIGINAL user agent every time: after the Windows override the
+  // live one no longer says Macintosh, and a replace on it left Linux
+  // looking like Windows.
+  originalUserAgent ??= await page.evaluate(() => navigator.userAgent);
+  const base = originalUserAgent;
   const userAgent =
     platform === "Win32"
       ? base.replace(/\(Macintosh;[^)]*\)/, "(Windows NT 10.0; Win64; x64)")
@@ -441,6 +451,20 @@ async function overridePlatform(
         : base;
   await cdp.send("Emulation.setUserAgentOverride", { userAgent, platform });
   await reloadAndWait(page);
+  // The app's platform branches read these two; assert we landed in the
+  // one this capture is named for.
+  const seen = await page.evaluate(() => ({
+    platform: navigator.platform,
+    linux: navigator.userAgent.includes("Linux"),
+  }));
+  const ok =
+    platform === "Linux x86_64"
+      ? seen.linux
+      : platform === "Win32"
+        ? seen.platform.toUpperCase().includes("WIN") && !seen.linux
+        : seen.platform.toUpperCase().includes("MAC");
+  if (!ok)
+    throw new Error(`platform override to ${platform} did not take: ${JSON.stringify(seen)}`);
 }
 
 test("toolbar strip review — every state of the strip", async () => {
@@ -550,6 +574,11 @@ test("toolbar strip review — every state of the strip", async () => {
     // 3. Wide, all signals: agent waiting, three errors, two unread, forge pill.
     await step(page, "signals", async () => {
       await expectNoOverflow(page);
+      // The defining state, asserted here too: a filtered run that skipped
+      // `agent-signal` must not write this file without the waiting pip.
+      await expect(
+        page.locator(`${BUTTON("claude")} .toolbar-pip[data-visible="true"]`).first()
+      ).toHaveClass(/waiting/, { timeout: 5000 });
       await snapStrip(page, "03-signals-wide");
     });
 
@@ -655,12 +684,12 @@ test("toolbar strip review — every state of the strip", async () => {
           return "right-overflow-trigger";
         return el.getAttribute("aria-label") ?? el.tagName;
       });
-      // Capture first: a shot of where focus actually went is the evidence,
-      // whichever way the assertion falls.
-      await snapStrip(page, "11-eviction-focus-redirect");
       if (landed !== "right-overflow-trigger") {
+        // Still worth a look, but never under the name a good run would use.
+        await snapStrip(page, "11-eviction-focus-redirect-failed");
         throw new Error(`after eviction focus landed on "${landed}", not the right … trigger`);
       }
+      await snapStrip(page, "11-eviction-focus-redirect");
     });
 
     // 12. Long names at a squeezed width: a long project name and a long
@@ -754,10 +783,30 @@ test("toolbar strip review — every state of the strip", async () => {
     // 15-16. The re-shuffled composition. A reload drops the in-memory
     // signals, so the errors and unread are re-seeded; the agent panel is left
     // to session restore, and the capture is honest either way.
+    // The reshuffled composition is a prerequisite of both alt steps, not a
+    // capture, so it runs whenever either is selected — a filtered run must
+    // never write an alt-named PNG of the rich composition.
+    const altSelected =
+      ONLY.length === 0 ||
+      ONLY.includes("composition-alt") ||
+      ONLY.includes("composition-alt-overflow");
+    if (altSelected) {
+      await step(page, "composition-alt-seed", async () => {
+        await seedComposition(page, ALT_LEFT, ALT_RIGHT);
+        await seedSignals(page);
+        await expect(page.locator(BUTTON("settings")).first()).toBeVisible({ timeout: 10_000 });
+      });
+    }
+    const expectAltComposition = async () => {
+      // settings persisted on the left is the composition's signature.
+      const settingsOnLeft = await page
+        .locator(`[aria-label="Navigation and agents"] ${BUTTON("settings")}`)
+        .count();
+      if (settingsOnLeft === 0) throw new Error("the reshuffled composition is not in place");
+    };
+
     await step(page, "composition-alt", async () => {
-      await seedComposition(page, ALT_LEFT, ALT_RIGHT);
-      await seedSignals(page);
-      await expect(page.locator(BUTTON("settings")).first()).toBeVisible({ timeout: 10_000 });
+      await expectAltComposition();
       // No fit assertion: with an agent and four panel buttons moved right,
       // this composition earns two dividers and may overflow even at 1680px.
       // Whether it does is part of what the capture is for.
@@ -765,6 +814,7 @@ test("toolbar strip review — every state of the strip", async () => {
     });
 
     await step(page, "composition-alt-overflow", async () => {
+      await expectAltComposition();
       await page.setViewportSize({ width: 900, height: 1050 });
       await settle(page, 800);
       await expectOverflow(page, "right");
@@ -778,15 +828,19 @@ test("toolbar strip review — every state of the strip", async () => {
     await step(page, "platform-windows", async () => {
       await overridePlatform(page, "Win32");
       await seedSignals(page);
-      await expect(page.locator('[aria-label="Application menu"], [data-app-menu-button]').first())
-        .toBeVisible({ timeout: 8000 })
-        .catch(() => {});
+      await expect(page.locator('[aria-label="Application menu"]').first()).toBeVisible({
+        timeout: 8000,
+      });
       await snapStrip(page, "17-platform-windows");
     });
 
     await step(page, "platform-linux", async () => {
       await overridePlatform(page, "Linux x86_64");
       await seedSignals(page);
+      await expect(page.locator('[aria-label="Application menu"]').first()).toBeVisible({
+        timeout: 8000,
+      });
+      await expect(page.locator(".window-resize-strip")).toHaveCount(0);
       await snapStrip(page, "18-platform-linux");
     });
 

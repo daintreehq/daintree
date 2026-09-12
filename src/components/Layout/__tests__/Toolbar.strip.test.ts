@@ -110,7 +110,7 @@ describe("Toolbar strip — composition invariants", () => {
     it("the grid keeps a gutter between the side groups and the pill", () => {
       const root = source.match(/role="toolbar"[\s\S]*?className="([^"]+)"/);
       expect(root).not.toBeNull();
-      expect(root![1]).toMatch(/\bgap-x-\d/);
+      expect(root![1]).toMatch(/\bgap-x-[1-9]\d*\b/);
     });
 
     it("the strip's content is centred in its height — no top padding pushing it low", () => {

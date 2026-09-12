@@ -197,9 +197,11 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(text).toMatch(
         /overflowIds\.includes\("notification-center"\) && notificationUnreadCount > 0/
       );
-      expect(text).toMatch(/agentDominantStates\.get\(id\)/);
-      // Observed state names, never a verdict: the text says what was seen.
-      expect(text).toMatch(/\$\{state\}/);
+      // Agent observations come from the same per-session derivation as the
+      // badge severity, never from the per-agent dominant state — a working
+      // session must not silence a waiting sibling in the name.
+      expect(text).toMatch(/observations\.push\(\.\.\.agentObservations\)/);
+      expect(text).not.toMatch(/agentDominantStates\.get\(id\)/);
       expect(text).not.toMatch(/needs attention|requires attention/);
       // The observations are joined into the tooltip and the aria-label.
       expect(text).toMatch(/tooltipText = `More — \$\{n\} hidden\$\{observations\.length > 0 \?/);
