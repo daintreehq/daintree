@@ -39,7 +39,7 @@ export function HostCrashBanner() {
         title={HOST_CRASH_RECOVERING_COPY.title}
         description={HOST_CRASH_RECOVERING_COPY.description}
         severity="warning"
-        role="alert"
+        role="status"
         animated={false}
         actions={[]}
       />

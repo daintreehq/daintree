@@ -17,6 +17,7 @@ vi.mock("@/utils/logger", () => ({
 
 import { WatchdogDisabledBanner } from "../WatchdogDisabledBanner";
 import { usePanelStore } from "@/store/panelStore";
+import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 import { actionService } from "@/services/ActionService";
 
 const mockedDispatch = vi.mocked(actionService.dispatch);
@@ -141,12 +142,15 @@ describe("WatchdogDisabledBanner", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("does not render a dismiss button", () => {
+  it("× records a session dismissal for the coordinator rather than touching the watchdog", () => {
     usePanelStore.setState({
       watchdogStatus: "disabled",
       watchdogDisabledInfo: { attemptCount: 3, lastExitCode: null, timestamp: 0 },
     });
+    useGlobalBannerDismissalStore.getState().reset("watchdog-disabled");
     render(<WatchdogDisabledBanner />);
-    expect(screen.queryByRole("button", { name: /dismiss/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss watchdog warning" }));
+    expect(useGlobalBannerDismissalStore.getState().dismissed.has("watchdog-disabled")).toBe(true);
+    expect(usePanelStore.getState().watchdogStatus).toBe("disabled");
   });
 });

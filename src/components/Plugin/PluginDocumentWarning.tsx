@@ -10,6 +10,7 @@ import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 
 function affectedPlugins(diagnostics: readonly PluginDocumentDiagnostic[]): string {
   return [
@@ -30,12 +31,16 @@ export function PluginDocumentWarning() {
     pluginDocumentRuntime.subscribe,
     pluginDocumentRuntime.getSnapshot
   );
+  const dismiss = useGlobalBannerDismissalStore((s) => s.dismiss);
   if (diagnostics.length === 0) return null;
   return (
     <InlineStatusBanner
       severity="warning"
       role="status"
       title="Plugins need a window reload"
+      // A reload is the user's to schedule; the inbox entry keeps it findable.
+      onClose={() => dismiss("plugin-document")}
+      closeAriaLabel="Dismiss plugin reload warning"
       description="Plugin registrations can't be replaced until this project window reloads. Save edits before continuing."
       contextLine={affectedPlugins(diagnostics)}
       action={{ id: "reload-project-window", label: "Reload window", onClick: requestReload }}

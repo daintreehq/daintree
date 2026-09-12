@@ -732,8 +732,8 @@ describe("InlineStatusBanner family invariants", () => {
     const buttons = screen
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(buttons.at(-1)).toBe("Dismiss");
-    expect(buttons.indexOf("Details")).toBeLessThan(buttons.indexOf("Fix it"));
+    // Primary leads the row, the secondary affordance follows, dismiss ends it.
+    expect(buttons).toEqual(["Fix it", "Details", "Dismiss"]);
   });
 
   it("hands focus back to the app shell when a focused dismiss unmounts the banner", () => {
@@ -777,6 +777,88 @@ describe("InlineStatusBanner family invariants", () => {
       expect(document.activeElement).toBe(landing);
       view.unmount();
       root.remove();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("InlineStatusBanner focus handoff on any removal", () => {
+  it("hands focus back when an action, not the ×, unmounts the banner", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      const root = document.createElement("div");
+      root.id = "root";
+      document.body.appendChild(root);
+      const landing = document.createElement("button");
+      landing.textContent = "Toolbar";
+      root.appendChild(landing);
+
+      function Host() {
+        const [open, setOpen] = useState(true);
+        return open ? (
+          <InlineStatusBanner
+            title="t"
+            severity="warning"
+            animated={false}
+            actions={[{ id: "hide", label: "Don't show again", onClick: () => setOpen(false) }]}
+          />
+        ) : null;
+      }
+      const view = render(<Host />, { container: root.appendChild(document.createElement("div")) });
+      const hide = screen.getByRole("button", { name: "Don't show again" });
+      hide.focus();
+      fireEvent.click(hide);
+      expect(screen.queryByRole("button", { name: "Don't show again" })).toBeNull();
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(landing);
+      view.unmount();
+      root.remove();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves focus alone when the banner unmounts without holding it", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      const elsewhere = document.createElement("input");
+      document.body.appendChild(elsewhere);
+      function Host() {
+        const [open, setOpen] = useState(true);
+        return (
+          <>
+            <button type="button" onClick={() => setOpen(false)}>
+              Outside
+            </button>
+            {open && <InlineStatusBanner title="t" severity="warning" animated={false} />}
+          </>
+        );
+      }
+      render(<Host />);
+      elsewhere.focus();
+      fireEvent.click(screen.getByRole("button", { name: "Outside" }));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(elsewhere);
+      elsewhere.remove();
     } finally {
       raf.mockRestore();
       vi.useRealTimers();

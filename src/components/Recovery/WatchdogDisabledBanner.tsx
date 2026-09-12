@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { usePanelStore } from "@/store/panelStore";
+import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { logError } from "@/utils/logger";
@@ -8,6 +9,7 @@ export function WatchdogDisabledBanner() {
   const watchdogStatus = usePanelStore((s) => s.watchdogStatus);
   const info = usePanelStore((s) => s.watchdogDisabledInfo);
   const [isRestarting, setIsRestarting] = useState(false);
+  const dismiss = useGlobalBannerDismissalStore((s) => s.dismiss);
 
   if (watchdogStatus !== "disabled") return null;
 
@@ -35,6 +37,10 @@ export function WatchdogDisabledBanner() {
       description={description}
       severity="warning"
       role="status"
+      // The protection layer being down is worth knowing, not worth blocking
+      // the band on: × hides it for the session and the next disable re-shows it.
+      onClose={() => dismiss("watchdog-disabled")}
+      closeAriaLabel="Dismiss watchdog warning"
       actions={[
         {
           id: "restart",

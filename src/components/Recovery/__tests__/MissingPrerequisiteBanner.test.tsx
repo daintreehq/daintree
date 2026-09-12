@@ -232,6 +232,23 @@ describe("MissingPrerequisiteBanner", () => {
   });
 
   describe("install flow", () => {
+    it("stops announcing while the package manager streams its output", () => {
+      useMissingPrerequisiteStore.setState({
+        missing: [missingGit()],
+        install: {
+          jobId: "live",
+          tool: "git",
+          status: "running",
+          statusLine: "==> Downloading",
+          error: null,
+        },
+      });
+      render(<MissingPrerequisiteBanner />);
+      // role=status is implicitly polite and atomic; every stdout chunk would
+      // re-read the whole banner. The busy button and the finishing toast carry it.
+      expect(screen.getByRole("status").getAttribute("aria-live")).toBe("off");
+    });
+
     it("streams the latest output line as the status", async () => {
       installAgentMock.mockReturnValue(new Promise(() => {}));
       useMissingPrerequisiteStore.setState({ missing: [missingGit()] });

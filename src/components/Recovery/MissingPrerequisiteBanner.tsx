@@ -68,19 +68,18 @@ const CONSEQUENCE: Record<string, string> = {
   node: "agent launches",
 };
 
+/** One tool's own condition — a missing Git and an outdated Node are not the same sentence. */
+function condition(m: PrerequisiteCheckResult): string {
+  if (!m.available) return `${m.label} is not installed or not on PATH`;
+  if (m.minVersion)
+    return `${m.label} ${m.version ?? "?"} is installed and ${m.minVersion} is needed`;
+  return `${m.label} is below the version Daintree needs`;
+}
+
 function describe(missing: PrerequisiteCheckResult[]): string {
-  const names = missing.map((m) => m.label).join(", ");
   const isOne = missing.length === 1;
   const subject = isOne ? "it's" : "they're";
-  const outdated = missing.every((m) => m.available);
-  const versions = missing
-    .filter((m) => m.available && m.minVersion)
-    .map((m) => `${m.label} ${m.version ?? "?"} is installed and ${m.minVersion} is needed`);
-  const problem = outdated
-    ? versions.length > 0
-      ? versions.join("; ")
-      : `${names} ${isOne ? "is" : "are"} below the version Daintree needs`
-    : `${names} ${isOne ? "is" : "are"} not installed or not on PATH`;
+  const problem = missing.map(condition).join("; ");
   const consequences = [...new Set(missing.map((m) => CONSEQUENCE[m.tool] ?? "some features"))];
   const consequence =
     consequences.length === 1
@@ -91,7 +90,12 @@ function describe(missing: PrerequisiteCheckResult[]): string {
 
 function title(missing: PrerequisiteCheckResult[]): string {
   const only = missing.length === 1 ? missing[0] : undefined;
-  if (!only) return "Required tools are missing";
+  if (!only) {
+    // Two or more tools, each in its own state — the description says which.
+    return missing.every((m) => !m.available)
+      ? "Required tools are missing"
+      : "Required tools need attention";
+  }
   return only.available ? `${only.label} is out of date` : `${only.label} is missing`;
 }
 
@@ -386,6 +390,10 @@ export function MissingPrerequisiteBanner() {
       contextLine={contextLine}
       severity="warning"
       role="status"
+      // While the package manager streams, the context line changes on every
+      // chunk and a status region would read each one aloud. The button is
+      // busy and the finish is a toast; nothing here needs announcing.
+      ariaLive={isRunning ? "off" : undefined}
       onClose={dismiss}
       closeAriaLabel="Dismiss missing tool warning"
       actions={[action]}

@@ -51,11 +51,11 @@ interface BaseInlineStatusBannerProps {
   /** Accessible label for the dismiss button. Defaults to "Dismiss". */
   closeAriaLabel?: string;
   /**
-   * Non-button control rendered alongside the actions (e.g. a Popover
-   * trigger). Rendered first in the controls row, before the action buttons
-   * and the dismiss button. This is the escape hatch for surfacing secondary
-   * affordances on an error banner without breaking the single-action rule.
-   * Render it with `Button` so it shares the row's geometry.
+   * Secondary control rendered after the action buttons and before the
+   * dismiss (e.g. a Popover trigger, a ghost link). This is the escape hatch
+   * for surfacing a secondary affordance on an error banner without breaking
+   * the single-action rule. Render it with `Button` so it shares the row's
+   * geometry; the primary action always leads the row.
    */
   trailingSlot?: React.ReactNode;
   /**
@@ -268,26 +268,45 @@ export function InlineStatusBanner({
 
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // Whether focus is inside the banner, tracked so an unmount that takes the
+  // focused control with it — ×, an action that hides the banner, the
+  // auto-dismiss timer — can hand focus to the app shell instead of leaving
+  // it on <body>. Chromium fires no blur when a focused element is removed,
+  // so a blur with no target is checked a tick later: still mounted means the
+  // user clicked away; gone means the banner left with the focus.
+  const focusWithinRef = useRef(false);
+  const handleFocusCapture = () => {
+    focusWithinRef.current = true;
+  };
+  const handleBlurCapture = (e: React.FocusEvent) => {
+    const root = rootRef.current;
+    if (e.relatedTarget instanceof Node && root?.contains(e.relatedTarget)) return;
+    if (e.relatedTarget) {
+      focusWithinRef.current = false;
+      return;
+    }
+    queueMicrotask(() => {
+      if (root?.isConnected) focusWithinRef.current = false;
+    });
+  };
+  useEffect(
+    () => () => {
+      if (!focusWithinRef.current) return;
+      requestAnimationFrame(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        restoreFocusTo();
+      });
+    },
+    []
+  );
+
   const actionList: BannerAction[] = actions ?? (action ? [action] : []);
 
   const hasDescription = description || contextLine || descriptionExtras;
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
-    // A keyboard dismissal unmounts the control that holds focus, which would
-    // drop focus on <body> and strand the user at the top of the document.
-    // The unmount lands after this handler returns, so check on the next
-    // frame: if the banner is gone and focus went with it, hand it to the app
-    // shell's first tabbable. A pointer dismissal moved focus with the click.
-    const root = rootRef.current;
-    const hadFocus = !!root && root.contains(document.activeElement);
     onClose?.();
-    if (!hadFocus) return;
-    requestAnimationFrame(() => {
-      if (root?.isConnected) return;
-      if (document.activeElement && document.activeElement !== document.body) return;
-      restoreFocusTo();
-    });
   };
 
   const closeButton = onClose ? (
@@ -334,6 +353,8 @@ export function InlineStatusBanner({
         ...windowControlsInset,
       }}
       role={role}
+      onFocusCapture={handleFocusCapture}
+      onBlurCapture={handleBlurCapture}
       aria-live={ariaLive}
       aria-atomic={ariaLive && ariaLive !== "off" ? "true" : undefined}
     >
@@ -385,7 +406,6 @@ export function InlineStatusBanner({
             isTitleBarSurface && "app-no-drag"
           )}
         >
-          {trailingSlot}
           {actionList.map((action) => {
             const variant = BUTTON_VARIANT[action.variant ?? "primary"];
             const buttonEl = (
@@ -415,8 +435,10 @@ export function InlineStatusBanner({
               <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
             );
           })}
-          {/* Dismiss sits after the actions, at the row's end, in both layouts —
-              never between two controls, where it reads as a third action. */}
+          {trailingSlot}
+          {/* Dismiss sits after every other control, at the row's end, in both
+              layouts — never between two controls, where it reads as a third
+              action. */}
           {!hasDescription && closeButton}
         </div>
       )}
