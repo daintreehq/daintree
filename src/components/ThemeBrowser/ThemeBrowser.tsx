@@ -551,12 +551,23 @@ export function ThemeBrowser() {
 
       {/* Search + type filter */}
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
-        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+        {/* The field, not the bare input, is what takes focus styling: the
+            magnifier sits inside the border and the lift is the neutral
+            selection-outline pair AppPaletteDialog.Input and PALETTE_ROW_CLASS
+            share, so the focused field and the cursor row read as one treatment. */}
+        <div
+          className={cn(
+            "flex items-center gap-1.5 flex-1 min-w-0 pl-2 pr-2.5 py-1.5",
+            "bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)]",
+            "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
+          )}
+        >
           <Search className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none" />
           <input
             ref={searchInputRef}
             type="text"
             role="combobox"
+
             aria-expanded
             aria-controls={LISTBOX_ID}
             aria-activedescendant={activeRowId}
@@ -566,7 +577,8 @@ export function ThemeBrowser() {
             onKeyDown={handleSearchKeyDown}
             placeholder="Filter themes"
             aria-label="Filter themes"
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder"
+            // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the field wrapper paints the focus lift via focus-within; a second ring on the bare input is what read as unstyled
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
           />
         </div>
         <div

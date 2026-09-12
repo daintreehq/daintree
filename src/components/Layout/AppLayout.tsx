@@ -1049,19 +1049,21 @@ export function AppLayout({
       {themeBrowserOpen &&
         createPortal(
           <>
-            {/* Interaction shield. Deliberately NOT a backdrop-filter: this
-                panel's whole purpose is judging a theme against the real
-                workspace, and blurring or heavily tinting the workspace
-                destroys the thing being judged. `backdrop-filter` also samples
-                the LIVE backdrop, so with agent terminals repainting behind it
-                the filter reprocesses whether or not the radius is animated —
-                which is why the hover blur was removed in the first place.
-                The non-interactive cue is carried by the dialog's own
-                "Live preview" line plus a click-away that cancels. */}
+            {/* Interaction shield. At rest it is tint-only so the live theme
+                preview stays crisp to judge. Parking the pointer on it blurs
+                the workspace, the cue that the app is not interactive while a
+                theme is being chosen. The blur is hover-only and SNAPS: the
+                transition list is deliberately colours-only, because the
+                animated backdrop-filter this replaces re-rasterized the whole
+                viewport every frame while the preview repainted beneath it
+                (8fb4b3e672). backdrop-filter still samples the live backdrop,
+                so this is not free while terminals repaint — performance mode
+                nulls every backdrop-blur app-wide for users who need that.
+                Clicking the shield cancels. */}
             <div
               aria-hidden="true"
               onClick={() => useThemeBrowserStore.getState().close()}
-              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-colors duration-150 hover:bg-scrim-soft/45"
+              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-colors duration-150 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px]"
             />
             <ErrorBoundary
               variant="section"

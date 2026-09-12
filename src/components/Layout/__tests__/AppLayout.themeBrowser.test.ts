@@ -71,19 +71,20 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     expect(source).toMatch(/className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*"/);
   });
 
-  it("keeps every backdrop-filter off the theme-browser shield", () => {
-    // The rule is about the FILTER, not about one utility spelling. A
-    // backdrop-filter samples the live backdrop, so behind this particular
-    // shield — agent terminals repainting, and the theme itself being
-    // repainted by the live preview — it reprocesses whether or not its radius
-    // is animated. Dropping the transition does not bound the work, which is
-    // why restoring a "discrete" hover blur here is not the cheaper option it
-    // looks like. It also blurs the exact thing the user opened the panel to
-    // judge. The non-interactive cue is carried by the dialog's own copy and by
-    // click-away, both asserted below.
+  it("blurs the workspace only on hover, and never animates the blur", () => {
+    // The rule is about HOW the blur is applied, not whether one exists. At
+    // rest the shield must be tint-only so the live theme preview stays sharp
+    // enough to judge. The blur may only appear under the pointer, and it must
+    // snap: an animated full-viewport backdrop-filter re-rasterized every
+    // frame while the preview repainted beneath it, which is why the original
+    // hover blur was removed (8fb4b3e672). Colours may transition; the filter
+    // may not.
     const shield = extractShield(source);
-    expect(shield).not.toMatch(/backdrop-blur|backdrop-filter|backdrop-saturate/);
-    expect(shield).not.toMatch(/transition-\[?backdrop/);
+    expect(shield).toMatch(/hover:backdrop-blur/);
+    expect(shield).not.toMatch(/(?<!hover:)backdrop-blur/);
+    expect(shield).not.toMatch(
+      /transition-\[[^\]]*backdrop|transition-all|(?<![-\w])transition(?![-\w])/
+    );
   });
 
   it("cancels the preview when the shield is clicked", () => {

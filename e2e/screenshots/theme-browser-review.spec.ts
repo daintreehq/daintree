@@ -210,6 +210,12 @@ test.describe("theme browser shots", () => {
         //     state that shows whether "what I run" and "what I'm trying" are
         //     distinguishable — capture the whole window, because the live
         //     preview repaints the app behind the panel too.
+        // The committed theme lives under one of the two filters; a light theme
+        // committed means the Dark list has no aria-current row at all.
+        if ((await list.locator('[role="option"][aria-current="true"]').count()) === 0) {
+          await page.locator('button:text-is("Light")').click();
+          await settle(page, 400);
+        }
         const notCommitted = list.locator('[role="option"]:not([aria-current="true"])');
         await notCommitted.first().click();
         await settle(page, 700);
