@@ -491,7 +491,9 @@ function Sheet() {
     >
       <div
         data-preview-shell=""
-        className="grid grid-cols-[minmax(0,1fr)_300px] gap-4 bg-surface-canvas p-4"
+        // Right padding is room for the worktree ghost, which dnd-kit positions
+        // from the row's rect and which would otherwise run off the sheet.
+        className="grid grid-cols-[minmax(0,1fr)_300px] gap-4 bg-surface-canvas p-4 pr-56"
         style={{ width }}
       >
         <div className="flex min-w-0 flex-col gap-4">

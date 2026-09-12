@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { cn } from "@/lib/utils";
+import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import { getWorktreeSidebarRowId } from "@/components/Sidebar/useWorktreeSidebarKeyboard";
 import { DROP_INDICATOR_LINE } from "./dropIndicator";
 
@@ -160,9 +161,8 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
       )}
       <div role="gridcell">
         <div
-          className={`h-full transition-opacity duration-150 motion-reduce:transition-none ${
-            isDragging ? "opacity-40" : ""
-          }`}
+          className="h-full transition-opacity duration-150 motion-reduce:transition-none"
+          style={{ opacity: isDragging ? DRAG_GHOST_OPACITY : undefined }}
         >
           {children({
             isDraggingSort: isDragging,

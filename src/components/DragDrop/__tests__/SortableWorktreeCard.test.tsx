@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
+import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import { SortableWorktreeCard } from "../SortableWorktreeCard";
 
 interface MockSortableState {
@@ -94,7 +95,9 @@ describe("SortableWorktreeCard", () => {
     expect(wrapper.getAttribute("role")).toBe("row");
   });
 
-  it("applies opacity-40 to the inner gridcell wrapper while dragging", () => {
+  // The dim is the app-wide drag-source tier (#8017), read from the shared
+  // token rather than a utility that happens to equal it today.
+  it("dims the inner gridcell wrapper to the shared drag-ghost tier while dragging", () => {
     mockState = { isDragging: true };
     const { container } = render(
       <SortableWorktreeCard
@@ -107,9 +110,10 @@ describe("SortableWorktreeCard", () => {
       </SortableWorktreeCard>
     );
     const wrapper = container.firstChild as HTMLElement;
-    expect(wrapper.className).not.toContain("opacity-40");
+    expect(wrapper.style.opacity).toBe("");
     const ghost = wrapper.querySelector("[role='gridcell'] > div") as HTMLElement;
-    expect(ghost.className).toContain("opacity-40");
+    expect(ghost.style.opacity).toBe(String(DRAG_GHOST_OPACITY));
+    expect(ghost.className).not.toMatch(/(?:^|\s)opacity-\d+/);
     expect(ghost.className).toContain("transition-opacity");
   });
 
