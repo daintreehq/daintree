@@ -36,7 +36,11 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   });
 
   it("renders the visual count as 'N of M worktrees' from filteredCount", () => {
-    expect(source).toContain("`${filteredCount} of ${totalCount} worktrees`");
+    // Both halves count the pinned main card, which is facet-filtered and on
+    // screen: without it, selecting "Main" read "0 of 6" above a visible main.
+    expect(source).toContain("`${filteredCount} of ${scopeTotal} worktrees`");
+    expect(source).toMatch(/filteredWorktrees\.length \+ \(mainVisible \? 1 : 0\)/);
+    expect(source).toMatch(/totalCount \+ \(mainWorktree \? 1 : 0\)/);
   });
 
   it("renders drag-disabled reason for search", () => {
@@ -47,19 +51,21 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toContain("Drag to reorder is off while grouped by type");
   });
 
-  it("separates the status line's parts with a middle dot", () => {
-    expect(source).toMatch(/\.filter\(Boolean\)\.join\(" · "\)/);
+  it("hands the bar the scope and the filter identity as separate parts", () => {
+    // Concatenated onto one line beside a non-shrinking "Clear all", the count
+    // took the width and the filter names truncated away first — and the names
+    // are the part the count cannot substitute for.
+    expect(source).toMatch(/statusText=\{filterStatusText\}/);
+    expect(source).toMatch(/filterSummaryText=\{activeFacetText \|\| null\}/);
   });
 
   it("names the active filters in the status line, not just their number", () => {
     // A count says the list is cut down; it does not say what cut it, so a
     // sparse sidebar still read as an empty one.
     expect(source).toContain("describeActiveFacets({");
-    // Composed into the line the user reads — asserting only that the helper is
-    // called somewhere would pass with its result thrown away.
-    expect(source).toMatch(
-      /filterStatusText\s*=\s*\[scopeText, activeFacetText \|\| null\][\s\S]{0,60}?join\(" · "\)/
-    );
+    // Reaching the bar — asserting only that the helper is called somewhere
+    // would pass with its result thrown away.
+    expect(source).toMatch(/filterSummaryText=\{activeFacetText \|\| null\}/);
   });
 
   it("gates the scope text on showScope and falls back through the drag reason", () => {
@@ -67,7 +73,7 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     // The reorder note is what is left when there is nothing else to say —
     // it is a standing explanation, not news, so it no longer outranks the
     // scope and the filter identities by consuming the line alongside them.
-    expect(source).toMatch(/\|\|\s*dragDisabledReason/);
+    expect(source).toMatch(/scopeText \?\? dragDisabledReason/);
   });
 
   it("derives drag-disabled reason with query taking priority over group-by-type", () => {
@@ -103,9 +109,15 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     // facet-filtered, so excluding it made every facet only it satisfies read
     // zero — and a zero count now disables the chip. The rule is that the
     // counted set is a superset of the rendered set, never a subset.
+    // Main is added because it is facet-filtered; quick-state is applied to the
+    // rest because the rows are, so a chip cannot promise matches the quick
+    // state has already excluded.
+    expect(source).toMatch(/const countedWorktrees = useMemo\(/);
+    expect(source).toMatch(/mainWorktree \? \[mainWorktree, \.\.\.eligible\] : eligible/);
     expect(source).toMatch(
-      /const countedWorktrees = useMemo\([\s\S]{0,80}?mainWorktree\s*\?\s*\[mainWorktree, \.\.\.nonMainWorktrees\]\s*:\s*nonMainWorktrees/
+      /const eligible =\s*quickStateFilter === "all"\s*\?\s*nonMainWorktrees\s*:\s*nonMainWorktrees\.filter\(/
     );
+    expect(source).toMatch(/matchesQuickStateFilter\(quickStateFilter, meta\)/);
     expect(source).toMatch(/computeChipCounts\(\s*countedWorktrees,/);
     expect(source).toMatch(/const nonMainCount = nonMainWorktrees\.length;/);
     expect(source).toMatch(/const filtered = nonMainWorktrees\.filter\(/);
@@ -118,7 +130,9 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   });
 
   it("computes showScope from the instant live-query filter state and count comparison", () => {
-    expect(source).toMatch(/showScope\s*=\s*hasFilters\s*&&\s*filteredCount\s*!==\s*totalCount/);
+    // Compared against the same total the scope line prints, which now counts
+    // the pinned main card in both halves.
+    expect(source).toMatch(/showScope\s*=\s*hasFilters\s*&&\s*filteredCount\s*!==\s*scopeTotal/);
     // hasFilters mirrors the store's hasActiveFilters() but uses liveQuery so the
     // scope line reacts immediately rather than after the persisted-query debounce.
     expect(source).toMatch(/hasFilters\s*=\s*[\s\S]*?liveQuery\.trim\(\)\.length\s*>\s*0/);
@@ -148,7 +162,7 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     expect(source).toContain('import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils"');
     // The count announcement is scheduled on a timer cleared on re-run, so
     // rapid keystrokes coalesce into a single late announcement.
-    expect(source).toMatch(/`\$\{filteredCount\} of \$\{totalCount\} worktrees`/);
+    expect(source).toMatch(/`\$\{filteredCount\} of \$\{scopeTotal\} worktrees`/);
     expect(source).toMatch(
       /setTimeout\([\s\S]*?announce\(message\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
     );
@@ -161,9 +175,14 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     // most need it confirmed — and bailing out on `!showScope` said nothing at
     // all there, so returning to everything was the one transition with no
     // feedback.
-    expect(source).toMatch(/if \(!showScope && !hasAnnouncedScope\.current\) return;/);
-    expect(source).toMatch(/hasAnnouncedScope\.current = true/);
-    expect(source).toMatch(/All \$\{totalCount\} worktrees shown/);
+    // Gated on mount having happened, not on the list having been narrowed:
+    // the old flag let an already-filtered first render announce, and skipped a
+    // change between two different result sets of the same size.
+    expect(source).toMatch(/if \(!hasMountedScope\.current\)/);
+    expect(source).toMatch(/hasMountedScope\.current = true/);
+    expect(source).toMatch(/All \$\{scopeTotal\} worktrees shown/);
+    // Keyed on the filter inputs too, so a same-size swap still speaks.
+    expect(source).toMatch(/activeFacetText,\s*liveQuery,\s*quickStateFilter/);
   });
 
   it("announces the sort-disabled reason on appear/change but not on re-enable", () => {

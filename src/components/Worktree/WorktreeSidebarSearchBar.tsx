@@ -35,6 +35,14 @@ interface WorktreeSidebarSearchBarProps {
    * announcer effects, not a live region here (#9665).
    */
   statusText?: string | null;
+  /**
+   * The active filters by name, e.g. `Status: Dirty · Branch type: Feature`.
+   * Separate from `statusText` rather than concatenated into it: on one line
+   * beside a non-shrinking "Clear all" the count ate the width and the filter
+   * names truncated away first — and the names are the part the count cannot
+   * substitute for. Given its own row it wraps instead.
+   */
+  filterSummaryText?: string | null;
 }
 
 // The visible filter updates instantly via `liveQuery`; only the persisted
@@ -55,6 +63,7 @@ export function WorktreeSidebarSearchBar({
   chipCounts,
   variant = "sidebar",
   statusText,
+  filterSummaryText,
   trailing,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
@@ -285,24 +294,34 @@ export function WorktreeSidebarSearchBar({
         />
         {trailing}
       </div>
-      {(statusText || showClearAll) && (
+      {(statusText || filterSummaryText || showClearAll) && (
         // pt-2, not pt-1: the rail's own bottom padding is 12px, so a 4px gap
         // above this line left it crowding the field it describes while
         // floating clear of the rule below.
-        <div className="flex items-center gap-2 pt-2">
-          {statusText && (
-            <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
-              {statusText}
-            </span>
-          )}
-          {showClearAll && (
-            <button
-              type="button"
-              onClick={handleClearAll}
-              className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
-            >
-              Clear all
-            </button>
+        <div className="pt-2">
+          <div className="flex items-center gap-2">
+            {statusText && (
+              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
+                {statusText}
+              </span>
+            )}
+            {showClearAll && (
+              <button
+                type="button"
+                onClick={handleClearAll}
+                className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          {filterSummaryText && (
+            // Its own row, and wrapping: at the 200px minimum width there is no
+            // room to share a line with the count and "Clear all", and a
+            // truncated "Status: Di…" answers nothing.
+            <div className="mt-0.5 text-2xs leading-snug text-text-secondary [overflow-wrap:anywhere]">
+              {filterSummaryText}
+            </div>
           )}
         </div>
       )}

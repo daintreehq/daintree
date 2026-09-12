@@ -710,6 +710,31 @@ test("worktrees sidebar rail — state matrix", async () => {
       await parkPointer(page);
       await cap.snapZone("51-width-200-typed");
       await clearQuery(page);
+
+      // The status zone's worst case: the narrowest supported sidebar with
+      // enough active facets that naming them cannot fit on the count's line.
+      // This is where a one-line summary truncated the filter names away and
+      // left only the number behind.
+      const narrowPopover = await openFilterPopover(page);
+      await ensureSectionOpen(narrowPopover, "Status");
+      await narrowPopover
+        .getByRole("button", { name: /^Dirty/ })
+        .first()
+        .click();
+      await ensureSectionOpen(narrowPopover, "Branch type");
+      await narrowPopover
+        .getByRole("button", { name: /^Feature/ })
+        .first()
+        .click();
+      await settle(page, 400);
+      await closeFilterPopover(page);
+      await parkPointer(page);
+      await expect(page.locator(SIDEBAR)).toContainText("Status: Dirty");
+      await cap.snapZone("55-width-200-filters-named");
+      await cap.snapLocator("56-width-200-popover", await openFilterPopover(page));
+      await closeFilterPopover(page);
+      await page.locator(SIDEBAR).getByRole("button", { name: "Clear all" }).click();
+      await settle(page, 400);
     });
 
     // 14. Narrow + hover — the header cluster's worst case for crowding.

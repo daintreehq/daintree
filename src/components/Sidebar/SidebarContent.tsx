@@ -886,16 +886,27 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
    * every facet it alone satisfies read zero. "Main" is the clear case — the
    * only worktree of that type is the main one, so the chip read (0) forever.
    *
-   * That matters now the counts gate `disabled` on a chip: a count is allowed
-   * to over-report, because the worst case is a filter that narrows less than
-   * promised, but it must never under-report, because that takes a working
-   * filter away entirely. So this stays a SUPERSET of what the sidebar shows —
-   * which is also why the quick-state filter is not applied to it.
+   * Quick-state IS applied, and main is exempt from it, because that is exactly
+   * how the rows themselves are gated. The `alwaysShowActive` / `alwaysShowWaiting`
+   * bypasses are deliberately ignored: they only fire while no facet filter is
+   * active, so selecting any chip switches them off anyway — a count taken
+   * without them is the count that will actually apply once the chip is clicked.
+   *
+   * The counts gate `disabled` on a chip, so both directions of error cost
+   * something. Under-reporting takes a working filter away; over-reporting
+   * promises matches and hands back an empty list. This population is the set
+   * of rows a facet can actually reach, which is neither.
    */
-  const countedWorktrees = useMemo(
-    () => (mainWorktree ? [mainWorktree, ...nonMainWorktrees] : nonMainWorktrees),
-    [mainWorktree, nonMainWorktrees]
-  );
+  const countedWorktrees = useMemo(() => {
+    const eligible =
+      quickStateFilter === "all"
+        ? nonMainWorktrees
+        : nonMainWorktrees.filter((w) => {
+            const meta = derivedMetaMap.get(w.id);
+            return meta ? matchesQuickStateFilter(quickStateFilter, meta) : false;
+          });
+    return mainWorktree ? [mainWorktree, ...eligible] : eligible;
+  }, [mainWorktree, nonMainWorktrees, quickStateFilter, derivedMetaMap]);
 
   const chipCounts = useMemo(() => {
     return computeChipCounts(
@@ -1176,8 +1187,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // immediately rather than after the persisted-query debounce.
   const hasFilters =
     liveQuery.trim().length > 0 || hasFacetFiltersActive || quickStateFilter !== "all";
-  const filteredCount = filteredWorktrees.length;
-  const showScope = hasFilters && filteredCount !== totalCount;
+  // Main is a pinned card rather than a list row, but it is facet-filtered and
+  // it is on screen, so it belongs in both halves of the ratio. Without it,
+  // selecting "Main (1)" read "0 of 6 worktrees" directly above a visible main
+  // card. The quick-state bar keeps its own non-main scope.
+  const filteredCount = filteredWorktrees.length + (mainVisible ? 1 : 0);
+  const scopeTotal = totalCount + (mainWorktree ? 1 : 0);
+  const showScope = hasFilters && filteredCount !== scopeTotal;
   // Names drag reorder, not sorting: `sortWorktreesByRelevance` still honours the
   // chosen order as a tie-breaker within each relevance score, so "sorting
   // disabled" described neither what stops nor what this flag actually gates.
@@ -1191,7 +1207,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // screen readers are served by the debounced announcer effects below, not a
   // live region, so the persistent sort-disabled text isn't re-announced on
   // every keystroke (#9665).
-  const scopeText = showScope ? `${filteredCount} of ${totalCount} worktrees` : null;
+  const scopeText = showScope ? `${filteredCount} of ${scopeTotal} worktrees` : null;
   // Which filters, not just how many. A count tells the user the list is cut
   // down; it does not stop a sparse sidebar reading as an empty one.
   const activeFacetText = describeActiveFacets({
@@ -1204,8 +1220,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   });
   // Identity outranks the reorder note: that note is a standing explanation
   // rather than news, and it was eating the line and truncating the scope.
-  const filterStatusText =
-    [scopeText, activeFacetText || null].filter(Boolean).join(" · ") || dragDisabledReason;
+  const filterStatusText = scopeText ?? dragDisabledReason;
 
   // Announce the filtered worktree count to screen readers, debounced so rapid
   // typing in the search box doesn't flood the AT speech queue. Routed through
@@ -1217,20 +1232,26 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // count; from then on every transition speaks, including the one back to the
   // full set. Bailing out on `!showScope` meant clearing the last filter — the
   // moment the user most needs it confirmed — said nothing at all.
-  const hasAnnouncedScope = useRef(false);
+  const hasMountedScope = useRef(false);
   useEffect(() => {
-    if (!showScope && !hasAnnouncedScope.current) return;
-    hasAnnouncedScope.current = true;
+    // Mount is not a transition, however the list already looks — announcing
+    // there would read a project's worktree count aloud on every open.
+    if (!hasMountedScope.current) {
+      hasMountedScope.current = true;
+      return;
+    }
     const message = showScope
-      ? `${filteredCount} of ${totalCount} worktrees`
-      : `All ${totalCount} worktrees shown`;
+      ? `${filteredCount} of ${scopeTotal} worktrees`
+      : `All ${scopeTotal} worktrees shown`;
     const timer = window.setTimeout(() => {
       useAnnouncerStore.getState().announce(message);
     }, UI_DOHERTY_THRESHOLD);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [showScope, filteredCount, totalCount]);
+    // Keyed on the filter inputs as well as the count, so swapping to a
+    // different set of the same size still speaks.
+  }, [showScope, filteredCount, scopeTotal, activeFacetText, liveQuery, quickStateFilter]);
 
   // Announce the sort-disabled reason whenever it appears or changes — covers
   // null → reason (sorting becomes disabled) and reason → reason (e.g. switching
@@ -1830,6 +1851,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           inputRef={searchInputRef}
           chipCounts={chipCounts}
           statusText={filterStatusText}
+          filterSummaryText={activeFacetText || null}
         />
       )}
 

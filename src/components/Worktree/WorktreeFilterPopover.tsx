@@ -237,7 +237,17 @@ function ChipGrid<T extends string>({
     const useful = options.filter((o) => counts[o.value] > 0 || isActive(o.value));
     // Nothing matches anything — fold nothing rather than render an empty facet.
     if (useful.length === 0) return { shown: options, hiddenCount: 0 };
-    return { shown: useful, hiddenCount: options.length - useful.length };
+    // Matching is the first cut, but it is not a limit: a repository using a
+    // dozen branch prefixes would still get the wall this fold exists to stop.
+    // Selected values are always kept, so folding can never hide a live filter.
+    const capped =
+      useful.length > overflowAfter
+        ? useful
+            .filter((o) => isActive(o.value))
+            .concat(useful.filter((o) => !isActive(o.value)))
+            .slice(0, overflowAfter)
+        : useful;
+    return { shown: capped, hiddenCount: options.length - capped.length };
   }, [options, counts, overflowAfter, isActive]);
 
   const visible = showAll || hiddenCount === 0 ? options : shown;
@@ -466,8 +476,12 @@ export function WorktreeFilterPopover({
 
   const sortSummary = useMemo(() => {
     const label = ORDER_OPTIONS.find((option) => option.value === orderBy)?.label ?? "";
+    // A search ranks by relevance and uses the chosen order only to break ties,
+    // so naming the stored preference here described something that was not in
+    // charge of what the user was looking at.
+    if (hasQuery) return `Relevance, then ${label.toLowerCase()}`;
     return groupByType ? `${label} · grouped` : label;
-  }, [orderBy, groupByType]);
+  }, [orderBy, groupByType, hasQuery]);
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
