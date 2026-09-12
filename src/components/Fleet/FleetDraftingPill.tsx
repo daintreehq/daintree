@@ -11,7 +11,7 @@ import { isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
-import { splitByRecipeVariables } from "@/utils/recipeVariables";
+import { detectUnresolvedVariables, splitByRecipeVariables } from "@/utils/recipeVariables";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
 
@@ -219,10 +219,11 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
 
   const parts = splitByRecipeVariables(draft);
   const showsOverride = isOverridden && !isSkipped;
-  // The preview's unresolved list describes the template. Once the user has
-  // overridden the payload, only the variables they kept are still a problem.
+  // The preview's unresolved list describes the template. An override is sent
+  // verbatim, so every recipe variable still in it goes out as literal text —
+  // including ones the template never had, in any letter case.
   const visibleUnresolved = isOverridden
-    ? unresolvedVars.filter((v) => currentValue.includes(`{{${v}}}`))
+    ? detectUnresolvedVariables(currentValue, {})
     : unresolvedVars;
 
   return (

@@ -53,20 +53,26 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuItem: ({
     children,
     onSelect,
+    disabled,
     destructive,
     textValue: _textValue,
     ...rest
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
+    disabled?: boolean;
     destructive?: boolean;
     textValue?: string;
   } & React.HTMLAttributes<HTMLDivElement>) => (
     <div
       role="menuitem"
       {...rest}
+      data-disabled={disabled ? "true" : undefined}
       data-destructive={destructive ? "true" : undefined}
-      onClick={(e) => onSelect?.(e.nativeEvent)}
+      onClick={(e) => {
+        if (disabled) return;
+        onSelect?.(e.nativeEvent);
+      }}
     >
       {children}
     </div>
@@ -158,10 +164,13 @@ describe("Fleet ribbon design invariants", () => {
     render(<FleetArmingRibbon />);
     const confirm = tokens(screen.getByTestId("fleet-arming-ribbon"));
 
-    // Every class the confirm shell paints is also on the armed shell — the
-    // armed one may add motion/overflow extras, but the confirm branch may not
-    // diverge in what it shares.
-    for (const cls of confirm) expect(armed).toContain(cls);
+    // The two shells are the same shell. The armed branch may add only the
+    // clipping and focus-suppression it needs for the slide-in; nothing else
+    // may differ in either direction, or the heights drift apart again.
+    const armedOnly = armed.filter((cls) => !confirm.includes(cls));
+    const confirmOnly = confirm.filter((cls) => !armed.includes(cls));
+    expect(confirmOnly).toEqual([]);
+    expect(armedOnly.sort()).toEqual(["outline-hidden", "overflow-hidden"]);
     // And the shell is not trivially empty.
     expect(confirm.length).toBeGreaterThan(5);
   });
@@ -225,7 +234,9 @@ describe("Fleet ribbon design invariants", () => {
       const bar = screen.getByRole("progressbar");
       expect(bar.getAttribute("aria-valuenow")).toBe("3");
       expect(bar.getAttribute("aria-valuemax")).toBe("8");
-      expect(bar.getAttribute("aria-valuetext")).toMatch(/3 of 8/);
+      // `valuenow` counts attempts; the words count sends, so a failed attempt
+      // is never announced as sent.
+      expect(bar.getAttribute("aria-valuetext")).toMatch(/2 of 8 sent/);
       expect(bar.getAttribute("aria-valuetext")).toMatch(/1 failed/);
       act(() => {
         useFleetBroadcastProgressStore.getState().advance(2, 0);
@@ -272,9 +283,10 @@ describe("Fleet ribbon design invariants", () => {
     ].map((b) => b.className);
     expect(new Set(buttons).size).toBe(1);
     // Fixed geometry, not padding around the glyph: a hit area has to be the
-    // same size whichever icon sits inside it.
-    expect(buttons[0]).toMatch(/\bh-\d+\b/);
-    expect(buttons[0]).toMatch(/\bw-\d+\b/);
+    // same size whichever icon sits inside it. `h-6` or `size-6`, never a
+    // `min-h-*` that a taller icon could still stretch.
+    expect(buttons[0]).toMatch(/(^|\s)(h-\d+|size-\d+)(\s|$)/);
+    expect(buttons[0]).toMatch(/(^|\s)(w-\d+|size-\d+)(\s|$)/);
   });
 
   it("send failures in the status line are the only segments carrying an error tone", () => {
@@ -318,10 +330,14 @@ describe("Fleet ribbon design invariants", () => {
     const rest = segments.filter((s) => !/failed/.test(s.textContent ?? ""));
     expect(failed.length).toBe(1);
     expect(rest.length).toBeGreaterThan(0);
-    for (const seg of rest) expect(seg.className).toBe("");
-    expect(failed[0]!.className).not.toBe("");
-    // The tone is carried by a glyph, not only by a colour on the words.
-    expect(status.querySelector("svg")).not.toBeNull();
+    // Every neutral segment looks like every other neutral segment, and the
+    // failed one looks like none of them.
+    expect(new Set(rest.map((seg) => seg.className)).size).toBe(1);
+    for (const seg of rest) expect(seg.className).not.toBe(failed[0]!.className);
+    // The tone is carried by a glyph inside the failed segment, not only by a
+    // colour on the words.
+    expect(failed[0]!.querySelector("svg")).not.toBeNull();
+    for (const seg of rest) expect(seg.querySelector("svg")).toBeNull();
   });
 
   it("a status line with no failures shows no error glyph", () => {
@@ -456,6 +472,9 @@ describe("Saved fleet row invariants", () => {
     );
     const staleRow = screen.getByTestId("fleet-saved-row");
     const staleDelete = screen.getByTestId("fleet-saved-row-delete");
+    // Stale means "cannot recall", never "menu item disabled" — Radix would dim
+    // and block every descendant, Delete included.
+    expect(staleRow.getAttribute("data-disabled")).toBeNull();
     expect(staleRow.className).not.toMatch(/opacity-/);
     expect(staleDelete.className).not.toMatch(/opacity-/);
     const fadedText = Array.from(staleRow.querySelectorAll("span")).filter((s) =>

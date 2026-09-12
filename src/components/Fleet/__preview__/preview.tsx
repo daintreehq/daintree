@@ -190,20 +190,27 @@ function seedRun(status: "watching" | "completed" | "failed"): void {
       endedAt: status === "watching" ? undefined : Date.now(),
       // A finalized run has every target settled, so only the watching
       // fixture carries live "working" targets.
-      targets: [
-        target("t-1", {
-          agentState: status === "watching" ? "working" : "idle",
-          settled: status !== "watching",
-        }),
-        target("t-4", {
-          agentState: status === "watching" ? "working" : "idle",
-          settled: status !== "watching",
-        }),
-        target("t-2", { agentState: "waiting", settled: true }),
-        target("t-3", { agentState: "idle", settled: true }),
-        target("t-8", { agentState: "idle", settled: true }),
-        target("t-7", { submission: "failed", failureKind: "transient", settled: true }),
-      ],
+      targets:
+        status === "failed"
+          ? [
+              target("t-1", { submission: "failed", failureKind: "permanent", settled: true }),
+              target("t-2", { submission: "failed", failureKind: "permanent", settled: true }),
+              target("t-3", { submission: "skipped", settled: true }),
+            ]
+          : [
+              target("t-1", {
+                agentState: status === "watching" ? "working" : "idle",
+                settled: status !== "watching",
+              }),
+              target("t-4", {
+                agentState: status === "watching" ? "working" : "idle",
+                settled: status !== "watching",
+              }),
+              target("t-2", { agentState: "waiting", settled: true }),
+              target("t-3", { agentState: "idle", settled: true }),
+              target("t-8", { agentState: "idle", settled: true }),
+              target("t-7", { submission: "failed", failureKind: "transient", settled: true }),
+            ],
     },
   });
 }

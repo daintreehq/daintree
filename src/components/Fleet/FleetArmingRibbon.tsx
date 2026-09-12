@@ -608,7 +608,11 @@ export function FleetArmingRibbon(): ReactElement | null {
                 aria-valuemin={0}
                 aria-valuemax={progressTotal}
                 aria-valuenow={progressCompleted}
-                aria-valuetext={`${progressCompleted} of ${progressTotal} sent${progressFailed > 0 ? `, ${progressFailed} failed` : ""}`}
+                aria-valuetext={
+                  progressFailed > 0
+                    ? `${progressCompleted - progressFailed} of ${progressTotal} sent, ${progressFailed} failed`
+                    : `${progressCompleted} of ${progressTotal} sent`
+                }
                 className="shrink-0 text-2xs tabular-nums text-text-secondary"
                 data-testid="fleet-broadcast-progress"
               >

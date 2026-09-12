@@ -29,7 +29,7 @@
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
+import { mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import path from "path";
 import { createServer, type ViteDevServer } from "vite";
 
@@ -86,12 +86,24 @@ const FIXTURES: { name: string; marker: string; what: string; sweep?: boolean }[
   },
   {
     name: "broadcast-running-failed",
-    marker: '[data-testid="fleet-broadcast-progress"]',
+    marker: '[data-testid="fleet-broadcast-progress"]:has-text("failed")',
     what: "progress with a failure",
   },
-  { name: "run-watching", marker: '[data-testid="fleet-run-status"]', what: "run counts" },
-  { name: "run-finished", marker: '[data-testid="fleet-run-dismiss"]', what: "run summary" },
-  { name: "run-failed", marker: '[data-testid="fleet-run-status"]', what: "run failed" },
+  {
+    name: "run-watching",
+    marker: '[data-testid="fleet-run-status"]:has-text("working")',
+    what: "run counts",
+  },
+  {
+    name: "run-finished",
+    marker: '[data-testid="fleet-run-status"]:has-text("Run finished")',
+    what: "run summary",
+  },
+  {
+    name: "run-failed",
+    marker: '[data-testid="fleet-run-status"]:has-text("Run failed")',
+    what: "run failed",
+  },
   {
     name: "confirm-kill",
     marker: '[data-pending-action="kill"]',
@@ -106,7 +118,8 @@ const FIXTURES: { name: string; marker: string; what: string; sweep?: boolean }[
   { name: "failure-banner", marker: '[role="alert"]', what: "failure banner", sweep: true },
   {
     name: "failure-banner-confirm",
-    marker: '[data-pending-action="interrupt"]',
+    marker:
+      '[data-testid="fleet-arming-ribbon-group"]:has([role="alert"]):has([data-pending-action="interrupt"])',
     what: "banner + confirm",
   },
   {
@@ -131,13 +144,32 @@ const FIXTURES: { name: string; marker: string; what: string; sweep?: boolean }[
 let server: ViteDevServer | undefined;
 let baseURL = "";
 
-test.use({ deviceScaleFactor: 2 });
+// Every PNG goes through `snap()`; Playwright's own failure screenshot would be an
+// unverified artifact in test-results, so it is off for this spec.
+test.use({ deviceScaleFactor: 2, screenshot: "off" });
 
 test.beforeAll(async () => {
   if (!ENABLED) return;
   if (!OUT_DIR) throw new Error("DAINTREE_SHOT_DIR must be set to a directory outside the repo");
-  if (existsSync(OUT_DIR)) rmSync(OUT_DIR, { recursive: true, force: true });
+  // The directory is the harness's to clear, so it must not be the checkout, a
+  // parent of it, or anything inside it — and even then only its PNGs go.
+  const repo = path.resolve(process.cwd());
+  if (
+    OUT_DIR === path.parse(OUT_DIR).root ||
+    repo === OUT_DIR ||
+    repo.startsWith(OUT_DIR + path.sep)
+  ) {
+    throw new Error(`DAINTREE_SHOT_DIR (${OUT_DIR}) contains the checkout — refusing`);
+  }
+  if (OUT_DIR.startsWith(repo + path.sep)) {
+    throw new Error(`DAINTREE_SHOT_DIR (${OUT_DIR}) is inside the checkout — refusing`);
+  }
   mkdirSync(OUT_DIR, { recursive: true });
+  // Fresh per run: a leftover PNG from an earlier round read as this round's
+  // output is the easiest way to review a screen that no longer exists.
+  for (const f of readdirSync(OUT_DIR)) {
+    if (f.endsWith(".png")) rmSync(path.join(OUT_DIR, f), { force: true });
+  }
 
   // Walk to a free port: `vite.config.ts` pins 5173 with `strictPort`, and a dev server
   // already on it would otherwise read as a render failure in the surface under review.

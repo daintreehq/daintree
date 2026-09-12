@@ -250,9 +250,13 @@ export function FleetCountChip({
                       <button
                         type="button"
                         onClick={() => focusArmedPane(id)}
-                        aria-label={
-                          worktreeName ? `Focus ${title} in ${worktreeName}` : `Focus ${title}`
-                        }
+                        aria-label={[
+                          `Focus ${title}`,
+                          worktreeName ? `in ${worktreeName}` : null,
+                          id === focusedId ? "(primary)" : null,
+                        ]
+                          .filter((part) => part !== null)
+                          .join(" ")}
                         title={worktreeName ? `${title} · ${worktreeName}` : title}
                         className={cn(
                           "flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
