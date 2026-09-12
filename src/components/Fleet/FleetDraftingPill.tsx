@@ -30,11 +30,7 @@ export function FleetDraftingPill(): ReactElement | null {
       if (skippedIds.has(id)) continue;
       n += 1;
     }
-    // The primary is excluded by identity above — eligible or not. Only when
-    // focus sits on a pane outside the fleet is the primary unknown, and then
-    // the membership still contains it once.
-    const primaryIdentified = state.focusedId !== null && armOrder.includes(state.focusedId);
-    return primaryIdentified ? n : Math.max(n - 1, 0);
+    return n;
   });
 
   const open = useFleetResolutionPreviewStore((s) => s.open);

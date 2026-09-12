@@ -385,10 +385,22 @@ describe("Fleet drafting preview invariants", () => {
       makeAgent("live"),
       makeAgent("dead", { hasPty: false, runtimeStatus: "exited" }),
     ]);
+    usePanelStore.setState({ focusedId: "p" });
     useFleetArmingStore.getState().armIds(["p", "live", "dead"]);
     render(<FleetDraftingPill />);
     expect(screen.getByText(/Mirroring to 1 peer\b/)).toBeTruthy();
     expect(screen.queryByText(/Mirroring to 2 peers/)).toBeNull();
+  });
+
+  it("with focus outside the fleet every armed peer still counts", () => {
+    // The pill only mounts on an armed, focused pane, so this is the harness
+    // and preview shape — nothing is subtracted for an absent primary,
+    // because no counted pane is the sender.
+    seed([makeAgent("outsider"), makeAgent("q"), makeAgent("r")]);
+    usePanelStore.setState({ focusedId: "outsider" });
+    useFleetArmingStore.getState().armIds(["q", "r"]);
+    render(<FleetDraftingPill />);
+    expect(screen.getByText(/Mirroring to 2 peers/)).toBeTruthy();
   });
 
   it("the pill's reach excludes a peer the user has skipped, and stays mounted while the preview is open", () => {

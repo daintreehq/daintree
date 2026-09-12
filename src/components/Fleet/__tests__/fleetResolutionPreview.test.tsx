@@ -258,6 +258,9 @@ describe("FleetDraftingPill", () => {
     seedPanel(a2);
     armAgent("t-1", 0);
     armAgent("t-2", 1);
+    // The pill only mounts on the focused armed pane, so the primary has to be
+    // one of them for the reach count to mean anything.
+    usePanelStore.setState({ focusedId: "t-1" });
 
     render(<FleetDraftingPill />);
     expect(screen.getByTestId("fleet-drafting-pill")).toBeTruthy();
@@ -274,6 +277,7 @@ describe("FleetDraftingPill", () => {
     armAgent("t-1", 0);
     armAgent("t-2", 1);
     armAgent("t-3", 2);
+    usePanelStore.setState({ focusedId: "t-1" });
 
     render(<FleetDraftingPill />);
     expect(screen.getByText(/Mirroring to 2 peers/)).toBeTruthy();
