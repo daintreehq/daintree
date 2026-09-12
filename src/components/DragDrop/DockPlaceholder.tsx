@@ -2,7 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { useDndPlaceholder } from "./DndProvider";
+import { useDndPlaceholder } from "./dndPlaceholderContext";
 import { PlaceholderContent } from "./PlaceholderContent";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 

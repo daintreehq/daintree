@@ -72,7 +72,7 @@ vi.mock("@dnd-kit/utilities", () => ({
   CSS: { Transform: { toString: () => undefined } },
 }));
 
-vi.mock("../DndProvider", () => ({
+vi.mock("../dndPlaceholderContext", () => ({
   useDndPlaceholder: () => ({ activeTerminal: null, isDragging: false }),
 }));
 

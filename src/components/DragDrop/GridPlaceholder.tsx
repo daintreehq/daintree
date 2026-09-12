@@ -2,7 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./DndProvider";
+import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./dndPlaceholderContext";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PlaceholderContent } from "./PlaceholderContent";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
