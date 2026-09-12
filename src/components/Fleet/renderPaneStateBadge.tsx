@@ -30,7 +30,7 @@ export function renderPaneStateBadge(
       ? "bg-transparent text-text-secondary"
       : state === "waiting"
         ? "text-state-waiting"
-        : "text-daintree-text/70";
+        : "text-text-secondary";
   return (
     <Badge
       size="xs"

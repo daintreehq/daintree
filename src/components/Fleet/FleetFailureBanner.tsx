@@ -42,7 +42,7 @@ export function FleetFailureBanner(): ReactElement | null {
       ? undefined
       : {
           id: "retry",
-          label: "Retry failed",
+          label: "Retry",
           variant: "primary",
           onClick: () => {
             void actionService.dispatch("fleet.retryFailures", undefined, { source: "user" });

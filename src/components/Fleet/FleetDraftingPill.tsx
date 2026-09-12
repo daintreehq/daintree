@@ -2,18 +2,36 @@ import { useCallback, useEffect, useRef, type KeyboardEvent, type ReactElement }
 import { RadioTower, ChevronDown, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
-import { splitByRecipeVariables } from "@/utils/recipeVariables";
+import { detectUnresolvedVariables, splitByRecipeVariables } from "@/utils/recipeVariables";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
 
 export function FleetDraftingPill(): ReactElement | null {
-  const armedIds = useFleetArmingStore((s) => s.armedIds);
-  const fleetSize = armedIds.size;
-  const peerCount = fleetSize - 1;
+  const armOrder = useFleetArmingStore((s) => s.armOrder);
+  // What Enter will actually reach: the armed panes that pass the same
+  // eligibility gate the broadcast applies at dispatch, minus this pane. A
+  // membership count here overstated the fan-out whenever an armed pane had
+  // lost its PTY.
+  const skippedIds = useFleetTargetOverridesStore((s) => s.skippedIds);
+  const peerCount = usePanelStore((state) => {
+    let n = 0;
+    for (const id of armOrder) {
+      if (id === state.focusedId) continue;
+      if (!isTerminalFleetEligible(state.panelsById[id])) continue;
+      if (skippedIds.has(id)) continue;
+      n += 1;
+    }
+    return n;
+  });
 
   const open = useFleetResolutionPreviewStore((s) => s.open);
   const hasVariables = useFleetResolutionPreviewStore((s) => s.hasVariables);
@@ -38,7 +56,12 @@ export function FleetDraftingPill(): ReactElement | null {
     }
   }, [open]);
 
-  if (peerCount < 1) return null;
+  const peerNoun = peerCount === 1 ? "peer" : "peers";
+  const reachLabel = `Mirroring to ${peerCount} ${peerNoun}`;
+
+  // Stay mounted while the preview is open even if exclusions bring the reach
+  // to zero — the user needs the popover to undo them.
+  if (peerCount < 1 && !open) return null;
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -50,7 +73,7 @@ export function FleetDraftingPill(): ReactElement | null {
         <PopoverTrigger asChild>
           <button
             type="button"
-            aria-label={`Drafting for ${fleetSize} agents`}
+            aria-label={reachLabel}
             data-testid="fleet-drafting-pill-trigger"
             className={cn(
               "inline-flex items-center gap-1 px-2 py-0.5 rounded-full",
@@ -60,15 +83,21 @@ export function FleetDraftingPill(): ReactElement | null {
             )}
           >
             <RadioTower className="h-3 w-3" aria-hidden="true" />
-            <span>
-              Mirroring to {peerCount} {peerCount === 1 ? "peer" : "peers"}
-            </span>
+            <span>{reachLabel}</span>
             {hasDivergence && (
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
                 aria-label={`${overridesCount + skippedCount} per-target edit${overridesCount + skippedCount === 1 ? "" : "s"} pending`}
-                className="status-mark ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-category-amber-border"
-              />
+                className="tabular-nums"
+              >
+                {[
+                  overridesCount > 0 ? `${overridesCount} edited` : null,
+                  skippedCount > 0 ? `${skippedCount} skipped` : null,
+                ]
+                  .filter((part) => part !== null)
+                  .map((part) => ` · ${part}`)
+                  .join("")}
+              </span>
             )}
             {hasVariables && (
               <ChevronDown
@@ -92,9 +121,9 @@ export function FleetDraftingPill(): ReactElement | null {
             }
           }}
           data-testid="fleet-resolution-popover"
-          className="max-h-[400px] w-[400px] overflow-y-auto p-1"
+          className="flex max-h-[400px] w-[400px] flex-col overflow-hidden p-1"
         >
-          <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
+          <div className="shrink-0 px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
             Fleet broadcast preview
           </div>
           {previews.length === 0 ? (
@@ -105,11 +134,15 @@ export function FleetDraftingPill(): ReactElement | null {
               className="py-3"
             />
           ) : (
-            <ul className="flex flex-col gap-0.5">
-              {previews.map((p) => (
-                <FleetResolutionRow key={p.terminalId} preview={p} />
-              ))}
-            </ul>
+            // The list can run past the popover's cap; the shadow says so where
+            // an overlay scrollbar would not.
+            <ScrollShadow className="flex-1">
+              <ul className="flex flex-col gap-0.5">
+                {previews.map((p) => (
+                  <FleetResolutionRow key={p.terminalId} preview={p} />
+                ))}
+              </ul>
+            </ScrollShadow>
           )}
         </PopoverContent>
       </Popover>
@@ -182,31 +215,31 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
 
   const parts = splitByRecipeVariables(draft);
   const showsOverride = isOverridden && !isSkipped;
+  // The preview's unresolved list describes the template. An override is sent
+  // verbatim, so every recipe variable still in it goes out as literal text —
+  // including ones the template never had, in any letter case.
+  const visibleUnresolved = isOverridden
+    ? detectUnresolvedVariables(currentValue, {})
+    : unresolvedVars;
 
   return (
     <li
       data-testid="fleet-resolution-row"
       data-skipped={isSkipped ? "true" : undefined}
-      className={cn(
-        "rounded px-2 py-1.5",
-        excluded && "opacity-50",
-        isSkipped && !excluded && "opacity-50"
-      )}
+      className={cn("rounded-[var(--radius-md)] px-2 py-1.5", excluded && "opacity-50")}
     >
-      <div className="flex items-center gap-1.5 text-2xs font-medium text-text-secondary">
-        {!excluded && (
-          <label className="inline-flex shrink-0 items-center">
-            <input
-              type="checkbox"
-              checked={!isSkipped}
-              onChange={(e) => setSkipped(terminalId, !e.target.checked)}
-              data-testid="fleet-resolution-row-include"
-              aria-label={`Include ${title} in broadcast`}
-              className="h-3 w-3 cursor-pointer rounded border-border-default transition-colors duration-150"
-            />
-          </label>
-        )}
-        <span className={cn("truncate", isSkipped && "line-through")}>{title}</span>
+      <div className="flex items-center gap-2 text-2xs font-medium text-text-secondary">
+        {/* An ineligible row keeps a disabled box so the column stays aligned
+            and the row reads as "cannot include" rather than "no control". */}
+        <Checkbox
+          size="sm"
+          checked={!isSkipped && !excluded}
+          disabled={excluded}
+          onCheckedChange={(next) => setSkipped(terminalId, next !== true)}
+          data-testid="fleet-resolution-row-include"
+          aria-label={`Include ${title} in broadcast`}
+        />
+        <span className={cn("truncate", isSkipped && "line-through opacity-50")}>{title}</span>
         {excluded && exclusionReason && (
           <span className="inline-flex items-center gap-0.5 text-3xs text-category-rose-text shrink-0">
             <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
@@ -225,7 +258,12 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
           </span>
         )}
       </div>
-      <div className="mt-0.5 text-2xs leading-relaxed text-text-secondary break-all">
+      <div
+        className={cn(
+          "mt-0.5 text-2xs leading-relaxed text-text-secondary break-all",
+          isSkipped && "opacity-50"
+        )}
+      >
         {parts.map((part, i) =>
           part.isVar ? (
             <span
@@ -240,37 +278,43 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
         )}
       </div>
       {!excluded && (
-        <div className="mt-1 border-t border-border-subtle pt-0.5">
-          <div className="flex items-start gap-1.5">
-            <span className="text-4xs uppercase tracking-wide text-text-secondary mt-px shrink-0">
-              {isOverridden ? "edited" : "resolved"}
-            </span>
-            <textarea
-              ref={textareaRef}
-              value={currentValue}
-              onChange={(e) => handleTextareaChange(e.target.value)}
-              onKeyDown={handleTextareaKeyDown}
-              disabled={isSkipped}
-              rows={1}
-              data-fleet-override-textarea="true"
-              data-testid="fleet-resolution-row-textarea"
-              aria-label={`Override payload for ${title}`}
-              className={cn(
-                "flex-1 resize-y bg-transparent text-2xs leading-relaxed break-all text-text-primary",
-                "rounded-sm border border-transparent px-1 py-0.5 outline-hidden transition-colors duration-150",
-                "hover:border-border-subtle focus:border-border-subtle",
-                isSkipped && "cursor-not-allowed line-through",
-                resolvedPayload === "" && !isOverridden && "text-daintree-text/40"
-              )}
-              placeholder={resolvedPayload === "" ? "(empty)" : undefined}
-            />
+        <div className="mt-1 border-t border-border-subtle pt-1">
+          <div
+            className={cn(
+              "mb-0.5 text-2xs uppercase tracking-wide text-text-secondary",
+              isSkipped && "opacity-50"
+            )}
+          >
+            {isOverridden ? "Edited" : "Resolved"}
           </div>
-          {unresolvedVars.length > 0 && (
-            <div className="mt-0.5 flex flex-wrap gap-1">
-              {unresolvedVars.map((v) => (
+          <Textarea
+            ref={textareaRef}
+            variant="code"
+            density="compact"
+            resize="none"
+            value={currentValue}
+            onChange={(e) => handleTextareaChange(e.target.value)}
+            onKeyDown={handleTextareaKeyDown}
+            disabled={isSkipped}
+            rows={1}
+            data-fleet-override-textarea="true"
+            data-testid="fleet-resolution-row-textarea"
+            aria-label={`Override payload for ${title}`}
+            // Grows with its content up to a cap so the payload is readable
+            // in full rather than clipped at one row.
+            className={cn(
+              "field-sizing-content max-h-24 text-2xs leading-relaxed break-all",
+              isSkipped && "line-through",
+              resolvedPayload === "" && !isOverridden && "text-text-placeholder"
+            )}
+            placeholder={resolvedPayload === "" ? "(empty)" : undefined}
+          />
+          {visibleUnresolved.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {visibleUnresolved.map((v) => (
                 <span
                   key={v}
-                  className="inline-flex items-center rounded-full px-1.5 py-px text-4xs bg-category-rose-subtle text-category-rose-text"
+                  className="inline-flex items-center rounded-full px-1.5 py-px text-3xs bg-category-rose-subtle text-category-rose-text"
                 >
                   {`{{${v}}}`} unresolved
                 </span>

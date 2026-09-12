@@ -7,6 +7,7 @@ import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/Fl
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { useUiMotionTransition } from "@/hooks/useShouldSkipMotion";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { handleSegmentedRadioKeyDown } from "./segmentedRadioKeys";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 type CommitMode = "replace" | "append";
@@ -15,6 +16,7 @@ const COMMIT_MODES: { mode: CommitMode; label: string }[] = [
   { mode: "replace", label: "Replace" },
   { mode: "append", label: "Append" },
 ];
+const COMMIT_MODE_VALUES: readonly CommitMode[] = ["replace", "append"];
 
 export interface FleetPickerPaletteProps {
   isOpen: boolean;
@@ -264,6 +266,11 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                 role="radiogroup"
                 aria-label="Commit mode"
                 data-testid="fleet-picker-cold-start-commit-mode"
+                // Arrow keys move within the group; stopping them here keeps the
+                // palette's row navigation from also acting on the same press.
+                onKeyDown={(e) =>
+                  handleSegmentedRadioKeyDown(e, COMMIT_MODE_VALUES, commitMode, setCommitMode)
+                }
               >
                 {COMMIT_MODES.map(({ mode, label }) => {
                   const isActive = commitMode === mode;
@@ -274,6 +281,8 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                       type="button"
                       role="radio"
                       aria-checked={isActive}
+                      tabIndex={isActive ? 0 : -1}
+                      data-value={mode}
                       onClick={() => setCommitMode(mode)}
                       data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
                       className={cn(

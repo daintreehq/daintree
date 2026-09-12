@@ -63,6 +63,7 @@ const config: KnipConfig = {
     // <script type="module">. Knip does not follow HTML module-script edges,
     // so declare the TypeScript roots directly and retain analysis of their
     // imported shims and fixtures.
+    "src/components/Fleet/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
