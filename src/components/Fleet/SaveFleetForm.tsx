@@ -161,7 +161,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
                 : "Arm panes first…"
               : "Name…"
           }
-          className="flex-1 rounded-[var(--radius-md)] bg-tint/[0.08] px-2 py-1 text-2xs text-text-primary placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14]"
+          className="flex-1 rounded-[var(--radius-md)] bg-tint/[0.08] px-2 py-1 text-2xs text-text-primary placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14] focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary"
           data-testid="fleet-save-form-name"
         />
         <button

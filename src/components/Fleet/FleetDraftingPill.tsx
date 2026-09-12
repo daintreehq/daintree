@@ -24,19 +24,17 @@ export function FleetDraftingPill(): ReactElement | null {
   const skippedIds = useFleetTargetOverridesStore((s) => s.skippedIds);
   const peerCount = usePanelStore((state) => {
     let n = 0;
-    let primaryEligible = false;
     for (const id of armOrder) {
+      if (id === state.focusedId) continue;
       if (!isTerminalFleetEligible(state.panelsById[id])) continue;
-      if (id === state.focusedId) {
-        primaryEligible = true;
-        continue;
-      }
       if (skippedIds.has(id)) continue;
       n += 1;
     }
-    // This pane is the primary; if it is not the focused one (or focus sits
-    // elsewhere), the membership still includes it once.
-    return primaryEligible ? n : Math.max(n - 1, 0);
+    // The primary is excluded by identity above — eligible or not. Only when
+    // focus sits on a pane outside the fleet is the primary unknown, and then
+    // the membership still contains it once.
+    const primaryIdentified = state.focusedId !== null && armOrder.includes(state.focusedId);
+    return primaryIdentified ? n : Math.max(n - 1, 0);
   });
 
   const open = useFleetResolutionPreviewStore((s) => s.open);
@@ -142,7 +140,7 @@ export function FleetDraftingPill(): ReactElement | null {
           ) : (
             // The list can run past the popover's cap; the shadow says so where
             // an overlay scrollbar would not.
-            <ScrollShadow>
+            <ScrollShadow className="flex-1">
               <ul className="flex flex-col gap-0.5">
                 {previews.map((p) => (
                   <FleetResolutionRow key={p.terminalId} preview={p} />

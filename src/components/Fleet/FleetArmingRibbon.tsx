@@ -106,11 +106,6 @@ function FleetRunStatusLine({
       className="flex min-w-0 items-center gap-1 text-2xs tabular-nums text-text-secondary"
       data-testid="fleet-run-status"
     >
-      {/* The error glyph carries the tone; the words stay on a text token,
-          because the danger colour sits under 4.5:1 on the amber fill. */}
-      {status.segments.some((segment) => segment.tone === "error") && (
-        <AlertCircle className="h-3 w-3 shrink-0 text-status-error" aria-hidden="true" />
-      )}
       <span className="truncate">
         {status.segments.map((segment, index) => (
           <span
@@ -118,6 +113,15 @@ function FleetRunStatusLine({
             className={segment.tone === "error" ? "font-medium text-text-primary" : undefined}
           >
             {index > 0 ? " · " : ""}
+            {/* The glyph carries the tone and sits with the clause it is
+                about; the words stay on a text token because the danger
+                colour sits under 4.5:1 on the amber fill. */}
+            {segment.tone === "error" && (
+              <AlertCircle
+                className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
+                aria-hidden="true"
+              />
+            )}
             {segment.label}
           </span>
         ))}
@@ -610,7 +614,14 @@ export function FleetArmingRibbon(): ReactElement | null {
               >
                 Sending {progressCompleted}/{progressTotal}
                 {progressFailed > 0 && (
-                  <span className="font-medium text-text-primary"> · {progressFailed} failed</span>
+                  <span className="font-medium text-text-primary">
+                    {" · "}
+                    <AlertCircle
+                      className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
+                      aria-hidden="true"
+                    />
+                    {progressFailed} failed
+                  </span>
                 )}
               </span>
             )}

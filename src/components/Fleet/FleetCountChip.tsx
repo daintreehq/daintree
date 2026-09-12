@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
@@ -278,9 +278,10 @@ export function FleetCountChip({
                       </button>
                       {sendFailed && (
                         <span
-                          className="shrink-0 text-3xs text-status-error"
+                          className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary"
                           data-testid={`fleet-row-send-failed-${id}`}
                         >
+                          <AlertCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
                           Send failed
                         </span>
                       )}
