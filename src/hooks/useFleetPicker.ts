@@ -108,12 +108,22 @@ export interface UseFleetPickerResult {
   snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
   confirmedIds: string[];
   driftCount: number;
+  /** Total eligible terminals, ignoring the filter — the denominator of "N of M selected". */
+  eligibleCount: number;
+  /**
+   * Selected terminals the current filter is hiding. A selection survives
+   * filtering by design, so without this the footer can promise to arm a
+   * terminal the user cannot see and cannot name.
+   */
+  hiddenSelectedCount: number;
 
   // Handlers
   handleToggleId: (id: string, event?: React.MouseEvent) => void;
   handleListKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
   handleConfirm: () => void;
   clearSearch: () => void;
+  /** Move focus into the list. The search input calls this on ArrowDown. */
+  focusFirstRow: () => void;
   /**
    * Stable callback-ref factory. Consumers attach `registerRow(id)` to each
    * row's `ref` so the hook's keyboard handler can move DOM focus to match
@@ -201,6 +211,11 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const [snippetMap, setSnippetMap] = useState<Map<string, SemanticSearchMatch>>(() => new Map());
+  // The query `snippetMap` was produced for. Semantic results arrive ~300ms
+  // behind the keystroke, so without this a terminal matched only by the
+  // PREVIOUS query keeps passing the filter under the new one — and can be
+  // swept into a bulk selection while it is visibly unrelated to what was typed.
+  const [snippetQuery, setSnippetQuery] = useState("");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const deferredQuery = useDeferredValue(query);
   const rangeAnchorRef = useRef<string | null>(null);
@@ -278,6 +293,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     const trimmed = deferredQuery.trim();
     if (trimmed === "") {
       setSnippetMap(new Map());
+      setSnippetQuery("");
       nextSearchRequestId += 1;
       currentRequestRef.current = nextSearchRequestId;
       return;
@@ -295,6 +311,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
           const next = new Map<string, SemanticSearchMatch>();
           for (const m of matches) next.set(m.terminalId, m);
           setSnippetMap(next);
+          setSnippetQuery(trimmed);
         })
         .catch(() => {
           if (currentRequestRef.current !== issueId) return;
@@ -381,8 +398,12 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     // index can't see.
     const fuzzyIds = new Set<string>();
     for (const result of fuse.search(trimmed)) fuzzyIds.add(result.item.id);
-    return eligibleTerminals.filter((t) => snippetMap.has(t.id) || fuzzyIds.has(t.id));
-  }, [eligibleTerminals, deferredQuery, snippetMap, fuse]);
+    // Only honour semantic hits that belong to the query currently on screen.
+    const semanticFresh = snippetQuery === trimmed;
+    return eligibleTerminals.filter(
+      (t) => (semanticFresh && snippetMap.has(t.id)) || fuzzyIds.has(t.id)
+    );
+  }, [eligibleTerminals, deferredQuery, snippetMap, snippetQuery, fuse]);
 
   const visibleIds = useMemo(() => visibleTerminals.map((t) => t.id), [visibleTerminals]);
 
@@ -449,6 +470,18 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
 
   const driftCount = selectedIds.size - confirmedIds.length;
 
+  const eligibleCount = eligibleTerminals.length;
+
+  const hiddenSelectedCount = useMemo(() => {
+    if (deferredQuery.trim() === "") return 0;
+    const visible = new Set(visibleIds);
+    let n = 0;
+    for (const id of selectedIds) {
+      if (!visible.has(id) && eligibleIdSet.has(id)) n++;
+    }
+    return n;
+  }, [selectedIds, visibleIds, eligibleIdSet, deferredQuery]);
+
   const clearSearch = useCallback(() => setQuery(""), []);
 
   const handleToggleId = useCallback(
@@ -486,8 +519,56 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     [flatVisibleIds]
   );
 
+  /**
+   * Move logical *and* DOM focus to one visible row by index, clamped. The two
+   * have to move together: `tabIndex={isFocused ? 0 : -1}` shifts the keyboard
+   * target, so leaving DOM focus behind strands the ring on the previous row.
+   *
+   * Exported as `focusFirstRow` so the search input can hand off on ArrowDown —
+   * the dialog autofocuses that input, and without a hand-off the footer's own
+   * "↑↓ Move" hint does nothing at all from the state the user actually starts in.
+   */
+  const focusRow = useCallback(
+    (index: number) => {
+      if (flatVisibleIds.length === 0) return;
+      const clamped = Math.max(0, Math.min(index, flatVisibleIds.length - 1));
+      const id = flatVisibleIds[clamped];
+      if (!id) return;
+      setFocusedId(id);
+      rowRefs.current.get(id)?.focus();
+    },
+    [flatVisibleIds]
+  );
+
+  const focusFirstRow = useCallback(() => focusRow(0), [focusRow]);
+
+  // Enter commits from anywhere in the picker, including the search input.
+  // Read through a ref so the key handler doesn't have to be redefined (and
+  // re-bound) every time the selection changes.
+  const confirmRef = useRef<() => void>(() => {});
+
   const handleListKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      // Group headers live inside this container and own their own keys. Without
+      // the guard, Space on a header is swallowed here and toggles whichever
+      // ROW `focusedId` happens to point at — not the group holding focus.
+      if (e.target !== e.currentTarget && (e.target as HTMLElement).closest("[data-group-header]")) {
+        return;
+      }
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmRef.current();
+        return;
+      }
+
+      if (e.key === "Home" || e.key === "End") {
+        if (flatVisibleIds.length === 0) return;
+        e.preventDefault();
+        focusRow(e.key === "Home" ? 0 : flatVisibleIds.length - 1);
+        return;
+      }
+
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         if (e.metaKey) return;
         if (flatVisibleIds.length === 0) return;
@@ -546,32 +627,44 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       if (!mod) return;
       const key = e.key.toLowerCase();
       if (key === "a" && !e.shiftKey) {
+        // Union, never replace. A filtered-out terminal the user already
+        // picked is still armed on commit, so dropping it here would silently
+        // change the broadcast set — the one thing this surface exists to let
+        // the user audit.
         e.preventDefault();
-        setSelectedIds(new Set(visibleIds));
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of visibleIds) next.add(id);
+          return next;
+        });
         return;
       }
       if (key === "i" && e.shiftKey) {
-        // Scope to the listbox only — stopPropagation prevents the global
+        // Scope to the list only — stopPropagation prevents the global
         // Cmd+Shift+I "inject context" binding from firing while the picker
-        // has list focus.
+        // has list focus. Inverting is likewise scoped to what is visible:
+        // ids outside the filter keep whatever state the user gave them.
         e.preventDefault();
         e.stopPropagation();
         setSelectedIds((prev) => {
-          const next = new Set<string>();
+          const next = new Set(prev);
           for (const id of visibleIds) {
-            if (!prev.has(id)) next.add(id);
+            if (prev.has(id)) next.delete(id);
+            else next.add(id);
           }
           return next;
         });
       }
     },
-    [flatVisibleIds, focusedId, visibleIds]
+    [flatVisibleIds, focusedId, visibleIds, focusRow]
   );
 
   const handleConfirm = useCallback(() => {
     if (confirmedIds.length === 0) return;
     onCommit(confirmedIds);
   }, [confirmedIds, onCommit]);
+
+  confirmRef.current = handleConfirm;
 
   // Stable callback-ref factory — `registerRow(id)` returns the same callback
   // identity for the same id, so memoized rows don't churn the ref Map on
@@ -601,10 +694,13 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     snippetMap,
     confirmedIds,
     driftCount,
+    eligibleCount,
+    hiddenSelectedCount,
     handleToggleId,
     handleListKeyDown,
     handleConfirm,
     clearSearch,
+    focusFirstRow,
     registerRow,
   };
 }

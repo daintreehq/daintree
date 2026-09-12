@@ -545,12 +545,13 @@ describe("FleetPickerContent + useFleetPicker", () => {
   });
 
   describe("empty state", () => {
-    it("renders 'No terminals available' when there are no eligibles", async () => {
+    it("names the next action when there are no eligibles", async () => {
       seedTerminals([]);
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
       renderHarness([], { mode: "cold-start", onCommit: () => {} });
       await act(async () => {});
-      expect(screen.getByText("No terminals available")).toBeTruthy();
+      // Empty states name the next action, not the absence.
+      expect(screen.getByText("Open a terminal in the grid to arm it")).toBeTruthy();
     });
 
     it("renders 'No terminals match' when the search filters out all eligibles", async () => {
@@ -570,7 +571,76 @@ describe("FleetPickerContent + useFleetPicker", () => {
       });
       await act(async () => {});
       expect(screen.getByText("No terminals match")).toBeTruthy();
-      expect(screen.queryAllByRole("option")).toHaveLength(0);
+      expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
+    });
+
+    it("offers a recovery action from the filtered-empty state", async () => {
+      seedTerminals([makeTerminal("t1", { title: "alpha" })]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "zzz-no-match" } });
+      });
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fp-clear-search"));
+      });
+      await act(async () => {});
+
+      expect(search.value).toBe("");
+      expect(screen.queryAllByRole("treeitem").length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("keyboard entry from the search field", () => {
+    it("ArrowDown in the search input moves focus into the list", async () => {
+      // The dialog opens with the search input focused and the footer
+      // advertises "↑↓ Move", so this is the first thing a keyboard user tries.
+      seedTerminals([
+        makeTerminal("t1", { title: "alpha" }),
+        makeTerminal("t2", { title: "beta" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      // The real dialog autofocuses this input; the test harness does not, so
+      // put focus where the user's would be before pressing the key.
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      search.focus();
+      expect(document.activeElement).toBe(search);
+
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "ArrowDown" });
+      });
+      await act(async () => {});
+
+      expect(document.activeElement).not.toBe(search);
+      expect((document.activeElement as HTMLElement)?.getAttribute("role")).toBe("treeitem");
+    });
+
+    it("Enter in the search input commits the selection", async () => {
+      const onCommit = vi.fn();
+      seedTerminals([makeTerminal("t1", { title: "alpha", worktreeId: "wt-1" })]);
+      renderHarness([makeWorktreeSnap("wt-1", "main")], { mode: "cold-start", onCommit });
+      await act(async () => {});
+
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "Enter" });
+      });
+      await act(async () => {});
+
+      expect(onCommit).toHaveBeenCalledWith(["t1"]);
     });
   });
 });

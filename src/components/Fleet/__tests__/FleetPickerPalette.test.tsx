@@ -275,7 +275,7 @@ describe("FleetPickerPalette", () => {
     ]);
     renderPalette([makeWorktreeSnap("wt-1", "main")]);
     await act(async () => {});
-    expect(screen.getByText("No terminals available")).toBeTruthy();
+    expect(screen.getByText("Open a terminal in the grid to arm it")).toBeTruthy();
     const confirm = screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
   });
@@ -329,7 +329,10 @@ describe("FleetPickerPalette", () => {
       expect(confirm.textContent).toContain("Arm 1 selected");
     });
 
-    it("toggles to 'Deselect all' once every visible terminal is selected", async () => {
+    it("keeps each bulk action's label fixed while its selection state changes", async () => {
+      // The rule, not the string: one control means one action. This used to be
+      // a single button cycling through four labels, which reversed its own
+      // meaning under the pointer and reflowed its neighbour on every click.
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
       seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
       renderPalette([makeWorktreeSnap("wt-1", "main")]);
@@ -338,23 +341,28 @@ describe("FleetPickerPalette", () => {
       const selectAll = screen.getByTestId(
         "fleet-picker-cold-start-select-all"
       ) as HTMLButtonElement;
-      await act(async () => {
-        fireEvent.click(selectAll);
-      });
-      expect(selectAll.textContent).toContain("Deselect all");
+      const clear = screen.getByTestId(
+        "fleet-picker-cold-start-clear-selection"
+      ) as HTMLButtonElement;
+      const labelBefore = selectAll.textContent;
 
       await act(async () => {
         fireEvent.click(selectAll);
       });
+      expect(selectAll.textContent).toBe(labelBefore);
+
+      await act(async () => {
+        fireEvent.click(clear);
+      });
+      expect(selectAll.textContent).toBe(labelBefore);
+
       const confirm = screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement;
       expect(confirm.disabled).toBe(true);
-      expect(selectAll.textContent).toContain("Select all");
     });
 
-    it("'Deselect visible' only removes the filtered subset and keeps other picks", async () => {
-      // Cold-start preselects active-worktree eligibles, so all three start
-      // selected. Filtering to "alpha" and clicking the button should drop
-      // alpha but keep beta and gamma selected.
+    it("'Clear' empties the whole selection, not just the filtered subset", async () => {
+      // "Clear" that leaves things selected is a trap — the scoped removal the
+      // old toggle did was invisible, and the commit still armed the leftovers.
       seedTerminals([
         makeTerminal("alpha", { worktreeId: "wt-1" }),
         makeTerminal("beta", { worktreeId: "wt-1" }),
@@ -369,23 +377,17 @@ describe("FleetPickerPalette", () => {
       });
       await act(async () => {});
 
-      const selectAll = screen.getByTestId(
-        "fleet-picker-cold-start-select-all"
-      ) as HTMLButtonElement;
-      expect(selectAll.textContent).toContain("Deselect visible");
-
       await act(async () => {
-        fireEvent.click(selectAll);
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-clear-selection"));
       });
 
-      // Clear the query — confirm should now show beta + gamma still selected.
       await act(async () => {
         fireEvent.change(search, { target: { value: "" } });
       });
       await act(async () => {});
 
       const confirm = screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement;
-      expect(confirm.textContent).toContain("Arm 2 selected");
+      expect(confirm.disabled).toBe(true);
     });
 
     it("'Select agents' adds only working/waiting/directing terminals additively", async () => {
@@ -470,10 +472,13 @@ describe("FleetPickerPalette", () => {
       expect(s.armOrder.sort()).toEqual(["alpha-idle", "beta-working"]);
     });
 
-    it("'Select all visible' replaces a prior cross-filter selection", async () => {
-      // Cold-start preselects wt-1 terminals. Filter to a wt-2 terminal,
-      // hit "Select all visible" — replace semantics drop the wt-1 pick and
-      // leave only the wt-2 visible id in the armed set.
+    it("'Select all visible' keeps picks the filter is hiding", async () => {
+      // The invariant: a bulk action scoped to what is visible must only ever
+      // ADD. This test previously asserted the opposite — that the wt-1 pick
+      // was dropped — which encoded a silent data loss: the user filters,
+      // bulk-selects, commits, and broadcasts to a different set than the one
+      // they assembled. Arming is the one thing on this surface that must not
+      // surprise anybody.
       seedTerminals([
         makeTerminal("a-wt1", { worktreeId: "wt-1" }),
         makeTerminal("b-wt2", { worktreeId: "wt-2" }),
@@ -505,16 +510,14 @@ describe("FleetPickerPalette", () => {
         fireEvent.click(screen.getByTestId("fleet-picker-cold-start-confirm"));
       });
 
-      expect(useFleetArmingStore.getState().armOrder).toEqual(["b-wt2"]);
+      expect(useFleetArmingStore.getState().armOrder.sort()).toEqual(["a-wt1", "b-wt2"]);
     });
 
-    it("'Deselect all' (no query) fully clears selection — drifted ids do not survive", async () => {
+    it("'Clear' drops drifted ids too — they do not come back when the terminal does", async () => {
       // Cold-start preselects two wt-1 terminals. Simulate drift by removing
-      // one from the panel store while the picker is open. Click the toggle
-      // (label is now "Deselect all", since visible == selected). With the
-      // unfiltered path doing a full clear, when the drifted terminal
-      // re-enters the panel store its id is no longer in selectedIds, so the
-      // confirm-eligible count stays at 0.
+      // one from the panel store while the picker is open, then Clear. When the
+      // drifted terminal re-enters the panel store its id must not still be in
+      // selectedIds, or a "cleared" picker silently re-arms it.
       seedTerminals([
         makeTerminal("t1", { worktreeId: "wt-1" }),
         makeTerminal("t2", { worktreeId: "wt-1" }),
@@ -531,11 +534,11 @@ describe("FleetPickerPalette", () => {
       await act(async () => {});
 
       await act(async () => {
-        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-select-all"));
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-clear-selection"));
       });
 
-      // Re-introduce t2 — confirm should still be empty if "Deselect all"
-      // really cleared everything.
+      // Re-introduce t2 — confirm should still be empty if Clear really
+      // cleared everything.
       seedTerminals([
         makeTerminal("t1", { worktreeId: "wt-1" }),
         makeTerminal("t2", { worktreeId: "wt-1" }),
