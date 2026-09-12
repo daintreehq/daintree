@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
+import { menuRowPointerMove } from "./menu-row-hover-focus";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
@@ -303,7 +304,7 @@ interface SelectItemProps extends React.ComponentPropsWithoutRef<typeof SelectPr
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitiveType.Item>,
   SelectItemProps
->(({ className, children, description, ...props }, ref) => {
+>(({ className, children, description, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const Item = radix.SelectPrimitive.Item;
@@ -319,6 +320,7 @@ const SelectItem = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       <span className="absolute left-2 top-1.5 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>

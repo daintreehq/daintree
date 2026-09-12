@@ -8,6 +8,7 @@ import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import { menuRowPointerMove } from "./menu-row-hover-focus";
 import {
   OverlayFocusRestoreContext,
   useOverlayFocusRestore,
@@ -184,7 +185,7 @@ type ContextMenuSubTriggerProps = React.ComponentPropsWithoutRef<
 const ContextMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.SubTrigger>,
   ContextMenuSubTriggerProps
->(({ className, inset, children, ...props }, ref) => {
+>(({ className, inset, children, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const SubTrigger = radix.ContextMenuPrimitive.SubTrigger;
@@ -197,6 +198,7 @@ const ContextMenuSubTrigger = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       {children}
       <ChevronRight className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
@@ -352,7 +354,7 @@ type ContextMenuItemProps = React.ComponentPropsWithoutRef<typeof ContextMenuPri
 const ContextMenuItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
   ContextMenuItemProps
->(({ className, inset, destructive, ...props }, ref) => {
+>(({ className, inset, destructive, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const Item = radix.ContextMenuPrimitive.Item;
@@ -367,6 +369,7 @@ const ContextMenuItem = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     />
   );
 });
@@ -486,7 +489,7 @@ type ContextMenuCheckboxItemProps = React.ComponentPropsWithoutRef<
 const ContextMenuCheckboxItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.CheckboxItem>,
   ContextMenuCheckboxItemProps
->(({ className, children, checked, ...props }, ref) => {
+>(({ className, children, checked, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const CheckboxItem = radix.ContextMenuPrimitive.CheckboxItem;
@@ -500,6 +503,7 @@ const ContextMenuCheckboxItem = React.forwardRef<
       )}
       checked={checked}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
@@ -531,7 +535,7 @@ type ContextMenuRadioItemProps = React.ComponentPropsWithoutRef<
 const ContextMenuRadioItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.RadioItem>,
   ContextMenuRadioItemProps
->(({ className, children, ...props }, ref) => {
+>(({ className, children, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const RadioItem = radix.ContextMenuPrimitive.RadioItem;
@@ -544,6 +548,7 @@ const ContextMenuRadioItem = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>

@@ -9,6 +9,7 @@ import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import { menuRowPointerMove } from "./menu-row-hover-focus";
 import {
   OverlayFocusRestoreContext,
   useOverlayFocusRestore,
@@ -236,7 +237,7 @@ type DropdownMenuSubTriggerProps = React.ComponentPropsWithoutRef<
 const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.SubTrigger>,
   DropdownMenuSubTriggerProps
->(({ className, inset, children, ...props }, ref) => {
+>(({ className, inset, children, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const SubTrigger = radix.DropdownMenuPrimitive.SubTrigger;
@@ -249,6 +250,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       {children}
       <ChevronRight className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
@@ -417,7 +419,7 @@ type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
 const DropdownMenuItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
   DropdownMenuItemProps
->(({ className, inset, destructive, ...props }, ref) => {
+>(({ className, inset, destructive, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const Item = radix.DropdownMenuPrimitive.Item;
@@ -432,6 +434,7 @@ const DropdownMenuItem = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     />
   );
 });
@@ -563,7 +566,7 @@ type DropdownMenuRadioItemProps = React.ComponentPropsWithoutRef<
 const DropdownMenuRadioItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.RadioItem>,
   DropdownMenuRadioItemProps
->(({ className, children, ...props }, ref) => {
+>(({ className, children, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const RadioItem = radix.DropdownMenuPrimitive.RadioItem;
@@ -576,6 +579,7 @@ const DropdownMenuRadioItem = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
@@ -595,7 +599,7 @@ type DropdownMenuCheckboxItemProps = React.ComponentPropsWithoutRef<
 const DropdownMenuCheckboxItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.CheckboxItem>,
   DropdownMenuCheckboxItemProps
->(({ className, children, checked, ...props }, ref) => {
+>(({ className, children, checked, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const CheckboxItem = radix.DropdownMenuPrimitive.CheckboxItem;
@@ -609,6 +613,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
       )}
       checked={checked}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
