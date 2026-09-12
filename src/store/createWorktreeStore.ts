@@ -12,6 +12,7 @@ import {
 import { logDebug } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
 
 /**
  * How long a `worktree-removed` tombstone suppresses a late `worktree-update`
@@ -2087,12 +2088,6 @@ function mergeIssueState(
     issueTitle = existing.issueTitle;
   }
 
-  // MANUAL_OVER_AUTO: explicit user association wins over auto-detection.
-  if (manual) {
-    issueNumber = manual.issueNumber;
-    issueTitle = manual.issueTitle;
-  }
-
   // `linked: undefined` from the host means "PR service hasn't run yet" —
   // preserve whatever the renderer already has (e.g. `linked.pr` from a
   // prior session's `pr-detected` event). `linked: null` is an explicit
@@ -2101,6 +2096,21 @@ function mergeIssueState(
     incoming.linked === undefined && existing?.linked !== undefined
       ? existing.linked
       : incoming.linked;
+
+  // The host already drops an issue number its linked GitHub PR carries, but
+  // the `pr-detected` overlay re-adds the raw candidate number the event was
+  // sent with. Applied before the manual override so an explicit association
+  // still wins (#12381).
+  if (issueNumberBelongsToLinkedPr(issueNumber, linked)) {
+    issueNumber = undefined;
+    issueTitle = undefined;
+  }
+
+  // MANUAL_OVER_AUTO: explicit user association wins over auto-detection.
+  if (manual) {
+    issueNumber = manual.issueNumber;
+    issueTitle = manual.issueTitle;
+  }
 
   if (
     issueNumber === incoming.issueNumber &&

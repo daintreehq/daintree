@@ -11,6 +11,7 @@ import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import type { WorktreeChanges, RepoState } from "../../shared/types/git.js";
 import type { PluginWorktreeLinked } from "../../shared/types/plugin.js";
+import { issueNumberBelongsToLinkedPr } from "../../shared/utils/worktreeIssueProjection.js";
 
 export interface SnapshotBuilderHost {
   readonly id: string;
@@ -113,6 +114,11 @@ export class SnapshotBuilder {
         linkedPr.ciStatus.state === "pending")
         ? linkedPr.ciStatus.state
         : undefined;
+    const detectedIssueNumber = linkedIssue?.ref.number ?? this.host.issueNumber;
+    // Dropped from the projection only: the monitor keeps the parsed number so
+    // `onIssueNotFound` still matches its lookup, and a genuine PR clear brings
+    // the #8851 offline fallback back (#12381).
+    const issueIsLinkedPr = issueNumberBelongsToLinkedPr(detectedIssueNumber, this.host.linked);
 
     const snapshot: WorktreeSnapshot = {
       id: this.host.id,
@@ -130,7 +136,7 @@ export class SnapshotBuilder {
       createdAt: this.host.createdAt,
       aiNote: this.host.aiNote,
       aiNoteTimestamp: this.host.aiNoteTimestamp,
-      issueNumber: linkedIssue?.ref.number ?? this.host.issueNumber,
+      issueNumber: issueIsLinkedPr ? undefined : detectedIssueNumber,
       prNumber: linkedPr?.ref.number ?? this.host.prNumber,
       prUrl: linkedPr?.url ?? this.host.prUrl,
       prState: linkedPr
@@ -140,7 +146,11 @@ export class SnapshotBuilder {
           : this.host.prState,
       prCiStatus: linkedPr ? linkedPrCiStatus : this.host.prCiStatus,
       prTitle: linkedPr ? linkedPr.title : this.host.prTitle,
-      issueTitle: linkedIssue ? linkedIssue.title : this.host.issueTitle,
+      issueTitle: issueIsLinkedPr
+        ? undefined
+        : linkedIssue
+          ? linkedIssue.title
+          : this.host.issueTitle,
       branchDerivedTitle: this.host.branchDerivedTitle,
       sourcePrNumber: this.host.sourcePrNumber,
       prLastUpdatedAt: this.host.prLastUpdatedAt,

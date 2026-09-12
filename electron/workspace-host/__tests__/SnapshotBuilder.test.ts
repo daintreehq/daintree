@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { SnapshotBuilder, type SnapshotBuilderHost } from "../SnapshotBuilder.js";
+import type { PluginWorktreeLinked } from "../../../shared/types/plugin.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 
 function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilderHost {
   return {
@@ -260,5 +262,93 @@ describe("SnapshotBuilder", () => {
     expect(
       new SnapshotBuilder(makeHost({ isExternal: undefined })).build().isExternal
     ).toBeUndefined();
+  });
+
+  describe("an issue number the linked PR already carries (#12381)", () => {
+    function githubPr(number: number): PluginWorktreeLinked {
+      return {
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        pr: {
+          ref: {
+            providerId: BUILTIN_GITHUB_PROVIDER_ID,
+            owner: "daintreehq",
+            repo: "daintree",
+            number,
+            rawData: null,
+          },
+          title: "Native Daintree assistant",
+          url: `https://github.com/daintreehq/daintree/pull/${number}`,
+          state: "open",
+        },
+      };
+    }
+
+    it("drops the phantom issue and its title but keeps the PR", () => {
+      const snapshot = new SnapshotBuilder(
+        makeHost({
+          issueNumber: 12189,
+          issueTitle: "Stale title",
+          branchDerivedTitle: "Native daintree assistant",
+          linked: githubPr(12189),
+        })
+      ).build();
+
+      expect(snapshot.issueNumber).toBeUndefined();
+      expect(snapshot.issueTitle).toBeUndefined();
+      expect(snapshot.prNumber).toBe(12189);
+      expect(snapshot.prTitle).toBe("Native Daintree assistant");
+      expect(snapshot.linked?.pr?.ref.number).toBe(12189);
+      // Every issue surface already gates on the number; the branch still
+      // names the work for labels that fall back to it.
+      expect(snapshot.branchDerivedTitle).toBe("Native daintree assistant");
+    });
+
+    it("keeps a parsed issue with a different number beside the PR (#8851)", () => {
+      const snapshot = new SnapshotBuilder(
+        makeHost({
+          issueNumber: 8851,
+          branchDerivedTitle: "Sidebar shows branch",
+          linked: githubPr(12189),
+        })
+      ).build();
+
+      expect(snapshot.issueNumber).toBe(8851);
+      expect(snapshot.branchDerivedTitle).toBe("Sidebar shows branch");
+      expect(snapshot.prNumber).toBe(12189);
+    });
+
+    it("keeps an equal-numbered issue on a forge that numbers merge requests separately", () => {
+      const snapshot = new SnapshotBuilder(
+        makeHost({
+          issueNumber: 12,
+          linked: {
+            providerId: "acme.gitlab",
+            pr: {
+              ref: {
+                providerId: "acme.gitlab",
+                owner: "acme",
+                repo: "demo",
+                number: 12,
+                rawData: null,
+              },
+              url: "https://gitlab.acme.test/acme/demo/-/merge_requests/12",
+              state: "open",
+            },
+          },
+        })
+      ).build();
+
+      expect(snapshot.issueNumber).toBe(12);
+      expect(snapshot.prNumber).toBe(12);
+    });
+
+    it("keeps the issue when only legacy flat PR fields carry the number", () => {
+      const snapshot = new SnapshotBuilder(
+        makeHost({ issueNumber: 12189, prNumber: 12189 })
+      ).build();
+
+      expect(snapshot.issueNumber).toBe(12189);
+      expect(snapshot.prNumber).toBe(12189);
+    });
   });
 });
