@@ -503,10 +503,15 @@ function DragOverlayWithCursorTracking({
 
   return (
     <DragOverlay
+      // Reduced motion drops the travelling ghost on release as well as the
+      // entry spring — `getUiAnimationDuration()` only collapses for
+      // performance mode, not for the OS preference.
       dropAnimation={
-        isCancelDrop
-          ? { duration: PANEL_RESTORE_DURATION, easing: EASE_OUT_EXPO, sideEffects: null }
-          : { duration: getUiAnimationDuration(), easing: EASE_SNAPPY, sideEffects: null }
+        prefersReducedMotion
+          ? null
+          : isCancelDrop
+            ? { duration: PANEL_RESTORE_DURATION, easing: EASE_OUT_EXPO, sideEffects: null }
+            : { duration: getUiAnimationDuration(), easing: EASE_SNAPPY, sideEffects: null }
       }
       modifiers={activeModifiers}
     >

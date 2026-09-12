@@ -164,7 +164,7 @@ function FixtureRow({
 }) {
   const title = worktree.issueTitle ?? worktree.branch ?? worktree.name;
   return (
-    <div className="mx-2 my-0.5 flex items-start gap-2 rounded-md border border-border-default bg-surface-panel px-2 py-2">
+    <div className="mx-0.5 my-0.5 flex items-start gap-2 rounded-md border border-border-default bg-surface-panel px-2 py-2">
       <button
         type="button"
         ref={activatorRef}

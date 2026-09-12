@@ -4,6 +4,8 @@
 // dropAnimation prop so we can assert success and cancel branches use
 // the right motion tokens. Following the same harness pattern as
 // DndProvider.cancelDrop.test.ts and DndProvider.trashDrop.test.ts.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -27,7 +29,11 @@ type DropAnimationConfig = {
  * Must call getUiAnimationDuration() at invocation time so it reads the
  * live `document.body.dataset.performanceMode` flag.
  */
-function dropAnimation(isCancelDrop: boolean): DropAnimationConfig {
+function dropAnimation(
+  isCancelDrop: boolean,
+  prefersReducedMotion = false
+): DropAnimationConfig | null {
+  if (prefersReducedMotion) return null;
   return isCancelDrop
     ? { duration: PANEL_RESTORE_DURATION, easing: EASE_OUT_EXPO, sideEffects: null }
     : { duration: getUiAnimationDuration(), easing: EASE_SNAPPY, sideEffects: null };
@@ -38,6 +44,23 @@ function dropAnimation(isCancelDrop: boolean): DropAnimationConfig {
 describe("DragOverlay dropAnimation config", () => {
   afterEach(() => {
     delete document.body.dataset.performanceMode;
+  });
+
+  // dnd-kit runs the drop animation through WAAPI, which CSS reduced-motion
+  // rules never reach — so the OS preference has to disable it here, for the
+  // snap-back as well as the settle, the same way it already skips the entry
+  // spring.
+  it("disables the travelling ghost entirely under reduced motion", () => {
+    expect(dropAnimation(false, true)).toBeNull();
+    expect(dropAnimation(true, true)).toBeNull();
+  });
+
+  // The replica above cannot see the real prop, so pin the gate at the source:
+  // the DragOverlay's dropAnimation must short-circuit on the same reduced-motion
+  // flag the entry spring already reads.
+  it("wires the reduced-motion gate onto the real DragOverlay", () => {
+    const source = readFileSync(resolve(__dirname, "../DndProvider.tsx"), "utf8");
+    expect(source).toMatch(/dropAnimation=\{(?:\s|\/\/[^\n]*)*prefersReducedMotion\s*\?\s*null/);
   });
 
   it("uses Tier 1 snap motion (150ms EASE_SNAPPY) on successful drops", () => {

@@ -7,6 +7,8 @@ import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
 } from "@/components/Worktree/terminalStateConfig";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 interface TerminalDragPreviewProps {
@@ -17,14 +19,14 @@ interface TerminalDragPreviewProps {
 
 // Fixed dimensions of the drag ghost. Exported so the DragOverlay cursor
 // modifier can center on the preview's real size — the overlay wrapper rect
-// reflects the dragged panel's (much larger) dimensions, not this box.
+// reflects the dragged panel's (much larger) dimensions, not this box. Kept in
+// px, not the rem scale, so the modifier and the box can never disagree.
 export const TERMINAL_DRAG_PREVIEW_WIDTH = 240;
 export const TERMINAL_DRAG_PREVIEW_HEIGHT = 140;
 
 export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPreviewProps) {
   // Drag visual color mirrors the same chrome descriptor used by tabs/panels.
   const chrome = deriveTerminalChrome(terminal);
-  const brandColor = chrome.color;
   const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
@@ -32,110 +34,52 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
 
   return (
     <div
-      style={{
-        width: TERMINAL_DRAG_PREVIEW_WIDTH,
-        height: TERMINAL_DRAG_PREVIEW_HEIGHT,
-        backgroundColor: "var(--color-surface-sidebar)",
-        border: "1px solid var(--color-border-default)",
-        borderRadius: "var(--radius-lg)",
-        boxShadow: "var(--theme-shadow-floating)",
-        overflow: "visible",
-        display: "flex",
-        flexDirection: "column",
-        position: "relative",
-      }}
+      className="relative rounded-lg border border-border-default bg-surface-panel shadow-[var(--theme-shadow-floating)]"
+      style={{ width: TERMINAL_DRAG_PREVIEW_WIDTH, height: TERMINAL_DRAG_PREVIEW_HEIGHT }}
     >
-      {/* Group tab count badge */}
+      {/* Group tab count. Sits outside the clipping wrapper so it can overhang the corner. */}
       {isGroupDrag && (
-        <div
-          style={{
-            position: "absolute",
-            top: -8,
-            right: -8,
-            backgroundColor: "var(--color-text-primary)",
-            color: "var(--color-surface-canvas)",
-            borderRadius: "9999px",
-            padding: "2px 6px",
-            fontSize: "var(--text-3xs)",
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: 3,
-            boxShadow: "var(--theme-shadow-ambient)",
-            fontVariantNumeric: "tabular-nums",
-            zIndex: 10,
-          }}
+        <Badge
+          size="xs"
+          shape="pill"
+          className="absolute -top-2 -right-2 z-10 gap-0.5 bg-text-primary text-surface-canvas shadow-[var(--theme-shadow-ambient)] tabular-nums"
         >
-          <Layers style={{ width: 10, height: 10 }} aria-hidden="true" />
+          <Layers aria-hidden="true" />
           <span>{groupTabCount}</span>
-        </div>
+        </Badge>
       )}
-      {/* Title bar */}
-      <div
-        style={{
-          height: 24,
-          padding: "0 8px",
-          backgroundColor: "var(--color-border-default)",
-          borderBottom: "1px solid var(--color-surface-highlight)",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          flexShrink: 0,
-        }}
-      >
-        {/* Icon */}
+      <div className="flex h-full flex-col overflow-hidden rounded-lg">
+        {/* Title bar — the panel header's own recipe, so the ghost reads as the lifted panel */}
         <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            backgroundColor: brandColor || "var(--color-text-primary)",
-            flexShrink: 0,
-          }}
-        />
-
-        {/* Title text */}
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "var(--text-2xs)",
-            fontWeight: 500,
-            color: "var(--color-text-primary)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            flex: 1,
-          }}
+          className={cn(
+            "flex h-8 shrink-0 items-center gap-2 border-b border-border-strong/30 bg-overlay-medium px-3 text-xs",
+            // Clear the badge so it never covers the state glyph.
+            isGroupDrag && "pr-7"
+          )}
         >
-          {terminal.title}
-        </span>
+          <TerminalIcon kind={terminal.kind} chrome={chrome} className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate font-medium text-text-primary">
+            {terminal.title}
+          </span>
+          {StateIcon && displayAgentState && (
+            <StateIcon
+              className={cn(
+                "h-3 w-3 shrink-0",
+                getEffectiveStateColor(displayAgentState),
+                displayAgentState === "working" && "animate-spin-slow",
+                "motion-reduce:animate-none"
+              )}
+              aria-hidden="true"
+            />
+          )}
+        </div>
 
-        {StateIcon && displayAgentState && (
-          <StateIcon
-            className={cn(
-              "w-3 h-3 shrink-0",
-              getEffectiveStateColor(displayAgentState),
-              displayAgentState === "working" && "animate-spin-slow",
-              "motion-reduce:animate-none"
-            )}
-            aria-hidden="true"
+        <div className="flex flex-1 flex-col p-3">
+          <PlaceholderContent
+            kind={terminal.kind ?? "terminal"}
+            agentId={chrome.agentId ?? undefined}
           />
-        )}
-      </div>
-
-      {/* Panel body (ghost content) */}
-      <div
-        style={{
-          flex: 1,
-          padding: 8,
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <PlaceholderContent
-          kind={terminal.kind ?? "terminal"}
-          agentId={chrome.agentId ?? undefined}
-        />
+        </div>
       </div>
     </div>
   );

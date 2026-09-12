@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./dndPlaceholderContext";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PlaceholderContent } from "./PlaceholderContent";
+import { DROP_SLOT_FRAME } from "./dropIndicator";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 interface GridPlaceholderProps {
@@ -14,43 +15,43 @@ interface GridPlaceholderProps {
 export function GridPlaceholder({ className }: GridPlaceholderProps) {
   const { activeTerminal } = useDndPlaceholder();
 
-  // Fallback: render simple background if terminal data unavailable
-  if (!activeTerminal) {
-    return <div className={cn("h-full rounded-[var(--radius-lg)] bg-daintree-bg/50", className)} />;
-  }
-
-  const { title, kind } = activeTerminal;
   // Drag visuals mirror chrome: live detection only. A demoted shell dragged
   // across the grid shows plain-terminal styling even though it was launched
   // as an agent — matches what the tab looks like right now.
-  const chrome = deriveTerminalChrome(activeTerminal);
+  const chrome = activeTerminal ? deriveTerminalChrome(activeTerminal) : null;
 
   return (
     <div
       className={cn(
-        "h-full w-full rounded flex flex-col overflow-hidden",
-        "border border-border-strong bg-overlay-subtle",
+        "flex h-full w-full flex-col overflow-hidden rounded-lg",
+        DROP_SLOT_FRAME,
         "animate-in fade-in duration-200",
         className
       )}
       aria-hidden="true"
     >
-      {/* Ghost Handle / Header */}
-      <div
-        className={cn(
-          "flex items-center gap-2 px-3 h-7 shrink-0 font-mono text-xs",
-          "bg-overlay-medium border-b border-border-strong/30"
+      {/* Ghost header — the panel header's own recipe (h-8, sans, medium) so the
+          slot reads as the panel that is about to land in it. When the active
+          panel is unknown the bar stays, empty: the destination boundary never
+          depends on identity data. */}
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border-strong/30 bg-overlay-medium px-3 text-xs">
+        {activeTerminal && chrome && (
+          <>
+            <TerminalIcon
+              kind={activeTerminal.kind}
+              chrome={chrome}
+              className="h-3.5 w-3.5 shrink-0"
+            />
+            <span className="truncate font-medium text-text-secondary">{activeTerminal.title}</span>
+          </>
         )}
-      >
-        <span className="shrink-0 flex items-center justify-center text-daintree-text/50">
-          <TerminalIcon kind={kind} chrome={chrome} className="w-3.5 h-3.5" />
-        </span>
-        <span className="font-medium text-text-secondary truncate">{title}</span>
       </div>
 
-      {/* Panel-specific placeholder body */}
-      <div className="flex-1 w-full p-3">
-        <PlaceholderContent kind={kind ?? "terminal"} agentId={chrome.agentId ?? undefined} />
+      <div className="flex w-full flex-1 flex-col p-3">
+        <PlaceholderContent
+          kind={activeTerminal?.kind ?? "unknown"}
+          agentId={chrome?.agentId ?? undefined}
+        />
       </div>
     </div>
   );

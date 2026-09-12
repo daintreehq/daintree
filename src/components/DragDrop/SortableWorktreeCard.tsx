@@ -4,6 +4,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { cn } from "@/lib/utils";
 import { getWorktreeSidebarRowId } from "@/components/Sidebar/useWorktreeSidebarKeyboard";
+import { DROP_INDICATOR_LINE } from "./dropIndicator";
 
 export interface WorktreeSortDragData {
   type: "worktree-sort";
@@ -151,7 +152,8 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
           aria-hidden="true"
           data-worktree-drop-indicator={dropDirection}
           className={cn(
-            "pointer-events-none absolute inset-x-0 z-10 h-0.5 bg-border-strong",
+            DROP_INDICATOR_LINE,
+            "inset-x-0 h-0.5",
             dropDirection === "above" ? "-top-px" : "-bottom-px"
           )}
         />
