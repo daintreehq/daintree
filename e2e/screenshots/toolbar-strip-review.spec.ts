@@ -281,6 +281,9 @@ async function step(page: Page | null, name: string, fn: () => Promise<void>): P
       .catch(() => {});
     await page.emulateMedia({ forcedColors: "none", contrast: "no-preference" }).catch(() => {});
     await page.setViewportSize(WIDE).catch(() => {});
+    // A step that clicked a button leaves the pointer on it, and the next
+    // capture would show that button hovered.
+    await page.mouse.move(WIDE.width / 2, WIDE.height - 20).catch(() => {});
     await settle(page, 300).catch(() => {});
   }
 }
@@ -713,9 +716,20 @@ test("toolbar strip review — every state of the strip", async () => {
         await snapStrip(page, "12-long-names");
       } finally {
         await page
-          .locator(SEL.worktree.mainCard)
-          .first()
-          .click()
+          .evaluate(async () => {
+            const w = window as unknown as {
+              __DAINTREE_E2E_WORKTREES__?: () => Array<{ id: string; branch: string }>;
+              __daintreeDispatchAction?: (id: string, payload: unknown, o: unknown) => unknown;
+            };
+            const main = w.__DAINTREE_E2E_WORKTREES__?.().find((t) => t.branch === "main");
+            if (main) {
+              await w.__daintreeDispatchAction?.(
+                "worktree.select",
+                { worktreeId: main.id },
+                { source: "test" }
+              );
+            }
+          })
           .catch(() => {});
         await rename(PROJECT_NAME);
       }
@@ -744,7 +758,9 @@ test("toolbar strip review — every state of the strip", async () => {
       await seedComposition(page, ALT_LEFT, ALT_RIGHT);
       await seedSignals(page);
       await expect(page.locator(BUTTON("settings")).first()).toBeVisible({ timeout: 10_000 });
-      await expectNoOverflow(page);
+      // No fit assertion: with an agent and four panel buttons moved right,
+      // this composition earns two dividers and may overflow even at 1680px.
+      // Whether it does is part of what the capture is for.
       await snapStrip(page, "15-composition-alt");
     });
 
