@@ -616,17 +616,17 @@ interface PickerCheckboxProps {
 
 /** Shape, fill and border — shared so the glyph and the real control cannot drift apart. */
 const CHECKBOX_CLASS = cn(
-        // `rounded-xs`, never the repo's bare `rounded` — that resolves to the
-        // 10px `--radius-lg` value, which on a 16px box is a full circle and
-        // told every user this multi-select list was single-select.
-        "relative flex shrink-0 w-4 h-4 rounded-xs border transition-colors duration-150",
-        // `border-text-secondary`, not `border-border-strong`: the unchecked
-        // ring measured ~1.4:1 against the row, under the 3:1 non-text floor,
-        // so the un-picked rows — the ones the user has to act on — were the
-        // hardest things on the surface to find.
-        "bg-surface-canvas border-text-secondary",
-        "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
-        "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary",
+  // `rounded-xs`, never the repo's bare `rounded` — that resolves to the
+  // 10px `--radius-lg` value, which on a 16px box is a full circle and
+  // told every user this multi-select list was single-select.
+  "relative flex shrink-0 w-4 h-4 rounded-xs border transition-colors duration-150",
+  // `border-text-secondary`, not `border-border-strong`: the unchecked
+  // ring measured ~1.4:1 against the row, under the 3:1 non-text floor,
+  // so the un-picked rows — the ones the user has to act on — were the
+  // hardest things on the surface to find.
+  "bg-surface-canvas border-text-secondary",
+  "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
+  "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary",
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
 );
 

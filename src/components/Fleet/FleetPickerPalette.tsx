@@ -313,7 +313,9 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                   // added; without this the button stayed enabled on a selection
                   // that was already entirely armed, and closed having done
                   // nothing.
-                  disabled={commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0}
+                  disabled={
+                    commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0
+                  }
                   data-testid="fleet-picker-cold-start-confirm"
                   className={cn(
                     // Neutral high-contrast, the house primary treatment

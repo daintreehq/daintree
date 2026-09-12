@@ -357,7 +357,13 @@ async function seedFleet(page: Page): Promise<void> {
  * at a time.
  */
 async function openPicker(page: Page): Promise<void> {
-  if (await page.locator(PICKER).isVisible().catch(() => false)) return;
+  if (
+    await page
+      .locator(PICKER)
+      .isVisible()
+      .catch(() => false)
+  )
+    return;
   await dismissBlockingPalette(page).catch(() => {});
   await page.locator(SIDEBAR_HEADING).first().hover();
   await settle(page, 200);
@@ -437,7 +443,10 @@ test("fleet picker review — every state that carries design weight", async () 
       // entirely (`isSingleWorktree`), and the sweep would quietly document a
       // flat list as though that were the design. Fail loudly instead.
       const groups = await page.locator(`[data-testid^="${TID}-group-"]`).count();
-      expect(groups, "fixture produced one group — the picker collapsed to its single-worktree layout").toBeGreaterThan(1);
+      expect(
+        groups,
+        "fixture produced one group — the picker collapsed to its single-worktree layout"
+      ).toBeGreaterThan(1);
       await snapSurface(page, "10-rest");
     });
 

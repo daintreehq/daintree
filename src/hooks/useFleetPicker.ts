@@ -610,10 +610,11 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       // controls — the filtered-empty state's "Clear search" button sits inside
       // it — and swallowing Enter there turned a recovery click into a commit
       // of the very selection the filter was hiding.
-      const target = e.target as HTMLElement;
-      if (target !== e.currentTarget && !target.closest('[role="treeitem"]')) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (!target) return;
+      const node = target.closest<HTMLElement>('[role="treeitem"]');
+      if (target !== e.currentTarget && !node) return;
 
-      const node = target.closest('[role="treeitem"]');
       const isGroupNode = node?.hasAttribute("data-group-header") ?? false;
 
       if (e.key === "Enter") {
@@ -621,7 +622,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         // Enter on a group header toggles that group; the header is a control
         // in its own right, and committing from it would be a surprise.
         if (isGroupNode) {
-          (node as HTMLElement).click();
+          node?.click();
           return;
         }
         confirmRef.current();
@@ -632,7 +633,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         // Let the header's own click handler own its toggle. Without this the
         // key fell through and toggled whichever ROW `focusedId` pointed at.
         e.preventDefault();
-        (node as HTMLElement).click();
+        node?.click();
         return;
       }
 
@@ -649,7 +650,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         // down the list passes through the worktree headings exactly as the eye
         // does, and can toggle a whole worktree from there.
         if (navKeys.length > 0) {
-          const currentNav = node ? navKeyForElement(node as HTMLElement) : null;
+          const currentNav = node ? navKeyForElement(node) : null;
           const idx = currentNav ? navKeys.indexOf(currentNav) : -1;
           if (isGroupNode || idx !== -1) {
             e.preventDefault();
@@ -743,7 +744,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         });
       }
     },
-    [flatVisibleIds, focusedId, visibleIds, focusRow]
+    [flatVisibleIds, focusedId, visibleIds, navKeys, navKeyForElement, focusNavIndex]
   );
 
   const handleConfirm = useCallback(() => {
