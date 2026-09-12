@@ -1049,11 +1049,18 @@ export function AppLayout({
       {themeBrowserOpen &&
         createPortal(
           <>
-            {/* Opacity-only scrim: a hover-animated backdrop-filter here forced
-                a full-viewport blur re-rasterization on every underlying frame
-                exactly while the live theme preview is repainting beneath it. */}
+            {/* Interaction shield. Deliberately NOT a backdrop-filter: this
+                panel's whole purpose is judging a theme against the real
+                workspace, and blurring or heavily tinting the workspace
+                destroys the thing being judged. `backdrop-filter` also samples
+                the LIVE backdrop, so with agent terminals repainting behind it
+                the filter reprocesses whether or not the radius is animated —
+                which is why the hover blur was removed in the first place.
+                The non-interactive cue is carried by the dialog's own
+                "Live preview" line plus a click-away that cancels. */}
             <div
               aria-hidden="true"
+              onClick={() => useThemeBrowserStore.getState().close()}
               className="fixed inset-0 z-30 bg-scrim-soft/30 transition-colors duration-150 hover:bg-scrim-soft/45"
             />
             <ErrorBoundary

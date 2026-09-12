@@ -53,11 +53,33 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
   it("renders scrim as a sibling of the panel, not an ancestor", () => {
     // Bug 2: backdrop-filter on an ancestor creates a containing block for
     // position:fixed children (lesson #2574). The scrim must be a flat sibling
-    // of the panel. The hover cue is opacity-only (no backdrop-filter at all):
-    // an animated full-viewport blur re-rasterized on every frame of the live
-    // theme preview underneath.
+    // of the panel.
     expect(source).toMatch(/className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*"/);
-    expect(source).not.toMatch(/hover:backdrop-blur/);
+  });
+
+  it("keeps every backdrop-filter off the theme-browser shield", () => {
+    // The rule is about the FILTER, not about one utility spelling. A
+    // backdrop-filter samples the live backdrop, so behind this particular
+    // shield — agent terminals repainting, and the theme itself being
+    // repainted by the live preview — it reprocesses whether or not its radius
+    // is animated. Dropping the transition does not bound the work, which is
+    // why restoring a "discrete" hover blur here is not the cheaper option it
+    // looks like. It also blurs the exact thing the user opened the panel to
+    // judge. The non-interactive cue is carried by the dialog's own copy and by
+    // click-away, both asserted below.
+    const shield = source.match(/className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*"/)?.[0] ?? "";
+    expect(shield).not.toMatch(/backdrop-blur|backdrop-filter|backdrop-saturate/);
+    expect(shield).not.toMatch(/transition-\[?backdrop/);
+  });
+
+  it("cancels the preview when the shield is clicked", () => {
+    // Click-away must dismiss: the panel is modal, the app behind it is inert,
+    // and a click that lands on the shield with no effect reads as a frozen
+    // app. Closing unmounts ThemeBrowser, whose cleanup restores the committed
+    // theme — so dismissal and preview-revert are the same path.
+    expect(source).toMatch(
+      /className="fixed inset-0 z-30 bg-scrim-soft[\s\S]{0,400}?useThemeBrowserStore\.getState\(\)\.close\(\)|useThemeBrowserStore\.getState\(\)\.close\(\)[\s\S]{0,400}?className="fixed inset-0 z-30 bg-scrim-soft/
+    );
   });
 
   it("anchors the panel with fixed positioning below the toolbar", () => {

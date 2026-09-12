@@ -21,6 +21,8 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useOverlayClaim, useImageError } from "@/hooks";
 
 const PANEL_WIDTH = 380;
+const LISTBOX_ID = "theme-browser-listbox";
+const PREVIEW_HINT_ID = "theme-browser-preview-hint";
 const EMPTY_WARNINGS: AppThemeValidationWarning[] = [];
 
 // Sample a live row to measure row height, then divide viewport height.
@@ -38,45 +40,59 @@ function computeListPageSize(
   return Math.max(1, Math.floor(viewportHeight / sampleHeight));
 }
 
+/** Stable DOM id for a row, so the combobox can point at it. */
+function rowDomId(schemeId: string): string {
+  return `theme-option-${schemeId}`;
+}
+
 function ThemeRow({
   scheme,
+  effectiveScheme,
   isCommitted,
   isActive,
-  isKeyboardFocused,
   onSelect,
   warnings,
   onRowRef,
 }: {
   scheme: AppColorScheme;
+  effectiveScheme: AppColorScheme;
   isCommitted: boolean;
   isActive: boolean;
-  isKeyboardFocused: boolean;
   onSelect: (id: string) => void;
   warnings: AppThemeValidationWarning[];
-  onRowRef: (id: string, el: HTMLButtonElement | null) => void;
+  onRowRef: (id: string, el: HTMLDivElement | null) => void;
 }) {
   const { imgRef, error, onError } = useImageError(
     scheme.heroImage?.replace("/themes/", "/themes/thumb/")
   );
   const rowRef = useCallback(
-    (el: HTMLButtonElement | null) => {
+    (el: HTMLDivElement | null) => {
       onRowRef(scheme.id, el);
     },
     [onRowRef, scheme.id]
   );
 
   return (
-    <button
+    <div
       ref={rowRef}
-      type="button"
+      id={rowDomId(scheme.id)}
       role="option"
+      // Two separate facts, two separate attributes — matching the eight other
+      // palettes in the app and the shared row CSS (ui/paletteRowStyles.ts):
+      // aria-selected is the CURSOR (selection follows the active descendant,
+      // per the APG combobox pattern), aria-current is what is actually SAVED.
+      // Collapsing them is what makes a picker unable to say "you are running
+      // this one, but you are currently trying that one".
       aria-selected={isActive}
-      tabIndex={isKeyboardFocused ? 0 : -1}
+      aria-current={isCommitted ? "true" : undefined}
       onClick={() => onSelect(scheme.id)}
       className={cn(
-        "w-full flex items-center gap-2.5 px-2.5 py-2 text-left transition-colors",
-        "focus:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/60",
-        isActive ? "bg-daintree-accent/10" : "hover:bg-surface-hover"
+        "w-full flex items-center gap-2.5 px-2.5 py-2 text-left cursor-pointer",
+        "transition-colors duration-150 ease-out",
+        isActive ? "bg-overlay-selected" : "hover:bg-surface-hover",
+        // The preview marker is a neutral inset rule, not an accent fill: the
+        // accent budget for this dialog is spent on the committed check.
+        isActive && "shadow-[inset_2px_0_0_0_var(--color-text-primary)]"
       )}
     >
       {scheme.heroImage && !error ? (
@@ -92,7 +108,7 @@ function ThemeRow({
         />
       ) : (
         <div
-          className="w-10 h-10 rounded-sm shrink-0 border border-daintree-border/50"
+          className="w-10 h-10 rounded-sm shrink-0 border border-border-default"
           style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
         />
       )}
@@ -106,15 +122,24 @@ function ThemeRow({
             </span>
           )}
         </div>
-        {scheme.location && (
-          <span className="text-2xs text-text-secondary truncate block">{scheme.location}</span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          {scheme.location && (
+            <span className="text-2xs text-text-secondary truncate">{scheme.location}</span>
+          )}
+        </div>
+      </div>
+      <PaletteStrip scheme={effectiveScheme} variant="compact" />
+      <div className="w-11 shrink-0 flex items-center justify-end">
+        {isCommitted ? (
+          <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-accent-primary">
+            <Check className="w-3 h-3" />
+            Current
+          </span>
+        ) : (
+          isActive && <span className="text-3xs text-text-secondary">Trying</span>
         )}
       </div>
-      <PaletteStrip scheme={scheme} />
-      <div className="w-4 shrink-0 flex items-center justify-center">
-        {isCommitted && <Check className="w-3.5 h-3.5 text-accent-primary" />}
-      </div>
-    </button>
+    </div>
   );
 }
 
@@ -142,7 +167,7 @@ export function ThemeBrowser() {
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const commitButtonRef = useRef<HTMLButtonElement>(null);
   const announceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -184,15 +209,18 @@ export function ThemeBrowser() {
     return byType.filter((s) => s.name.toLowerCase().includes(lowerQuery));
   }, [darkSchemes, lightSchemes, typeFilter, lowerQuery]);
 
-  const warningsByScheme = useMemo(
+  // The palette the app will ACTUALLY apply, override included. Swatches and
+  // warnings both read from this — showing a theme's built-in accent next to a
+  // warning computed from the overridden one would contradict itself.
+  const effectiveSchemes = useMemo(
     () =>
-      new Map(
-        allSchemes.map((scheme) => [
-          scheme.id,
-          getAppThemeWarnings(applyAccentOverrideToScheme(scheme, accentColorOverride)),
-        ])
-      ),
+      new Map(allSchemes.map((s) => [s.id, applyAccentOverrideToScheme(s, accentColorOverride)])),
     [allSchemes, accentColorOverride]
+  );
+
+  const warningsByScheme = useMemo(
+    () => new Map([...effectiveSchemes].map(([id, scheme]) => [id, getAppThemeWarnings(scheme)])),
+    [effectiveSchemes]
   );
 
   const [keyboardIndex, setKeyboardIndex] = useState<number>(() => {
@@ -317,9 +345,26 @@ export function ThemeBrowser() {
     };
   }, [clearAnnouncementTimer]);
 
+  // Focus into the filter on open, and hand focus back to whatever opened the
+  // dialog on close (APG dialog contract). The opener is only restored if it is
+  // still in the document: opening from Settings unmounts the Settings dialog,
+  // and that path is already handled by useThemeBrowserSettingsBridge reopening
+  // the Appearance tab — focusing a detached node would just strand the user on
+  // document.body.
   useEffect(() => {
+    const opener = document.activeElement;
     const rafId = requestAnimationFrame(() => searchInputRef.current?.focus());
-    return () => cancelAnimationFrame(rafId);
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (
+        opener instanceof HTMLElement &&
+        opener.isConnected &&
+        opener !== document.body &&
+        typeof opener.focus === "function"
+      ) {
+        opener.focus({ preventScroll: true });
+      }
+    };
   }, []);
 
   // Scroll the committed theme into view on open so the user lands at their
@@ -337,13 +382,26 @@ export function ThemeBrowser() {
     }
   }, []);
 
-  const focusRow = useCallback((schemeId: string) => {
+  // Scroll the active option into view WITHOUT moving DOM focus. Focus stays
+  // on the search input for the life of the dialog (the combobox pattern), so
+  // the user can arrow to a theme and then keep typing to narrow the list.
+  const revealRow = useCallback((schemeId: string) => {
     const node = rowRefs.current.get(schemeId);
-    if (node) node.focus();
+    if (node && typeof node.scrollIntoView === "function") {
+      node.scrollIntoView({ block: "nearest" });
+    }
   }, []);
 
   const handleListKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Escape is a two-stage dismiss for the whole dialog, not just the field:
+      // clear the query first, cancel only once there is nothing left to clear.
+      if (e.key === "Escape" && query !== "") {
+        e.stopPropagation();
+        e.preventDefault();
+        setQuery("");
+        return;
+      }
       if (filteredThemes.length === 0) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -352,7 +410,7 @@ export function ThemeBrowser() {
         const scheme = filteredThemes[next];
         if (scheme && scheme.id !== activeSchemeId) {
           handlePreview(scheme.id, true);
-          focusRow(scheme.id);
+          revealRow(scheme.id);
         }
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
@@ -361,7 +419,7 @@ export function ThemeBrowser() {
         const scheme = filteredThemes[next];
         if (scheme && scheme.id !== activeSchemeId) {
           handlePreview(scheme.id, true);
-          focusRow(scheme.id);
+          revealRow(scheme.id);
         }
       } else if (e.key === "PageDown") {
         e.preventDefault();
@@ -373,7 +431,7 @@ export function ThemeBrowser() {
           const scheme = filteredThemes[next];
           if (scheme && scheme.id !== activeSchemeId) {
             handlePreview(scheme.id, true);
-            focusRow(scheme.id);
+            revealRow(scheme.id);
           }
         }
       } else if (e.key === "PageUp") {
@@ -386,7 +444,7 @@ export function ThemeBrowser() {
           const scheme = filteredThemes[next];
           if (scheme && scheme.id !== activeSchemeId) {
             handlePreview(scheme.id, true);
-            focusRow(scheme.id);
+            revealRow(scheme.id);
           }
         }
       } else if (e.key === "Enter") {
@@ -394,18 +452,13 @@ export function ThemeBrowser() {
         void handleCommit();
       }
     },
-    [filteredThemes, focusRow, handleCommit, handlePreview, keyboardIndex, activeSchemeId]
+    [filteredThemes, revealRow, handleCommit, handlePreview, keyboardIndex, activeSchemeId, query]
   );
 
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Escape" && query !== "") {
-        e.stopPropagation();
-        e.preventDefault();
-        setQuery("");
-        return;
-      }
       if (
+        e.key === "Escape" ||
         e.key === "ArrowDown" ||
         e.key === "ArrowUp" ||
         e.key === "PageDown" ||
@@ -415,11 +468,30 @@ export function ThemeBrowser() {
         handleListKeyDown(e as unknown as React.KeyboardEvent<HTMLDivElement>);
       }
     },
-    [handleListKeyDown, query]
+    [handleListKeyDown]
   );
 
+  // A pointer click is a navigation event too: without this the keyboard
+  // cursor stays where it was, so clicking the last row and pressing ArrowDown
+  // jumps back to the second row instead of continuing from the click.
+  const handleSelect = useCallback(
+    (id: string) => {
+      const index = filteredThemes.findIndex((s) => s.id === id);
+      if (index >= 0) setKeyboardIndex(index);
+      handlePreview(id);
+    },
+    [filteredThemes, handlePreview]
+  );
+
+  // The option the combobox points at. Only meaningful while that option is
+  // actually in the filtered list — a stale id would leave screen readers
+  // announcing a row the user can no longer see.
+  const activeRowId = filteredThemes.some((s) => s.id === activeSchemeId)
+    ? rowDomId(activeSchemeId)
+    : undefined;
+
   const isEmpty = filteredThemes.length === 0;
-  const registerRowRef = useCallback((id: string, el: HTMLButtonElement | null) => {
+  const registerRowRef = useCallback((id: string, el: HTMLDivElement | null) => {
     if (el) rowRefs.current.set(id, el);
     else rowRefs.current.delete(id);
   }, []);
@@ -431,6 +503,7 @@ export function ThemeBrowser() {
       role="dialog"
       aria-modal="true"
       aria-label="Theme browser"
+      aria-describedby={PREVIEW_HINT_ID}
     >
       {/* Sticky hero */}
       <div className="relative h-[200px] shrink-0 overflow-hidden">
@@ -449,14 +522,14 @@ export function ThemeBrowser() {
               backgroundColor: activeScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
             }}
           >
-            <PaletteStrip scheme={activeScheme} />
+            <PaletteStrip scheme={effectiveSchemes.get(activeScheme.id) ?? activeScheme} />
           </div>
         )}
         <button
           type="button"
           onClick={handleCancel}
           aria-label="Close theme browser"
-          className="absolute top-2 right-2 p-1 rounded-full bg-scrim-medium text-white/90 hover:bg-scrim-strong transition-colors"
+          className="absolute top-2 right-2 p-1 rounded-full bg-scrim-strong text-white hover:bg-overlay-strong transition-colors duration-150 ease-out"
         >
           <X className="w-4 h-4" />
         </button>
@@ -468,7 +541,7 @@ export function ThemeBrowser() {
             {activeScheme.name}
           </span>
           {activeScheme.location && (
-            <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+            <span className="text-2xs text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
               {activeScheme.location}
             </span>
           )}
@@ -477,22 +550,33 @@ export function ThemeBrowser() {
 
       {/* Search + type filter */}
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
-        <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent/40">
-          <Search className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none" />
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <Search className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none" />
           <input
             ref={searchInputRef}
-            type="search"
+            type="text"
+            role="combobox"
+            aria-expanded
+            aria-controls={LISTBOX_ID}
+            aria-activedescendant={activeRowId}
+            aria-autocomplete="list"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleSearchKeyDown}
-            placeholder="Filter themes..."
+            placeholder="Filter themes"
             aria-label="Filter themes"
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder"
           />
         </div>
-        <div className="flex rounded-[var(--radius-md)] border border-border-default overflow-hidden shrink-0">
+        <div
+          role="radiogroup"
+          aria-label="Appearance mode"
+          className="flex rounded-[var(--radius-md)] border border-border-default overflow-hidden shrink-0"
+        >
           <button
             type="button"
+            role="radio"
+            aria-checked={typeFilter === "dark"}
             onClick={() => {
               if (typeFilter === "dark") return;
               // Switching filter away from the previewed type hides the
@@ -505,7 +589,7 @@ export function ThemeBrowser() {
             className={cn(
               "px-2.5 py-0.5 text-2xs font-medium transition-colors",
               typeFilter === "dark"
-                ? "bg-daintree-accent/15 text-text-primary"
+                ? "bg-overlay-selected text-text-primary"
                 : "text-text-secondary hover:text-text-primary"
             )}
           >
@@ -513,6 +597,8 @@ export function ThemeBrowser() {
           </button>
           <button
             type="button"
+            role="radio"
+            aria-checked={typeFilter === "light"}
             onClick={() => {
               if (typeFilter === "light") return;
               revertPreview();
@@ -521,7 +607,7 @@ export function ThemeBrowser() {
             className={cn(
               "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default",
               typeFilter === "light"
-                ? "bg-daintree-accent/15 text-text-primary"
+                ? "bg-overlay-selected text-text-primary"
                 : "text-text-secondary hover:text-text-primary"
             )}
           >
@@ -530,30 +616,33 @@ export function ThemeBrowser() {
         </div>
       </div>
 
-      {/* Scrollable theme list. `min-h-0` is required for a flex child to
-          allow `overflow-y-auto` to kick in instead of pushing the list past
-          the panel bounds. */}
+      {/* Scrollable theme list, sized to its content rather than to the panel.
+          `shrink` (grow 0, shrink 1) keeps the list as tall as its rows when
+          they fit and lets it collapse into a scroller when they don't, so the
+          action bar stays next to the choices instead of being stranded at the
+          bottom of a tall window. `min-h-0` is what lets a flex child actually
+          scroll instead of pushing past the panel bounds. */}
       <div
         ref={listRef}
+        id={LISTBOX_ID}
         role="listbox"
         aria-label="Theme list"
-        tabIndex={-1}
         onKeyDown={handleListKeyDown}
-        className="flex-1 overflow-y-auto min-h-0"
+        className="shrink min-h-0 overflow-y-auto"
       >
         {isEmpty ? (
           <p className="text-xs text-text-secondary text-center py-4">
             No themes match your search.
           </p>
         ) : (
-          filteredThemes.map((scheme, index) => (
+          filteredThemes.map((scheme) => (
             <ThemeRow
               key={scheme.id}
               scheme={scheme}
+              effectiveScheme={effectiveSchemes.get(scheme.id) ?? scheme}
               isCommitted={scheme.id === selectedSchemeId}
               isActive={scheme.id === activeSchemeId}
-              isKeyboardFocused={index === keyboardIndex}
-              onSelect={handlePreview}
+              onSelect={handleSelect}
               warnings={warningsByScheme.get(scheme.id) ?? EMPTY_WARNINGS}
               onRowRef={registerRowRef}
             />
@@ -569,7 +658,13 @@ export function ThemeBrowser() {
           (near-white fill + off-black text on dark themes, near-black fill +
           off-white text on light) so it's highly visible and never restyles to
           the previewed accent. */}
-      <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-border-default bg-surface-canvas shrink-0">
+      <div className="flex items-center gap-2 px-2.5 py-2 border-t border-border-default bg-surface-canvas shrink-0">
+        {/* The app behind this panel is showing a live preview and is not
+            interactive. Saying so is what the scrim alone cannot do — and it
+            says it without tinting or blurring the very thing being judged. */}
+        <p id={PREVIEW_HINT_ID} className="flex-1 min-w-0 text-2xs text-text-secondary">
+          Live preview — the app behind is paused while you choose
+        </p>
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
         </Button>
