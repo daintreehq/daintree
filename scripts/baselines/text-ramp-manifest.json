@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-12",
-  "total": 407,
-  "files": 157,
+  "total": 406,
+  "files": 156,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -707,21 +707,6 @@
       "decision": "keep",
       "category": "semantic-state-pair",
       "evidence": "another branch already paints text-text-primary here; the band role would erase the difference"
-    },
-    {
-      "file": "src/components/DragDrop/GridPlaceholder.tsx",
-      "ordinal": 0,
-      "line": 45,
-      "start": 1672,
-      "end": 1693,
-      "token": "text-daintree-text/50",
-      "variants": "",
-      "step": 50,
-      "group": "src/components/DragDrop/GridPlaceholder.tsx#1618",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<span> wraps only icons — the colour paints a glyph through currentColor"
     },
     {
       "file": "src/components/FileViewer/FileViewerToolbar.tsx",

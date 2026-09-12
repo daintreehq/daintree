@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
+import { BUILT_IN_PANEL_KINDS } from "@shared/config/panelKindRegistry";
 import { PlaceholderContent } from "../PlaceholderContent";
 
 /**
@@ -46,5 +47,53 @@ describe("PlaceholderContent compact body gating (#11055)", () => {
     const compact = render(<PlaceholderContent kind="terminal" compact />);
     expect(full.container.querySelectorAll("[data-placeholder-body]")).toHaveLength(0);
     expect(compact.container.querySelectorAll("[data-placeholder-body]")).toHaveLength(0);
+  });
+});
+
+/** The illustration with every per-kind tint stripped, so only its shape remains. */
+function shape(kind: string): string {
+  const { container } = render(<PlaceholderContent kind={kind} />);
+  return container.innerHTML.replace(/ style="[^"]*"/g, "");
+}
+
+/**
+ * The header carries the identity; the illustration is what makes the ghost
+ * read as *this* kind of panel at a glance. Eight kinds used to collapse into
+ * the same three bars, so the rule is: no two kinds share a composition, and
+ * a kind the registry has never heard of is not dressed up as a terminal.
+ */
+describe("PlaceholderContent kind compositions", () => {
+  it("gives every built-in kind its own composition", () => {
+    const shapes = new Map(BUILT_IN_PANEL_KINDS.map((kind) => [kind, shape(kind)]));
+    for (const [kind, markup] of shapes) {
+      for (const [other, otherMarkup] of shapes) {
+        if (kind !== other) expect(markup, `${kind} vs ${other}`).not.toBe(otherMarkup);
+      }
+    }
+  });
+
+  it("does not impersonate a built-in kind for an unknown one", () => {
+    const unknown = shape("sticky-notes");
+    for (const kind of BUILT_IN_PANEL_KINDS) {
+      expect(unknown, `unknown vs ${kind}`).not.toBe(shape(kind));
+    }
+  });
+
+  it("keeps illustration geometry on the class scale, not in inline styles", () => {
+    for (const kind of [...BUILT_IN_PANEL_KINDS, "sticky-notes"]) {
+      for (const compact of [false, true]) {
+        const { container } = render(<PlaceholderContent kind={kind} compact={compact} />);
+        for (const el of container.querySelectorAll<HTMLElement>("[style]")) {
+          const props = (el.getAttribute("style") ?? "")
+            .split(";")
+            .map((d) => d.split(":")[0]!.trim())
+            .filter(Boolean);
+          for (const prop of props) {
+            // Bar widths are content (how long the line is), tints are the kind colour.
+            expect(prop === "width" || prop.startsWith("--ph-"), `${kind}: ${prop}`).toBe(true);
+          }
+        }
+      }
+    }
   });
 });

@@ -3,8 +3,6 @@ import {
   useCallback,
   useMemo,
   useRef,
-  createContext,
-  useContext,
   useEffect,
   type MouseEvent as ReactMouseEvent,
   type TouchEvent as ReactTouchEvent,
@@ -86,6 +84,7 @@ export const sameContainerKeyboardCoordinates: KeyboardCoordinateGetter = (event
 };
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
+import { DndPlaceholderContext, GRID_PLACEHOLDER_ID } from "./dndPlaceholderContext";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalDragPreview, TERMINAL_DRAG_PREVIEW_WIDTH } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
@@ -129,54 +128,18 @@ import {
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 // Placeholder ID used when dragging from dock to grid
-export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
 
 // Droppable ID for the trash pill — drop a panel here to trash it
 export const TRASH_DROPPABLE_ID = "__trash-droppable__";
 
-// Context to share placeholder state with ContentGrid
-interface DndPlaceholderContextValue {
-  placeholderIndex: number | null;
-  sourceContainer: "grid" | "dock" | null;
-  activeTerminal: PanelInstance | null;
-  isDragging: boolean;
-  isWorktreeSortDragging: boolean;
-  /** If dragging a tab group, the group ID */
-  activeGroupId: string | null;
-  /** If dragging a tab group, the panel IDs in the group */
-  activeGroupPanelIds: string[] | null;
-  /**
-   * True when the active drag can't be dropped in the dock — its kind, or ANY
-   * live member's kind for a group drag, is non-dockable (#11375). Consumers
-   * (the dock's `cursor-no-drop` cue) read this instead of re-checking the lone
-   * representative kind, so the cue matches what `cancelDrop`/`collisionDetection`
-   * actually enforce for a mixed group.
-   */
-  activeDragRejectsDock: boolean;
-}
-
-const DndPlaceholderContext = createContext<DndPlaceholderContextValue>({
-  placeholderIndex: null,
-  sourceContainer: null,
-  activeTerminal: null,
-  isDragging: false,
-  isWorktreeSortDragging: false,
-  activeGroupId: null,
-  activeGroupPanelIds: null,
-  activeDragRejectsDock: false,
-});
-
-export function useDndPlaceholder() {
-  return useContext(DndPlaceholderContext);
-}
-
-export function useIsDragging() {
-  return useContext(DndPlaceholderContext).isDragging;
-}
-
-export function useIsWorktreeSortDragging() {
-  return useContext(DndPlaceholderContext).isWorktreeSortDragging;
-}
+// Placeholder context lives in its own module so GridPlaceholder/DockPlaceholder
+// don't import this provider; re-exported here to keep the public surface.
+export {
+  useDndPlaceholder,
+  useIsDragging,
+  useIsWorktreeSortDragging,
+  GRID_PLACEHOLDER_ID,
+} from "./dndPlaceholderContext";
 
 // Minimum distance (px) pointer must move before drag starts
 // This allows clicks to work for popovers without triggering drag
@@ -540,10 +503,18 @@ function DragOverlayWithCursorTracking({
 
   return (
     <DragOverlay
+      // Reduced motion drops the travelling ghost on release as well as the
+      // entry spring — `getUiAnimationDuration()` only collapses for
+      // performance mode, not for the OS preference. A zero-duration config
+      // rather than `null`: dnd-kit returns before its scroll-into-view when
+      // the config is null, and a cancelled drag whose source scrolled away
+      // still has to come back to it.
       dropAnimation={
-        isCancelDrop
-          ? { duration: PANEL_RESTORE_DURATION, easing: EASE_OUT_EXPO, sideEffects: null }
-          : { duration: getUiAnimationDuration(), easing: EASE_SNAPPY, sideEffects: null }
+        prefersReducedMotion
+          ? { duration: 0, easing: EASE_SNAPPY, sideEffects: null }
+          : isCancelDrop
+            ? { duration: PANEL_RESTORE_DURATION, easing: EASE_OUT_EXPO, sideEffects: null }
+            : { duration: getUiAnimationDuration(), easing: EASE_SNAPPY, sideEffects: null }
       }
       modifiers={activeModifiers}
     >
