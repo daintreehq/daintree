@@ -321,7 +321,8 @@ describe("MissingPrerequisiteBanner", () => {
         await Promise.resolve();
       });
 
-      expect(await screen.findByText("Error: no such formula")).toBeTruthy();
+      // The tool's "Error:" prefix is stripped — the red band already says it.
+      expect(await screen.findByText("no such formula")).toBeTruthy();
       expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
     });
 

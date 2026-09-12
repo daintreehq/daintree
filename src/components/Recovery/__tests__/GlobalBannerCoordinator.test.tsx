@@ -197,7 +197,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
   });
 
   it("treats a dismissed safe mode as inactive and promotes restore", () => {
@@ -206,7 +206,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
   });
 
@@ -254,7 +254,7 @@ describe("GlobalBannerCoordinator", () => {
   it("switches from restore to safe mode reactively via store subscription", async () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
     render(<GlobalBannerCoordinator />);
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
 
     act(() => {
       useSafeModeStore.setState({ safeMode: true, dismissed: false });
@@ -306,7 +306,7 @@ describe("GlobalBannerCoordinator", () => {
     act(() => {
       useSafeModeStore.setState({ dismissed: true });
     });
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
 
     act(() => {
       vi.advanceTimersByTime(10_000);
@@ -395,7 +395,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
     expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });

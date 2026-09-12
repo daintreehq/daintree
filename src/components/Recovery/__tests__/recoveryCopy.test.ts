@@ -5,7 +5,8 @@ import {
   HOST_CRASH_RECOVERING_COPY,
   SAFE_MODE_BANNER_COPY,
   getHostCrashBannerCopy,
-  getRestoreConfirmationTitle,
+  RESTORE_CONFIRMATION_TITLE,
+  getRestoreConfirmationDescription,
 } from "../recoveryCopy";
 
 describe("HOST_CRASH_BANNER_COPY", () => {
@@ -69,20 +70,24 @@ describe("SAFE_MODE_BANNER_COPY", () => {
   });
 });
 
-describe("getRestoreConfirmationTitle", () => {
-  it("returns the static title when there are no suspect panels", () => {
-    expect(getRestoreConfirmationTitle(0)).toBe("Session recovered after unexpected exit.");
+describe("restore confirmation copy", () => {
+  it("keeps the title a noun phrase with no trailing period", () => {
+    expect(RESTORE_CONFIRMATION_TITLE.endsWith(".")).toBe(false);
+  });
+
+  it("has no description when there are no suspect panels", () => {
+    expect(getRestoreConfirmationDescription(0)).toBeUndefined();
   });
 
   it("pluralises panel/panels by suspectCount", () => {
-    expect(getRestoreConfirmationTitle(1)).toBe(
-      "Session recovered after unexpected exit — 1 panel created near the crash may be affected."
+    expect(getRestoreConfirmationDescription(1)).toBe(
+      "1 panel created near the crash may be affected."
     );
-    expect(getRestoreConfirmationTitle(2)).toBe(
-      "Session recovered after unexpected exit — 2 panels created near the crash may be affected."
+    expect(getRestoreConfirmationDescription(2)).toBe(
+      "2 panels created near the crash may be affected."
     );
-    expect(getRestoreConfirmationTitle(3)).toBe(
-      "Session recovered after unexpected exit — 3 panels created near the crash may be affected."
+    expect(getRestoreConfirmationDescription(3)).toBe(
+      "3 panels created near the crash may be affected."
     );
   });
 });

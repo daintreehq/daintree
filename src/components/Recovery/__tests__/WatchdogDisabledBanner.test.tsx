@@ -130,14 +130,15 @@ describe("WatchdogDisabledBanner", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("uses role=alert without redundant aria-live", () => {
+  it("announces politely: a downed monitor is a standing condition, not an emergency", () => {
     usePanelStore.setState({
       watchdogStatus: "disabled",
       watchdogDisabledInfo: { attemptCount: 3, lastExitCode: null, timestamp: 0 },
     });
     render(<WatchdogDisabledBanner />);
-    const alert = screen.getByRole("alert");
-    expect(alert.hasAttribute("aria-live")).toBe(false);
+    const status = screen.getByRole("status");
+    expect(status.hasAttribute("aria-live")).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("does not render a dismiss button", () => {

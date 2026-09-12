@@ -1,5 +1,4 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { TriangleAlert } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
@@ -34,8 +33,8 @@ export function PluginDocumentWarning() {
   if (diagnostics.length === 0) return null;
   return (
     <InlineStatusBanner
-      icon={TriangleAlert}
       severity="warning"
+      role="status"
       title="Plugins need a window reload"
       description="Plugin registrations can't be replaced until this project window reloads. Save edits before continuing."
       contextLine={affectedPlugins(diagnostics)}

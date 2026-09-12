@@ -456,12 +456,11 @@ describe("InlineStatusBanner", () => {
       );
       const title = screen.getByText("25 panels open");
       const dismiss = screen.getByRole("button", { name: "Dismiss" });
-      // Dismiss shares a parent with the title text (the flex justify-between wrapper)
-      const titleParent = title.closest('[class*="flex"]');
-      const dismissParent = dismiss.closest('[class*="flex"]');
-      expect(titleParent).toBe(dismissParent);
-      // The parent is the justify-between wrapper, not the controls row
-      expect(titleParent?.className).toContain("justify-between");
+      // Dismiss lives inside the title's row (the justify-between wrapper),
+      // not in the controls row beneath the description.
+      const titleRow = title.parentElement;
+      expect(titleRow?.className).toContain("justify-between");
+      expect(titleRow?.contains(dismiss)).toBe(true);
     });
 
     it("fires onClose when the title-row dismiss is clicked", () => {
@@ -641,6 +640,150 @@ describe("InlineStatusBanner", () => {
  * None of that may leak into the far more common inline usage — a banner
  * inside a terminal must never become a window drag handle.
  */
+describe("InlineStatusBanner family invariants", () => {
+  const STATUS_SEVERITIES: InlineStatusBannerSeverity[] = ["error", "warning", "info", "success"];
+
+  it("keeps severity off the text: title and description use neutral tokens, only the icon is coloured", () => {
+    for (const severity of STATUS_SEVERITIES) {
+      const { container, unmount } = render(
+        <InlineStatusBanner
+          title={`${severity} title`}
+          description="Body copy"
+          severity={severity}
+          animated={false}
+          onClose={() => {}}
+          autoDismissAfter={1000}
+        />
+      );
+      const title = screen.getByText(`${severity} title`);
+      const description = screen.getByText("Body copy");
+      // Severity-coloured type failed the contrast floor on most themes; the
+      // rule is that no text node carries an inline status colour.
+      expect(title.getAttribute("style")).toBeNull();
+      expect(description.getAttribute("style")).toBeNull();
+      expect(title.className).toMatch(/\btext-text-primary\b/);
+      expect(description.className).toMatch(/\btext-text-secondary\b/);
+      const icon = container.querySelector("svg");
+      expect(icon?.getAttribute("style")).toContain("--color-status-");
+      unmount();
+    }
+  });
+
+  it("gives each status severity its own default glyph, so shape tells them apart without hue", () => {
+    const glyphs = STATUS_SEVERITIES.map((severity) => {
+      const { container, unmount } = render(
+        <InlineStatusBanner
+          title="t"
+          severity={severity}
+          animated={false}
+          onClose={() => {}}
+          autoDismissAfter={1000}
+        />
+      );
+      const html = container.querySelector("svg")!.innerHTML;
+      unmount();
+      return html;
+    });
+    expect(new Set(glyphs).size).toBe(glyphs.length);
+  });
+
+  it("lets a caller's icon win only when one is passed", () => {
+    const { container } = render(
+      <InlineStatusBanner icon={FileEdit} title="t" severity="warning" animated={false} />
+    );
+    const explicit = container.querySelector("svg")!.innerHTML;
+    const { container: defaulted } = render(
+      <InlineStatusBanner title="t2" severity="warning" animated={false} />
+    );
+    expect(explicit).not.toBe(defaulted.querySelector("svg")!.innerHTML);
+  });
+
+  it("renders every action and the dismiss through the shared Button primitive", () => {
+    render(
+      <InlineStatusBanner
+        title="t"
+        severity="warning"
+        animated={false}
+        onClose={() => {}}
+        actions={[
+          { id: "a", label: "Primary", onClick: () => {} },
+          { id: "b", label: "Secondary", variant: "dismiss", onClick: () => {} },
+        ]}
+      />
+    );
+    for (const button of screen.getAllByRole("button")) {
+      // One geometry for the family: the primitive stamps its variant.
+      expect(button.getAttribute("data-variant")).toBeTruthy();
+      expect(button.className).not.toMatch(/(^|\s)rounded(\s|$)/);
+    }
+  });
+
+  it("places the dismiss after the actions in the single-line layout, never between controls", () => {
+    render(
+      <InlineStatusBanner
+        title="t"
+        severity="warning"
+        animated={false}
+        onClose={() => {}}
+        trailingSlot={<button type="button">Details</button>}
+        actions={[{ id: "a", label: "Fix it", onClick: () => {} }]}
+      />
+    );
+    const buttons = screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(buttons.at(-1)).toBe("Dismiss");
+    expect(buttons.indexOf("Details")).toBeLessThan(buttons.indexOf("Fix it"));
+  });
+
+  it("hands focus back to the app shell when a focused dismiss unmounts the banner", () => {
+    vi.useFakeTimers();
+    // The handoff runs on the next frame, after React has committed the
+    // unmount — a frame that fires inside the click would still see the banner.
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      const root = document.createElement("div");
+      root.id = "root";
+      document.body.appendChild(root);
+      const landing = document.createElement("button");
+      landing.textContent = "Toolbar";
+      root.appendChild(landing);
+
+      function Host() {
+        const [open, setOpen] = useState(true);
+        return open ? (
+          <InlineStatusBanner
+            title="t"
+            severity="warning"
+            animated={false}
+            onClose={() => setOpen(false)}
+          />
+        ) : null;
+      }
+      const view = render(<Host />, { container: root.appendChild(document.createElement("div")) });
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      dismiss.focus();
+      expect(document.activeElement).toBe(dismiss);
+      fireEvent.click(dismiss);
+      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(landing);
+      view.unmount();
+      root.remove();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("InlineStatusBanner as the window title-bar surface", () => {
   // Success is excluded on purpose: it is required to dismiss itself, so it
   // cannot be the window's standing title-bar surface. Narrowing here keeps the
@@ -687,6 +830,12 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
       }
     }
   }
+
+  it("never slides in: the native caption tint switches instantly, so the band must too", () => {
+    renderGlobal({ animated: true });
+    expect(root().className).not.toMatch(/\btransition-\[/);
+    expect(root().className).not.toContain("opacity-0");
+  });
 
   it("becomes draggable and fills the caption band's height", () => {
     renderGlobal();

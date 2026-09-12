@@ -269,11 +269,12 @@ test("global banner family — every slot, every state, every theme", async ({ c
   // outside the band, and it carries its own hand-rolled controls.
   written.push(
     await withPage(context, "safe-mode details", async (page) => {
-      const shell = await openFixture(page, "safe-mode", theme, DEFAULT_WIDTH, 0);
+      await openFixture(page, "safe-mode", theme, DEFAULT_WIDTH, 0);
       await page.getByRole("button", { name: "Show details" }).click();
       await expect(page.getByText(/quarantined/)).toBeVisible();
       await page.waitForTimeout(250);
-      return snap(shell, `safe-mode-${theme}-details.png`);
+      // The popover hangs below the shell, so the shell's own box would clip it.
+      return snap(page.locator("body"), `safe-mode-${theme}-details.png`);
     })
   );
 

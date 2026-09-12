@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from "react";
-import { AlertTriangle, Download, Loader2 } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store/panelStore";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { actionService } from "@/services/ActionService";
@@ -76,29 +77,22 @@ export function HostCrashBanner() {
 
   // `trailingSlot` is the documented escape hatch for surfacing a secondary
   // affordance on an error banner without breaking the single-action rule
-  // (see InlineStatusBanner.tsx). Keeping "Restart service" as the primary
-  // `action` preserves the dangerFilled emphasis.
+  // (see InlineStatusBanner.tsx). "Restart service" stays the one `action`.
   const sendDiagnosticsButton = (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="sm"
       onClick={handleSendDiagnostics}
       disabled={isCollectingDiagnostics}
       aria-label="Send diagnostics"
-      className={cn(
-        "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors",
-        "text-text-secondary hover:text-text-primary hover:bg-daintree-border/50",
-        "outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
-        isCollectingDiagnostics && "cursor-not-allowed opacity-60 hover:bg-transparent"
-      )}
     >
-      <Download className="w-3 h-3" aria-hidden="true" />
+      <Download aria-hidden="true" />
       {isCollectingDiagnostics ? "Collecting…" : "Send diagnostics"}
-    </button>
+    </Button>
   );
 
   return (
     <InlineStatusBanner
-      icon={AlertTriangle}
       title={title}
       description={description}
       severity="error"
@@ -108,8 +102,7 @@ export function HostCrashBanner() {
       descriptionExtras={
         diagnosticsError ? (
           <p
-            className="text-xs mt-1.5 break-words"
-            style={{ color: "color-mix(in oklab, var(--color-status-error) 80%, transparent)" }}
+            className="text-xs mt-1 break-words text-text-primary"
             data-testid="host-crash-banner-diagnostics-error"
           >
             Diagnostics collection failed: {diagnosticsError}
@@ -119,7 +112,7 @@ export function HostCrashBanner() {
       action={{
         id: "restart",
         label: isRestarting ? "Restarting…" : "Restart service",
-        variant: "dangerFilled",
+        variant: "primary",
         onClick: handleRestart,
         disabled: isRestarting,
       }}

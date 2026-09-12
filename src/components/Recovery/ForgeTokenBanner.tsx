@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { AlertTriangle } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
@@ -59,7 +58,6 @@ export function ForgeTokenBanner() {
 
   return (
     <InlineStatusBanner
-      icon={AlertTriangle}
       title={`${name} token expired`}
       description="Reconnect to restore issue, PR, and repository data."
       severity="warning"

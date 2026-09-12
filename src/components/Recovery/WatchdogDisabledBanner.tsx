@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -32,12 +31,10 @@ export function WatchdogDisabledBanner() {
 
   return (
     <InlineStatusBanner
-      icon={AlertTriangle}
       title="Crash watchdog disabled"
       description={description}
       severity="warning"
-      role="alert"
-      animated={false}
+      role="status"
       actions={[
         {
           id: "restart",

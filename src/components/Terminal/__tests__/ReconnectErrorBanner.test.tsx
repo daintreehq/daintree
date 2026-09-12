@@ -91,7 +91,8 @@ describe("ReconnectErrorBanner", () => {
   it("disables retry and sets aria-busy when isRestarting is true", () => {
     renderBanner("error", { isRestarting: true });
     const button = screen.getByRole("button", { name: /retry reconnecting/i });
-    expect(button.hasAttribute("disabled")).toBe(true);
+    // Loading keeps focus on the control (no native disabled) and blocks activation.
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("aria-busy")).toBe("true");
   });
 
