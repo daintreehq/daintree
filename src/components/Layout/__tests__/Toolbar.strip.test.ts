@@ -141,6 +141,15 @@ describe("Toolbar strip — composition invariants", () => {
       expect(source.match(/className=\{toolbarFixedDividerClass\}/g)).toHaveLength(2);
     });
 
+    it("an empty overflow trigger leaves no wrapper behind to own a gap", () => {
+      // The trigger is display:none when nothing is hidden; a wrapper around
+      // it would still be a zero-width flex item costing gap-1.5.
+      expect(source).not.toMatch(/<div className="app-no-drag">\s*\{renderOverflowMenu\(/);
+      expect(source).toMatch(
+        /data-toolbar-overflow-trigger=""[\s\S]{0,600}?className=\{cn\(toolbarIconButtonClass, "app-no-drag"\)\}/
+      );
+    });
+
     it("a collapsed platform spacer folds its flex gap away too", () => {
       // Both spacers: a w-0 item still owns a gap on each side of it.
       const collapsed =

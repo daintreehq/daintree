@@ -350,7 +350,12 @@ function OverflowMenu({
               data-visible={isEmpty ? "false" : "true"}
               aria-hidden={isEmpty || undefined}
               tabIndex={isEmpty ? -1 : undefined}
-              className={toolbarIconButtonClass}
+              // The no-drag rectangle lives on the button itself, not on a
+              // wrapper: an empty trigger is display:none, and a wrapper
+              // around it would stay a zero-width flex item that still owns a
+              // gap — which is what gave the fixed divider 12px of clearance
+              // on one side while there was nothing to overflow.
+              className={cn(toolbarIconButtonClass, "app-no-drag")}
               aria-label={ariaLabel}
             >
               <Ellipsis />
@@ -2351,9 +2356,7 @@ export function Toolbar({
               >
                 {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
-              <div className="app-no-drag">
-                {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
-              </div>
+              {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
             </div>
 
             {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -2543,9 +2546,7 @@ export function Toolbar({
               >
                 {renderGroupedButtons(effectiveRightButtons, rightVisibleSet)}
               </div>
-              <div className="app-no-drag">
-                {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
-              </div>
+              {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
 
               {/* Fixed chrome outside the measured button row: it exists only
                   while a terminal host has output paused for memory (#12375),
