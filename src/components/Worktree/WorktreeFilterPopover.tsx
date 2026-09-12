@@ -235,20 +235,30 @@ function ChipGrid<T extends string>({
   overflowAfter,
 }: ChipGridProps<T>) {
   const [showAll, setShowAll] = useState(false);
+  // Anything the user has selected while this grid has been open stays in the
+  // grid after they deselect it. Otherwise deselecting a zero-count value with
+  // the keyboard folded it away in the same tick, the chip under focus
+  // unmounted, and the modeless popover left focus on the body. The popover's
+  // content unmounts on close, so this resets per opening.
+  const seenSelectedRef = useRef(new Set<T>());
 
   const { shown, hiddenCount, hiddenAllDead } = useMemo(() => {
     if (!counts || overflowAfter === undefined || options.length <= overflowAfter) {
       return { shown: options, hiddenCount: 0, hiddenAllDead: true };
     }
-    const selected = options.filter((o) => isActive(o.value));
+    for (const o of options) if (isActive(o.value)) seenSelectedRef.current.add(o.value);
+    const selected = options.filter(
+      (o) => isActive(o.value) || seenSelectedRef.current.has(o.value)
+    );
     const matching = options.filter((o) => !isActive(o.value) && counts[o.value] > 0);
     // Nothing to show — fold nothing rather than render an empty facet.
     if (selected.length + matching.length === 0) {
       return { shown: options, hiddenCount: 0, hiddenAllDead: true };
     }
-    // Selected values are never folded, whatever the cap: hiding a live filter
-    // is how a list ends up narrowed by something the user cannot see. The cap
-    // spends whatever room is left on values that would actually narrow it.
+    // Selected values — and ones deselected during this opening — are never
+    // folded, whatever the cap: hiding a live filter is how a list ends up
+    // narrowed by something the user cannot see. The cap spends whatever room
+    // is left on values that would actually narrow it.
     const room = Math.max(0, overflowAfter - selected.length);
     const shownMatching = new Set(matching.slice(0, room));
     const keep = new Set([...selected, ...shownMatching]);

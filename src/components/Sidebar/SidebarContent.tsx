@@ -1232,19 +1232,28 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // count; from then on every transition speaks, including the one back to the
   // full set. Bailing out on `!showScope` meant clearing the last filter — the
   // moment the user most needs it confirmed — said nothing at all.
-  const hasMountedScope = useRef(false);
+  // Compares against the last narrowed state rather than counting effect runs:
+  // a "first run is mount" flag flips on the loading render, so the first real
+  // snapshot after it announced the project's own worktree count on open. The
+  // "All N" message fires only on the narrowed -> not-narrowed edge, and only
+  // once the deferred list has actually caught up (`filteredCount ===
+  // scopeTotal`) — `liveQuery` clears instantly while `deferredQuery` still
+  // drives the rows, so without that check it spoke "All 7" over a list of one
+  // and then again when the rows arrived.
+  const wasNarrowedRef = useRef(false);
   useEffect(() => {
-    // Mount is not a transition, however the list already looks — announcing
-    // there would read a project's worktree count aloud on every open.
-    if (!hasMountedScope.current) {
-      hasMountedScope.current = true;
-      return;
+    let message: string | null = null;
+    if (showScope) {
+      message = `${filteredCount} of ${scopeTotal} worktrees`;
+      wasNarrowedRef.current = true;
+    } else if (wasNarrowedRef.current && filteredCount === scopeTotal) {
+      message = `All ${scopeTotal} worktrees shown`;
+      wasNarrowedRef.current = false;
     }
-    const message = showScope
-      ? `${filteredCount} of ${scopeTotal} worktrees`
-      : `All ${scopeTotal} worktrees shown`;
+    if (message === null) return;
+    const spoken = message;
     const timer = window.setTimeout(() => {
-      useAnnouncerStore.getState().announce(message);
+      useAnnouncerStore.getState().announce(spoken);
     }, UI_DOHERTY_THRESHOLD);
     return () => {
       window.clearTimeout(timer);

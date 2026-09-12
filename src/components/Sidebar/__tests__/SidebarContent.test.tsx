@@ -162,9 +162,12 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     expect(source).toContain('import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils"');
     // The count announcement is scheduled on a timer cleared on re-run, so
     // rapid keystrokes coalesce into a single late announcement.
-    expect(source).toMatch(/`\$\{filteredCount\} of \$\{scopeTotal\} worktrees`/);
+    // The template is what gets spoken: `message` is built from the count,
+    // copied to `spoken` for the closure, and that is what the timer announces.
+    expect(source).toMatch(/message = `\$\{filteredCount\} of \$\{scopeTotal\} worktrees`/);
+    expect(source).toMatch(/const spoken = message;/);
     expect(source).toMatch(
-      /setTimeout\([\s\S]*?announce\(message\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
+      /setTimeout\([\s\S]*?announce\(spoken\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
     );
     expect(source).toMatch(/clearTimeout\(timer\)/);
   });
@@ -178,9 +181,15 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     // Gated on mount having happened, not on the list having been narrowed:
     // the old flag let an already-filtered first render announce, and skipped a
     // change between two different result sets of the same size.
-    expect(source).toMatch(/if \(!hasMountedScope\.current\)/);
-    expect(source).toMatch(/hasMountedScope\.current = true/);
-    expect(source).toMatch(/All \$\{scopeTotal\} worktrees shown/);
+    // Not a "first run is mount" flag: that flips on the loading render, so the
+    // first real snapshot after it announced the project's own count on open.
+    // The gate is the narrowed -> not-narrowed edge, and only once the deferred
+    // rows have caught up with the instant query.
+    expect(source).not.toMatch(/hasMountedScope/);
+    expect(source).toMatch(/if \(showScope\) \{[\s\S]{0,120}?wasNarrowedRef\.current = true/);
+    expect(source).toMatch(
+      /else if \(wasNarrowedRef\.current && filteredCount === scopeTotal\) \{[\s\S]{0,120}?All \$\{scopeTotal\} worktrees shown/
+    );
     // Keyed on the filter inputs too, so a same-size swap still speaks.
     expect(source).toMatch(/activeFacetText,\s*liveQuery,\s*quickStateFilter/);
   });

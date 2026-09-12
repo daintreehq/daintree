@@ -2,7 +2,11 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
+import {
+  ensureFilterSectionOpen,
+  addAndSwitchToProject,
+  selectExistingProjectAndRefresh,
+} from "../../helpers/workflows";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
@@ -189,6 +193,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await modal.locator(SEL.worktree.filterButton).click();
       const popover = window.locator(SEL.worktree.filterPopover);
       await expect(popover).toBeVisible({ timeout: T_SHORT });
+      await ensureFilterSectionOpen(popover, "Sort by");
 
       // Switch to Alphabetical sort
       const alphaRadio = popover.locator('[role="radio"]', { hasText: "Alphabetical" });

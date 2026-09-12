@@ -149,6 +149,20 @@ describe("WorktreeSidebarSearchBar", () => {
     expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
   });
 
+  it("renders the filter summary it is handed, on its own row", () => {
+    // The sidebar composes the names; this is the half that has to put them on
+    // screen. Checking only that the prop is passed left a deleted render green.
+    render(
+      <WorktreeSidebarSearchBar
+        statusText="1 of 7 worktrees"
+        filterSummaryText="Status: Dirty · Branch type: Feature"
+      />,
+      { wrapper: TooltipProvider }
+    );
+    expect(screen.getByText("Status: Dirty · Branch type: Feature")).toBeTruthy();
+    expect(screen.getByText("1 of 7 worktrees")).toBeTruthy();
+  });
+
   it("shows 'Clear all' when only facets are non-default", () => {
     renderBar();
     act(() => {

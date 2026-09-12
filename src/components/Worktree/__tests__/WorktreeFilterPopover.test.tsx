@@ -15,6 +15,35 @@ function openPopover() {
   );
 }
 
+const COUNTS = {
+  status: { active: 0, dirty: 3, stale: 0, idle: 2 },
+  branchType: {
+    feature: 2,
+    bugfix: 1,
+    refactor: 0,
+    chore: 0,
+    docs: 0,
+    test: 0,
+    release: 0,
+    ci: 0,
+    deps: 0,
+    perf: 0,
+    style: 0,
+    wip: 0,
+    main: 0,
+    detached: 0,
+    other: 0,
+  },
+  prIssue: { hasIssue: 0, hasPR: 0, prOpen: 0, prMerged: 0, prClosed: 0 },
+  sessions: { hasTerminals: 0, working: 0, waiting: 0, completed: 0, exited: 0 },
+  activity: { last15m: 0, last1h: 0, last24h: 0, last7d: 0 },
+  devServer: { hasDevServer: 0, running: 0, starting: 0, error: 0 },
+} satisfies ChipCounts;
+
+function chip(name: RegExp) {
+  return screen.getAllByRole("button").find((b) => name.test(b.textContent ?? ""));
+}
+
 describe("WorktreeFilterPopover derives its filter state from one snapshot", () => {
   beforeEach(() => {
     useWorktreeFilterStore.getState().clearAll();
@@ -84,31 +113,6 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
   });
   afterEach(cleanup);
 
-  const COUNTS = {
-    status: { active: 0, dirty: 3, stale: 0, idle: 2 },
-    branchType: {
-      feature: 2,
-      bugfix: 1,
-      refactor: 0,
-      chore: 0,
-      docs: 0,
-      test: 0,
-      release: 0,
-      ci: 0,
-      deps: 0,
-      perf: 0,
-      style: 0,
-      wip: 0,
-      main: 0,
-      detached: 0,
-      other: 0,
-    },
-    prIssue: { hasIssue: 0, hasPR: 0, prOpen: 0, prMerged: 0, prClosed: 0 },
-    sessions: { hasTerminals: 0, working: 0, waiting: 0, completed: 0, exited: 0 },
-    activity: { last15m: 0, last1h: 0, last24h: 0, last7d: 0 },
-    devServer: { hasDevServer: 0, running: 0, starting: 0, error: 0 },
-  } satisfies ChipCounts;
-
   function openWithCounts() {
     return render(
       <WorktreeFilterPopover
@@ -119,10 +123,6 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
         chipCounts={COUNTS}
       />
     );
-  }
-
-  function chip(name: RegExp) {
-    return screen.getAllByRole("button").find((b) => name.test(b.textContent ?? ""));
   }
 
   it("marks a value that matches nothing without taking it out of reach", () => {
@@ -169,7 +169,11 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
       .split(/\s+/)
       .filter(Boolean)
       .filter((c) => !restClasses.includes(c) && !hoverApplies.has(c));
-    expect(gained.length).toBeGreaterThan(0);
+    // A colour-only gain (bg-/text-/border-) is exactly the thing that collided
+    // with hover, so it does not count. The difference has to be non-colour:
+    // weight, decoration, a glyph, an outline.
+    const nonColour = gained.filter((c) => !/^(bg|text|border|hover:|from|to)-/.test(c));
+    expect(nonColour.length).toBeGreaterThan(0);
   });
 
   it("carries the shared filter-chip hook, so selection survives forced colors", () => {
@@ -323,10 +327,48 @@ describe("WorktreeFilterPopover surfaces its own state", () => {
   });
 
   it("says what it is sorted by while the sort section is shut", () => {
+    useWorktreeFilterStore.getState().setOrderBy("alpha");
     openPopover();
     const header = screen.getByRole("button", { name: /Sort by/ });
     expect(header.getAttribute("aria-expanded")).toBe("false");
-    expect(header.textContent).toContain("Date created");
+    expect(header.textContent).toContain("Alphabetical");
+    useWorktreeFilterStore.getState().setOrderBy("created");
+  });
+
+  it("names relevance while a search is active, because that is what leads", () => {
+    // The chosen order only breaks ties inside each relevance score during a
+    // search, so a header still reading "Date created" described a setting
+    // that was not in charge of the list.
+    useWorktreeFilterStore.getState().setQuery("auth");
+    render(<WorktreeFilterPopover appearance="field" open onOpenChange={() => {}} />);
+    const header = screen.getByRole("button", { name: /Sort by/ });
+    expect(header.textContent).toMatch(/Relevance/);
+  });
+
+  it("keeps a value visible after it is deselected, so focus has somewhere to be", () => {
+    // Deselecting a zero-count value used to fold it away in the same tick,
+    // unmounting the chip under focus in a modeless popover.
+    const zeroDocs = {
+      ...COUNTS,
+      branchType: { ...COUNTS.branchType, docs: 0 },
+    } satisfies ChipCounts;
+    useWorktreeFilterStore.getState().toggleTypeFilter("docs");
+    render(
+      <WorktreeFilterPopover
+        appearance="field"
+        hideSearchInput
+        open
+        onOpenChange={() => {}}
+        chipCounts={zeroDocs}
+      />
+    );
+    const docs = chip(/^Docs/);
+    expect(docs?.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(docs!);
+    const after = chip(/^Docs/);
+    expect(after).toBeDefined();
+    expect(after?.getAttribute("aria-pressed")).toBe("false");
+    expect(after?.textContent).toContain("(0)");
   });
 });
 

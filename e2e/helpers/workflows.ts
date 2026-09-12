@@ -286,3 +286,22 @@ export async function verifyTerminalContent(
     { box: true }
   );
 }
+
+/**
+ * Opens a section of the worktree filter popover if it is shut, and leaves it
+ * alone if it is already open. Every section is a disclosure — including "Sort
+ * by", which starts collapsed with the current order in its header — and a
+ * collapsed body is `inert`, so radios and chips inside it cannot be clicked. A
+ * bare click on the header is a toggle, not an "expand": on an open section it
+ * collapses the panel and every control inside goes unreachable.
+ */
+export async function ensureFilterSectionOpen(popover: Locator, name: string): Promise<void> {
+  const toggle = popover.getByRole("button", { name }).first();
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+    await popover
+      .locator(`#${await toggle.getAttribute("aria-controls")}`)
+      .waitFor({ state: "visible", timeout: T_SHORT })
+      .catch(() => {});
+  }
+}

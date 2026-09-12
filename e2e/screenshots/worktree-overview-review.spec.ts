@@ -76,6 +76,7 @@ import {
   FAKE_AGENT_READY,
   FAKE_AGENT_STOP,
 } from "../helpers/fakeAgent";
+import { ensureFilterSectionOpen } from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 
@@ -401,9 +402,14 @@ async function closeFilterPopover(page: Page): Promise<void> {
 
 async function ensureGrouped(page: Page, grouped: boolean): Promise<void> {
   await openFilterPopover(page);
-  const box = page.locator(`${SEL.worktree.filterPopover} input[type="checkbox"]`).first();
-  const checked = await box.isChecked().catch(() => false);
-  if (checked !== grouped) await box.setChecked(grouped);
+  const popover = page.locator(SEL.worktree.filterPopover);
+  // Grouping lives in the collapsed "Sort by" section and is the Checkbox
+  // primitive — a button with role=checkbox, not an input — so it is reached
+  // by role, after opening the section.
+  await ensureFilterSectionOpen(popover, "Sort by");
+  const box = popover.getByRole("checkbox", { name: "Group by type" }).first();
+  const checked = (await box.getAttribute("aria-checked")) === "true";
+  if (checked !== grouped) await box.click();
   await closeFilterPopover(page);
   await settle(page, 300);
 }
