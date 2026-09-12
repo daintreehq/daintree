@@ -55,13 +55,17 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const handleCommit = useCallback(
     (selected: string[]) => {
       if (commitMode === "append") {
+        // The button disables when nothing would actually be added, but Enter
+        // from the search input or a row reaches this path directly. Guard
+        // here too, or the dialog closes having appended nothing.
+        if (!selected.some((id) => !armedIds.has(id))) return;
         addToFleet(selected);
       } else {
         armIds(selected);
       }
       onClose();
     },
-    [armIds, addToFleet, commitMode, onClose]
+    [armIds, addToFleet, armedIds, commitMode, onClose]
   );
 
   const picker = useFleetPicker({

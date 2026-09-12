@@ -99,6 +99,10 @@ export function FleetPickerContent({
    */
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // An IME confirming a candidate also fires Enter (and ArrowDown moves
+      // through candidates). Acting on those would arm the pre-selected fleet
+      // and close the dialog while the user was still typing a character.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         focusFirstRow();
@@ -450,6 +454,7 @@ function WorktreeGroupSection({
             checked={selectedIds.has(t.id)}
             snippet={snippetMap.get(t.id)}
             isRovingStop={rovingNavKey === `t:${t.id}`}
+            hasHeading={!hideHeader}
             disambiguator={duplicateTitles.has(t.title) ? shortId(t.id) : undefined}
             onToggleId={onToggleId}
             registerRow={registerRow}
@@ -466,6 +471,8 @@ interface TerminalRowProps {
   checked: boolean;
   snippet?: SemanticSearchMatch;
   isRovingStop: boolean;
+  /** False when the group heading is hidden (single worktree), which makes rows the top level. */
+  hasHeading: boolean;
   /** Rendered beside the title when a worktree holds two terminals of the same name. */
   disambiguator?: string;
   onToggleId: (id: string, event?: React.MouseEvent) => void;
@@ -478,6 +485,7 @@ function TerminalRow({
   checked,
   snippet,
   isRovingStop,
+  hasHeading,
   disambiguator,
   onToggleId,
   registerRow,
@@ -501,7 +509,9 @@ function TerminalRow({
         // selection vocabularies must not be mixed on one node.
         role="treeitem"
         aria-checked={checked}
-        aria-level={2}
+        // Level 2 only when there is a level-1 heading above it; with one
+        // worktree the headings are hidden and the rows are the top level.
+        aria-level={hasHeading ? 2 : 1}
         className={cn(
           // `pl-8` puts the child control 20px right of the parent's, inside
           // the 20–24px band where two-level nesting actually reads. It was

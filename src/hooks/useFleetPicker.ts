@@ -224,6 +224,10 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   // swept into a bulk selection while it is visibly unrelated to what was typed.
   const [snippetQuery, setSnippetQuery] = useState("");
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  // Which tree node last held focus — `g:<worktreeId>` or `t:<terminalId>`.
+  // `focusedId` only ever names a row, so without this a heading could take
+  // DOM focus and still never become the roving tab stop.
+  const [focusedNavKey, setFocusedNavKey] = useState<string | null>(null);
   const deferredQuery = useDeferredValue(query);
   const rangeAnchorRef = useRef<string | null>(null);
   const currentRequestRef = useRef(0);
@@ -531,6 +535,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       });
       rangeAnchorRef.current = id;
       setFocusedId(id);
+      setFocusedNavKey(`t:${id}`);
     },
     [flatVisibleIds]
   );
@@ -551,6 +556,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       const id = flatVisibleIds[clamped];
       if (!id) return;
       setFocusedId(id);
+      setFocusedNavKey(`t:${id}`);
       rowRefs.current.get(id)?.focus();
     },
     [flatVisibleIds]
@@ -586,6 +592,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       const clamped = Math.max(0, Math.min(index, navKeys.length - 1));
       const key = navKeys[clamped];
       if (!key) return;
+      setFocusedNavKey(key);
       if (key.startsWith("t:")) {
         const id = key.slice(2);
         setFocusedId(id);
@@ -599,10 +606,10 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     [navKeys]
   );
 
-  // Enter commits from anywhere in the picker, including the search input.
-  // Read through a ref so the key handler doesn't have to be redefined (and
-  // re-bound) every time the selection changes.
-  const confirmRef = useRef<() => void>(() => {});
+  const handleConfirm = useCallback(() => {
+    if (confirmedIds.length === 0) return;
+    onCommit(confirmedIds);
+  }, [confirmedIds, onCommit]);
 
   const handleListKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -625,7 +632,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
           node?.click();
           return;
         }
-        confirmRef.current();
+        handleConfirm();
         return;
       }
 
@@ -649,42 +656,28 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         // Headers and rows are ONE ordered sequence: a keyboard user arrowing
         // down the list passes through the worktree headings exactly as the eye
         // does, and can toggle a whole worktree from there.
-        if (navKeys.length > 0) {
-          const currentNav = node ? navKeyForElement(node) : null;
-          const idx = currentNav ? navKeys.indexOf(currentNav) : -1;
-          if (isGroupNode || idx !== -1) {
-            e.preventDefault();
-            const base = idx === -1 ? 0 : idx;
-            focusNavIndex(e.key === "ArrowDown" ? base + 1 : base - 1);
-            return;
-          }
-        }
-        if (flatVisibleIds.length === 0) return;
+        if (navKeys.length === 0) return;
         e.preventDefault();
-        const currentIdx = focusedId !== null ? flatVisibleIds.indexOf(focusedId) : -1;
-        const baseIdx = currentIdx === -1 ? 0 : currentIdx;
+        const currentNav = node ? navKeyForElement(node) : null;
+        const idx = currentNav ? navKeys.indexOf(currentNav) : -1;
+        // From the container itself (nothing focused yet) Down lands on the
+        // first node, matching what the search input's hand-off does.
         const nextIdx =
-          e.key === "ArrowDown"
-            ? Math.min(baseIdx + 1, flatVisibleIds.length - 1)
-            : Math.max(baseIdx - 1, 0);
-        const nextId = flatVisibleIds[nextIdx];
-        if (!nextId) return;
-        const moved = nextId !== focusedId;
-        if (moved) {
-          setFocusedId(nextId);
-          // Move DOM focus to match logical focus — without this, the
-          // visible focus ring stays on the previously-focused row while
-          // `tabIndex={isFocused ? 0 : -1}` shifts the keyboard target.
-          // This is the matching half of the dialog's roving-tabindex
-          // pattern (lifted into the hook so the consumer doesn't need
-          // to wire focus management itself).
-          rowRefs.current.get(nextId)?.focus();
-        }
-        if (e.shiftKey && moved && rangeAnchorRef.current !== null) {
+          idx === -1
+            ? 0
+            : Math.max(0, Math.min(navKeys.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)));
+        const nextKey = navKeys[nextIdx];
+        if (!nextKey) return;
+        focusNavIndex(nextIdx);
+        // Shift+Arrow extends the range from the anchor to the destination row.
+        // Headings are skipped over by the range, not selected by it — the
+        // range is a run of terminals, and `flatVisibleIds` is that run.
+        if (e.shiftKey && nextKey.startsWith("t:") && rangeAnchorRef.current !== null) {
           const anchorIdx = flatVisibleIds.indexOf(rangeAnchorRef.current);
-          if (anchorIdx !== -1) {
-            const lo = Math.min(anchorIdx, nextIdx);
-            const hi = Math.max(anchorIdx, nextIdx);
+          const destIdx = flatVisibleIds.indexOf(nextKey.slice(2));
+          if (anchorIdx !== -1 && destIdx !== -1) {
+            const lo = Math.min(anchorIdx, destIdx);
+            const hi = Math.max(anchorIdx, destIdx);
             setSelectedIds((prev) => {
               const next = new Set(prev);
               for (let i = lo; i <= hi; i++) {
@@ -744,15 +737,8 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         });
       }
     },
-    [flatVisibleIds, focusedId, visibleIds, navKeys, navKeyForElement, focusNavIndex]
+    [flatVisibleIds, focusedId, visibleIds, navKeys, navKeyForElement, focusNavIndex, handleConfirm]
   );
-
-  const handleConfirm = useCallback(() => {
-    if (confirmedIds.length === 0) return;
-    onCommit(confirmedIds);
-  }, [confirmedIds, onCommit]);
-
-  confirmRef.current = handleConfirm;
 
   // Stable callback-ref factory — `registerRow(id)` returns the same callback
   // identity for the same id, so memoized rows don't churn the ref Map on
@@ -779,9 +765,10 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
    * it — every group heading used to be its own tab stop.
    */
   const rovingNavKey = useMemo(() => {
+    if (focusedNavKey && navKeys.includes(focusedNavKey)) return focusedNavKey;
     if (focusedId && navKeys.includes(`t:${focusedId}`)) return `t:${focusedId}`;
     return navKeys[0] ?? null;
-  }, [focusedId, navKeys]);
+  }, [focusedNavKey, focusedId, navKeys]);
 
   return {
     acquired,

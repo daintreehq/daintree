@@ -290,7 +290,11 @@ export function FleetCountChip({
               <span className="text-2xs tabular-nums text-text-secondary">
                 {picker.confirmedIds.length === 0
                   ? "Select panes to add"
-                  : `${picker.confirmedIds.length} selected`}
+                  : `${picker.confirmedIds.length} selected${
+                      picker.hiddenSelectedCount > 0
+                        ? ` · ${picker.hiddenSelectedCount} hidden by search`
+                        : ""
+                    }`}
               </span>
               <div className="flex items-center gap-1.5">
                 <button

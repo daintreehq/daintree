@@ -513,6 +513,26 @@ describe("FleetPickerPalette", () => {
       expect(useFleetArmingStore.getState().armOrder.sort()).toEqual(["a-wt1", "b-wt2"]);
     });
 
+    it("Enter does not close the palette in Append mode when nothing would be added", async () => {
+      // The button disables on zero additions; the keyboard path must agree,
+      // or Enter closes the dialog having appended nothing.
+      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      const onClose = vi.fn();
+      renderPalette([makeWorktreeSnap("wt-1", "main")], true, onClose);
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+      const search = screen.getByTestId("fleet-picker-cold-start-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "Enter" });
+      });
+
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
     it("'Clear' drops drifted ids too — they do not come back when the terminal does", async () => {
       // Cold-start preselects two wt-1 terminals. Simulate drift by removing
       // one from the panel store while the picker is open, then Clear. When the

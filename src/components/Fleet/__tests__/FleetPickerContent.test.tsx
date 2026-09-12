@@ -565,6 +565,60 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(tabbable).toHaveLength(1);
     });
 
+    it("Shift+ArrowDown from a focused row extends the selection", async () => {
+      // The unified heading+row navigation must still carry range selection;
+      // an earlier version moved focus and silently dropped the extension.
+      const onCommit = vi.fn();
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], { mode: "cold-start", onCommit });
+      await act(async () => {});
+
+      const rowA = screen.getByTestId("fp-row-a");
+      await act(async () => {
+        fireEvent.click(rowA);
+      });
+      await act(async () => {
+        fireEvent.keyDown(rowA, { key: "ArrowDown", shiftKey: true });
+      });
+      await act(async () => {
+        fireEvent.keyDown(screen.getByTestId("fp-row-b"), { key: "Enter" });
+      });
+
+      expect(onCommit).toHaveBeenCalledTimes(1);
+      expect([...onCommit.mock.calls[0]![0]].sort()).toEqual(["a", "b"]);
+    });
+
+    it("a heading focused by Home becomes the tree's tab stop", async () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-2" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main"), makeWorktreeSnap("wt-2", "feature")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      const rowB = screen.getByTestId("fp-row-b");
+      await act(async () => {
+        fireEvent.click(rowB);
+      });
+      await act(async () => {
+        fireEvent.keyDown(rowB, { key: "Home" });
+      });
+
+      const tabbable = screen
+        .getAllByRole("treeitem")
+        .filter((n) => n.getAttribute("tabindex") === "0");
+      expect(tabbable).toHaveLength(1);
+      expect(tabbable[0]?.hasAttribute("data-group-header")).toBe(true);
+    });
+
     it("distinguishes two same-named terminals in one worktree", async () => {
       seedTerminals([
         makeTerminal("pane-aaaaaa", { title: "Claude", worktreeId: "wt-1" }),

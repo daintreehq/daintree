@@ -405,13 +405,18 @@ test("fleet picker review — every state that carries design weight", async () 
   test.skip(!THEME, "Set DAINTREE_SHOT_THEME to run the fleet-picker-review capture");
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
-  const repo = createRepo();
-  const fakeBinDir = installFakeAgent(repo.dir);
-  // Prefix deliberately avoids "daintree-e2e" — launchApp's pre-launch hygiene
-  // pkills that pattern, and parallel theme captures would SIGKILL each other.
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-fleetpickershot-"));
+  // Everything allocated below is released in `finally`, including on a setup
+  // failure part-way through — a fixture that dies during `git worktree add`
+  // must not leave its temp dirs behind.
+  let repo: ReturnType<typeof createRepo> | undefined;
+  let userDataDir: string | undefined;
   let ctx: AppContext | undefined;
   try {
+    repo = createRepo();
+    const fakeBinDir = installFakeAgent(repo.dir);
+    // Prefix deliberately avoids "daintree-e2e" — launchApp's pre-launch hygiene
+    // pkills that pattern, and parallel theme captures would SIGKILL each other.
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-fleetpickershot-"));
     ctx = await launchApp({
       userDataDir,
       screenshotScale: SCALE,
@@ -558,7 +563,11 @@ test("fleet picker review — every state that carries design weight", async () 
     expect(written.length, "no PNGs were written").toBeGreaterThan(0);
   } finally {
     if (ctx?.app) await closeApp(ctx.app).catch(() => {});
-    repo.cleanup();
-    rmSync(userDataDir, { recursive: true, force: true });
+    try {
+      repo?.cleanup();
+    } catch {
+      // One cleanup failing must not stop the next.
+    }
+    if (userDataDir) rmSync(userDataDir, { recursive: true, force: true });
   }
 });
