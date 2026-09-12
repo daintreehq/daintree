@@ -3,14 +3,18 @@ import { Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { handleSegmentedRadioKeyDown } from "./segmentedRadioKeys";
 
 interface SaveFleetFormProps {
   armedCount: number;
 }
 
+type SaveFleetKind = "snapshot" | "predicate";
+const SAVE_FLEET_KINDS: SaveFleetKind[] = ["snapshot", "predicate"];
+
 export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement {
   const [name, setName] = useState("");
-  const [kind, setKind] = useState<"snapshot" | "predicate">("snapshot");
+  const [kind, setKind] = useState<SaveFleetKind>("snapshot");
   const [predicateScope, setPredicateScope] = useState<"current" | "all">("all");
   const [predicateState, setPredicateState] = useState<"all" | "working" | "waiting" | "finished">(
     "waiting"
@@ -49,18 +53,27 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
         <Save className="h-3 w-3" />
         <span>Save current as…</span>
       </div>
-      <div className="flex gap-1 text-2xs" role="radiogroup" aria-label="Save fleet flavor">
+      <div
+        className="flex gap-1 text-2xs"
+        role="radiogroup"
+        aria-label="Save fleet flavor"
+        // Arrow keys move within the group and must not reach the menu, which
+        // would otherwise treat them as item navigation.
+        onKeyDown={(e) => handleSegmentedRadioKeyDown(e, SAVE_FLEET_KINDS, kind, setKind)}
+      >
         <button
           type="button"
           role="radio"
           aria-checked={kind === "snapshot"}
+          tabIndex={kind === "snapshot" ? 0 : -1}
+          data-value="snapshot"
           onClick={(e) => {
             e.stopPropagation();
             setKind("snapshot");
           }}
           onPointerDown={(e) => e.stopPropagation()}
           className={cn(
-            "flex-1 rounded px-2 py-1 transition-colors",
+            "flex-1 rounded-[var(--radius-md)] px-2 py-1 transition-colors",
             kind === "snapshot"
               ? "bg-tint/[0.14] text-text-primary"
               : "bg-tint/[0.04] text-text-secondary hover:bg-tint/[0.08]"
@@ -72,13 +85,15 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
           type="button"
           role="radio"
           aria-checked={kind === "predicate"}
+          tabIndex={kind === "predicate" ? 0 : -1}
+          data-value="predicate"
           onClick={(e) => {
             e.stopPropagation();
             setKind("predicate");
           }}
           onPointerDown={(e) => e.stopPropagation()}
           className={cn(
-            "flex-1 rounded px-2 py-1 transition-colors",
+            "flex-1 rounded-[var(--radius-md)] px-2 py-1 transition-colors",
             kind === "predicate"
               ? "bg-tint/[0.14] text-text-primary"
               : "bg-tint/[0.04] text-text-secondary hover:bg-tint/[0.08]"
@@ -98,7 +113,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-text-primary"
+            className="flex-1 rounded-[var(--radius-md)] bg-tint/[0.08] px-1.5 py-1 text-text-primary"
           >
             <option value="current">This worktree</option>
             <option value="all">All worktrees</option>
@@ -114,7 +129,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-text-primary"
+            className="flex-1 rounded-[var(--radius-md)] bg-tint/[0.08] px-1.5 py-1 text-text-primary"
           >
             <option value="all">All</option>
             <option value="waiting">Waiting</option>
@@ -146,7 +161,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
                 : "Arm panes first…"
               : "Name…"
           }
-          className="flex-1 rounded bg-tint/[0.08] px-2 py-1 text-2xs text-text-primary placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14]"
+          className="flex-1 rounded-[var(--radius-md)] bg-tint/[0.08] px-2 py-1 text-2xs text-text-primary placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14]"
           data-testid="fleet-save-form-name"
         />
         <button

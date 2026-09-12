@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { ArrowLeft, Plus, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { useEscapeStack } from "@/hooks";
+import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
 import type { AgentState } from "@/types";
@@ -17,6 +17,7 @@ import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
 import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
 
 interface FleetCountChipProps {
   armedCount: number;
@@ -99,6 +100,20 @@ export function FleetCountChip({
       return out;
     })
   );
+  // Worktree per armed pane, so the inventory can carry the same colour dot
+  // the chip summarises — a truncated title alone does not say which tree a
+  // pane belongs to.
+  const worktreeIdsByPane = usePanelStore(
+    useShallow((state) => {
+      const out: Record<string, string | undefined> = {};
+      for (const id of armOrder) {
+        out[id] = state.panelsById[id]?.worktreeId;
+      }
+      return out;
+    })
+  );
+  const colorMap = useWorktreeColorMap();
+  const focusedId = usePanelStore((state) => state.focusedId);
   const waitingReasonsByPane = usePanelStore(
     useShallow((state) => {
       const out: Record<string, WaitingReason | undefined> = {};
@@ -170,11 +185,10 @@ export function FleetCountChip({
           aria-expanded={open}
           data-testid="fleet-armed-count-chip"
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs leading-[inherit] transition-colors",
-            "bg-tint/[0.08] hover:bg-tint/[0.14]"
+            "inline-flex h-6 items-center gap-1.5 rounded-full px-2 text-xs leading-[inherit] transition-colors",
+            "bg-tint/[0.08] hover:bg-tint/[0.14] data-[state=open]:bg-tint/[0.14]"
           )}
         >
-          <FleetWorktreeDots scope={scope} />
           <AnimatedLabel
             label={String(armedCount)}
             textClassName="font-semibold tabular-nums text-text-primary"
@@ -183,11 +197,13 @@ export function FleetCountChip({
             in fleet
             {scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : ""}
           </span>
+          <FleetWorktreeDots scope={scope} />
           {scope.exitedCount > 0 ? (
             <span className="text-text-secondary tabular-nums" data-testid="fleet-exited-count">
               · {scope.exitedCount} exited
             </span>
           ) : null}
+          <ChevronDown className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -197,7 +213,7 @@ export function FleetCountChip({
         data-testid="fleet-armed-list"
         className={cn(
           "flex flex-col overflow-hidden p-1",
-          popoverMode === "list" ? "max-h-[320px] w-[260px]" : "max-h-[420px] w-[340px]"
+          popoverMode === "list" ? "max-h-[320px] w-[320px]" : "max-h-[420px] w-[380px]"
         )}
       >
         {popoverMode === "list" ? (
@@ -214,18 +230,39 @@ export function FleetCountChip({
                   const sendFailed = run?.targets.some(
                     (t) => t.terminalId === id && t.submission === "failed"
                   );
+                  const worktreeId = worktreeIdsByPane[id];
+                  const dotColor = worktreeId && colorMap ? colorMap[worktreeId] : undefined;
                   return (
-                    <li key={id} className="flex items-center gap-2 rounded hover:bg-tint/[0.08]">
+                    <li
+                      key={id}
+                      className="flex items-center gap-2 rounded-[var(--radius-md)] hover:bg-tint/[0.08]"
+                    >
                       <button
                         type="button"
                         onClick={() => focusArmedPane(id)}
                         aria-label={`Focus ${title}`}
+                        title={title}
                         className={cn(
-                          "flex-1 truncate px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
+                          "flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
                           PALETTE_ROW_FOCUS_CLASS
                         )}
                       >
-                        {title}
+                        {dotColor && (
+                          <span
+                            aria-hidden="true"
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: dotColor }}
+                          />
+                        )}
+                        <span className="truncate">{title}</span>
+                        {id === focusedId && (
+                          <span
+                            className="shrink-0 text-3xs uppercase tracking-wide text-text-secondary"
+                            data-testid={`fleet-row-primary-${id}`}
+                          >
+                            Primary
+                          </span>
+                        )}
                       </button>
                       {sendFailed && (
                         <span
@@ -240,7 +277,7 @@ export function FleetCountChip({
                         type="button"
                         onClick={() => disarmId(id)}
                         aria-label={`Disarm ${title}`}
-                        className="inline-flex shrink-0 items-center rounded p-0.5 mr-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
+                        className={cn(FLEET_RIBBON_ICON_BUTTON_CLASS, "mr-0.5")}
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -254,7 +291,7 @@ export function FleetCountChip({
               onClick={() => setPopoverMode("picker")}
               data-testid="fleet-armed-list-add-panes"
               className={cn(
-                "mt-1 flex items-center gap-2 rounded px-2 py-1.5 text-xs leading-[inherit] text-daintree-text/80",
+                "mt-1 flex items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-xs leading-[inherit] text-text-secondary",
                 "hover:bg-tint/[0.08] hover:text-text-primary",
                 "border-t border-daintree-border/50 pt-2",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
@@ -273,7 +310,7 @@ export function FleetCountChip({
                 aria-label="Back to fleet list"
                 data-testid="fleet-picker-back"
                 className={cn(
-                  "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs leading-[inherit] text-text-secondary",
+                  "inline-flex items-center gap-1 rounded-[var(--radius-md)] px-1.5 py-1 text-xs leading-[inherit] text-text-secondary",
                   "hover:bg-tint/[0.08] hover:text-text-primary",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 )}
@@ -301,7 +338,7 @@ export function FleetCountChip({
                   type="button"
                   onClick={() => setPopoverMode("list")}
                   className={cn(
-                    "rounded px-2 py-1 text-2xs text-text-secondary",
+                    "rounded-[var(--radius-md)] px-2 py-1 text-2xs text-text-secondary",
                     "hover:bg-tint/[0.08] hover:text-text-primary",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}

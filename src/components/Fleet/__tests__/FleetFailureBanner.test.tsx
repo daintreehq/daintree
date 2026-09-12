@@ -67,7 +67,7 @@ describe("FleetFailureBanner", () => {
     render(<FleetFailureBanner />);
     expect(screen.getByText("Broadcast failed")).toBeTruthy();
     expect(screen.getByText("2 terminals rejected the write.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry failed" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("uses singular noun when exactly one target failed", () => {
@@ -88,7 +88,7 @@ describe("FleetFailureBanner", () => {
     expect(
       screen.getByText("2 terminals rejected a keystroke. Single keystrokes can't be replayed.")
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry failed" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("dispatches fleet.retryFailures when the retry button is clicked", () => {
@@ -97,7 +97,7 @@ describe("FleetFailureBanner", () => {
       payload: "ls\r",
     });
     render(<FleetFailureBanner />);
-    fireEvent.click(screen.getByRole("button", { name: "Retry failed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(actionService.dispatch).toHaveBeenCalledWith("fleet.retryFailures", undefined, {
       source: "user",
     });

@@ -24,11 +24,13 @@ function resetStores() {
   __resetFleetTargetOverridesStoreForTesting();
 }
 
+// Merges rather than replaces: an armed id always has a live panel behind it in
+// the app, and the pill now reads eligibility off those panels.
 function seedPanel(panel: PtyPanelData) {
-  usePanelStore.setState({
-    panelsById: { [panel.id]: panel },
-    panelIds: [panel.id],
-  });
+  usePanelStore.setState((s) => ({
+    panelsById: { ...s.panelsById, [panel.id]: panel },
+    panelIds: s.panelIds.includes(panel.id) ? s.panelIds : [...s.panelIds, panel.id],
+  }));
 }
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -335,8 +337,8 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
 
   it("toggles a skip via the include checkbox", () => {
     render(<FleetDraftingPill />);
-    const checkboxes = screen.getAllByTestId("fleet-resolution-row-include") as HTMLInputElement[];
-    expect(checkboxes[1]!.checked).toBe(true);
+    const checkboxes = screen.getAllByTestId("fleet-resolution-row-include");
+    expect(checkboxes[1]!.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(checkboxes[1]!);
     expect(useFleetTargetOverridesStore.getState().skippedIds.has("t-2")).toBe(true);
   });
