@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
-import { Filter, X, ChevronDown, Check } from "lucide-react";
+import { Filter, X, ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -167,17 +167,24 @@ interface FilterChipProps {
  * Three tiers, and they have to be told apart at a glance while the pointer is
  * somewhere in the grid:
  *
- *   unavailable — matches nothing right now. Shows its `(0)` and is disabled,
- *     because selecting it can only empty the list.
+ *   unavailable — matches nothing right now. Shows its `(0)` and dims, so the
+ *     values that would narrow the list are the ones that stand out.
  *   available   — a subtle fill gives the pill a body; the border alone is far
  *     below a perceptible step on every dark theme.
- *   selected    — a check glyph, a stronger fill and a stronger border.
+ *   selected    — the app's filter-chip treatment: the strong fill, `font-medium`,
+ *     and the shared `data-filter-chip` hook that gives it a heavier border under
+ *     `forced-colors: active` and an inset outline under `prefers-contrast: more`.
  *
- * The glyph is what actually carries selection. Hovering an available chip also
- * raises its fill and takes its text to `text-text-primary`, so fill and text
- * alone left hover and selected reading identically — you could not see what
- * was selected while the pointer was in the grid. A glyph is not a colour, so
- * it also survives `forced-colors: active`, where every author fill flattens.
+ * `font-medium` is the part that carries selection, and it is not decoration:
+ * hovering an available chip already raises its fill and takes its text to
+ * `text-text-primary`, so fill and tone alone left hover and selected rendering
+ * identically — you could not see what was selected while the pointer was in the
+ * grid. Weight is the one axis hover does not touch.
+ *
+ * Zero-count chips stay clickable rather than `disabled`. Their `(0)` is what
+ * answers "will this do anything", and disabling would take them out of the tab
+ * order — so a keyboard user would silently skip values that reappear the moment
+ * another facet changes. Matches `LogFilters`, which fades rather than disables.
  */
 function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
   const isUnavailable = count === 0 && !isActive;
@@ -186,17 +193,16 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
       type="button"
       onClick={onClick}
       aria-pressed={isActive}
-      disabled={isUnavailable}
+      data-filter-chip="true"
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs transition-colors",
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-2xs transition-colors",
         isActive
-          ? "border-text-secondary bg-filter-selected-bg-strong text-text-primary"
+          ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
           : isUnavailable
-            ? "cursor-not-allowed border-border-default bg-transparent text-text-secondary"
-            : "border-text-secondary bg-overlay-soft text-text-primary hover:bg-overlay-medium hover:border-text-primary"
+            ? "border-border-default bg-transparent text-text-secondary opacity-60 hover:opacity-100"
+            : "border-text-secondary bg-overlay-soft text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
       )}
     >
-      {isActive && <Check className="-ml-0.5 w-3 h-3 shrink-0" aria-hidden="true" />}
       {count === undefined ? label : `${label} (${count})`}
     </button>
   );

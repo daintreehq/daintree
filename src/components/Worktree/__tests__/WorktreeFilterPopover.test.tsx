@@ -5,6 +5,7 @@ import path from "path";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import type { ChipCounts } from "@/lib/worktreeFilters";
 
 const SOURCE = fs.readFileSync(path.resolve(__dirname, "../WorktreeFilterPopover.tsx"), "utf-8");
 
@@ -106,7 +107,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     sessions: { hasTerminals: 0, working: 0, waiting: 0, completed: 0, exited: 0 },
     activity: { last15m: 0, last1h: 0, last24h: 0, last7d: 0 },
     devServer: { hasDevServer: 0, running: 0, starting: 0, error: 0 },
-  } as never;
+  } satisfies ChipCounts;
 
   function openWithCounts() {
     return render(
@@ -124,15 +125,19 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     return screen.getAllByRole("button").find((b) => name.test(b.textContent ?? ""));
   }
 
-  it("disables a value that matches nothing rather than letting it empty the list", () => {
-    // The dead-end trap: selecting a zero-count value can only produce an empty
-    // list, so it must not be selectable at all.
+  it("marks a value that matches nothing without taking it out of reach", () => {
+    // The rule is that a value which cannot narrow the list says so. It is NOT
+    // `disabled`: that drops it from the tab order, so a keyboard user silently
+    // skips values that come back the moment another facet changes — and every
+    // other filter surface in the app keeps its options reachable.
     openWithCounts();
     const dead = chip(/^Active/);
     expect(dead).toBeDefined();
-    expect((dead as HTMLButtonElement).disabled).toBe(true);
+    expect((dead as HTMLButtonElement).disabled).toBe(false);
+    expect(dead?.textContent).toContain("(0)");
+    // Told apart from a live value by something, and not by the count alone.
     const live = chip(/^Dirty/);
-    expect((live as HTMLButtonElement).disabled).toBe(false);
+    expect(dead?.className).not.toBe(live?.className);
   });
 
   it("keeps a value's count visible even when it drops to zero", () => {
@@ -142,18 +147,38 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     expect(chip(/^Active/)?.textContent).toContain("(0)");
   });
 
-  it("marks selection with something that is not a fill or a text tone", () => {
-    // Hovering an unselected chip already raises its fill and takes its text to
-    // text-primary, so if selection were carried by fill or tone alone the two
-    // would be indistinguishable while the pointer was in the grid. Selection
-    // must add a glyph — which also survives forced-colors, where fills flatten.
+  it("marks selection on an axis that hover does not touch", () => {
+    // The defect this guards: hovering an unselected chip already raises its
+    // fill and takes its text to `text-text-primary`, so a selected chip and a
+    // hovered one rendered pixel-identically — while the pointer was in the
+    // grid you could not see what was on. Selection therefore has to differ by
+    // something hover cannot produce. Weight is that axis today; the rule is
+    // that SOME hover-proof difference exists, not that it is this one.
     openWithCounts();
-    const before = chip(/^Dirty/);
-    const glyphsBefore = before?.querySelectorAll("svg").length ?? 0;
-    fireEvent.click(before!);
+    const target = chip(/^Dirty/);
+    // Snapshot the STRING: React reuses the DOM node, so holding the element
+    // and reading `.className` after the click reads the selected state back.
+    const restClasses = (target?.className ?? "").split(/\s+/).filter(Boolean);
+    const hoverApplies = new Set(
+      restClasses.filter((c) => c.startsWith("hover:")).map((c) => c.slice("hover:".length))
+    );
+    fireEvent.click(target!);
     const after = chip(/^Dirty/);
     expect(after?.getAttribute("aria-pressed")).toBe("true");
-    expect(after?.querySelectorAll("svg").length ?? 0).toBeGreaterThan(glyphsBefore);
+    const gained = (after?.className ?? "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((c) => !restClasses.includes(c) && !hoverApplies.has(c));
+    expect(gained.length).toBeGreaterThan(0);
+  });
+
+  it("carries the shared filter-chip hook, so selection survives forced colors", () => {
+    // Under `forced-colors: active` the UA flattens every author fill, so a
+    // fill-plus-weight treatment loses its fill half. `data-filter-chip` is the
+    // app-wide handle the index.css block uses to give the selected chip a
+    // heavier border there, and an inset outline under `prefers-contrast: more`.
+    openWithCounts();
+    expect(chip(/^Dirty/)?.getAttribute("data-filter-chip")).toBe("true");
   });
 
   it("folds a long facet's dead values behind one control, keeping the live ones", () => {
@@ -173,12 +198,24 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     // cap spends its room on unselected values; selections are not negotiable.
     const many = {
       ...COUNTS,
-      branchType: Object.fromEntries(
-        Object.keys((COUNTS as never as { branchType: Record<string, number> }).branchType).map(
-          (k) => [k, 0]
-        )
-      ),
-    } as never;
+      branchType: {
+        feature: 0,
+        bugfix: 0,
+        refactor: 0,
+        chore: 0,
+        docs: 0,
+        test: 0,
+        release: 0,
+        ci: 0,
+        deps: 0,
+        perf: 0,
+        style: 0,
+        wip: 0,
+        main: 0,
+        detached: 0,
+        other: 0,
+      },
+    } satisfies ChipCounts;
     const store = useWorktreeFilterStore.getState();
     const picked = [
       "feature",
@@ -230,7 +267,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
         detached: 0,
         other: 0,
       },
-    } as never;
+    } satisfies ChipCounts;
     render(
       <WorktreeFilterPopover
         appearance="field"

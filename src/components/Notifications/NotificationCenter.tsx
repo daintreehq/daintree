@@ -1363,12 +1363,13 @@ function FilterChip({
     <button
       type="button"
       aria-pressed={selected}
-      // Handle for the `forced-colors: active` block in index.css. There the UA
+      // Handle for the `forced-colors: active` block in index.css, shared with
+      // the worktree filter popover's chips. There the UA
       // flattens `bg-filter-selected-bg-strong` to Canvas and paints every chip
       // as the same outlined pill, so which filter you are looking at becomes
       // unreadable — the same failure the destructive-button rule in that block
       // already solves, and solved the same way: a heavier border.
-      data-notification-filter="true"
+      data-filter-chip="true"
       onClick={onSelect}
       className={cn(
         "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
