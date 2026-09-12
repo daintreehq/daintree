@@ -47,13 +47,27 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toContain("Drag to reorder is off while grouped by type");
   });
 
-  it("separates scope and drag reason with a middle dot when both present", () => {
-    expect(source).toContain("`${scopeText} · ${dragDisabledReason}`");
+  it("separates the status line's parts with a middle dot", () => {
+    expect(source).toMatch(/\.filter\(Boolean\)\.join\(" · "\)/);
+  });
+
+  it("names the active filters in the status line, not just their number", () => {
+    // A count says the list is cut down; it does not say what cut it, so a
+    // sparse sidebar still read as an empty one.
+    expect(source).toContain("describeActiveFacets({");
+    // Composed into the line the user reads — asserting only that the helper is
+    // called somewhere would pass with its result thrown away.
+    expect(source).toMatch(
+      /filterStatusText\s*=\s*\[scopeText, activeFacetText \|\| null\][\s\S]{0,60}?join\(" · "\)/
+    );
   });
 
   it("gates the scope text on showScope and falls back through the drag reason", () => {
     expect(source).toMatch(/scopeText\s*=\s*showScope\s*\?/);
-    expect(source).toMatch(/scopeText\s*\?\?\s*dragDisabledReason/);
+    // The reorder note is what is left when there is nothing else to say —
+    // it is a standing explanation, not news, so it no longer outranks the
+    // scope and the filter identities by consuming the line alongside them.
+    expect(source).toMatch(/\|\|\s*dragDisabledReason/);
   });
 
   it("derives drag-disabled reason with query taking priority over group-by-type", () => {
@@ -84,7 +98,15 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     // code iterated too and then skipped the worktree it had already pinned.
     expect(source).toMatch(/all: nonMainWorktrees\.length/);
     expect(source).toMatch(/for \(const w of nonMainWorktrees\)/);
-    expect(source).toMatch(/computeChipCounts\(\s*nonMainWorktrees,/);
+    // Chip counts read a population derived from the same shared array but
+    // deliberately WIDER: the main worktree is not a list row yet is still
+    // facet-filtered, so excluding it made every facet only it satisfies read
+    // zero — and a zero count now disables the chip. The rule is that the
+    // counted set is a superset of the rendered set, never a subset.
+    expect(source).toMatch(
+      /const countedWorktrees = useMemo\([\s\S]{0,80}?mainWorktree\s*\?\s*\[mainWorktree, \.\.\.nonMainWorktrees\]\s*:\s*nonMainWorktrees/
+    );
+    expect(source).toMatch(/computeChipCounts\(\s*countedWorktrees,/);
     expect(source).toMatch(/const nonMainCount = nonMainWorktrees\.length;/);
     expect(source).toMatch(/const filtered = nonMainWorktrees\.filter\(/);
     // No second, branch-derived exclusion anywhere in the sidebar: neither the
@@ -126,15 +148,22 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     expect(source).toContain('import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils"');
     // The count announcement is scheduled on a timer cleared on re-run, so
     // rapid keystrokes coalesce into a single late announcement.
+    expect(source).toMatch(/`\$\{filteredCount\} of \$\{totalCount\} worktrees`/);
     expect(source).toMatch(
-      /setTimeout\([\s\S]*?announce\(`\$\{filteredCount\} of \$\{totalCount\} worktrees`\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
+      /setTimeout\([\s\S]*?announce\(message\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
     );
     expect(source).toMatch(/clearTimeout\(timer\)/);
   });
 
-  it("gates the count announcement on showScope being active", () => {
-    // No filters narrowing the list → no count announcement at all.
-    expect(source).toMatch(/if \(!showScope\) return;/);
+  it("stays silent until the list is first narrowed, then speaks both ways", () => {
+    // Opening a project must not announce its own worktree count. But once the
+    // user has narrowed the list, clearing the last filter is the moment they
+    // most need it confirmed — and bailing out on `!showScope` said nothing at
+    // all there, so returning to everything was the one transition with no
+    // feedback.
+    expect(source).toMatch(/if \(!showScope && !hasAnnouncedScope\.current\) return;/);
+    expect(source).toMatch(/hasAnnouncedScope\.current = true/);
+    expect(source).toMatch(/All \$\{totalCount\} worktrees shown/);
   });
 
   it("announces the sort-disabled reason on appear/change but not on re-enable", () => {

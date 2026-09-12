@@ -5,17 +5,17 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  useWorktreeFilterStore,
-  type OrderBy,
-  type StatusFilter,
-  type TypeFilter,
-  type PrIssueFilter,
-  type SessionFilter,
-  type ActivityFilter,
-  type DevServerFilter,
-} from "@/store/worktreeFilterStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
+import {
+  ACTIVITY_OPTIONS,
+  DEV_SERVER_OPTIONS,
+  ORDER_OPTIONS,
+  PR_ISSUE_OPTIONS,
+  SESSION_OPTIONS,
+  STATUS_OPTIONS,
+  TYPE_OPTIONS,
+} from "@/lib/worktreeFilterOptions";
 
 interface FilterSectionProps {
   title: string;
@@ -95,25 +95,38 @@ function FilterSection({
             )}
           />
         </button>
-        {onClear && hasActive && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              // The Clear button unmounts itself once activeCount hits 0, so move
-              // focus to the adjacent expand toggle first to keep it off body.
-              expandButtonRef.current?.focus();
-              onClear();
-            }}
-            aria-label={`Clear ${title} filters`}
-            // Underlined rather than a bare colour step: at rest this sat at the
-            // same tone as the heading beside it, so nothing marked it as a
-            // control rather than a second label.
-            className="shrink-0 px-2 py-1.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
-          >
-            Clear
-          </button>
-        )}
+        {/* The slot is always the same width, whether or not there is anything
+            in it: Clear is a sibling of the flex-1 header button, so rendering
+            it only on active sections pushed their chevrons out of line with
+            every other section's. `inert` keeps the placeholder — and a hidden
+            Clear — out of the tab order. */}
+        <span
+          className={cn("shrink-0 px-2 py-1.5 text-2xs", !(onClear && hasActive) && "invisible")}
+          inert={!(onClear && hasActive)}
+          aria-hidden={!(onClear && hasActive)}
+        >
+          {onClear && hasActive ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                // The Clear button hides itself once activeCount hits 0, so move
+                // focus to the adjacent expand toggle first to keep it off body.
+                expandButtonRef.current?.focus();
+                onClear();
+              }}
+              aria-label={`Clear ${title} filters`}
+              // Underlined rather than a bare colour step: at rest this sat at
+              // the same tone as the heading beside it, so nothing marked it as
+              // a control rather than a second label.
+              className="text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
+            >
+              Clear
+            </button>
+          ) : (
+            "Clear"
+          )}
+        </span>
       </div>
       {/* Animated reveal so the body honors what the rotating chevron
        * promises — same grid-rows idiom as LocalCommitsDropdown. Content
@@ -177,10 +190,10 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
       className={cn(
         "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs transition-colors",
         isActive
-          ? "border-border-strong bg-filter-selected-bg-strong text-text-primary"
+          ? "border-text-secondary bg-filter-selected-bg-strong text-text-primary"
           : isUnavailable
             ? "cursor-not-allowed border-border-default bg-transparent text-text-secondary"
-            : "border-border-default bg-overlay-soft text-text-primary hover:bg-overlay-medium hover:border-border-strong"
+            : "border-text-secondary bg-overlay-soft text-text-primary hover:bg-overlay-medium hover:border-text-primary"
       )}
     >
       {isActive && <Check className="-ml-0.5 w-3 h-3 shrink-0" aria-hidden="true" />}
@@ -245,7 +258,7 @@ function ChipGrid<T extends string>({
           type="button"
           onClick={() => setShowAll((v) => !v)}
           aria-expanded={showAll}
-          className="inline-flex items-center rounded-full px-2 py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
+          className="inline-flex items-center self-center py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current"
         >
           {showAll ? "Show fewer" : `${hiddenCount} with no matches`}
         </button>
@@ -253,68 +266,6 @@ function ChipGrid<T extends string>({
     </>
   );
 }
-
-const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: "active", label: "Active" },
-  { value: "dirty", label: "Dirty" },
-  { value: "stale", label: "Stale" },
-  { value: "idle", label: "Idle" },
-];
-
-const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
-  { value: "feature", label: "Feature" },
-  { value: "bugfix", label: "Bugfix" },
-  { value: "refactor", label: "Refactor" },
-  { value: "chore", label: "Chore" },
-  { value: "docs", label: "Docs" },
-  { value: "test", label: "Test" },
-  { value: "release", label: "Release" },
-  { value: "ci", label: "CI" },
-  { value: "deps", label: "Deps" },
-  { value: "perf", label: "Perf" },
-  { value: "style", label: "Style" },
-  { value: "wip", label: "WIP" },
-  { value: "main", label: "Main" },
-  { value: "detached", label: "Detached" },
-  { value: "other", label: "Other" },
-];
-
-const PR_ISSUE_OPTIONS: { value: PrIssueFilter; label: string }[] = [
-  { value: "hasIssue", label: "Has issue" },
-  { value: "hasPR", label: "Has PR" },
-  { value: "prOpen", label: "PR open" },
-  { value: "prMerged", label: "PR merged" },
-  { value: "prClosed", label: "PR closed" },
-];
-
-const SESSION_OPTIONS: { value: SessionFilter; label: string }[] = [
-  { value: "hasTerminals", label: "Has terminals" },
-  { value: "working", label: "Working" },
-  { value: "waiting", label: "Waiting" },
-  { value: "completed", label: "Completed" },
-  { value: "exited", label: "Exited" },
-];
-
-const ACTIVITY_OPTIONS: { value: ActivityFilter; label: string }[] = [
-  { value: "last15m", label: "15m" },
-  { value: "last1h", label: "1h" },
-  { value: "last24h", label: "24h" },
-  { value: "last7d", label: "7d" },
-];
-
-const DEV_SERVER_OPTIONS: { value: DevServerFilter; label: string }[] = [
-  { value: "hasDevServer", label: "Has server" },
-  { value: "running", label: "Running" },
-  { value: "starting", label: "Starting" },
-  { value: "error", label: "Error" },
-];
-
-const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
-  { value: "created", label: "Date created" },
-  { value: "recent", label: "Recently updated" },
-  { value: "alpha", label: "Alphabetical" },
-  { value: "manual", label: "Custom order" },
-];
 
 /** Both orientations, because the group reads as a vertical list of choices. */
 const SORT_ARROW_STEPS: Record<string, number | undefined> = {

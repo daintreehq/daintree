@@ -241,11 +241,11 @@ export function WorktreeSidebarSearchBar({
             "flex h-7 flex-1 min-w-0 items-center gap-1.5 px-2 rounded-[var(--radius-md)]",
             // Fallback keeps themes without --worktree-search-input-bg byte-identical.
             "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] border border-border-default",
-            "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-accent-primary"
           )}
         >
           <Search
-            className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
+            className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
             aria-hidden="true"
           />
           <input
@@ -260,13 +260,13 @@ export function WorktreeSidebarSearchBar({
             // the full phrase stays the accessible name.
             placeholder="Search…"
             aria-label="Search worktrees"
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder-daintree-text/40 focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
           />
           {showClear && (
             <button
               type="button"
               onClick={handleClearSearch}
-              className="flex shrink-0 items-center justify-center w-5 h-5 rounded text-daintree-text/40 transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
+              className="flex shrink-0 items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
               aria-label="Clear search"
             >
               <X className="w-3 h-3" />
@@ -299,7 +299,7 @@ export function WorktreeSidebarSearchBar({
             <button
               type="button"
               onClick={handleClearAll}
-              className="ml-auto shrink-0 rounded text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+              className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
             >
               Clear all
             </button>

@@ -84,6 +84,7 @@ import {
   type DerivedWorktreeMeta,
   type FilterState,
 } from "@/lib/worktreeFilters";
+import { describeActiveFacets } from "@/lib/worktreeFilterOptions";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type { WorktreeState } from "@/types";
@@ -878,9 +879,27 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return counts;
   }, [nonMainWorktrees, derivedMetaMap]);
 
+  /**
+   * The population the chip counts describe. It is deliberately WIDER than
+   * `nonMainWorktrees`: the main worktree is not a list row, but it is subject
+   * to the same facets (`mainMatchesFacetsPre` below), so leaving it out made
+   * every facet it alone satisfies read zero. "Main" is the clear case — the
+   * only worktree of that type is the main one, so the chip read (0) forever.
+   *
+   * That matters now the counts gate `disabled` on a chip: a count is allowed
+   * to over-report, because the worst case is a filter that narrows less than
+   * promised, but it must never under-report, because that takes a working
+   * filter away entirely. So this stays a SUPERSET of what the sidebar shows —
+   * which is also why the quick-state filter is not applied to it.
+   */
+  const countedWorktrees = useMemo(
+    () => (mainWorktree ? [mainWorktree, ...nonMainWorktrees] : nonMainWorktrees),
+    [mainWorktree, nonMainWorktrees]
+  );
+
   const chipCounts = useMemo(() => {
     return computeChipCounts(
-      nonMainWorktrees,
+      countedWorktrees,
       derivedMetaMap,
       activeWorktreeId,
       {
@@ -895,7 +914,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       devServerSessions
     );
   }, [
-    nonMainWorktrees,
+    countedWorktrees,
     derivedMetaMap,
     activeWorktreeId,
     deferredQuery,
@@ -1173,10 +1192,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // live region, so the persistent sort-disabled text isn't re-announced on
   // every keystroke (#9665).
   const scopeText = showScope ? `${filteredCount} of ${totalCount} worktrees` : null;
+  // Which filters, not just how many. A count tells the user the list is cut
+  // down; it does not stop a sparse sidebar reading as an empty one.
+  const activeFacetText = describeActiveFacets({
+    statusFilters,
+    typeFilters,
+    prIssueFilters,
+    sessionFilters,
+    activityFilters,
+    devServerFilters,
+  });
+  // Identity outranks the reorder note: that note is a standing explanation
+  // rather than news, and it was eating the line and truncating the scope.
   const filterStatusText =
-    scopeText && dragDisabledReason
-      ? `${scopeText} · ${dragDisabledReason}`
-      : (scopeText ?? dragDisabledReason);
+    [scopeText, activeFacetText || null].filter(Boolean).join(" · ") || dragDisabledReason;
 
   // Announce the filtered worktree count to screen readers, debounced so rapid
   // typing in the search box doesn't flood the AT speech queue. Routed through
@@ -1184,10 +1213,19 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // than a persistent aria-atomic live region — that region re-announced the
   // whole status line, including the persistent sort-disabled text, on every
   // keystroke (#9665).
+  // Silent on mount, so opening a project does not announce its own worktree
+  // count; from then on every transition speaks, including the one back to the
+  // full set. Bailing out on `!showScope` meant clearing the last filter — the
+  // moment the user most needs it confirmed — said nothing at all.
+  const hasAnnouncedScope = useRef(false);
   useEffect(() => {
-    if (!showScope) return;
+    if (!showScope && !hasAnnouncedScope.current) return;
+    hasAnnouncedScope.current = true;
+    const message = showScope
+      ? `${filteredCount} of ${totalCount} worktrees`
+      : `All ${totalCount} worktrees shown`;
     const timer = window.setTimeout(() => {
-      useAnnouncerStore.getState().announce(`${filteredCount} of ${totalCount} worktrees`);
+      useAnnouncerStore.getState().announce(message);
     }, UI_DOHERTY_THRESHOLD);
     return () => {
       window.clearTimeout(timer);

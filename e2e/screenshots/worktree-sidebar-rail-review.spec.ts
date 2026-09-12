@@ -446,6 +446,21 @@ function popoverButton(popover: Locator, label: string): Locator {
  * Assert a string is really in the open popover, quoting what IS there when it
  * is not — a bare "element not found" says nothing about which state rendered.
  */
+/**
+ * Sections carry their own open state — Status and Branch type start open, the
+ * long-tail facets start shut, and any section holding an active filter opens
+ * itself. So a bare click is a toggle, not an "expand": on an already-open
+ * section it collapses the panel and every chip inside goes `inert`, which is
+ * how three capture steps started timing out on chips that were plainly there.
+ * Drive the state you want, never the transition.
+ */
+async function ensureSectionOpen(popover: Locator, name: string): Promise<void> {
+  const toggle = popover.getByRole("button", { name }).first();
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+  }
+}
+
 async function expectInPopover(popover: Locator, text: string): Promise<void> {
   // textContent, not innerText: the popover clips and scrolls, and innerText's
   // "rendered text" approximation is exactly the wrong oracle for asking
@@ -593,7 +608,7 @@ test("worktrees sidebar rail — state matrix", async () => {
     // 8. One facet filter — the neutral count on the trigger, and the status line.
     await cap.step("filters-one", async () => {
       const popover = await openFilterPopover(page);
-      await popover.getByRole("button", { name: "Status" }).first().click();
+      await ensureSectionOpen(popover, "Status");
       await settle(page, 300);
       await popover
         .getByRole("button", { name: /^Dirty/ })
@@ -610,7 +625,7 @@ test("worktrees sidebar rail — state matrix", async () => {
     // 9. Several axes — count, status line and "Clear all" all present at once.
     await cap.step("filters-many", async () => {
       const popover = await openFilterPopover(page);
-      await popover.getByRole("button", { name: "Branch Type" }).first().click();
+      await ensureSectionOpen(popover, "Branch type");
       await settle(page, 300);
       await popover
         .getByRole("button", { name: /^Feature/ })
@@ -674,14 +689,9 @@ test("worktrees sidebar rail — state matrix", async () => {
     // 12. Popover expanded — chips, counts, and the zero-count dimming.
     await cap.step("popover-expanded", async () => {
       const popover = await openFilterPopover(page);
-      for (const section of ["Status", "Branch Type", "Sessions"]) {
-        const toggle = popover.getByRole("button", { name: section }).first();
-        // Click only when collapsed: these sections keep their own open state
-        // across a filter clear, so an unconditional click closes them instead.
-        if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-          await toggle.click();
-          await settle(page, 250);
-        }
+      for (const section of ["Status", "Branch type", "Sessions"]) {
+        await ensureSectionOpen(popover, section);
+        await settle(page, 250);
       }
       await expect(popover.getByRole("button", { name: /^Feature/ })).toBeVisible();
       await cap.snapLocator("44-popover-expanded", popover);
