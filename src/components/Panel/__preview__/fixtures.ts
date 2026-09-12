@@ -253,12 +253,13 @@ export const FIXTURES = {
     lastCommand: "npm run build",
   },
   tabs: {
-    what: "a tab group — three tabs, one active, states on the others",
+    what: "a tab group in a wide pane — three tabs, one active, states on the others",
     kind: "terminal",
     title: "Claude: fix flaky auth tests",
     agentId: "claude",
     agentState: "working",
     isFocused: true,
+    width: 760,
     tabs: [
       {
         id: "tab-1",

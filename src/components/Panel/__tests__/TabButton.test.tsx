@@ -636,4 +636,14 @@ describe("TabButton", () => {
       expect(parentHandler).not.toHaveBeenCalled();
     });
   });
+
+  describe("close button in the Tab order", () => {
+    it("is a Tab stop only on the active tab — inactive tabs are reached with the arrows", () => {
+      const { unmount } = render(<TabButton {...defaultProps} isActive />);
+      expect(screen.getByLabelText("Close Test Agent").tabIndex).not.toBe(-1);
+      unmount();
+      render(<TabButton {...defaultProps} isActive={false} />);
+      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(-1);
+    });
+  });
 });

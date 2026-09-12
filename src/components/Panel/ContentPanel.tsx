@@ -357,7 +357,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // navigation and action-target resolution are unaffected; only the chrome
   // releases. Ambient agent-state borders (`panel-state-*`) still render.
   const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
-  const showSelectedChrome = (isFocused || isSelected) && !isAssistantActive;
+  // The frame follows focus alone. An armed follower keeps the title-bar lift
+  // and its stripe (PanelHeader), but not the focus frame — otherwise every
+  // receiver in a fleet looks like the pane the keystrokes go to.
+  const showSelectedChrome = isFocused && !isAssistantActive;
   // #11837: a lone grid pane has no sibling to contrast against, so it skips
   // `showGridAttention` entirely and renders bare in every state — including
   // while the Assistant holds the keystrokes. That leaves the two states
@@ -440,7 +443,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         <TerminalHeaderContent
           id={id}
           kind={kind}
-          agentState={headerAgentState}
+          // The lifecycle state, not the glyph's display state: the display
+          // state folds `completed` into `waiting` for the indicator, which
+          // would keep the row's settled trace (cost, "Finished, no changes")
+          // from ever rendering.
+          agentState={agentState}
           activityStatus={activityStatus}
           lastCommand={lastCommand}
           isExited={isExited}
@@ -457,7 +464,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isAutoTerminalHeader,
     kind,
     id,
-    headerAgentState,
+    agentState,
     activityStatus,
     lastCommand,
     isExited,
@@ -620,7 +627,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         (location === "dock" || location === "dialog" || isMaximized) && "bg-surface-canvas",
         location === "grid" &&
           !isMaximized &&
-          "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
+          "rounded-lg border shadow-[var(--theme-shadow-ambient)] transition-colors duration-150",
         location === "grid" &&
           !isMaximized &&
           resolveGridPanelChromeClass({

@@ -97,6 +97,7 @@ function ptyRow(id: string, extra: Partial<PtyPanelData>): PtyPanelData {
 function worktree(id: string, branch: string, extra: Partial<WorktreeSnapshot>): WorktreeSnapshot {
   return {
     id,
+    worktreeId: id,
     path: `/Users/dev/acme-platform-worktrees/${branch.replace(/\//g, "-")}`,
     name: branch,
     branch,
@@ -289,7 +290,8 @@ function App() {
       }}
     >
       {FIXTURE_NAMES.map((name) => {
-        const wide = (FIXTURES[name].width ?? DEFAULT_WIDTH) > DEFAULT_WIDTH;
+        const fixture: PanelHeaderFixture = FIXTURES[name];
+        const wide = (fixture.width ?? DEFAULT_WIDTH) > DEFAULT_WIDTH;
         return (
           <div
             key={name}

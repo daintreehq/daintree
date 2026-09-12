@@ -3,12 +3,21 @@ import { LayoutGroup, AnimatePresence, m } from "framer-motion";
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import type { TabInfo } from "./TabButton";
 
 export interface PanelTabListProps {
   layoutGroupId: string;
   tabs: TabInfo[];
+  /**
+   * Tabs the overflow observer has marked as not fitting. They stay in the
+   * strip's layout — the observer needs their boxes to notice when they fit
+   * again — but they are painted `invisible` rather than left as fragments
+   * at the clipped edge. The active tab is never hidden: it is scrolled into
+   * view, and the observer can flag it mid-scroll.
+   */
+  hiddenTabIds?: ReadonlySet<string>;
   tabListRef: (el: HTMLDivElement | null) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   onAddTab?: () => void;
@@ -21,6 +30,7 @@ export interface PanelTabListProps {
 export function PanelTabList({
   layoutGroupId,
   tabs,
+  hiddenTabIds,
   tabListRef,
   onKeyDown,
   onAddTab,
@@ -30,6 +40,7 @@ export function PanelTabList({
   className,
 }: PanelTabListProps) {
   const performanceMode = document.body.dataset.performanceMode === "true";
+  const isParked = (tab: TabInfo) => !tab.isActive && (hiddenTabIds?.has(tab.id) ?? false);
 
   return (
     // [data-no-dnd] opts the whole tab strip out of the outer panel-move drag
@@ -47,13 +58,23 @@ export function PanelTabList({
         <LayoutGroup id={layoutGroupId}>
           <div className="flex items-center">
             {performanceMode ? (
-              tabs.map((tab) => renderTab(tab))
+              tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  className={cn(isParked(tab) && "invisible")}
+                  data-tab-parked={isParked(tab) || undefined}
+                >
+                  {renderTab(tab)}
+                </div>
+              ))
             ) : (
               <AnimatePresence initial={false} mode="popLayout">
                 {tabs.map((tab) => (
                   <m.div
                     key={tab.id}
                     layout="position"
+                    className={cn(isParked(tab) && "invisible")}
+                    data-tab-parked={isParked(tab) || undefined}
                     transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
                   >
                     {renderTab(tab)}
@@ -64,18 +85,19 @@ export function PanelTabList({
             {onAddTab && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       onAddTab();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                    className="shrink-0"
                     aria-label="Duplicate panel as new tab"
-                    type="button"
                   >
-                    <Plus className="w-3 h-3" aria-hidden="true" />
-                  </button>
+                    <Plus aria-hidden="true" />
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{addTabTooltipContent}</TooltipContent>
               </Tooltip>

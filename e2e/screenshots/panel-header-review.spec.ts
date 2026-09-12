@@ -185,6 +185,29 @@ async function snapRegion(
 }
 
 /**
+ * The width contract under pressure: the title never collapses below a few
+ * characters, and nothing in the identity group is allowed to reach the controls.
+ * Both were true failures in the first capture, so both are proved on every run.
+ */
+async function proveTitleSurvives(header: Locator): Promise<void> {
+  const title = header.getByRole("button", { name: /title:/ });
+  const titleBox = await title.boundingBox();
+  if (!titleBox || titleBox.width < 30) {
+    throw new Error(`title collapsed to ${titleBox?.width ?? 0}px — refusing to write`);
+  }
+  const more = header.getByRole("button", { name: "More panel actions" });
+  await expect(more).toBeVisible();
+  const moreBox = (await more.boundingBox())!;
+  const badge = header.locator('[aria-label^="Branch:"]');
+  if ((await badge.count()) > 0) {
+    const badgeBox = (await badge.boundingBox())!;
+    if (badgeBox.x + badgeBox.width > moreBox.x) {
+      throw new Error("branch badge overlaps the More-actions trigger — refusing to write");
+    }
+  }
+}
+
+/**
  * What proves each state is actually on screen. The default is the pane title in the
  * header; states whose header shows something else name their own proof. A relabel
  * fails loudly here — which is the right sensitivity for a design harness.
@@ -195,7 +218,12 @@ async function proveState(page: Page, name: FixtureName, header: Locator): Promi
   switch (name) {
     case "tabs":
     case "tabs-overflow":
-      await expect(header.getByRole("tab")).toHaveCount((fixture.tabs ?? []).length, { timeout });
+      // Parked (overflowed) tabs are `visibility: hidden`, which drops them from
+      // the accessibility tree; they are still rendered and still counted.
+      await expect(header.getByRole("tab", { includeHidden: true })).toHaveCount(
+        (fixture.tabs ?? []).length,
+        { timeout }
+      );
       if (name === "tabs-overflow") {
         await expect(header.getByTestId("panel-tabs-overflow")).toBeVisible({ timeout });
       }
@@ -234,6 +262,10 @@ async function proveState(page: Page, name: FixtureName, header: Locator): Promi
     case "dense-metadata":
       await expect(header.getByText("feature/auth-redirect")).toBeVisible({ timeout });
       await expect(header.getByText("queued")).toBeVisible({ timeout });
+      await proveTitleSurvives(header);
+      break;
+    case "long-title-narrow":
+      await proveTitleSurvives(header);
       break;
     case "status-slot":
       await expect(header.getByRole("status", { name: /Output paused/ })).toBeVisible({ timeout });
@@ -406,7 +438,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
       await page.getByTestId("panel-restart").click();
       const confirm = page.getByTestId("panel-restart-confirm");
       await expect(confirm).toBeVisible();
-      await expect(confirm).toContainText("Confirm Restart");
+      await expect(confirm).toContainText("Confirm restart");
       await page.waitForTimeout(100);
       written.push(
         await snapRegion(page, pane, 320, `focused-working--${theme}--armed-restart.png`)

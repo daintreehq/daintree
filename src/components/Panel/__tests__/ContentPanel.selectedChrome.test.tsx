@@ -219,17 +219,17 @@ describe("ContentPanel lone-pane selection chrome (#11837)", () => {
     expect(chromeOf(container)).toBe("none");
   });
 
-  it("lights a lone pane that is selected rather than focused", () => {
-    // `showSelectedChrome` is (isFocused || isSelected), and TerminalPane
-    // documents selection treatment as identical to focus. The cue inherits
-    // that convention rather than inventing a narrower one beside it.
+  it("does not light a lone pane that is armed but not focused", () => {
+    // The frame follows focus alone: an armed pane keeps its title-bar lift
+    // (PanelHeader), but only the pane the keystrokes go to wears the frame.
+    // Here the Assistant has them, so nothing lights.
     const { container } = renderPanel({
       isMultiPanelGrid: false,
       isFocused: false,
       isSelected: true,
     });
     showAssistant(true);
-    expect(chromeOf(container)).toBe("quiet");
+    expect(chromeOf(container)).toBe("none");
   });
 
   it.each([
@@ -264,6 +264,17 @@ describe("ContentPanel grid chrome priority (#11837 extraction guard)", () => {
   // ternary's order exactly. These pin the order itself, not the class values:
   // each case supplies TWO competing states and asserts the higher-priority
   // one wins, so swapping any pair of branches fails.
+  it("frames the focused pane and not an armed follower (fleet)", () => {
+    // Question one on this surface is "which pane am I typing into". A
+    // follower is lifted and striped by the header; if it also wore the focus
+    // frame, every receiver in the fleet would look like the primary.
+    const primary = renderPanel({ isMultiPanelGrid: true, isFocused: true, isSelected: true });
+    expect(chromeOf(primary.container)).toBe("selected");
+    primary.unmount();
+    const follower = renderPanel({ isMultiPanelGrid: true, isFocused: false, isSelected: true });
+    expect(chromeOf(follower.container)).toBe("none");
+  });
+
   it("gives a focused multi-pane the full-strength class", () => {
     const { container } = renderPanel({ isMultiPanelGrid: true });
     expect(chromeOf(container)).toBe("selected");

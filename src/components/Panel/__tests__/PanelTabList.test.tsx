@@ -72,4 +72,22 @@ describe("PanelTabList", () => {
     const noDnd = container.querySelector("[data-no-dnd]");
     expect(noDnd?.contains(screen.getByTestId("overflow"))).toBe(true);
   });
+
+  it("parks tabs the overflow observer cannot fit, and never the active one", () => {
+    const three: TabInfo[] = [
+      { ...tabs[0]!, id: "tab-1", isActive: false },
+      { ...tabs[0]!, id: "tab-2", isActive: true },
+      { ...tabs[0]!, id: "tab-3", isActive: false },
+    ];
+    render(<PanelTabList {...baseProps} tabs={three} hiddenTabIds={new Set(["tab-2", "tab-3"])} />);
+    const wrapperOf = (id: string) => screen.getByTestId(`tab-${id}`).parentElement!;
+    // A tab that does not fit must not paint a fragment at the strip's edge —
+    // it stays in layout (the observer still measures it) but not on screen.
+    expect(wrapperOf("tab-3").classList.contains("invisible")).toBe(true);
+    expect(wrapperOf("tab-3").getAttribute("data-tab-parked")).toBe("true");
+    expect(wrapperOf("tab-1").classList.contains("invisible")).toBe(false);
+    // The active tab is scrolled into view and can be flagged mid-scroll; it
+    // is never parked or the strip would blink.
+    expect(wrapperOf("tab-2").classList.contains("invisible")).toBe(false);
+  });
 });

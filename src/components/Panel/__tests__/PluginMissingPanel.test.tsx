@@ -40,4 +40,20 @@ describe("PluginMissingPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove panel" }));
     expect(onRemove).toHaveBeenCalledOnce();
   });
+
+  it("is composed from the EmptyState and Button primitives", () => {
+    const { container } = render(
+      <PluginMissingPanel kind="plug.panel" pluginId="plug" onRemove={() => {}} />
+    );
+    expect(container.querySelector("[data-empty-state-icon]")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Remove panel" }).getAttribute("data-variant")
+    ).not.toBeNull();
+  });
+
+  it("scrolls rather than clips when the pane is shorter than the explanation", () => {
+    render(<PluginMissingPanel kind="plug.panel" pluginId="plug" onRemove={() => {}} />);
+    const region = screen.getByRole("region", { name: "Plugin unavailable" });
+    expect(region.className).toMatch(/overflow-y-auto/);
+  });
 });

@@ -416,12 +416,17 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                 onClick={handleClose}
                 onKeyDown={handleCloseKeyDown}
                 onPointerDown={handleClosePointerDown}
+                // A 24px target on a 24px tab: the button spans the tab's
+                // height and gives most of its width back with -mr-1.5. Only
+                // the active tab's close is a Tab stop — the strip already
+                // roves, and an inactive tab is reached with the arrows.
+                tabIndex={isActive ? undefined : -1}
                 className={cn(
-                  "shrink-0 p-0.5 -mr-1 rounded transition-[opacity,color,background-color,border-color]",
+                  "-my-1 -mr-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition-[opacity,color,background-color,border-color]",
                   "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",
                   "hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)]",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
-                  "text-daintree-text/40 hover:text-status-error"
+                  "text-text-secondary hover:text-status-error"
                 )}
                 aria-label={`Close ${title}`}
                 type="button"
