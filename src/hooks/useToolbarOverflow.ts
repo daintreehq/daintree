@@ -74,11 +74,10 @@ function footprint(
  * Items are removed lowest-priority-first (highest number). Within the same
  * priority, items later in the array are removed first.
  *
- * `pinnedIds` are immune to overflow — they always land in `visibleIds` and
- * their widths are excluded from the budget calculation, so non-pinned items
- * absorb all width pressure. Used for hardware-privacy indicators (e.g. an
- * active mic recording) where presence must remain stable regardless of
- * container width.
+ * `pinnedIds` are immune to removal — they always land in `visibleIds` — but
+ * their widths still count against the budget, so non-pinned items absorb all
+ * width pressure. Used for hardware-privacy indicators (e.g. an active mic
+ * recording) where presence must remain stable regardless of container width.
  */
 export function computeOverflow(
   containerWidth: number,
