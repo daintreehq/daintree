@@ -153,7 +153,7 @@ interface XtermCoreViewportSync {
  * public path reaches `Viewport.scrollToLine(line, true)`. Drop this when one
  * exists.
  */
-function invalidateXtermViewportScrollCache(terminal: Terminal): void {
+export function invalidateXtermViewportScrollCache(terminal: Terminal): void {
   try {
     const core = (terminal as Terminal & { _core?: XtermCoreViewportSync })._core;
     const viewport = core?._viewport;

@@ -76,7 +76,7 @@ export class TerminalWorkerIngestController {
       sendRelease: (drainId) => terminalClient.sendWorkerIngestRelease(id, drainId),
       createTransport: () => createParseWorkerTransport(),
       mirror: {
-        write: (data, callback) => {
+        write: (data, callback, source) => {
           const current = this.deps.getInstance(id);
           if (!current) {
             callback?.();
@@ -86,7 +86,21 @@ export class TerminalWorkerIngestController {
           // write controller's ack bookkeeping must never see them. Unseen
           // tracking still counts each repaint as output activity.
           this.deps.incrementUnseen(id, current.isUserScrolledBack);
-          current.terminal.write(data, callback);
+          if (source !== "snapshot") {
+            current.terminal.write(data, callback);
+            return;
+          }
+          // The snapshot payload opens with our own ESC[3J. Flag it until the
+          // parse callback — `write()` returning means queued, not parsed — so
+          // the viewport anchor does not read the clear as an agent replay.
+          current.pendingOwnClearWrites = (current.pendingOwnClearWrites ?? 0) + 1;
+          current.terminal.write(data, () => {
+            const parsed = this.deps.getInstance(id);
+            if (parsed) {
+              parsed.pendingOwnClearWrites = Math.max(0, (parsed.pendingOwnClearWrites ?? 0) - 1);
+            }
+            callback?.();
+          });
         },
       },
       serializeMirror: () => {

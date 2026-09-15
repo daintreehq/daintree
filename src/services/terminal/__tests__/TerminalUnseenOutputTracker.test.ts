@@ -192,4 +192,49 @@ describe("TerminalUnseenOutputTracker", () => {
       expect(listener).not.toHaveBeenCalled();
     });
   });
+
+  describe("restoreUnseen", () => {
+    it("exposes the raw count, not the throttled snapshot", () => {
+      for (let i = 0; i < 5; i++) tracker.incrementUnseen(terminalId, true);
+      expect(tracker.getUnseen(terminalId)).toBe(5);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(3);
+    });
+
+    it("lowers the count back to the value before a redraw and notifies", () => {
+      const listener = vi.fn();
+      tracker.incrementUnseen(terminalId, true);
+      const before = tracker.getUnseen(terminalId);
+      for (let i = 0; i < 4; i++) tracker.incrementUnseen(terminalId, true);
+      tracker.subscribe(terminalId, listener);
+
+      tracker.restoreUnseen(terminalId, before);
+
+      expect(tracker.getUnseen(terminalId)).toBe(1);
+      expect(tracker.getSnapshot(terminalId)).toEqual({ isUserScrolledBack: true, unseen: 1 });
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("never raises the count — a clear that landed meanwhile stays cleared", () => {
+      const listener = vi.fn();
+      for (let i = 0; i < 3; i++) tracker.incrementUnseen(terminalId, true);
+      tracker.clearUnseen(terminalId, false);
+      tracker.subscribe(terminalId, listener);
+
+      tracker.restoreUnseen(terminalId, 3);
+
+      expect(tracker.getUnseen(terminalId)).toBe(0);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(0);
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("is silent when nothing changes", () => {
+      const listener = vi.fn();
+      tracker.incrementUnseen(terminalId, true);
+      tracker.subscribe(terminalId, listener);
+
+      tracker.restoreUnseen(terminalId, 1);
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -77,7 +77,11 @@ function makeMockTerminal(captured: CapturedCallbacks) {
     options: { scrollback: 5000 },
     rows: 24,
     cols: 80,
-    modes: { bracketedPasteMode: false, mouseTrackingMode: "none" as const },
+    modes: {
+      bracketedPasteMode: false,
+      mouseTrackingMode: "none" as const,
+      synchronizedOutputMode: false,
+    },
     // Rendered cell dimensions read by getXtermCellDimensions(): a 20px cell
     // height makes the wheel normalizer's px-per-line basis exactly 20, the
     // value the amplifier/normalizer tests are written against.
@@ -96,7 +100,14 @@ function makeMockTerminal(captured: CapturedCallbacks) {
     },
     parser: {
       registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+      registerCsiHandler: vi.fn(
+        (
+          _id: { prefix?: string; final: string },
+          _handler: (params: (number | number[])[]) => boolean
+        ) => ({ dispose: vi.fn() })
+      ),
     },
+    scrollToLine: vi.fn(),
     attachCustomWheelEventHandler: vi.fn((handler: (event: WheelEvent) => boolean) => {
       captured.wheelHandler = handler;
     }),
@@ -186,6 +197,8 @@ function makeDeps(
     scrollToBottomSafe: vi.fn(),
     updateScrollState: vi.fn(),
     clearUnseen: vi.fn(),
+    getUnseen: vi.fn(() => 0),
+    restoreUnseen: vi.fn(),
     onWriteParsedReflow: vi.fn(),
     setCachedSelection: vi.fn(),
     deleteCachedSelection: vi.fn(),
@@ -1524,6 +1537,124 @@ describe("installTerminalBoundListeners", () => {
       // "auto" stays as-is (parseFloat → NaN, guarded out).
       const rows = element.querySelector(".xterm-rows")!.children;
       expect((rows[0] as HTMLElement).style.height).toBe("auto");
+    });
+  });
+
+  describe("viewport anchor across an ESC[3J redraw (#12398)", () => {
+    type CsiHandler = (params: (number | number[])[]) => boolean;
+
+    function installScrolledBack() {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      terminal.buffer.active.baseY = 50;
+      terminal.buffer.active.viewportY = 10;
+      terminal.buffer.active.getLine.mockImplementation((index: number) => ({
+        translateToString: () => `line ${index}`,
+      }));
+      const managed = makeMockManaged({ isUserScrolledBack: true });
+      const deps = makeDeps({ getUnseen: vi.fn(() => 4) });
+
+      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+      installTerminalBoundListeners(
+        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+        managed,
+        "t1",
+        deps
+      );
+      const csi = new Map<string, CsiHandler>();
+      for (const [id, handler] of terminal.parser.registerCsiHandler.mock.calls) {
+        csi.set(`${id.prefix ?? ""}${id.final}`, handler);
+      }
+      const erase = () => {
+        expect(csi.get("J")!([3])).toBe(false);
+        // xterm's own handler runs next: scrollback gone, reader parked at 0.
+        terminal.buffer.active.baseY = 0;
+        terminal.buffer.active.viewportY = 0;
+      };
+      const redraw = () => {
+        terminal.buffer.active.baseY = 60;
+        terminal.buffer.active.viewportY = 0;
+        captured.onWriteParsed?.();
+      };
+      const closeSyncBlock = () => expect(csi.get("?l")!([2026])).toBe(false);
+      return { terminal, managed, deps, captured, erase, redraw, closeSyncBlock };
+    }
+
+    it("observes ESC[3J and DECRST 2026 on the parser beside OSC 11 without blocking them", () => {
+      const { terminal, erase, redraw, closeSyncBlock } = installScrolledBack();
+      expect(terminal.parser.registerCsiHandler).toHaveBeenCalledWith(
+        { final: "J" },
+        expect.any(Function)
+      );
+      expect(terminal.parser.registerCsiHandler).toHaveBeenCalledWith(
+        { prefix: "?", final: "l" },
+        expect.any(Function)
+      );
+      erase();
+      redraw();
+      closeSyncBlock();
+    });
+
+    it("hands the unseen count at the erase back once the redraw's sync block closes", () => {
+      const { deps, erase, redraw, closeSyncBlock } = installScrolledBack();
+      erase();
+      expect(deps.getUnseen).toHaveBeenCalledWith("t1");
+      redraw();
+      expect(deps.restoreUnseen).not.toHaveBeenCalled();
+      closeSyncBlock();
+      expect(deps.restoreUnseen).toHaveBeenCalledWith("t1", 4);
+    });
+
+    it("scrolls back to the anchored content on the render after the block closes", async () => {
+      const { terminal, captured, erase, redraw, closeSyncBlock } = installScrolledBack();
+      erase();
+      redraw();
+      closeSyncBlock();
+      expect(terminal.scrollToLine).not.toHaveBeenCalled();
+
+      captured.onRender?.();
+      // Deferred a microtask past onRender so xterm's viewport sync runs first.
+      expect(terminal.scrollToLine).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(terminal.scrollToLine).toHaveBeenCalledWith(10);
+    });
+
+    it("a wheel gesture during the redraw drops the pending restore", () => {
+      const { managed, deps, erase, redraw, closeSyncBlock } = installScrolledBack();
+      erase();
+      managed.hostElement.dispatchEvent(new WheelEvent("wheel", { deltaY: -10 }));
+      redraw();
+      closeSyncBlock();
+      expect(deps.restoreUnseen).not.toHaveBeenCalled();
+    });
+
+    it("a scroll key during the redraw drops the pending restore", () => {
+      const { managed, deps, erase, redraw, closeSyncBlock } = installScrolledBack();
+      erase();
+      managed.hostElement.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageUp", bubbles: true })
+      );
+      redraw();
+      closeSyncBlock();
+      expect(deps.restoreUnseen).not.toHaveBeenCalled();
+    });
+
+    it("never arms for a Daintree-owned clear", () => {
+      const { managed, deps, erase, redraw, closeSyncBlock } = installScrolledBack();
+      managed.pendingOwnClearWrites = 1;
+      erase();
+      redraw();
+      closeSyncBlock();
+      expect(deps.getUnseen).not.toHaveBeenCalled();
+      expect(deps.restoreUnseen).not.toHaveBeenCalled();
+    });
+
+    it("disposes the parser observers with the bound listeners", () => {
+      const { terminal, managed } = installScrolledBack();
+      for (const unsubscribe of managed.listeners) unsubscribe();
+      for (const result of terminal.parser.registerCsiHandler.mock.results) {
+        expect(result.value.dispose).toHaveBeenCalled();
+      }
     });
   });
 });

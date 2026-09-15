@@ -169,6 +169,10 @@ export interface ManagedTerminal {
 
   // Viewport pinning: suppress scroll tracking during programmatic scrollToBottom
   _suppressScrollTracking?: boolean;
+  // Daintree-owned ESC[3J writes (worker-mirror snapshot applies) still queued
+  // or parsing on this terminal. The viewport anchor ignores erases while this
+  // is non-zero so its own clears never read as an agent replay.
+  pendingOwnClearWrites?: number;
   // Viewport pinning: set by wheel/keyboard events to distinguish user-initiated scroll
   _userScrollIntent?: boolean;
   // Timestamp of the most recent wheel event on the host element — used to

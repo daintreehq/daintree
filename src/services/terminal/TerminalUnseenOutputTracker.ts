@@ -90,6 +90,30 @@ export class TerminalUnseenOutputTracker {
     return snapshot;
   }
 
+  /** The raw count, not the throttled snapshot — the value to hand back to `restoreUnseen`. */
+  getUnseen(id: string): number {
+    return this.unseenById.get(id) ?? 0;
+  }
+
+  /**
+   * Lower the count back to `count` after output that only re-drew content the
+   * reader already had (an agent replaying its transcript after ESC[3J). Never
+   * raises it: a scroll-to-bottom that zeroed the count in the meantime stays
+   * zeroed rather than resurrecting a stale pill.
+   */
+  restoreUnseen(id: string, count: number): void {
+    const current = this.unseenById.get(id) ?? 0;
+    const next = Math.min(current, Math.max(0, count));
+    if (next === current) return;
+    this.unseenById.set(id, next);
+
+    const snapshot = this.getSnapshot(id);
+    if (snapshot.unseen !== next) {
+      this.updateSnapshot(id, snapshot.isUserScrolledBack, next);
+      this.notify(id);
+    }
+  }
+
   destroy(id: string): void {
     this.unseenById.delete(id);
     const listeners = this.listenersById.get(id);

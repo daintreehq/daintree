@@ -9,7 +9,11 @@ import type { ManagedTerminal } from "./types";
 import { isNonKeyboardInput } from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
-import { getXtermCellDimensions } from "./TerminalResizeController";
+import {
+  getXtermCellDimensions,
+  invalidateXtermViewportScrollCache,
+} from "./TerminalResizeController";
+import { installViewportAnchorController } from "./TerminalViewportAnchorController";
 import { MouseWheelClassifier } from "./mouseWheelClassifier";
 import { getTerminalMetrics } from "@/config/xtermConfig";
 import { hashPerfLine, PERF_MARKS } from "@shared/perf/marks";
@@ -257,6 +261,9 @@ export interface TerminalListenerInstallDeps {
   scrollToBottomSafe: (managed: ManagedTerminal) => void;
   updateScrollState: (id: string, isScrolledBack: boolean) => void;
   clearUnseen: (id: string, fromUser: boolean) => void;
+  /** Raw unseen count, snapshotted before an ESC[3J redraw and handed back after it (#12398). */
+  getUnseen: (id: string) => number;
+  restoreUnseen: (id: string, count: number) => void;
   onWriteParsedReflow?: (managed: ManagedTerminal) => void;
 
   // Selection cache
@@ -618,6 +625,34 @@ export function installTerminalBoundListeners(
   });
   managed.listeners.push(() => oscDisposable.dispose());
 
+  // A fresh terminal has no queued writes; a counter stranded by a rebuild
+  // (the old terminal's parse callback never fires) must not disarm the anchor.
+  managed.pendingOwnClearWrites = 0;
+  const viewportAnchor = installViewportAnchorController(terminal, {
+    isOwnClear: () =>
+      managed.isSerializedRestoreInProgress || (managed.pendingOwnClearWrites ?? 0) > 0,
+    afterRender: (callback) => {
+      let settled = false;
+      const renderOnce = terminal.onRender(() => {
+        if (settled) return;
+        settled = true;
+        renderOnce.dispose();
+        // Public onRender is xterm's onRenderedViewportChange, fired before the
+        // Viewport's own render listener performs the sync it deferred during
+        // synchronized output — hop out so scroll dimensions are current.
+        queueMicrotask(callback);
+      });
+      return () => {
+        settled = true;
+        renderOnce.dispose();
+      };
+    },
+    syncViewport: () => invalidateXtermViewportScrollCache(terminal),
+    getUnseen: () => deps.getUnseen(id),
+    restoreUnseen: (count) => deps.restoreUnseen(id, count),
+  });
+  managed.listeners.push(() => viewportAnchor.dispose());
+
   const writeParsedDisposable = terminal.onWriteParsed(() => {
     deps.notifyParsed(id);
     if (!managed.isUserScrolledBack && !managed.isAltBuffer) {
@@ -654,6 +689,7 @@ export function installTerminalBoundListeners(
   const onWheel = (ev: WheelEvent) => {
     managed._userScrollIntent = true;
     managed.lastWheelAt = Date.now();
+    viewportAnchor.cancel();
     // Skip the synthetic per-line events the alt-buffer mouse-reporting
     // amplifier dispatches (already drives the profile hold via onActiveWheel)
     // and modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
@@ -666,6 +702,7 @@ export function installTerminalBoundListeners(
   const onKeydownScroll = (e: KeyboardEvent) => {
     if (SCROLL_KEYS.has(e.key)) {
       managed._userScrollIntent = true;
+      viewportAnchor.cancel();
       deps.onUserScrollIntent(id);
     }
   };
