@@ -573,7 +573,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           <div
             ref={actionContainerRef}
             tabIndex={-1}
-            className="shrink-0 pl-1 flex items-center gap-2 outline-hidden"
+            className="shrink-0 pl-1 flex items-center gap-2"
           >
             <BackgroundContainer compact={isCompact} />
             <WaitingContainer compact={isCompact} />

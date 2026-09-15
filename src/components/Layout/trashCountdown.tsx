@@ -114,7 +114,7 @@ interface TrashTtlMeterProps {
  * `data-reduce-animations` setting as well as the media query.
  */
 export function TrashTtlMeter({ countdown }: TrashTtlMeterProps) {
-  const { fraction, remainingMs, isCritical, expiresAt } = countdown;
+  const { fraction, isCritical, expiresAt } = countdown;
 
   // Seeked ONCE, when the animation is created, and never restated.
   //
