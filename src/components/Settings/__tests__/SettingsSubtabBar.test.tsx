@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { SettingsSubtabBar } from "../SettingsSubtabBar";
+import { SettingsSubtabBar, subtabPanelProps } from "../SettingsSubtabBar";
 
 const SUBTABS = [
   { id: "claude", label: "Claude" },
@@ -253,5 +253,58 @@ describe("SettingsSubtabBar", () => {
     );
     expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
     expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
+  });
+});
+
+describe("SettingsSubtabBar — tab and panel association", () => {
+  // The dialog nests this bar inside the sidebar's own tablist, so each tab has to point
+  // at its panel and each panel back at its tab — resolved through the DOM, never by
+  // asserting the literal id prefixes.
+  it("links every tab to a panel that labels itself with that tab", () => {
+    const subtabs = [
+      { id: "one", label: "One" },
+      { id: "two", label: "Two" },
+    ];
+    render(
+      <>
+        <SettingsSubtabBar
+          subtabs={subtabs}
+          activeId="two"
+          onChange={vi.fn()}
+          group="g"
+          ariaLabel="Group sections"
+        />
+        <div {...subtabPanelProps("g", "two")}>content</div>
+      </>
+    );
+    const active = screen.getByRole("tab", { selected: true });
+    const panel = screen.getByRole("tabpanel");
+    expect(document.getElementById(active.getAttribute("aria-controls")!)).toBe(panel);
+    expect(document.getElementById(panel.getAttribute("aria-labelledby")!)).toBe(active);
+    expect(screen.getByRole("tablist", { name: "Group sections" })).toBeTruthy();
+  });
+
+  it("keeps ids distinct across two bars that share subtab ids", () => {
+    const subtabs = [{ id: "same", label: "Same" }];
+    render(
+      <>
+        <SettingsSubtabBar
+          subtabs={subtabs}
+          activeId="same"
+          onChange={vi.fn()}
+          group="a"
+          ariaLabel="A"
+        />
+        <SettingsSubtabBar
+          subtabs={subtabs}
+          activeId="same"
+          onChange={vi.fn()}
+          group="b"
+          ariaLabel="B"
+        />
+      </>
+    );
+    const ids = screen.getAllByRole("tab").map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

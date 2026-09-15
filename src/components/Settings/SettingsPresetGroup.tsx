@@ -55,6 +55,14 @@ export function SettingsPresetGroup<T extends string | number>({
 
   const enabled = options.filter((o) => !o.disabled);
 
+  const focusOption = (v: T) => {
+    // CSS.escape: a value carrying a quote or backslash would otherwise produce an
+    // invalid selector and silently focus nothing.
+    groupRef.current
+      ?.querySelector<HTMLElement>(`[data-preset-value="${CSS.escape(String(v))}"]`)
+      ?.focus();
+  };
+
   const move = (delta: number) => {
     if (enabled.length === 0) return;
     const from = focusedValue ?? value;
@@ -70,9 +78,7 @@ export function SettingsPresetGroup<T extends string | number>({
     const option = enabled[next]!;
     setFocusedValue(option.value);
     onChange(option.value);
-    groupRef.current
-      ?.querySelector<HTMLElement>(`[data-preset-value="${String(option.value)}"]`)
-      ?.focus();
+    focusOption(option.value);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -93,9 +99,7 @@ export function SettingsPresetGroup<T extends string | number>({
         if (enabled[0]) {
           setFocusedValue(enabled[0].value);
           onChange(enabled[0].value);
-          groupRef.current
-            ?.querySelector<HTMLElement>(`[data-preset-value="${String(enabled[0].value)}"]`)
-            ?.focus();
+          focusOption(enabled[0].value);
         }
         break;
       case "End":
@@ -104,9 +108,7 @@ export function SettingsPresetGroup<T extends string | number>({
           const last = enabled.at(-1)!;
           setFocusedValue(last.value);
           onChange(last.value);
-          groupRef.current
-            ?.querySelector<HTMLElement>(`[data-preset-value="${String(last.value)}"]`)
-            ?.focus();
+          focusOption(last.value);
         }
         break;
       default:
@@ -114,11 +116,13 @@ export function SettingsPresetGroup<T extends string | number>({
     }
   };
 
-  // Exactly one tab stop: the selected option, or the first one when nothing is selected
-  // yet. Two options reporting tabIndex 0 is the bug that makes a radiogroup feel like a
-  // list of buttons.
-  const rovingValue = value !== null && enabled.some((o) => o.value === value) ? value : null;
-  const fallbackIndex = rovingValue === null ? 0 : -1;
+  // Exactly one tab stop, and it has to be a button that can take focus: the selection
+  // when it is enabled, otherwise the first enabled option. Falling back to index zero
+  // regardless left the group unreachable by Tab whenever option zero was disabled, and
+  // two options reporting tabIndex 0 is the bug that makes a radiogroup feel like a list
+  // of buttons.
+  const tabStopValue =
+    value !== null && enabled.some((o) => o.value === value) ? value : (enabled[0]?.value ?? null);
 
   return (
     <div id={id} className="space-y-2 scroll-mt-12">
@@ -133,7 +137,7 @@ export function SettingsPresetGroup<T extends string | number>({
         onKeyDown={handleKeyDown}
         className="flex flex-wrap gap-2"
       >
-        {options.map((option, index) => {
+        {options.map((option) => {
           const isSelected = option.value === value;
           const isDisabled = disabled || option.disabled;
           return (
@@ -145,7 +149,7 @@ export function SettingsPresetGroup<T extends string | number>({
               aria-label={option.ariaLabel}
               data-preset-value={String(option.value)}
               disabled={isDisabled}
-              tabIndex={isSelected || (rovingValue === null && index === fallbackIndex) ? 0 : -1}
+              tabIndex={!isDisabled && option.value === tabStopValue ? 0 : -1}
               onFocus={() => setFocusedValue(option.value)}
               onBlur={(e) => {
                 // Leaving the group entirely resets tracking, so re-entering by Tab starts

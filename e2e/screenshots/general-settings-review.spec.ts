@@ -567,7 +567,7 @@ test("general settings pane review — overview, agent status, hibernation, disp
       }
     }
   } finally {
-    if (ctx) await closeApp(ctx).catch(() => {});
+    if (ctx) await closeApp(ctx.app).catch(() => {});
     repo.cleanup();
     rmSync(userDataDir, { recursive: true, force: true });
   }

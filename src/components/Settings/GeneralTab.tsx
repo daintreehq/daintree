@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ChevronRight,
   History,
@@ -162,6 +162,7 @@ export function GeneralTab({
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
   const [cliCheckFailed, setCliCheckFailed] = useState(false);
   const [isRecheckingAgents, setIsRecheckingAgents] = useState(false);
+  const availabilityRequestRef = useRef(0);
   /**
    * Per-section load errors. These used to be swallowed into a `logError` and the section
    * simply did not render, on the reasoning that a missing card beats a wrong explanation.
@@ -178,8 +179,12 @@ export function GeneralTab({
    * even an empty machine. This reports what the probe actually returned, which is also
    * where the positive "everything is fine" answer now lives: labelling every healthy row
    * "Ready" would be fourteen repetitions of the same word, so the count says it once.
+   *
+   * Not memoised on purpose: `getAgentIds()` reads the live registry, which changes when a
+   * plugin agent is added or removed, and the roster below reads it on every render. A memo
+   * keyed only on availability let the two disagree.
    */
-  const systemStatusSummary = useMemo(() => {
+  const systemStatusSummary = (() => {
     if (cliCheckFailed) return "Which agents are installed on this machine.";
     if (!cliAvailability) return "Checking which agents are installed on this machine.";
     const installed = getAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
@@ -192,7 +197,7 @@ export function GeneralTab({
     }
     const ready = installed.length - attention.length;
     return `${ready} of ${installed.length} installed agents are ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention.`;
-  }, [cliAvailability, cliCheckFailed]);
+  })();
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
   const [updateChannelLoadFailed, setUpdateChannelLoadFailed] = useState(false);
@@ -454,6 +459,11 @@ export function GeneralTab({
   const loadAgentAvailability = useCallback(async (): Promise<void> => {
     const STATUS_TIMEOUT_MS = 15_000;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    // StrictMode mounts the effect twice, and Retry can overlap an in-flight read. Only the
+    // newest request may write state, or a slow first failure lands on top of a later
+    // success.
+    const generation = ++availabilityRequestRef.current;
+    const isCurrent = () => isMountedRef.current && availabilityRequestRef.current === generation;
 
     const timeout = new Promise<never>((_resolve, reject) => {
       timeoutId = setTimeout(
@@ -468,19 +478,19 @@ export function GeneralTab({
         actionService.dispatch("cliAvailability.get", undefined, { source: "user" }),
         timeout,
       ]);
-      if (!isMountedRef.current) return;
+      if (!isCurrent()) return;
       if (!availabilityResult.ok) {
         throw new Error(availabilityResult.error.message);
       }
       setCliAvailability(availabilityResult.result as CliAvailability);
       setCliCheckFailed(false);
     } catch (error) {
-      if (!isMountedRef.current) return;
+      if (!isCurrent()) return;
       logError("[GeneralTab] Failed to load agent availability", error);
       setCliCheckFailed(true);
     } finally {
       clearTimeout(timeoutId);
-      if (isMountedRef.current) setIsRecheckingAgents(false);
+      if (isCurrent()) setIsRecheckingAgents(false);
     }
   }, []);
 
@@ -1054,7 +1064,7 @@ export function GeneralTab({
                       options={UPDATE_CHANNEL_OPTIONS}
                       value={updateChannel}
                       onChange={(ch) => void handleChannelChange(ch)}
-                      disabled={updateChannel === null}
+                      disabled={updateChannel === null || channelSaving}
                     />
                     {updateChannel === "nightly" && (
                       <p className="text-xs text-status-warning">
@@ -1194,6 +1204,7 @@ export function GeneralTab({
                     {idleNotifyConfig.enabled && (
                       <SettingsPresetGroup
                         id="general-idle-terminal-threshold"
+                        disabled={isIdleNotifySaving}
                         label="Idle threshold"
                         options={IDLE_TERMINAL_THRESHOLD_PRESETS}
                         value={idleNotifyConfig.thresholdMinutes}
@@ -1233,6 +1244,7 @@ export function GeneralTab({
                     {idleAutoCloseConfig.enabled && (
                       <SettingsPresetGroup
                         id="general-idle-background-threshold"
+                        disabled={isIdleAutoCloseSaving}
                         label="Idle threshold"
                         options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
                         value={idleAutoCloseConfig.thresholdMinutes}
@@ -1271,6 +1283,7 @@ export function GeneralTab({
                 {hibernationConfig.enabled && (
                   <SettingsPresetGroup
                     id="general-hibernation-threshold"
+                    disabled={isSaving}
                     label="Inactivity threshold"
                     options={THRESHOLD_PRESETS}
                     value={hibernationConfig.inactiveThresholdHours}

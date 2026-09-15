@@ -85,6 +85,42 @@ describe("faultRegistry (env enabled)", () => {
     initFaultRegistry();
     await expect(applyInvokeFault("clean-channel")).resolves.toBeUndefined();
   });
+
+  // A stub answers the channel in place of its handler. The wrapper treats a returned
+  // StubbedInvoke as "return this, do not run the listener", so the contract here is that
+  // stub faults — and only stub faults — produce one.
+  it("applyInvokeFault returns the stubbed value for stub faults, including falsy ones", async () => {
+    const { initFaultRegistry, setFault, applyInvokeFault } = await loadRegistry();
+    initFaultRegistry();
+    const roster = { claude: "ready", codex: "missing" };
+    setFault("ch", { kind: "stub", value: roster });
+    await expect(applyInvokeFault("ch")).resolves.toEqual({ value: roster });
+
+    // Falsy and undefined values are still stubs: the caller must not mistake them for
+    // "no fault, run the real handler".
+    setFault("zero", { kind: "stub", value: 0 });
+    await expect(applyInvokeFault("zero")).resolves.toEqual({ value: 0 });
+    setFault("nil", { kind: "stub", value: undefined });
+    await expect(applyInvokeFault("nil")).resolves.toEqual({ value: undefined });
+  });
+
+  it("applyInvokeFault holds a delayed stub back before answering", async () => {
+    const { initFaultRegistry, setFault, applyInvokeFault } = await loadRegistry();
+    initFaultRegistry();
+    setFault("ch", { kind: "stub", value: "later", delayMs: 50 });
+    const start = Date.now();
+    const result = await applyInvokeFault("ch");
+    expect(Date.now() - start).toBeGreaterThanOrEqual(40);
+    expect(result).toEqual({ value: "later" });
+  });
+
+  it("clearing a stub lets the real handler run again", async () => {
+    const { initFaultRegistry, setFault, clearFault, applyInvokeFault } = await loadRegistry();
+    initFaultRegistry();
+    setFault("ch", { kind: "stub", value: 1 });
+    clearFault("ch");
+    await expect(applyInvokeFault("ch")).resolves.toBeUndefined();
+  });
 });
 
 describe("faultRegistry (env disabled)", () => {
@@ -117,6 +153,14 @@ describe("faultRegistry (env disabled)", () => {
   it("getFault returns undefined", async () => {
     const { getFault } = await loadRegistry();
     expect(getFault("anything")).toBeUndefined();
+  });
+
+  it("applyInvokeFault ignores a stub that somehow reached the registry", async () => {
+    // The gate is the env flag, not the registry's emptiness: even a hand-populated
+    // registry must not let a stub short-circuit a real handler outside fault mode.
+    globalThis.__daintreeFaultRegistry = { ch: { kind: "stub", value: "leaked" } };
+    const { applyInvokeFault } = await loadRegistry();
+    await expect(applyInvokeFault("ch")).resolves.toBeUndefined();
   });
 
   it("setFault is a no-op", async () => {

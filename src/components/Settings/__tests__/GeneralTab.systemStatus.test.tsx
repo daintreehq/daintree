@@ -403,6 +403,32 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     }
   });
 
+  // The rows a user can act on are why they opened the section, so they lead — but
+  // within each group the registry order holds, or the roster reshuffles between visits.
+  it("lists agents needing attention before ready ones, preserving registry order within each", async () => {
+    // Registry order (from the mock): claude, gemini, codex, opencode, cursor.
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "unauthenticated",
+        codex: "ready",
+        opencode: "blocked",
+        cursor: "ready",
+      },
+      { agents: {} } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem").length).toBe(5);
+    });
+    const order = screen
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("[data-agent-row]")!.getAttribute("data-agent-row"));
+    expect(order).toEqual(["gemini", "opencode", "claude", "codex", "cursor"]);
+  });
+
   it("renders empty-state CTA when no agents installed", async () => {
     setupDispatchMock(
       {

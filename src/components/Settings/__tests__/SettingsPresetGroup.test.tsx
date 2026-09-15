@@ -42,6 +42,27 @@ describe("SettingsPresetGroup", () => {
     expect(stops[0]!.getAttribute("aria-checked")).toBe("true");
   });
 
+  // The one tab stop has to be a button that can take focus. Falling back to index
+  // zero regardless made the group unreachable whenever option zero was disabled.
+  it("puts the tab stop on the first enabled option when the selection is disabled", () => {
+    render(
+      <SettingsPresetGroup
+        label="Channel"
+        options={[
+          { value: "a", label: "A", disabled: true },
+          { value: "b", label: "B", disabled: true },
+          { value: "c", label: "C" },
+        ]}
+        value="a"
+        onChange={vi.fn()}
+      />
+    );
+    const stops = screen.getAllByRole("radio").filter((r) => r.tabIndex === 0);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.hasAttribute("disabled")).toBe(false);
+    expect(stops[0]!.textContent).toBe("C");
+  });
+
   it("still offers one tab stop when nothing is selected yet", () => {
     renderGroup(null);
     const stops = screen.getAllByRole("radio").filter((r) => r.tabIndex === 0);
