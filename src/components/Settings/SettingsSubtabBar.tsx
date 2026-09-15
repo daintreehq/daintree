@@ -110,7 +110,11 @@ export function SettingsSubtabBar({
                 // bar sat against the dialog header, leaving an open-topped "U".
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 focus-visible:rounded-[var(--radius-sm)]",
                 isActive
-                  ? "border-b-2 border-accent-primary text-text-primary"
+                  ? // forced-colors replaces every author colour with a system one, so an
+                    // accent underline against a transparent sibling underline becomes two
+                    // identical lines and the active tab is unidentifiable. A Highlight
+                    // outline is the one selection cue that survives there.
+                    "border-b-2 border-accent-primary text-text-primary forced-colors:outline forced-colors:outline-2 forced-colors:[outline-color:Highlight] forced-colors:rounded-[var(--radius-sm)]"
                   : "border-b-2 border-transparent text-text-secondary hover:border-border-default hover:text-text-primary"
               )}
             >

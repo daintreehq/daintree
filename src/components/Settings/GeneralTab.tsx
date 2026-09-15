@@ -964,7 +964,7 @@ export function GeneralTab({
                                     hover-only chevron answers that only after the user has
                                     already guessed, so it rests visible and lifts on hover. */}
                                 <ChevronRight
-                                  className="w-4 h-4 shrink-0 text-text-secondary opacity-60 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                                  className="w-4 h-4 shrink-0 text-text-secondary opacity-60 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 forced-colors:opacity-100"
                                   aria-hidden="true"
                                 />
                               </button>
@@ -1164,72 +1164,90 @@ export function GeneralTab({
 
         {effectiveSubtab === "hibernation" && (
           <>
-            {idleNotifyConfig && (
+            {(idleNotifyConfig || sectionErrors.idleNotify) && (
               <SettingsSection
                 icon={Bell}
                 title="Idle terminal notifications"
                 description="Get a friendly reminder when terminals in background projects have been idle for a while. Doesn't kill anything — just lets you decide."
                 id="general-idle-terminal-notify"
               >
-                <SettingsSwitchCard
-                  icon={Bell}
-                  title="Notify me about idle terminals"
-                  subtitle="Applies to background projects only — the active one is never flagged"
-                  isEnabled={idleNotifyConfig.enabled}
-                  onChange={handleIdleNotifyToggle}
-                  ariaLabel="Idle Terminal Notifications Toggle"
-                />
-
-                {idleNotifyConfig.enabled && (
-                  <SettingsPresetGroup
-                    id="general-idle-terminal-threshold"
-                    label="Idle threshold"
-                    options={IDLE_TERMINAL_THRESHOLD_PRESETS}
-                    value={idleNotifyConfig.thresholdMinutes}
-                    onChange={(v) => handleIdleNotifyThresholdChange(v)}
-                    description={
-                      "A toast appears when background project terminals have been quiet this long, with options to close them or dismiss the reminder."
-                    }
+                {sectionErrors.idleNotify ? (
+                  <SettingsLoadErrorBanner
+                    message={sectionErrors.idleNotify}
+                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
                   />
-                )}
+                ) : idleNotifyConfig ? (
+                  <>
+                    <SettingsSwitchCard
+                      icon={Bell}
+                      title="Notify me about idle terminals"
+                      subtitle="Applies to background projects only — the active one is never flagged"
+                      isEnabled={idleNotifyConfig.enabled}
+                      onChange={handleIdleNotifyToggle}
+                      ariaLabel="Idle Terminal Notifications Toggle"
+                    />
+
+                    {idleNotifyConfig.enabled && (
+                      <SettingsPresetGroup
+                        id="general-idle-terminal-threshold"
+                        label="Idle threshold"
+                        options={IDLE_TERMINAL_THRESHOLD_PRESETS}
+                        value={idleNotifyConfig.thresholdMinutes}
+                        onChange={(v) => handleIdleNotifyThresholdChange(v)}
+                        description={
+                          "A toast appears when background project terminals have been quiet this long, with options to close them or dismiss the reminder."
+                        }
+                      />
+                    )}
+                  </>
+                ) : null}
               </SettingsSection>
             )}
-            {idleAutoCloseConfig && (
+            {(idleAutoCloseConfig || sectionErrors.idleAutoClose) && (
               <SettingsSection
                 icon={MemoryStick}
                 title="Auto-close idle projects"
                 description="Reclaim memory from background projects that have no terminals and have been idle for a while. They stay in the switcher and reopen right where you left off."
                 id="general-idle-background-auto-close"
               >
-                <SettingsSwitchCard
-                  icon={MemoryStick}
-                  title="Close idle projects automatically"
-                  subtitle="Only projects with no open terminals — panels are restored when you reopen them"
-                  isEnabled={idleAutoCloseConfig.enabled}
-                  onChange={handleIdleAutoCloseToggle}
-                  ariaLabel="Auto-Close Idle Projects Toggle"
-                />
-
-                {idleAutoCloseConfig.enabled && (
-                  <SettingsPresetGroup
-                    id="general-idle-background-threshold"
-                    label="Idle threshold"
-                    options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
-                    value={idleAutoCloseConfig.thresholdMinutes}
-                    onChange={(v) => handleIdleAutoCloseThresholdChange(v)}
-                    description={
-                      "Only projects with no terminals are auto-closed. The active project is never touched, and reopening a project restores its panels."
-                    }
+                {sectionErrors.idleAutoClose ? (
+                  <SettingsLoadErrorBanner
+                    message={sectionErrors.idleAutoClose}
+                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
                   />
-                )}
+                ) : idleAutoCloseConfig ? (
+                  <>
+                    <SettingsSwitchCard
+                      icon={MemoryStick}
+                      title="Close idle projects automatically"
+                      subtitle="Only projects with no open terminals — panels are restored when you reopen them"
+                      isEnabled={idleAutoCloseConfig.enabled}
+                      onChange={handleIdleAutoCloseToggle}
+                      ariaLabel="Auto-Close Idle Projects Toggle"
+                    />
+
+                    {idleAutoCloseConfig.enabled && (
+                      <SettingsPresetGroup
+                        id="general-idle-background-threshold"
+                        label="Idle threshold"
+                        options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
+                        value={idleAutoCloseConfig.thresholdMinutes}
+                        onChange={(v) => handleIdleAutoCloseThresholdChange(v)}
+                        description={
+                          "Only projects with no terminals are auto-closed. The active project is never touched, and reopening a project restores its panels."
+                        }
+                      />
+                    )}
+                  </>
+                ) : null}
               </SettingsSection>
             )}
             {configError ? (
-              <div className="p-4 rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--color-status-error)_50%,transparent)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)]">
-                <p className="text-sm text-status-error">
-                  Failed to load hibernation settings: {configError}
-                </p>
-              </div>
+              <SettingsLoadErrorBanner
+                title="Couldn't load hibernation settings"
+                message={configError}
+                onRetry={() => setConfigRetryNonce((n) => n + 1)}
+              />
             ) : hibernationConfig ? (
               <SettingsSection
                 icon={Moon}

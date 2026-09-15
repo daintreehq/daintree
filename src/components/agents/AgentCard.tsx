@@ -260,7 +260,11 @@ export function AgentInstallSection({
     : showWslNotice
       ? `${agentName} CLI was detected in WSL, but WSL binaries can't be launched directly yet — install a native Windows binary if available`
       : showAuthNudge
-        ? `${agentName} CLI found but not signed in — launching will prompt for login`
+        ? // Two claims the probe cannot support: that the user is not signed in, and that
+          // launching will prompt. `unauthenticated` only means no credentials were found
+          // where we looked, and the state is launchable — the CLI resolves auth at run
+          // time and may well just work.
+          `${agentName} CLI found, but no credentials were detected — it may still launch, or ask you to sign in`
         : `${agentName} CLI not found`;
 
   return (
