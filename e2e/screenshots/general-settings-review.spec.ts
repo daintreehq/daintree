@@ -408,7 +408,7 @@ const STATES: GeneralState[] = [
     availability: MIXED_AVAILABILITY,
     extraCrop: "content",
     arrange: async (page) => {
-      const row = page.locator(`${DIALOG} [aria-label^="Go to "]`).first();
+      const row = page.locator(`${DIALOG} [data-agent-row]`).first();
       await row.waitFor({ state: "visible", timeout: 15_000 });
       await row.evaluate((el: HTMLElement) => el.focus());
       // Force the keyboard-driven focus the browser would infer from a real Tab.

@@ -158,12 +158,19 @@ export function AgentIdentityBlock({
   name,
   description,
   compact = false,
+  showDescription = true,
 }: {
   Icon: ComponentType<AgentIconProps>;
   color: string;
   name: string;
   description: string;
   compact?: boolean;
+  /**
+   * Drop the blurb and render the row on one line. In a long roster the blurbs stop
+   * distinguishing anything — "Open-source CLI" is true of three different agents — while
+   * still costing a second line on every row, so the mark does the recognition work alone.
+   */
+  showDescription?: boolean;
 }) {
   return (
     <>
@@ -177,8 +184,10 @@ export function AgentIdentityBlock({
         </BrandMark>
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-text-primary">{name}</div>
-        {description && <div className="text-2xs text-text-secondary truncate">{description}</div>}
+        <div className="text-sm font-medium text-text-primary truncate">{name}</div>
+        {showDescription && description && (
+          <div className="text-2xs text-text-secondary truncate">{description}</div>
+        )}
       </div>
     </>
   );

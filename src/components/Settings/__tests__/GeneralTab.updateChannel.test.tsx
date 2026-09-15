@@ -17,6 +17,12 @@ vi.mock("../SettingsSection", () => ({
 
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
+  subtabPanelProps: (group: string, activeId: string) => ({
+    role: "tabpanel",
+    id: `settings-subtabpanel-${group}-${activeId}`,
+    "aria-labelledby": `settings-subtab-${group}-${activeId}`,
+    tabIndex: -1,
+  }),
 }));
 
 vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
@@ -119,8 +125,8 @@ function setupElectron(getChannel: GetChannel, lastCheck: number | null = null) 
 
 function channelButtons() {
   return {
-    stable: screen.queryByRole("button", { name: "stable" }),
-    nightly: screen.queryByRole("button", { name: "nightly" }),
+    stable: screen.queryByRole("radio", { name: "Stable" }),
+    nightly: screen.queryByRole("radio", { name: "Nightly" }),
   };
 }
 
@@ -193,7 +199,7 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
     await renderGeneralTab();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "nightly" }).hasAttribute("disabled")).toBe(false);
+      expect(screen.getByRole("radio", { name: "Nightly" }).hasAttribute("disabled")).toBe(false);
     });
     // The nightly warning is the semantic proof that the REAL channel landed, not a fabricated one.
     expect(screen.getByText(NIGHTLY_WARNING)).toBeTruthy();
@@ -207,8 +213,8 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
 
     await renderGeneralTab();
 
-    const stable = await screen.findByRole("button", { name: "stable" });
-    const nightly = screen.getByRole("button", { name: "nightly" });
+    const stable = await screen.findByRole("radio", { name: "Stable" });
+    const nightly = screen.getByRole("radio", { name: "Nightly" });
     expect(stable.hasAttribute("disabled")).toBe(true);
     expect(nightly.hasAttribute("disabled")).toBe(true);
     expect(screen.queryByRole("alert")).toBeNull();
@@ -223,7 +229,7 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "stable" }).hasAttribute("disabled")).toBe(false);
+      expect(screen.getByRole("radio", { name: "Stable" }).hasAttribute("disabled")).toBe(false);
     });
     expect(setChannel).not.toHaveBeenCalled();
   });

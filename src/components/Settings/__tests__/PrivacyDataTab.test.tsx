@@ -19,6 +19,12 @@ vi.mock("../SettingsSection", () => ({
 
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
+  subtabPanelProps: (group: string, activeId: string) => ({
+    role: "tabpanel",
+    id: `settings-subtabpanel-${group}-${activeId}`,
+    "aria-labelledby": `settings-subtab-${group}-${activeId}`,
+    tabIndex: -1,
+  }),
 }));
 
 function createPrivacyApi(overrides: Partial<typeof window.electron.privacy> = {}) {

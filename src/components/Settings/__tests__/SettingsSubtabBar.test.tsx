@@ -12,7 +12,15 @@ const SUBTABS = [
 describe("SettingsSubtabBar", () => {
   it("renders all subtab buttons", () => {
     const onChange = vi.fn();
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="claude"
+        onChange={onChange}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     expect(screen.getByText("Claude")).toBeTruthy();
     expect(screen.getByText("Gemini")).toBeTruthy();
     expect(screen.getByText("Codex")).toBeTruthy();
@@ -20,7 +28,15 @@ describe("SettingsSubtabBar", () => {
 
   it("calls onChange with the clicked subtab id", () => {
     const onChange = vi.fn();
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="claude"
+        onChange={onChange}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     fireEvent.click(screen.getByText("Gemini").closest("button")!);
     expect(onChange).toHaveBeenCalledWith("gemini");
     expect(onChange).toHaveBeenCalledTimes(1);
@@ -34,7 +50,15 @@ describe("SettingsSubtabBar", () => {
       { id: "a", label: "A", renderIcon },
       { id: "b", label: "B", renderIcon },
     ];
-    render(<SettingsSubtabBar subtabs={subtabs} activeId="a" onChange={vi.fn()} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={subtabs}
+        activeId="a"
+        onChange={vi.fn()}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     expect(screen.getAllByTestId("active-icon")).toHaveLength(1);
     expect(screen.getAllByTestId("inactive-icon")).toHaveLength(1);
   });
@@ -42,7 +66,13 @@ describe("SettingsSubtabBar", () => {
   it("does not render trailing wrapper when trailing is undefined", () => {
     const subtabs = [{ id: "a", label: "A" }];
     const { container } = render(
-      <SettingsSubtabBar subtabs={subtabs} activeId="a" onChange={vi.fn()} />
+      <SettingsSubtabBar
+        subtabs={subtabs}
+        activeId="a"
+        onChange={vi.fn()}
+        group="test"
+        ariaLabel="Test sections"
+      />
     );
     const button = container.querySelector("button[role='tab']")!;
     expect(button.querySelector(".flex.items-center.gap-1")).toBeNull();
@@ -56,22 +86,54 @@ describe("SettingsSubtabBar", () => {
         trailing: <span data-testid="trailing-dot" />,
       },
     ];
-    render(<SettingsSubtabBar subtabs={subtabs} activeId="a" onChange={vi.fn()} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={subtabs}
+        activeId="a"
+        onChange={vi.fn()}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     expect(screen.getByTestId("trailing-dot")).toBeTruthy();
   });
 
   it("renders a tablist element", () => {
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="claude"
+        onChange={vi.fn()}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     expect(screen.getByRole("tablist")).toBeTruthy();
   });
 
   it("returns null when subtabs list is empty", () => {
-    const { container } = render(<SettingsSubtabBar subtabs={[]} activeId="" onChange={vi.fn()} />);
+    const { container } = render(
+      <SettingsSubtabBar
+        subtabs={[]}
+        activeId=""
+        onChange={vi.fn()}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     expect(container.firstChild).toBeNull();
   });
 
   it("marks active button with aria-selected and role=tab", () => {
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="gemini" onChange={vi.fn()} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="gemini"
+        onChange={vi.fn()}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(3);
 
@@ -86,7 +148,15 @@ describe("SettingsSubtabBar", () => {
 
   it("navigates tabs with ArrowRight/ArrowLeft keys and moves focus", () => {
     const onChange = vi.fn();
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="claude"
+        onChange={onChange}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     const tablist = screen.getByRole("tablist");
     const claudeTab = screen.getByText("Claude").closest("button")!;
     const geminiTab = screen.getByText("Gemini").closest("button")!;
@@ -104,7 +174,15 @@ describe("SettingsSubtabBar", () => {
 
   it("wraps around with ArrowRight on last tab", () => {
     const onChange = vi.fn();
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="codex" onChange={onChange} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="codex"
+        onChange={onChange}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     const tablist = screen.getByRole("tablist");
     const codexTab = screen.getByText("Codex").closest("button")!;
     const claudeTab = screen.getByText("Claude").closest("button")!;
@@ -117,7 +195,15 @@ describe("SettingsSubtabBar", () => {
 
   it("wraps around with ArrowLeft on first tab", () => {
     const onChange = vi.fn();
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="claude"
+        onChange={onChange}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     const tablist = screen.getByRole("tablist");
     const claudeTab = screen.getByText("Claude").closest("button")!;
     const codexTab = screen.getByText("Codex").closest("button")!;
@@ -130,7 +216,15 @@ describe("SettingsSubtabBar", () => {
 
   it("navigates to first/last with Home/End keys and moves focus", () => {
     const onChange = vi.fn();
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="gemini" onChange={onChange} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="gemini"
+        onChange={onChange}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     const tablist = screen.getByRole("tablist");
     const geminiTab = screen.getByText("Gemini").closest("button")!;
     const claudeTab = screen.getByText("Claude").closest("button")!;
@@ -148,7 +242,15 @@ describe("SettingsSubtabBar", () => {
   });
 
   it("does not render scroll arrow buttons", () => {
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+    render(
+      <SettingsSubtabBar
+        subtabs={SUBTABS}
+        activeId="claude"
+        onChange={vi.fn()}
+        group="test"
+        ariaLabel="Test sections"
+      />
+    );
     expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
     expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
   });

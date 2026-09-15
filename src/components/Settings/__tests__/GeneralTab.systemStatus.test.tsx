@@ -26,6 +26,12 @@ vi.mock("../SettingsSection", () => ({
 
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
+  subtabPanelProps: (group: string, activeId: string) => ({
+    role: "tabpanel",
+    id: `settings-subtabpanel-${group}-${activeId}`,
+    "aria-labelledby": `settings-subtab-${group}-${activeId}`,
+    tabIndex: -1,
+  }),
 }));
 
 vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
@@ -330,7 +336,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     const rowFor = (name: string) => screen.getByLabelText(new RegExp(`^${name} \u2014 `));
     const attention = [
       { name: "Claude", label: "Blocked" },
-      { name: "Gemini", label: "Login required" },
+      { name: "Gemini", label: "No credentials detected" },
       { name: "Codex", label: "Needs setup" },
     ];
 
