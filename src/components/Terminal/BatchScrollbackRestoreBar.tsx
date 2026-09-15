@@ -63,6 +63,9 @@ export function BatchScrollbackRestoreBar({ className }: { className?: string })
         role="alert"
         ariaLive="assertive"
         className={className}
+        // A strip in the panel grid's column, like its neighbours: Retry trails
+        // the text instead of dropping beneath it.
+        layout="strip"
         action={{
           id: "retry-batch",
           label: "Retry batch",
