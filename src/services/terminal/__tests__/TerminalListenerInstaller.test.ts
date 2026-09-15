@@ -1648,16 +1648,31 @@ describe("installTerminalBoundListeners", () => {
       expect(terminal.scrollToLine).not.toHaveBeenCalled();
     });
 
-    it("a scroll key during the redraw drops the pending restore", async () => {
+    it("xterm's scrollback chord (Shift+PageUp) during the redraw drops the pending restore", async () => {
       const { terminal, managed, erase, redraw, closeSyncBlock, render } = installScrolledBack();
       erase();
       managed.hostElement.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "PageUp", bubbles: true })
+        new KeyboardEvent("keydown", { key: "PageUp", shiftKey: true, bubbles: true })
       );
       redraw();
       closeSyncBlock();
       await render();
       expect(terminal.scrollToLine).not.toHaveBeenCalled();
+    });
+
+    it("keys the program owns (a plain ArrowUp into Codex's input) leave the restore alone", async () => {
+      const { terminal, managed, erase, redraw, closeSyncBlock, render } = installScrolledBack();
+      erase();
+      managed.hostElement.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })
+      );
+      managed.hostElement.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageDown", bubbles: true })
+      );
+      redraw();
+      closeSyncBlock();
+      await render();
+      expect(terminal.scrollToLine).toHaveBeenCalledWith(10);
     });
 
     it("a press on the scrollbar cancels; a press elsewhere in the pane does not", async () => {

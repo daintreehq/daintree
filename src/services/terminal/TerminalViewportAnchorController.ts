@@ -85,6 +85,8 @@ export interface ViewportAnchorController {
 
 /** Top visible lines captured as the content anchor. */
 export const ANCHOR_LINE_COUNT = 3;
+/** Fewer characters than this across the anchor is a bare prompt or rule — it matches the wrong occurrence. */
+export const MIN_ANCHOR_CHARS = 8;
 /** Quiet time after the last parsed write that ends a redraw with no sync block (a plain `clear`). */
 export const REPLAY_QUIET_MS = 150;
 /** Hard bound from the erase to the restore attempt, so a streaming program cannot hold it open. */
@@ -106,6 +108,12 @@ interface Anchor {
 
 interface PendingAnchor extends Anchor {
   phase: "armed" | "restoring";
+  /**
+   * The reader took over before the redraw finished landing: never scroll, but
+   * keep the unseen hold until the redraw's end signal so the count still
+   * comes back down — the batches still arriving are not new output.
+   */
+  restoreCancelled: boolean;
   /** Where the buffer sits unless the reader moves it; anything else is a cancel. */
   expectedViewportY: number;
   target?: number;
@@ -166,8 +174,10 @@ export function installViewportAnchorController(
       if (!line) break;
       lines.push(line.translateToString(true));
     }
-    // An all-blank anchor matches everywhere; the distance fallback is better.
-    return lines.some((text) => text.length > 0) ? lines : [];
+    // A bare prompt or rule matches its every other occurrence; the distance
+    // fallback is better than the wrong `>`.
+    const chars = lines.reduce((total, text) => total + text.trim().length, 0);
+    return chars >= MIN_ANCHOR_CHARS ? lines : [];
   };
 
   const restartQuietTimer = (): void => {
@@ -201,6 +211,7 @@ export function installViewportAnchorController(
       unseen: previous?.unseenHeld === false ? deps.holdUnseen() : anchor.unseen,
       unseenHeld: true,
       phase: "armed",
+      restoreCancelled: false,
       // ED3 leaves ydisp at 0 and buffer-driven scrolling keeps it there while
       // the reader is scrolled back; a different value means the reader moved.
       expectedViewportY: 0,
@@ -208,6 +219,16 @@ export function installViewportAnchorController(
       deadlineTimer,
     };
     restartQuietTimer();
+  };
+
+  const cancelRestore = (): void => {
+    if (!pending) return;
+    // Past the end signal every redraw batch has landed, so the count can settle now.
+    if (pending.phase === "restoring") {
+      release();
+      return;
+    }
+    pending.restoreCancelled = true;
   };
 
   const onQuiet = (): void => {
@@ -242,6 +263,10 @@ export function installViewportAnchorController(
 
   const beginRestore = (): void => {
     if (!pending || pending.phase !== "armed") return;
+    if (pending.restoreCancelled) {
+      release();
+      return;
+    }
     pending.phase = "restoring";
     clearTimers(pending);
     waitForRender(attemptRestore);
@@ -315,10 +340,13 @@ export function installViewportAnchorController(
     // Runs before xterm's own ED handler (newest first); `false` lets the erase proceed.
     terminal.parser.registerCsiHandler({ final: "J" }, (params) => {
       if (firstParam(params) !== 3) return false;
-      if (pending) {
+      if (pending && !pending.restoreCancelled) {
         arm(pending, pending);
         return false;
       }
+      // A cancelled cycle was only counting; the reader has moved since, so
+      // this erase gets a fresh anchor from wherever they are now.
+      release();
       const buffer = terminal.buffer.active;
       if (buffer.type === "normal" && buffer.viewportY < buffer.baseY && !deps.isOwnClear()) {
         const lines = captureAnchorLines();
@@ -350,18 +378,21 @@ export function installViewportAnchorController(
     terminal.onScroll(() => {
       if (!pending || selfScrolling) return;
       const viewportY = terminal.buffer.active.viewportY;
-      if (viewportY !== pending.expectedViewportY && viewportY !== pending.target) release();
+      if (viewportY !== pending.expectedViewportY && viewportY !== pending.target) {
+        cancelRestore();
+      }
     }),
   ];
 
   return {
-    cancel: release,
+    cancel: cancelRestore,
     dispose: () => {
       release();
       for (const disposable of disposables) disposable.dispose();
     },
     get phase(): ViewportAnchorPhase {
-      return pending?.phase ?? "idle";
+      if (!pending || pending.restoreCancelled) return "idle";
+      return pending.phase;
     },
   };
 }

@@ -661,11 +661,14 @@ export function installTerminalBoundListeners(
   // Reader navigation drops a pending restore. Capture phase, unlike the
   // intent listeners below: xterm's scrollable element stops propagation of
   // any wheel it consumed, and a drag straight to the top while the DOM still
-  // shows the pre-erase position produces no scroll event at all.
-  const ANCHOR_CANCEL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
+  // shows the pre-erase position produces no scroll event at all. Keys are
+  // only xterm's own scrollback chords — with `scrollOnUserInput` off, plain
+  // arrows and paging keys go to the program (Codex's input editor), and the
+  // controller's onScroll check already catches anything that moves the buffer.
+  const ANCHOR_CANCEL_KEYS = new Set(["PageUp", "PageDown", "Home", "End"]);
   const cancelAnchorOnWheel = () => viewportAnchor.cancel();
   const cancelAnchorOnKey = (e: KeyboardEvent) => {
-    if (ANCHOR_CANCEL_KEYS.has(e.key)) viewportAnchor.cancel();
+    if (e.shiftKey && ANCHOR_CANCEL_KEYS.has(e.key)) viewportAnchor.cancel();
   };
   const cancelAnchorOnScrollbar = (e: PointerEvent) => {
     if (e.target instanceof Element && e.target.closest(".xterm-scrollbar")) {

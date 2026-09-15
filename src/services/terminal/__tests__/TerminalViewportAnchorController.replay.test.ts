@@ -270,7 +270,7 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(terminal.buffer.active.viewportY).toBe(5);
   });
 
-  it("a wheel gesture cancels even before the replay ends, publishing the held count", async () => {
+  it("a wheel gesture cancels before the replay ends; the count stays held until it lands", async () => {
     const { terminal } = await scrolledBackTerminal();
     const harness = install(terminal);
     harness.deps.holdUnseen.mockReturnValue(2);
@@ -281,11 +281,14 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
 
     harness.controller.cancel();
     expect(harness.controller.phase).toBe("idle");
-    expect(harness.deps.releaseUnseen).toHaveBeenCalledWith(2);
+    // The transcript is still re-landing: not new output, so the hold stays.
+    expect(harness.deps.releaseUnseen).not.toHaveBeenCalled();
 
     await writeAndFlush(terminal, `${transcript().join("\r\n")}\r\n${ESU}`);
     expect(harness.controller.phase).toBe("idle");
+    expect(harness.deps.releaseUnseen).toHaveBeenCalledWith(2);
     expect(harness.deps.releaseUnseen).toHaveBeenCalledTimes(1);
+    expect(harness.pendingRenders()).toBe(0);
     expect(terminal.buffer.active.viewportY).toBe(0);
   });
 

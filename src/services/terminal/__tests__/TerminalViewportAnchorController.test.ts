@@ -348,17 +348,52 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     expect(renders).toHaveLength(0);
   });
 
-  it("cancel before the replay ends publishes the held count without scrolling", () => {
+  it("cancel before the replay ends keeps the count held until the redraw has landed, and never scrolls", () => {
     install();
     terminal.ed3();
     controller.cancel();
-    expect(deps.releaseUnseen).toHaveBeenCalledWith(3);
+    expect(controller.phase).toBe("idle");
+    // The rest of the redraw is still arriving — it is not new output either.
+    expect(deps.releaseUnseen).not.toHaveBeenCalled();
     replay(terminal, originalLines());
     terminal.esu();
-    expect(controller.phase).toBe("idle");
+    expect(deps.releaseUnseen).toHaveBeenCalledWith(3);
     expect(deps.releaseUnseen).toHaveBeenCalledTimes(1);
     expect(terminal.scrollToLine).not.toHaveBeenCalled();
+    expect(renders).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("an erase after a cancelled cycle starts fresh from where the reader is now", () => {
+    install();
+    terminal.ed3();
+    controller.cancel();
+    // The reader scrolled somewhere else in the rebuilt transcript.
+    replay(terminal, originalLines());
+    terminal.viewportY = 50;
+    terminal.fireScroll();
+    terminal.ed3();
+    expect(controller.phase).toBe("armed");
+    expect(deps.holdUnseen).toHaveBeenCalledTimes(2);
+    replay(terminal, originalLines());
+    terminal.esu();
+    flushRender();
+    expect(terminal.scrollToLine).toHaveBeenCalledWith(50);
+  });
+
+  it("falls back to distance when the anchor is too short to be distinctive", () => {
+    // One row from the bottom, the whole anchor is the prompt line itself.
+    terminal.viewportY = terminal.baseY - 1;
+    terminal.lines = terminal.lines.map((line, i) => (i === terminal.viewportY ? ">" : line));
+    install();
+    terminal.ed3();
+    // The prompt the reader was on is gone, but an older `>` survives nearby.
+    const rebuilt = originalLines();
+    rebuilt[150] = ">";
+    replay(terminal, rebuilt);
+    terminal.esu();
+    flushRender();
+    expect(terminal.scrollToLine).toHaveBeenCalledWith(terminal.baseY - 1);
   });
 
   it("a second erase while armed keeps the original anchor and deadline", () => {
