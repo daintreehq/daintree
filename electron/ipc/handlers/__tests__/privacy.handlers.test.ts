@@ -131,6 +131,7 @@ describe("registerPrivacyHandlers", () => {
 
   it("PRIVACY_SET_TELEMETRY_LEVEL broadcasts consent change on valid level", async () => {
     telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
+    telemetryServiceMock.getTelemetryLevel.mockReturnValueOnce("errors");
     registerPrivacyHandlers();
 
     const handler = ipcMainMock._handlers.get("privacy:set-telemetry-level");
@@ -143,6 +144,33 @@ describe("registerPrivacyHandlers", () => {
       level: "errors",
       hasSeenPrompt: true,
     });
+  });
+
+  it("PRIVACY_SET_TELEMETRY_LEVEL broadcasts the stored level when a newer Off request lands first", async () => {
+    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
+    let finishEnable: () => void = () => {};
+    telemetryServiceMock.setTelemetryLevel.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishEnable = resolve;
+        })
+    );
+    telemetryServiceMock.getTelemetryLevel.mockReturnValue("off");
+    registerPrivacyHandlers();
+
+    const handler = ipcMainMock._handlers.get("privacy:set-telemetry-level");
+    const enabling = handler!(null, "errors");
+    await handler!(null, "off");
+    finishEnable();
+    await enabling;
+
+    expect(utilsMock.typedBroadcast).toHaveBeenCalledTimes(2);
+    for (const call of utilsMock.typedBroadcast.mock.calls) {
+      expect(call).toEqual([
+        "privacy:telemetry-consent-changed",
+        { level: "off", hasSeenPrompt: true },
+      ]);
+    }
   });
 
   it("PRIVACY_SET_TELEMETRY_LEVEL ignores invalid values and does not broadcast", async () => {

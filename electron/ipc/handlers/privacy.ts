@@ -36,8 +36,10 @@ export const privacyNamespace = defineIpcNamespace({
       async (level: "off" | "errors" | "full"): Promise<void> => {
         if (typeof level !== "string" || !VALID_LEVELS.includes(level)) return;
         await setTelemetryLevel(level);
+        // A newer request may have changed the level while this one awaited
+        // init — broadcast what is stored, not what this request asked for.
         typedBroadcast("privacy:telemetry-consent-changed", {
-          level,
+          level: getTelemetryLevel(),
           hasSeenPrompt: hasTelemetryPromptBeenShown(),
         });
       }

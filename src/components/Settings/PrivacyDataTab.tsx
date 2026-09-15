@@ -395,7 +395,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             ))}
           </div>
           <p className="text-xs text-text-secondary mt-2 select-text">
-            Changes to telemetry level take effect on next app restart.
+            Turning telemetry off stops sending immediately.
           </p>
 
           <div className="mt-4 flex items-start gap-3 rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3">
