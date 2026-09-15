@@ -43,7 +43,11 @@ export function SettingsPresetGroup<T extends string | number>({
 }: SettingsPresetGroupProps<T>) {
   const labelId = useId();
   const descriptionId = useId();
-  const groupRef = useRef<HTMLDivElement>(null);
+  // One element per option, keyed by value, so keyboard movement focuses the button
+  // directly instead of rebuilding an attribute selector from the value. That is what
+  // makes a quote or a backslash in a value a non-event, and it keeps the component off
+  // `CSS.escape`, which not every test DOM provides.
+  const optionRefs = useRef(new Map<T, HTMLButtonElement>());
   /**
    * Where the keyboard actually is, which is not always where `value` is. A save can be
    * rejected and rolled back — `PrivacyDataTab` does exactly this — leaving the selection
@@ -56,11 +60,7 @@ export function SettingsPresetGroup<T extends string | number>({
   const enabled = options.filter((o) => !o.disabled);
 
   const focusOption = (v: T) => {
-    // CSS.escape: a value carrying a quote or backslash would otherwise produce an
-    // invalid selector and silently focus nothing.
-    groupRef.current
-      ?.querySelector<HTMLElement>(`[data-preset-value="${CSS.escape(String(v))}"]`)
-      ?.focus();
+    optionRefs.current.get(v)?.focus();
   };
 
   const move = (delta: number) => {
@@ -130,7 +130,6 @@ export function SettingsPresetGroup<T extends string | number>({
         {label}
       </span>
       <div
-        ref={groupRef}
         role="radiogroup"
         aria-labelledby={labelId}
         aria-describedby={description ? descriptionId : undefined}
@@ -147,7 +146,10 @@ export function SettingsPresetGroup<T extends string | number>({
               role="radio"
               aria-checked={isSelected}
               aria-label={option.ariaLabel}
-              data-preset-value={String(option.value)}
+              ref={(el) => {
+                if (el) optionRefs.current.set(option.value, el);
+                else optionRefs.current.delete(option.value);
+              }}
               disabled={isDisabled}
               tabIndex={!isDisabled && option.value === tabStopValue ? 0 : -1}
               onFocus={() => setFocusedValue(option.value)}
