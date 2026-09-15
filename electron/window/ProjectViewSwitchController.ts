@@ -238,7 +238,7 @@ export async function performSwitch(
           releaseChannel: "warm-painted",
           softMs: warmSoftMs,
           hardMs: warmHardMs,
-          confirmFrame: () => waitForRenderedFrame(cachedWc),
+          confirmFrame: () => waitForRenderedFrame(cachedWc, host.win),
           unpaintedHardMs: warmUnpaintedMs,
         }
       );
@@ -566,7 +566,7 @@ export async function performSwitch(
       releaseChannel: coldReleaseChannel,
       softMs,
       hardMs,
-      confirmFrame: () => waitForRenderedFrame(incomingWc),
+      confirmFrame: () => waitForRenderedFrame(incomingWc, host.win),
       // Probes wait for the load to settle — see enableFrameConfirmation below.
       deferFrameConfirmation: true,
     }

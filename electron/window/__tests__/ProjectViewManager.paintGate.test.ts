@@ -229,6 +229,8 @@ function createMockWindow() {
   const win = {
     id: 1,
     isDestroyed: vi.fn(() => false),
+    isMinimized: vi.fn(() => false),
+    isVisible: vi.fn(() => true),
     on: vi.fn(),
     removeListener: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
@@ -1891,6 +1893,66 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     expect((await retry).isNew).toBe(false);
     expect(manager.getActiveProjectId()).toBe("proj-a");
     expect(attachedWebContents()).toEqual([initialWc]);
+  });
+
+  it("completes a cold switch in a minimised window without waiting for frames", async () => {
+    const bWc = createMockWebContents();
+    const frames = holdFrames(bWc);
+    wcQueue.push(bWc);
+    // Animation frames stop in a minimised window, so a probe would never settle.
+    win.isMinimized.mockReturnValue(true);
+
+    const switched = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalSkeletonPainted(bWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await switched;
+
+    expect(frames.probeCount()).toBe(0);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(attachedWebContents()).toEqual([bWc]);
+    expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+  });
+
+  it("completes a warm switch in a hidden window without waiting for frames", async () => {
+    const bWc = await switchToColdB();
+    const frames = holdFrames(initialWc);
+    win.isVisible.mockReturnValue(false);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    const result = await switchedBack;
+
+    expect(result.isNew).toBe(false);
+    expect(frames.probeCount()).toBe(0);
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(attachedWebContents()).toEqual([initialWc]);
+    expect(bWc.close).not.toHaveBeenCalled();
+    expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+  });
+
+  it("completes a warm switch whose window is minimised while the frame probe waits", async () => {
+    await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.probeCount()).toBe(2);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    win.isMinimized.mockReturnValue(true);
+    win.on.mock.calls
+      .filter(([event]) => event === "minimize")
+      .forEach(([, handler]) => (handler as () => void)());
+    await switchedBack;
+
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(attachedWebContents()).toEqual([initialWc]);
+    expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
   });
 
   it("releases on a wake signal that lands during the extended wait for a first frame", async () => {
