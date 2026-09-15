@@ -175,6 +175,18 @@ describe("PrivacyDataTab", () => {
     }
   });
 
+  it("does not claim telemetry is sampled in the disclosure", async () => {
+    // Sentry deliberately runs without `sampleRate` (#5259), so every captured
+    // error is eligible for transmission. Consent copy must not suggest otherwise.
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+
+    const heading = await waitFor(() => screen.getByText(/What's collected at each level/i));
+
+    const text = (heading.parentElement as HTMLElement).textContent ?? "";
+    expect(text).not.toMatch(/sampl/i);
+    expect(text).not.toMatch(/\d+\s*%/);
+  });
+
   it("does not render telemetry disclosure on the storage subtab", async () => {
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
 
