@@ -119,9 +119,13 @@ describe("panel variant guards", () => {
     expect(isDockPanel(browserPanel)).toBe(true);
     expect(isDockPanel(filePanel)).toBe(true);
     expect(isDockPanel(fileBrowserPanel)).toBe(true);
-    expect(
-      isDockPanel({ ...fileBrowserPanel, id: "p6", kind: "dev-preview" } as PanelInstance)
-    ).toBe(true);
+    const devPreviewPanel = {
+      id: "p6",
+      kind: "dev-preview",
+      title: "t",
+      location: "dock",
+    } as PanelInstance;
+    expect(isDockPanel(devPreviewPanel)).toBe(true);
     for (const kind of ["review", "diff"]) {
       const panel = { id: `opt-${kind}`, kind, title: "t", location: "grid" } as PanelInstance;
       expect(isDockPanel(panel), `${kind} opts out of the dock`).toBe(false);

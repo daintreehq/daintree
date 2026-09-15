@@ -115,6 +115,9 @@ export function DevPreviewPane({
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
+  const isParkedInDock = usePanelStore(
+    (state) => location === "dock" && state.activeDockTerminalId !== id
+  );
 
   const terminal = usePanelStore((state) => {
     const p = state.getTerminal(id);
@@ -1162,6 +1165,7 @@ export function DevPreviewPane({
             onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
             onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
             onStop={stop}
+            isPanelVisible={!isParkedInDock}
           />
         )}
         <DevPreviewDestructiveConfirmDialog

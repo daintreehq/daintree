@@ -533,14 +533,21 @@ function makeReviewPanel(id: string, worktreeId?: string) {
 // longer be moved to the dock, so the dock-move focus-policy cases below use a
 // browser (or dev-preview) panel — which CAN dock — to exercise the same policy
 // on a real move.
-function makeBrowserPanel(
-  id: string,
-  worktreeId?: string,
-  kind: "browser" | "dev-preview" = "browser"
-) {
+function makeBrowserPanel(id: string, worktreeId?: string) {
   return {
     id,
-    kind,
+    kind: "browser" as const,
+    worktreeId,
+    title: id,
+    location: "grid" as const,
+  };
+}
+
+function makeDevPreviewPanel(id: string, worktreeId?: string) {
+  return {
+    id,
+    kind: "dev-preview" as const,
+    cwd: "/repo",
     worktreeId,
     title: id,
     location: "grid" as const,
@@ -658,7 +665,10 @@ describe("reading-surface dock/trash fallback (#8946 — previous-focused policy
         panelsById: {
           "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
           "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
-          "browser-1": makeBrowserPanel("browser-1", "wt-1", kind),
+          "browser-1":
+            kind === "browser"
+              ? makeBrowserPanel("browser-1", "wt-1")
+              : makeDevPreviewPanel("browser-1", "wt-1"),
         },
         panelIds: ["shell-first", "shell-last", "browser-1"],
         focusedId: "browser-1",

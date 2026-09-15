@@ -1880,6 +1880,17 @@ describe("buildArgsForNonPtyRecreation", () => {
       expect(result.worktreeId).toBe("wt-1");
     });
 
+    it("keeps a global dock dev-preview global rather than adopting the active worktree", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d2", kind: "dev-preview", title: "Dev", location: "dock", command: "npm run dev" },
+        "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("dock");
+      expect(result.worktreeId).toBeUndefined();
+    });
+
     it("rescues a non-dockable dock panel to the grid and adopts the active worktree", () => {
       // `review` is a non-dockable built-in. A persisted global dock review
       // must land visibly in the active worktree's grid, not worktree-less in
