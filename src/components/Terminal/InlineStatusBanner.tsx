@@ -51,6 +51,28 @@ interface BaseInlineStatusBannerProps {
   /** Accessible label for the dismiss button. Defaults to "Dismiss". */
   closeAriaLabel?: string;
   /**
+   * Tooltip on the dismiss button, for the one case where × does not mean
+   * "dismiss": a consent prompt whose × means "decide later". The accessible
+   * name stays `closeAriaLabel`; this only explains it on hover and focus.
+   */
+  closeTitle?: string;
+  /**
+   * Keep the dismiss button in place but inert. A banner that unmounts its ×
+   * while an action is in flight shifts every control beside it; one that
+   * disables it holds the row still.
+   */
+  closeDisabled?: boolean;
+  /**
+   * `stacked` (the default for a banner with a description) puts the controls
+   * on their own row beneath the text, dismiss up in the title row. `strip`
+   * keeps a description but lays the controls out the way a single-line
+   * banner does — trailing, vertically centred against the text block,
+   * dismiss last — and drops them beneath the text only when the container
+   * is too narrow to hold both. For a banner that lives in a column of
+   * strips and has one sentence to say beneath its title.
+   */
+  layout?: "stacked" | "strip";
+  /**
    * Secondary control rendered after the action buttons and before the
    * dismiss (e.g. a Popover trigger, a ghost link). This is the escape hatch
    * for surfacing a secondary affordance on an error banner without breaking
@@ -182,6 +204,9 @@ export function InlineStatusBanner({
   ariaLive,
   onClose,
   closeAriaLabel = "Dismiss",
+  closeTitle,
+  closeDisabled,
+  layout = "stacked",
   trailingSlot,
   descriptionExtras,
   autoDismissAfter,
@@ -332,33 +357,56 @@ export function InlineStatusBanner({
   const actionList: BannerAction[] = actions ?? (action ? [action] : []);
 
   const hasDescription = description || contextLine || descriptionExtras;
+  // Only a described banner can stack; a strip with no description is just the
+  // single-line layout under another name.
+  const stacked = !!hasDescription && layout === "stacked";
+  const isStrip = !!hasDescription && layout === "strip";
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
     onClose?.();
   };
 
-  const closeButton = onClose ? (
+  const closeButtonEl = onClose ? (
     <Button
       variant="ghost"
       size="icon-sm"
       onClick={handleClose}
+      disabled={closeDisabled}
       aria-label={closeAriaLabel}
-      className={cn("shrink-0", isTitleBarSurface && "app-no-drag")}
+      className={cn(
+        "shrink-0",
+        isTitleBarSurface && "app-no-drag",
+        // Once the strip's controls drop beneath the text, the × keeps the
+        // right edge, in the column every neighbouring strip's × occupies.
+        isStrip && "@max-[52rem]/banner:ml-auto"
+      )}
     >
       <X aria-hidden="true" />
     </Button>
   ) : null;
+  const closeButton =
+    closeButtonEl && closeTitle ? (
+      <Tooltip>
+        <TooltipTrigger asChild>{closeButtonEl}</TooltipTrigger>
+        <TooltipContent side="bottom">{closeTitle}</TooltipContent>
+      </Tooltip>
+    ) : (
+      closeButtonEl
+    );
 
-  const showControlsRow = !!trailingSlot || (!hasDescription && !!onClose) || actionList.length > 0;
+  const showControlsRow = !!trailingSlot || (!stacked && !!onClose) || actionList.length > 0;
 
   return (
     <div
       ref={rootRef}
       className={cn(
-        hasDescription
+        stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
+        // The strip wraps its controls beneath the text once the container is
+        // narrower than a two-line sentence plus three actions can share.
+        isStrip && "@container/banner flex-wrap gap-y-2",
         // Scoped, not bare: `transition` carries box-shadow, every colour
         // property and filter along with it, and this banner's entry is an
         // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
@@ -391,7 +439,7 @@ export function InlineStatusBanner({
       {/* The band's tint and this glyph carry the severity; the text does not.
           Severity-coloured type failed 4.5:1 on most themes, and a title that
           is only legible on some of them is not a title. */}
-      <div className="flex items-start gap-2 min-w-0">
+      <div className={cn("flex items-start gap-2 min-w-0", isStrip && "flex-1")}>
         <IconComponent
           className={cn("w-4 h-4 shrink-0 mt-0.5", isNeutral && "text-text-secondary")}
           style={isNeutral ? undefined : { color: `var(${colorVar})` }}
@@ -401,7 +449,7 @@ export function InlineStatusBanner({
           <div className="flex-1 min-w-0">
             <div className="flex justify-between items-start gap-2">
               <span className="text-sm font-medium text-text-primary">{title}</span>
-              {closeButton && <div className="-mt-1 -mr-1">{closeButton}</div>}
+              {stacked && closeButton && <div className="-mt-1 -mr-1">{closeButton}</div>}
             </div>
             {description && (
               <p className="text-xs mt-0.5 break-words text-text-secondary">{description}</p>
@@ -430,7 +478,18 @@ export function InlineStatusBanner({
           data-banner-controls
           className={cn(
             "flex items-center shrink-0",
-            hasDescription ? "gap-2 ml-6" : "gap-1",
+            stacked ? "gap-2 ml-6" : "gap-1",
+            // Beneath the text, the controls line up with it, past the glyph.
+            // 52rem leaves the text column a real measure just above the
+            // break: three actions and a dismiss run to ~400px, and a column
+            // narrower than ~360px wraps a one-sentence description to four
+            // lines before it would ever drop the controls.
+            // Padding, not margin: a full-basis row with a margin runs past the
+            // container, and the flush-right × with it.
+            // The row itself wraps once it is beneath the text: a grid squeezed
+            // by a wide sidebar can be narrower than three actions and a ×.
+            isStrip &&
+              "@max-[52rem]/banner:basis-full @max-[52rem]/banner:pl-6 @max-[52rem]/banner:flex-wrap @max-[52rem]/banner:gap-y-1",
             // `.app-no-drag *` carries the opt-out down to every control in the
             // row, including nested popover triggers.
             isTitleBarSurface && "app-no-drag"
@@ -473,7 +532,7 @@ export function InlineStatusBanner({
           {/* Dismiss sits after every other control, at the row's end, in both
               layouts — never between two controls, where it reads as a third
               action. */}
-          {!hasDescription && closeButton}
+          {!stacked && closeButton}
         </div>
       )}
     </div>
