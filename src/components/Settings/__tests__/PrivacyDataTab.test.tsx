@@ -175,6 +175,26 @@ describe("PrivacyDataTab", () => {
     }
   });
 
+  it("does not claim telemetry is sampled in the disclosure", async () => {
+    // Sentry deliberately runs without `sampleRate` (#5259), so every captured
+    // error is eligible for transmission. Consent copy must not suggest otherwise.
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+
+    const heading = await waitFor(() => screen.getByText(/What's collected at each level/i));
+
+    // Scoped to the per-level summaries: field lists may legitimately carry
+    // percentages (CPU, memory) that aren't sampling claims.
+    const summaries = Array.from(
+      (heading.parentElement as HTMLElement).querySelectorAll("dd > p"),
+      (p) => p.textContent ?? ""
+    );
+    expect(summaries).toHaveLength(3);
+    for (const summary of summaries) {
+      expect(summary).not.toMatch(/sampl/i);
+      expect(summary).not.toMatch(/\d+\s*%/);
+    }
+  });
+
   it("does not render telemetry disclosure on the storage subtab", async () => {
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
 

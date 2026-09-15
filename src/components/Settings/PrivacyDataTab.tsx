@@ -71,7 +71,7 @@ const TELEMETRY_DISCLOSURE: Array<{
     level: "errors",
     title: "Errors Only level",
     summary:
-      "A sampled subset (roughly 10%) of crash reports is sent to Sentry. Home-directory paths are redacted from stack frames and error messages before transmission. If onboarding analytics events were buffered before you made a consent choice, they may be flushed once when telemetry is first enabled.",
+      "Crash reports and error details are sent to Sentry. Home-directory paths are redacted from stack frames and error messages before transmission. Usage analytics aren't sent, and any analytics events recorded before you chose a level are discarded.",
     fields: [
       "Exception type and message (home directory redacted)",
       "Stack frames with sanitized file paths, line and column numbers",
@@ -85,7 +85,7 @@ const TELEMETRY_DISCLOSURE: Array<{
     level: "full",
     title: "Full Usage level",
     summary:
-      "Everything above, plus the following anonymous onboarding analytics events. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Like crash reports, these events pass through the same roughly 10% sampling before transmission.",
+      "Crash reports and error details, plus anonymous usage analytics events, including those listed below. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Analytics events recorded before you chose a level may be sent when you choose Full Usage.",
     fields: [],
     events: ANALYTICS_EVENTS,
   },
