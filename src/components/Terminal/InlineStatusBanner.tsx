@@ -374,7 +374,13 @@ export function InlineStatusBanner({
       onClick={handleClose}
       disabled={closeDisabled}
       aria-label={closeAriaLabel}
-      className={cn("shrink-0", isTitleBarSurface && "app-no-drag")}
+      className={cn(
+        "shrink-0",
+        isTitleBarSurface && "app-no-drag",
+        // Once the strip's controls drop beneath the text, the × keeps the
+        // right edge, in the column every neighbouring strip's × occupies.
+        isStrip && "@max-[52rem]/banner:ml-auto"
+      )}
     >
       <X aria-hidden="true" />
     </Button>
