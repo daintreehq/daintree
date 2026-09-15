@@ -58,6 +58,7 @@ type ManagedStub = {
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: unknown) => Promise<unknown>;
   callbacks: ActionCallbacks;
+  actions: ActionRegistry;
 } {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {
@@ -73,6 +74,7 @@ function setupActions(): {
       return def.run(args, (ctx ?? {}) as never);
     },
     callbacks,
+    actions,
   };
 }
 
@@ -423,17 +425,14 @@ describe("terminalInputActions adversarial", () => {
   // can never be the one to honour this tool (#12407).
   describe("terminal.injectOwned (#12407)", () => {
     function definition(): AnyActionDefinition {
-      const actions: ActionRegistry = new Map();
-      registerTerminalInputActions(actions, {
-        getActiveWorktreeId: vi.fn(),
-        onInject: vi.fn(),
-      } as unknown as ActionCallbacks);
-      return actions.get("terminal.injectOwned")!() as AnyActionDefinition;
+      const factory = setupActions().actions.get("terminal.injectOwned");
+      if (!factory) throw new Error("terminal.injectOwned not registered");
+      return factory();
     }
 
     it("refuses renderer dispatch and never injects", async () => {
       const { run, callbacks } = setupActions();
-      (callbacks.getActiveWorktreeId as ReturnType<typeof vi.fn>).mockReturnValue("wt-1");
+      vi.mocked(callbacks.getActiveWorktreeId).mockReturnValue("wt-1");
 
       await expect(
         run("terminal.injectOwned", { terminalId: "term-9" }, { dispatchSource: "agent" })
