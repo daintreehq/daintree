@@ -51,12 +51,15 @@ describe("SettingsPresetGroup", () => {
   it("moves and selects with the arrow keys, wrapping at the ends", () => {
     const onChange = renderGroup(120);
     const group = screen.getByRole("radiogroup");
+    // Last option, so Right wraps to the first.
     fireEvent.keyDown(group, { key: "ArrowRight" });
     expect(onChange).toHaveBeenCalledWith(30);
 
+    // Focus is now on the first option, so Left wraps back to the last. Movement follows
+    // focus rather than the `value` prop, which this uncontrolled render never updates.
     onChange.mockClear();
     fireEvent.keyDown(group, { key: "ArrowLeft" });
-    expect(onChange).toHaveBeenCalledWith(60);
+    expect(onChange).toHaveBeenCalledWith(120);
   });
 
   it("names the group from its visible label", () => {
@@ -81,5 +84,31 @@ describe("SettingsPresetGroup", () => {
     );
     fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
     expect(onChange).toHaveBeenCalledWith("c");
+  });
+});
+
+describe("SettingsPresetGroup — movement follows focus, not the committed value", () => {
+  // A save can be rejected and rolled back, leaving `value` back where it started while
+  // focus stays on the option the user tried. Deriving the next step from `value` then
+  // re-attempts the option that just failed instead of moving past it.
+  it("advances from the focused option when the value did not follow", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <SettingsPresetGroup label="Retention" options={OPTIONS} value={30} onChange={onChange} />
+    );
+    const group = screen.getByRole("radiogroup");
+
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    expect(onChange).toHaveBeenCalledWith(60);
+
+    // The commit was rejected: value stays at 30 while focus sits on 60.
+    rerender(
+      <SettingsPresetGroup label="Retention" options={OPTIONS} value={30} onChange={onChange} />
+    );
+
+    onChange.mockClear();
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    // Moves on to 120 rather than re-offering the 60 that just failed.
+    expect(onChange).toHaveBeenCalledWith(120);
   });
 });

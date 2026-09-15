@@ -1,4 +1,4 @@
-import { useId, useRef } from "react";
+import { useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 export interface SettingsPresetOption<T extends string | number> {
@@ -44,12 +44,21 @@ export function SettingsPresetGroup<T extends string | number>({
   const labelId = useId();
   const descriptionId = useId();
   const groupRef = useRef<HTMLDivElement>(null);
+  /**
+   * Where the keyboard actually is, which is not always where `value` is. A save can be
+   * rejected and rolled back — `PrivacyDataTab` does exactly this — leaving the selection
+   * back at its old option while focus stays on the one the user tried. Deriving movement
+   * from `value` then walks from the wrong place, and the next arrow re-attempts the
+   * option that just failed instead of moving past it.
+   */
+  const [focusedValue, setFocusedValue] = useState<T | null>(null);
 
   const enabled = options.filter((o) => !o.disabled);
 
   const move = (delta: number) => {
     if (enabled.length === 0) return;
-    const current = enabled.findIndex((o) => o.value === value);
+    const from = focusedValue ?? value;
+    const current = enabled.findIndex((o) => o.value === from);
     // With nothing selected yet, an arrow enters the group at the first option rather
     // than jumping to whatever index -1 + delta happens to land on.
     const next =
@@ -59,6 +68,7 @@ export function SettingsPresetGroup<T extends string | number>({
           : enabled.length - 1
         : (current + delta + enabled.length) % enabled.length;
     const option = enabled[next]!;
+    setFocusedValue(option.value);
     onChange(option.value);
     groupRef.current
       ?.querySelector<HTMLElement>(`[data-preset-value="${String(option.value)}"]`)
@@ -81,6 +91,7 @@ export function SettingsPresetGroup<T extends string | number>({
       case "Home":
         e.preventDefault();
         if (enabled[0]) {
+          setFocusedValue(enabled[0].value);
           onChange(enabled[0].value);
           groupRef.current
             ?.querySelector<HTMLElement>(`[data-preset-value="${String(enabled[0].value)}"]`)
@@ -91,6 +102,7 @@ export function SettingsPresetGroup<T extends string | number>({
         e.preventDefault();
         if (enabled.at(-1)) {
           const last = enabled.at(-1)!;
+          setFocusedValue(last.value);
           onChange(last.value);
           groupRef.current
             ?.querySelector<HTMLElement>(`[data-preset-value="${String(last.value)}"]`)
@@ -134,7 +146,19 @@ export function SettingsPresetGroup<T extends string | number>({
               data-preset-value={String(option.value)}
               disabled={isDisabled}
               tabIndex={isSelected || (rovingValue === null && index === fallbackIndex) ? 0 : -1}
-              onClick={() => !isDisabled && onChange(option.value)}
+              onFocus={() => setFocusedValue(option.value)}
+              onBlur={(e) => {
+                // Leaving the group entirely resets tracking, so re-entering by Tab starts
+                // from the real selection rather than from wherever focus last sat.
+                if (!e.currentTarget.closest('[role="radiogroup"]')?.contains(e.relatedTarget)) {
+                  setFocusedValue(null);
+                }
+              }}
+              onClick={() => {
+                if (isDisabled) return;
+                setFocusedValue(option.value);
+                onChange(option.value);
+              }}
               className={cn(
                 "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium",
                 "transition-colors duration-150",
