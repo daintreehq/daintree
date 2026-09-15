@@ -263,15 +263,17 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    // Explicit opt-out: a live dev-server preview has no meaningful compact
-    // chip-row form (like diff and review).
-    dockable: false,
+    // Dockable by default (no explicit flag). Like browser, the chip row is only
+    // a label — the live preview itself is moved into the dock popover (#12397).
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["localhost", "server", "preview", "port"],
     firstRenderRestore: true,
     lazyImportPath: "src/components/DevPreview/DevPreviewPane.tsx",
+    // Reading surface like browser: focus returns to what the user was last
+    // viewing when the panel leaves the grid, not the first grid terminal.
+    policy: { dockFallbackTarget: "previous-focused" },
     // Not `agent.launch`: that path creates a bare preview with no command, so
     // only this one honours the project's configured dev-server command.
     launchActionId: "devServer.start",
@@ -285,7 +287,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canRestart: false,
     canConvert: false,
     // Explicit opt-out: a review surface has no meaningful compact chip-row
-    // form (like diff and dev-preview).
+    // form (like diff).
     dockable: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
@@ -354,7 +356,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canRestart: false,
     canConvert: false,
     // Explicit opt-out: the dock's chip row has no meaningful compact form for
-    // a diff (review and dev-preview opt out for the same reason).
+    // a diff (review opts out for the same reason).
     dockable: false,
     // Pin the dialog at the max height rather than sizing to content, so
     // stepping between files doesn't resize and re-center the whole frame

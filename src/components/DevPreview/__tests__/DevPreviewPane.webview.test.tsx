@@ -300,24 +300,27 @@ function latestToolbarProps(): MockToolbarProps {
 }
 
 const headerContentPointerDownSpy = vi.hoisted(() => vi.fn());
+const contentPanelPropsSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/Panel", () => ({
-  ContentPanel: ({
-    children,
-    headerContent,
-  }: {
+  ContentPanel: (props: {
     children: React.ReactNode;
     headerContent?: React.ReactNode;
-  }) => (
-    <div data-testid="content-panel">
-      {headerContent && (
-        <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
-          {headerContent}
-        </div>
-      )}
-      {children}
-    </div>
-  ),
+    showRestoreControl?: boolean;
+  }) => {
+    contentPanelPropsSpy(props);
+    const { children, headerContent } = props;
+    return (
+      <div data-testid="content-panel">
+        {headerContent && (
+          <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
+            {headerContent}
+          </div>
+        )}
+        {children}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -478,6 +481,14 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     document.createElement = originalCreateElement;
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+  });
+
+  it("forwards the single-panel dock restore control (#12397)", () => {
+    render(<DevPreviewPane {...baseProps} location="dock" showRestoreControl />);
+
+    expect(contentPanelPropsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ showRestoreControl: true })
+    );
   });
 
   it("renders webview with allowpopups attribute for target=_blank support", () => {

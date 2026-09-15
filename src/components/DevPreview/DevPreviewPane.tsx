@@ -96,6 +96,7 @@ export function DevPreviewPane({
   onTitleChange,
   onMinimize,
   onRestore,
+  showRestoreControl,
   isMultiPanelGrid,
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
@@ -886,6 +887,7 @@ export function DevPreviewPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      showRestoreControl={showRestoreControl}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
       headerContent={headerContent}

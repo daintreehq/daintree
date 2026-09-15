@@ -283,4 +283,30 @@ describe("dev-preview lifecycle integration", () => {
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-bg-1" });
     expect(mockStopByPanel).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the dev-preview runtime alive across a dock round trip (#12397)", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "dev-panel-dock": {
+          id: "dev-panel-dock",
+          kind: "dev-preview",
+          title: "Dev Preview",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "npm run dev",
+        } as PanelInstance,
+      },
+      panelIds: ["dev-panel-dock"],
+    });
+
+    usePanelStore.getState().moveTerminalToDock("dev-panel-dock");
+    expect(usePanelStore.getState().panelsById["dev-panel-dock"]?.location).toBe("dock");
+
+    usePanelStore.getState().moveTerminalToGrid("dev-panel-dock");
+    expect(usePanelStore.getState().panelsById["dev-panel-dock"]?.location).toBe("grid");
+
+    expect(mockStopByPanel).not.toHaveBeenCalled();
+  });
 });

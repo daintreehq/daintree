@@ -105,9 +105,9 @@ describe("panel variant guards", () => {
 
   it("isDockPanel admits dockable built-in kinds but not the opt-outs", () => {
     // Membership follows the registry (`panelKindIsDockable`), not a fixed kind
-    // list: terminal/file/browser/file-browser are dockable by default; the
-    // three kinds that declare `dockable: false` are excluded, or they vanish
-    // from the dock.
+    // list: terminal/file/browser/file-browser/dev-preview are dockable by
+    // default; the two kinds that declare `dockable: false` are excluded, or
+    // they vanish from the dock.
     const filePanel = { id: "p4", kind: "file", title: "t", location: "dock" } as PanelInstance;
     const fileBrowserPanel = {
       id: "p5",
@@ -119,7 +119,10 @@ describe("panel variant guards", () => {
     expect(isDockPanel(browserPanel)).toBe(true);
     expect(isDockPanel(filePanel)).toBe(true);
     expect(isDockPanel(fileBrowserPanel)).toBe(true);
-    for (const kind of ["dev-preview", "review", "diff"]) {
+    expect(
+      isDockPanel({ ...fileBrowserPanel, id: "p6", kind: "dev-preview" } as PanelInstance)
+    ).toBe(true);
+    for (const kind of ["review", "diff"]) {
       const panel = { id: `opt-${kind}`, kind, title: "t", location: "grid" } as PanelInstance;
       expect(isDockPanel(panel), `${kind} opts out of the dock`).toBe(false);
     }

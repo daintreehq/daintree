@@ -171,11 +171,11 @@ describe("shouldCancelDrop", () => {
       ).toBe(true);
     });
 
-    it("cancels a dev-preview panel dropped on a dock chip (sortable container)", () => {
+    it("cancels a review panel dropped on a dock chip (sortable container)", () => {
       expect(
         run({
           overData: { sortable: { containerId: "dock-container", index: 0 } },
-          activeData: makeDragDataOfKind("dev-preview"),
+          activeData: makeDragDataOfKind("review"),
         })
       ).toBe(true);
     });
@@ -184,6 +184,18 @@ describe("shouldCancelDrop", () => {
       expect(run({ overData: { container: "dock" }, activeData: makeDragDataOfKind("file") })).toBe(
         false
       );
+    });
+
+    it("does not cancel a dev-preview panel dropped on the dock or a dock chip (#12397)", () => {
+      expect(
+        run({ overData: { container: "dock" }, activeData: makeDragDataOfKind("dev-preview") })
+      ).toBe(false);
+      expect(
+        run({
+          overData: { sortable: { containerId: "dock-container", index: 0 } },
+          activeData: makeDragDataOfKind("dev-preview"),
+        })
+      ).toBe(false);
     });
 
     it("treats a missing kind as a legacy PTY panel, which is dockable", () => {
@@ -195,9 +207,9 @@ describe("shouldCancelDrop", () => {
       ).toBe(false);
     });
 
-    it("does not cancel a dev-preview panel dropped on the grid (dock guard is target-scoped)", () => {
+    it("does not cancel a review panel dropped on the grid (dock guard is target-scoped)", () => {
       expect(
-        run({ overData: { container: "grid" }, activeData: makeDragDataOfKind("dev-preview") })
+        run({ overData: { container: "grid" }, activeData: makeDragDataOfKind("review") })
       ).toBe(false);
     });
   });
