@@ -30,12 +30,14 @@ export function ProjectPluginTrustBanner() {
  * is one hover away, never lost.
  */
 function PluginName({ name }: { name: string }) {
+  // The quotes sit outside the clipped span so a truncated name still closes:
+  // the seam between its words and ours is the whole point of quoting it.
   return (
     <span
-      className="inline-block max-w-64 truncate align-bottom font-medium text-text-primary"
+      className="inline-flex max-w-64 items-baseline align-bottom font-medium text-text-primary"
       title={name}
     >
-      &ldquo;{name}&rdquo;
+      &ldquo;<span className="min-w-0 truncate">{name}</span>&rdquo;
     </span>
   );
 }

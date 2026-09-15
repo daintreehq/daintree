@@ -102,11 +102,13 @@ describe("ProjectPluginTrustBanner", () => {
     openPrompt([{ id: "acme.dashboard", displayName: name }]);
 
     // The name is quoted and carries its full text as a title, so a bounded
-    // render still discloses the whole string; the security sentence is never
-    // inside anything that can clip it.
+    // render still discloses the whole string. Only the name itself may clip —
+    // the quotes stay outside the clipped span so a cut name still closes —
+    // and the security sentence is never inside anything that can clip it.
     const quoted = screen.getByTitle(name);
     expect(quoted.textContent).toBe(`“${name}”`);
-    expect(quoted.className).toContain("truncate");
+    const clipped = quoted.querySelector('[class*="truncate"]');
+    expect(clipped?.textContent).toBe(name);
     const warning = screen.getByText(/runs with your account/);
     expect(warning.closest('[class*="truncate"]')).toBeNull();
   });

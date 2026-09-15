@@ -474,7 +474,11 @@ export function InlineStatusBanner({
             "flex items-center shrink-0",
             stacked ? "gap-2 ml-6" : "gap-1",
             // Beneath the text, the controls line up with it, past the glyph.
-            isStrip && "@max-[40rem]/banner:basis-full @max-[40rem]/banner:ml-6",
+            // 52rem leaves the text column a real measure just above the
+            // break: three actions and a dismiss run to ~400px, and a column
+            // narrower than ~360px wraps a one-sentence description to four
+            // lines before it would ever drop the controls.
+            isStrip && "@max-[52rem]/banner:basis-full @max-[52rem]/banner:ml-6",
             // `.app-no-drag *` carries the opt-out down to every control in the
             // row, including nested popover triggers.
             isTitleBarSurface && "app-no-drag"

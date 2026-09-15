@@ -20,6 +20,7 @@
  * Plus, in the first theme only:
  *   <fixture>-<theme>-narrow.png   width pressure at 640px
  *   <fixture>-<theme>-wide.png     the line with room to spare, 1600px
+ *   <fixture>-<theme>-mid.png      just above the wrap breakpoint, 880px
  *
  * Hard rule, inherited from the siblings: never write a PNG that has not been
  * verified. `snap()` asserts the target is attached with a real box before it
@@ -58,6 +59,12 @@ const FIXTURES = ["single", "multi", "deciding", "error", "spoof-name", "with-gr
 /** Width pressure is where the choices and the warning collide. */
 const NARROW_FIXTURES = ["single", "multi", "spoof-name", "with-grid-bar"] as const;
 const WIDE_FIXTURES = ["single", "multi"] as const;
+/**
+ * Just above the strip's wrap breakpoint, where the controls still share the
+ * row and the text column is at its narrowest.
+ */
+const MID_WIDTH = 880;
+const MID_FIXTURES = ["single", "spoof-name"] as const;
 
 /**
  * The dev server compiles each page on first request, and under load that can
@@ -206,13 +213,23 @@ test("project plugin trust banner — every state, every theme", async ({ contex
       )
     );
   }
+  for (const name of MID_FIXTURES) {
+    written.push(
+      await withPage(context, `${name} mid`, async (page) =>
+        snap(await openFixture(page, name, theme, MID_WIDTH), `${name}-${theme}-mid.png`)
+      )
+    );
+  }
 
   // Count the files ourselves. A harness that trusts its own exit code is how a
   // review ends up reasoning about screenshots that were never written.
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
   expect(onDisk.length).toBe(
-    THEMES.length * FIXTURES.length + NARROW_FIXTURES.length + WIDE_FIXTURES.length
+    THEMES.length * FIXTURES.length +
+      NARROW_FIXTURES.length +
+      WIDE_FIXTURES.length +
+      MID_FIXTURES.length
   );
   console.log(`[plugin-trust-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
