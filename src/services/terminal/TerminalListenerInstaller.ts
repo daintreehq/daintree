@@ -9,7 +9,11 @@ import type { ManagedTerminal } from "./types";
 import { isNonKeyboardInput } from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
-import { getXtermCellDimensions } from "./TerminalResizeController";
+import {
+  getXtermCellDimensions,
+  invalidateXtermViewportScrollCache,
+} from "./TerminalResizeController";
+import { installViewportAnchorController } from "./TerminalViewportAnchorController";
 import { MouseWheelClassifier } from "./mouseWheelClassifier";
 import { getTerminalMetrics } from "@/config/xtermConfig";
 import { hashPerfLine, PERF_MARKS } from "@shared/perf/marks";
@@ -257,6 +261,13 @@ export interface TerminalListenerInstallDeps {
   scrollToBottomSafe: (managed: ManagedTerminal) => void;
   updateScrollState: (id: string, isScrolledBack: boolean) => void;
   clearUnseen: (id: string, fromUser: boolean) => void;
+  /**
+   * Unseen-output accounting across an ESC[3J redraw (#12398): hold stops
+   * publishing and returns the count the redraw must not raise; release
+   * lowers back to it and publishes once.
+   */
+  holdUnseen: (id: string) => number;
+  releaseUnseen: (id: string, count: number) => void;
   onWriteParsedReflow?: (managed: ManagedTerminal) => void;
 
   // Selection cache
@@ -617,6 +628,63 @@ export function installTerminalBoundListeners(
     return false;
   });
   managed.listeners.push(() => oscDisposable.dispose());
+
+  // A fresh terminal has no queued writes; a counter stranded by a rebuild
+  // (the old terminal's parse callback never fires) must not disarm the anchor.
+  managed.pendingOwnClearWrites = 0;
+  // Serialized restores need no guard here: they go through `terminal.reset()`,
+  // which bypasses the parser, and the serialize addon never emits ESC[3J.
+  const viewportAnchor = installViewportAnchorController(terminal, {
+    isOwnClear: () => (managed.pendingOwnClearWrites ?? 0) > 0,
+    afterRender: (callback) => {
+      let settled = false;
+      const renderOnce = terminal.onRender(() => {
+        if (settled) return;
+        settled = true;
+        renderOnce.dispose();
+        // Public onRender is xterm's onRenderedViewportChange, fired before the
+        // Viewport's own render listener performs the sync it deferred during
+        // synchronized output — hop out so scroll dimensions are current.
+        queueMicrotask(callback);
+      });
+      return () => {
+        settled = true;
+        renderOnce.dispose();
+      };
+    },
+    syncViewport: () => invalidateXtermViewportScrollCache(terminal),
+    holdUnseen: () => deps.holdUnseen(id),
+    releaseUnseen: (count) => deps.releaseUnseen(id, count),
+  });
+  managed.listeners.push(() => viewportAnchor.dispose());
+
+  // Reader navigation drops a pending restore. Capture phase, unlike the
+  // intent listeners below: xterm's scrollable element stops propagation of
+  // any wheel it consumed, and a drag straight to the top while the DOM still
+  // shows the pre-erase position produces no scroll event at all. Keys are
+  // only xterm's own scrollback chords — with `scrollOnUserInput` off, plain
+  // arrows and paging keys go to the program (Codex's input editor), and the
+  // controller's onScroll check already catches anything that moves the buffer.
+  const ANCHOR_CANCEL_KEYS = new Set(["PageUp", "PageDown", "Home", "End"]);
+  const cancelAnchorOnWheel = () => viewportAnchor.cancel();
+  const cancelAnchorOnKey = (e: KeyboardEvent) => {
+    if (e.shiftKey && ANCHOR_CANCEL_KEYS.has(e.key)) viewportAnchor.cancel();
+  };
+  const cancelAnchorOnScrollbar = (e: PointerEvent) => {
+    if (e.target instanceof Element && e.target.closest(".xterm-scrollbar")) {
+      viewportAnchor.cancel();
+    }
+  };
+  hostElement.addEventListener("wheel", cancelAnchorOnWheel, { capture: true, passive: true });
+  hostElement.addEventListener("keydown", cancelAnchorOnKey, { capture: true });
+  hostElement.addEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+  hostElement.addEventListener("touchstart", cancelAnchorOnWheel, { capture: true, passive: true });
+  managed.listeners.push(() => {
+    hostElement.removeEventListener("wheel", cancelAnchorOnWheel, { capture: true });
+    hostElement.removeEventListener("keydown", cancelAnchorOnKey, { capture: true });
+    hostElement.removeEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+    hostElement.removeEventListener("touchstart", cancelAnchorOnWheel, { capture: true });
+  });
 
   const writeParsedDisposable = terminal.onWriteParsed(() => {
     deps.notifyParsed(id);

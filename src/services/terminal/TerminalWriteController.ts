@@ -250,8 +250,6 @@ export class TerminalWriteController {
       });
     }
 
-    this.deps.incrementUnseen(id, managed.isUserScrolledBack);
-
     this.perfWriteSampleCounter += 1;
     const shouldSample = this.perfWriteSampleCounter % 64 === 0;
 
@@ -296,6 +294,11 @@ export class TerminalWriteController {
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
       managed.lastWriteAt = Date.now();
+      // Counted once the batch has landed in the buffer, not when it was
+      // queued: the viewport anchor snapshots this count from inside the
+      // parser at an ESC[3J, and a batch still in the queue is redraw output
+      // that must land on the far side of that snapshot (#12398).
+      this.deps.incrementUnseen(id, managed.isUserScrolledBack);
 
       this.deps.acknowledgePortData(id, renderedBytes, chunkCount);
       if (ackBytes !== null) {

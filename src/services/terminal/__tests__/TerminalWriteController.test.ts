@@ -306,9 +306,9 @@ describe("TerminalWriteController.write", () => {
     store.set("t1", makeManaged());
     captured?.();
 
-    // The acknowledgement guard short-circuits — only the pre-write
-    // bookkeeping (incrementUnseen) was called, not the post-write acks.
-    expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false);
+    // The identity guard short-circuits everything the callback owns — the
+    // acks and, since unseen counts landed output (#12398), the increment.
+    expect(deps.incrementUnseen).not.toHaveBeenCalled();
     expect(deps.acknowledgeData).not.toHaveBeenCalled();
     expect(deps.notifyWriteComplete).not.toHaveBeenCalled();
 

@@ -411,6 +411,8 @@ class TerminalInstanceService {
       updateScrollState: (id, isScrolledBack) =>
         this.unseenTracker.updateScrollState(id, isScrolledBack),
       clearUnseen: (id, fromUser) => this.unseenTracker.clearUnseen(id, fromUser),
+      holdUnseen: (id) => this.unseenTracker.holdUnseen(id),
+      releaseUnseen: (id, count) => this.unseenTracker.releaseUnseen(id, count),
       onWriteParsedReflow: (managed) => this.maybeReflowTerminal(managed),
       setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
       deleteCachedSelection: (id) => this.cachedSelections.delete(id),
@@ -3647,6 +3649,9 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     // scrolling node, so its own state is the only reading that means anything.
     scrollTop: number | null;
     maxScrollTop: number | null;
+    // Text on the viewport's top row — lets a spec assert the reader is on the
+    // same CONTENT after an ESC[3J redraw re-indexed every line (#12398).
+    topLineText: string;
   };
 
   type XtermScrollableForE2E = {
@@ -3691,6 +3696,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
       rows: managed.terminal.rows,
       scrollTop,
       maxScrollTop,
+      topLineText: buffer.getLine(buffer.viewportY)?.translateToString(true) ?? "",
     };
   };
 

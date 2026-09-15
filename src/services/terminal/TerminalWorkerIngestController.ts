@@ -76,7 +76,7 @@ export class TerminalWorkerIngestController {
       sendRelease: (drainId) => terminalClient.sendWorkerIngestRelease(id, drainId),
       createTransport: () => createParseWorkerTransport(),
       mirror: {
-        write: (data, callback) => {
+        write: (data, callback, source) => {
           const current = this.deps.getInstance(id);
           if (!current) {
             callback?.();
@@ -84,9 +84,38 @@ export class TerminalWorkerIngestController {
           }
           // Direct write — snapshot applies and replays are pre-acked, so the
           // write controller's ack bookkeeping must never see them. Unseen
-          // tracking still counts each repaint as output activity.
-          this.deps.incrementUnseen(id, current.isUserScrolledBack);
-          current.terminal.write(data, callback);
+          // tracking still counts each repaint as output activity, once it has
+          // landed (same parse-time rule as TerminalWriteController).
+          const onParsed = () => {
+            const parsed = this.deps.getInstance(id);
+            if (parsed) this.deps.incrementUnseen(id, parsed.isUserScrolledBack);
+            callback?.();
+          };
+          if (source !== "snapshot") {
+            current.terminal.write(data, onParsed);
+            return;
+          }
+          // The snapshot payload opens with our own ESC[3J. Flag it until the
+          // parse callback — `write()` returning means queued, not parsed — so
+          // the viewport anchor does not read the clear as an agent replay.
+          current.pendingOwnClearWrites = (current.pendingOwnClearWrites ?? 0) + 1;
+          const releaseOwnClear = () => {
+            const parsed = this.deps.getInstance(id);
+            if (parsed) {
+              parsed.pendingOwnClearWrites = Math.max(0, (parsed.pendingOwnClearWrites ?? 0) - 1);
+            }
+          };
+          try {
+            current.terminal.write(data, () => {
+              releaseOwnClear();
+              onParsed();
+            });
+          } catch (error) {
+            // A rejected write (xterm's discard watermark) never runs its
+            // callback; leave the flag stranded and no later erase can arm.
+            releaseOwnClear();
+            throw error;
+          }
         },
       },
       serializeMirror: () => {
