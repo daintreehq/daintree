@@ -176,6 +176,7 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
+    isTerminalIdInUse: vi.fn(() => false),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     ...overrides,
@@ -7252,11 +7253,27 @@ describe("session-scoped resource ownership (#11909)", () => {
         },
       });
 
-      expect(dispatchAction).toHaveBeenCalledWith(
-        "terminal.sendCommand",
-        { terminalId: "terminal-1", command: "ls" },
-        expect.anything()
-      );
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      const [actionId, delegated, confirmed] = dispatchAction.mock.calls[0]!;
+      expect(actionId).toBe("terminal.sendCommand");
+      expect(delegated).toStrictEqual({ terminalId: "terminal-1", command: "ls" });
+      // A caller's `confirmed` is an argument like any other, not an approval.
+      expect(confirmed).toBe(false);
+    });
+
+    // An absent field is left absent rather than forwarded as `undefined`, so
+    // the delegate's own schema is what rejects the missing text.
+    it("forwards nothing for a field the caller left out", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit-nocommand");
+
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      const delegated = dispatchAction.mock.calls[0]![1] as Record<string, unknown>;
+      expect(delegated).toStrictEqual({ terminalId: "terminal-1" });
+      expect(Object.hasOwn(delegated, "command")).toBe(false);
     });
 
     it("injects into a terminal the session created with only the id", async () => {
@@ -7310,20 +7327,19 @@ describe("session-scoped resource ownership (#11909)", () => {
 
     // Submitting is not a claim the panel stopped existing, and a repeat is a
     // second submission rather than a replay to absorb.
-    it("keeps ownership and dispatches a repeated submission again", async () => {
-      const { store, server, dispatchAction } = inputHarness("s-submit-twice");
-      const args = {
-        name: "terminal.sendCommandOwned",
-        arguments: { terminalId: "terminal-1", command: "ls" },
-      };
+    it.each([
+      ["terminal.sendCommandOwned", "terminal.sendCommand"],
+      ["terminal.injectOwned", "terminal.inject"],
+    ])("%s keeps ownership and dispatches a repeat again", async (tool, delegate) => {
+      const sessionId = `s-twice-${tool}`;
+      const { store, server, dispatchAction } = inputHarness(sessionId);
+      const args = { name: tool, arguments: { terminalId: "terminal-1", command: "ls" } };
 
       expect((await callTool(server, args)).isError).toBeUndefined();
       expect((await callTool(server, args)).isError).toBeUndefined();
 
-      expect(
-        dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === "terminal.sendCommand")
-      ).toHaveLength(2);
-      expect(store.resourceOwnership.owns("s-submit-twice", "terminal", "terminal-1")).toBe(true);
+      expect(dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === delegate)).toHaveLength(2);
+      expect(store.resourceOwnership.owns(sessionId, "terminal", "terminal-1")).toBe(true);
     });
 
     it("reaches a terminal the session opened through terminal.new", async () => {
@@ -8176,6 +8192,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
       ...RESERVED.map((id) => ({ ...makeManifestEntry(id), kind: "command" as const })),
       { ...makeManifestEntry("terminal.sendCommandOwned"), kind: "command" as const },
       { ...makeManifestEntry("terminal.injectOwned"), kind: "command" as const },
+      makeManifestEntry("mcp.surface"),
     ];
     const deps = fakeDeps({
       sessionStore: fakeSessionStore(tier),
@@ -8191,9 +8208,27 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     async (tier) => {
       const server = createSessionServer("s-origin", originDeps("external", tier));
       const names = (await listTools(server)).tools.map((t) => t.name).sort();
-      expect(names).toEqual(["terminal.injectOwned", "terminal.sendCommandOwned"]);
+      expect(names).toEqual(["mcp.surface", "terminal.injectOwned", "terminal.sendCommandOwned"]);
     }
   );
+
+  // `mcp.surface` builds from its own policy object rather than the listing's,
+  // so the origin has to reach it separately — and the two must agree.
+  it.each([
+    ["external", false],
+    ["help", true],
+    ["assistant-pane", true],
+  ] as const)("reports the same surface as tools/list for a %s session", async (origin, full) => {
+    const server = createSessionServer("s-origin", originDeps(origin, "action"));
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, { name: "mcp.surface" })) as {
+      structuredContent: { tools: Array<{ id: string }> };
+    };
+    const reported = result.structuredContent.tools.map((t) => t.id);
+    for (const id of RESERVED) expect(reported.includes(id)).toBe(full);
+    expect(reported).toContain("terminal.sendCommandOwned");
+  });
 
   it.each(["help", "assistant-pane"] as const)(
     "lists unscoped terminal input to the assistant's %s session",
@@ -8224,21 +8259,114 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     }
   );
 
-  it("dispatches unscoped submission for the assistant's own session", async () => {
-    const deps = originDeps("help", "action");
+  // Only a tool the tier admits is described as reserved; anything above the
+  // tier keeps the ordinary tier explanation.
+  it("keeps the plain tier refusal when the tier itself does not admit the tool", async () => {
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("workbench") });
     const server = createSessionServer("s-origin", deps);
 
     const result = await callTool(server, {
       name: "terminal.sendCommand",
-      arguments: { terminalId: "user-agent", command: "run the tests" },
+      arguments: { terminalId: "user-shell", command: "ls" },
+    });
+
+    const text = JSON.stringify(result.content);
+    expect(text).toContain("not permitted for the 'workbench' tier");
+    expect(text).not.toContain("reserved");
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it.each(["help", "assistant-pane"] as const)(
+    "dispatches unscoped submission for the assistant's %s session",
+    async (origin) => {
+      const deps = originDeps(origin, "action");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "user-agent", command: "run the tests" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { terminalId: "user-agent", command: "run the tests" },
+        expect.anything()
+      );
+    }
+  );
+
+  // A caller-chosen id that is already live does not create a terminal — the
+  // spawn is refused and the original keeps running — so recording it would
+  // hand the session a panel it never opened.
+  it("refuses a launch under the id of a terminal that already exists, for any origin", async () => {
+    for (const origin of ["external", "help"] as const) {
+      const deps = originDeps(origin, "action");
+      deps.isTerminalIdInUse = vi.fn((id: string) => id === "user-shell");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", requestedId: "user-shell" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("VALIDATION_ERROR");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(deps.sessionStore.resourceOwnership.owns("s-origin", "terminal", "user-shell")).toBe(
+        false
+      );
+    }
+  });
+
+  it("launches under a requested id no terminal is using", async () => {
+    const deps = originDeps("external", "action");
+    const server = createSessionServer("s-origin", deps);
+
+    const result = await callTool(server, {
+      name: "agent.launch",
+      arguments: { agentId: "claude", requestedId: "fresh-id" },
     });
 
     expect(result.isError).toBeUndefined();
-    expect(deps.dispatchAction).toHaveBeenCalledWith(
-      "terminal.sendCommand",
-      { terminalId: "user-agent", command: "run the tests" },
-      expect.anything()
-    );
+    expect(deps.isTerminalIdInUse).toHaveBeenCalledWith("fresh-id");
+    expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  // Launching the assistant mints its pinned, renderer-owned bearer — the one
+  // origin that still carries unscoped terminal input.
+  it.each(["agent.launch", "workflow.startWorkOnIssue"])(
+    "%s will not start Daintree's own assistant for a non-renderer-owned session",
+    async (tool) => {
+      const deps = originDeps("external", "action");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: tool,
+        arguments: { agentId: "daintree-assistant", issueNumber: 1 },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      // The tier admits both tools, so this is the launch guard refusing, not
+      // the tier gate.
+      expect(text).toContain("cannot start Daintree's own assistant");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still lets a non-renderer-owned session start an ordinary agent", async () => {
+    const deps = originDeps("external", "action");
+    const server = createSessionServer("s-origin", deps);
+
+    const result = await callTool(server, {
+      name: "agent.launch",
+      arguments: { agentId: "claude" },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
   });
 
   // A session whose origin was never recorded — or was already torn down — is

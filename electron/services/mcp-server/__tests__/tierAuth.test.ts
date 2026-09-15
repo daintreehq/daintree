@@ -2516,15 +2516,19 @@ describe("unscoped terminal input is reserved for renderer-owned origins (#12407
   });
 
   it("reports no authorization to a non-renderer-owned session in its target policy", () => {
-    const entry = makeEntry({ id: "terminal.sendCommand", kind: "command" });
-    const snapshot = (rendererOwnedOrigin: boolean): TargetPolicySessionSnapshot => ({
-      tier: "action",
-      rendererOwnedOrigin,
-      perToolGrantedActionIds: new Set(),
-      nativeGrantedActionIds: new Set(),
-    });
-    expect(buildTargetPolicy(entry, snapshot(false))).toBeNull();
-    expect(buildTargetPolicy(entry, snapshot(true))).not.toBeNull();
+    for (const tier of ["action", "system"] as const) {
+      for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
+        const entry = makeEntry({ id, kind: "command" });
+        const snapshot = (rendererOwnedOrigin: boolean): TargetPolicySessionSnapshot => ({
+          tier,
+          rendererOwnedOrigin,
+          perToolGrantedActionIds: new Set(),
+          nativeGrantedActionIds: new Set(),
+        });
+        expect(buildTargetPolicy(entry, snapshot(false)), `${tier} ${id}`).toBeNull();
+        expect(buildTargetPolicy(entry, snapshot(true)), `${tier} ${id}`).not.toBeNull();
+      }
+    }
   });
 });
 

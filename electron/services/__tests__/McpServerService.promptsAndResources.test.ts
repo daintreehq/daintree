@@ -473,6 +473,21 @@ describe("McpServerService", () => {
     await fs.rm(testHomeDir, { recursive: true, force: true });
   });
 
+  // The prompt guard below is only as strict as this matcher, and a matcher
+  // that never matched would leave it green.
+  it("matches whole action ids only", () => {
+    expect(namesActionId("call `terminal.sendCommand`.", "terminal.sendCommand")).toBe(true);
+    expect(namesActionId("terminal.sendCommand({ terminalId })", "terminal.sendCommand")).toBe(
+      true
+    );
+    expect(namesActionId("use terminal.sendCommand", "terminal.sendCommand")).toBe(true);
+    expect(namesActionId("`terminal.sendCommandOwned`", "terminal.sendCommand")).toBe(false);
+    expect(namesActionId("app.theme.pick", "app.theme")).toBe(false);
+    expect(
+      namesActionId("terminal.sendCommandOwned then terminal.sendCommand", "terminal.sendCommand")
+    ).toBe(true);
+  });
+
   describe("prompts", () => {
     // Prompts render tier-agnostically — the same text goes to an api-key
     // session and to the in-app assistant. So naming a tool unconditionally is

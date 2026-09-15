@@ -588,6 +588,7 @@ describe("McpServerService", () => {
         "terminal.sendCommand",
         "terminal.sendCommandOwned",
         "terminal.injectOwned",
+        "terminal.new",
         "recipe.run",
         "agent.getState",
         // Ids the RENDERER offers but the external tier must refuse. They have to
@@ -756,6 +757,43 @@ describe("McpServerService", () => {
       expect(notOwned.isError).toBe(true);
       expect(notOwned.content[0].text).toContain("RESOURCE_NOT_OWNED");
       expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    // The other half over a real transport: a terminal the session opened is
+    // one it can submit to, and the delegate receives only the id and the text.
+    it("external tier: submits to a terminal the session opened (#12407)", async () => {
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result:
+          payload.actionId === "terminal.new"
+            ? { terminalId: "terminal-created" }
+            : { dispatched: payload.actionId },
+      }));
+      const { window } = createMockWindow({
+        getManifest: manifestForAllAllowlistedTools,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const created = getTextResult(await client.callTool({ name: "terminal.new", arguments: {} }));
+      expect(created.isError).not.toBe(true);
+
+      const submitted = getTextResult(
+        await client.callTool({
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId: "terminal-created", command: "ls", confirmed: true },
+        })
+      );
+      expect(submitted.isError).not.toBe(true);
+      expect(dispatchMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          actionId: "terminal.sendCommand",
+          args: { terminalId: "terminal-created", command: "ls" },
+        })
+      );
     });
 
     // The other half, and an intentional breaking change (#11585). These ids

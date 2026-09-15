@@ -22,6 +22,7 @@ import {
 } from "../../../shared/utils/dispatchTerminalCommand.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { isAssistantOnlyAgentId } from "../../../shared/config/agentIds.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
 import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
@@ -269,6 +270,22 @@ const OWNED_RESOURCE_TOOLS: Record<
     releasesOwnership: false,
   },
 };
+
+/**
+ * The launchers whose arguments can name an agent, and the one that can name
+ * the new panel's id (#12407).
+ */
+const AGENT_LAUNCH_TOOL = "agent.launch";
+const AGENT_NAMING_LAUNCH_TOOLS: ReadonlySet<string> = new Set([
+  AGENT_LAUNCH_TOOL,
+  "workflow.startWorkOnIssue",
+]);
+
+function readStringArg(args: unknown, key: string): string | undefined {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+  const value = (args as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
 
 /** The listing whose `owned` filter main resolves against the ledger (#12308). */
 const TERMINAL_LIST_TOOL = "terminal.list";
@@ -536,6 +553,13 @@ export interface SessionServerDeps {
     rawArgs: unknown,
     workspaceId: string
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
+  /**
+   * Whether a terminal with this id is already live anywhere in the app, read
+   * off the pty-host's spawn tracking rather than any one view's panel store
+   * (#12407). A caller-chosen id that names one would be recorded as this
+   * session's creation while the original shell keeps running under it.
+   */
+  isTerminalIdInUse: (terminalId: string) => boolean;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -1682,6 +1706,42 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({ code: RESOURCE_NOT_OWNED_CODE, message });
           }
           ownedResourceId = resourceId;
+        }
+
+        // Two launch arguments that would otherwise hand a session authority it
+        // was never given (#12407), refused before anything reaches a renderer.
+        //
+        // A caller-chosen panel id that is already live does not create a
+        // terminal: the renderer commits a panel under that id, reports the
+        // launch, and the spawn is then refused with the original shell still
+        // running. The ledger would record that shell as this session's, and
+        // the owned input tools would type into it. A collision is never a
+        // legitimate request, so this applies to every origin.
+        //
+        // An assistant-only agent launched from a session that is not the
+        // assistant would be given the assistant's own pinned bearer, and with
+        // it the unscoped terminal input this session was just denied.
+        if (AGENT_NAMING_LAUNCH_TOOLS.has(actionId)) {
+          const requestedId =
+            actionId === AGENT_LAUNCH_TOOL ? readStringArg(args, "requestedId") : undefined;
+          if (requestedId !== undefined && deps.isTerminalIdInUse(requestedId)) {
+            const message =
+              `A terminal with id '${requestedId}' already exists, so '${actionId}' will not ` +
+              `launch under it. Omit the requested id, or choose one no terminal is using.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
+            };
+            return buildToolError({ code: "VALIDATION_ERROR", message });
+          }
+          if (!rendererOwnedOrigin && isAssistantOnlyAgentId(readStringArg(args, "agentId"))) {
+            const message = `'${actionId}' cannot start Daintree's own assistant from this connection.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
+            };
+            return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
+          }
         }
 
         // Short-circuit: terminal.waitUntilIdle runs in the main process. The

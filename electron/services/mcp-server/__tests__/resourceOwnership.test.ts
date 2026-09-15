@@ -7,7 +7,7 @@ import {
   OWNERSHIP_RECORDING_TOOLS,
 } from "../resourceOwnership.js";
 import { formatPartialSuccessMessage } from "../../../../shared/utils/partialSuccess.js";
-import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
+import { NON_RENDERER_OWNED_TIER_ALLOWLISTS } from "../shared.js";
 
 describe("ResourceOwnershipLedger", () => {
   it("only reports a resource as owned by the session that created it", () => {
@@ -154,6 +154,21 @@ describe("extractOwnedResources", () => {
     // The session did not create that worktree, so recording it would grant
     // delete authority over someone else's directory.
     expect(drafts).toEqual([{ kind: "terminal", id: "terminal-1" }]);
+  });
+
+  it("attributes the plain shell and the issue agent a ladder-tier session opened (#12407)", () => {
+    expect(extractOwnedResources("agent.terminal", { terminalId: "terminal-1" })).toEqual([
+      { kind: "terminal", id: "terminal-1" },
+    ]);
+    // The worktree the workflow created is deliberately not attributed.
+    expect(
+      extractOwnedResources("workflow.startWorkOnIssue", {
+        worktreeId: "/tmp/wt",
+        terminalId: "terminal-2",
+        spawnedTerminalCount: 2,
+      })
+    ).toEqual([{ kind: "terminal", id: "terminal-2" }]);
+    expect(extractOwnedResources("agent.terminal", { terminalId: null })).toEqual([]);
   });
 
   it("attributes nothing for a failed agent launch", () => {
@@ -341,6 +356,8 @@ describe("ownership recording coverage", () => {
   const EXPECTED_RECORDING_TOOLS = [
     "terminal.new",
     "agent.launch",
+    "agent.terminal",
+    "workflow.startWorkOnIssue",
     "recipe.run",
     "worktree.createWithRecipe",
   ];
@@ -349,12 +366,16 @@ describe("ownership recording coverage", () => {
     expect([...OWNERSHIP_RECORDING_TOOLS].sort()).toEqual([...EXPECTED_RECORDING_TOOLS].sort());
   });
 
-  it("keeps every attributed tool reachable by an external session", () => {
-    // The gap this closes is a caller that can create but not clean up, so an
-    // attributed tool that left the external surface would mean the ledger is
-    // recording for a caller class that can no longer use it.
+  it("keeps every attributed tool reachable by a session that is not the assistant", () => {
+    // The gap this closes is a caller that can create but not clean up — or,
+    // since #12407, not type into what it created — so an attributed tool no
+    // such session can reach would mean the ledger is recording for a caller
+    // class that can no longer use it.
     for (const id of EXPECTED_RECORDING_TOOLS) {
-      expect(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).toContain(id);
+      expect(
+        NON_RENDERER_OWNED_TIER_ALLOWLISTS.external.has(id) ||
+          NON_RENDERER_OWNED_TIER_ALLOWLISTS.system.has(id)
+      ).toBe(true);
     }
   });
 });

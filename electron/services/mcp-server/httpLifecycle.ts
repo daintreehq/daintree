@@ -160,6 +160,7 @@ export interface HttpLifecycleDeps {
     rawArgs: unknown,
     workspaceId: string
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
+  isTerminalIdInUse: (terminalId: string) => boolean;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -1928,6 +1929,7 @@ export class HttpLifecycle {
       handleSkillsLoad: this.deps.handleSkillsLoad,
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
+      isTerminalIdInUse: this.deps.isTerminalIdInUse,
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
         // `summarizeMcpArgs` — running the scrubber after truncation would

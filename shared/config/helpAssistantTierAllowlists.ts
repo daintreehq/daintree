@@ -154,16 +154,17 @@ export const ACTION_TIER_ADDONS = [
   // run this same teardown implicitly, before removing the tree.
   "worktree.resource.teardown",
 
-  // Both reach any panel, so both are withheld from every session that is not
-  // Daintree's own assistant — see `RENDERER_OWNED_ORIGIN_ONLY_TOOLS` below.
+  // `terminal.inject` and `terminal.sendCommand` reach any panel, so both are
+  // withheld from every session that is not Daintree's own assistant — see
+  // `RENDERER_OWNED_ORIGIN_ONLY_TOOLS` below.
   "terminal.inject",
   "terminal.new",
   "terminal.sendCommand",
-  // The session-scoped forms of the two lines above (#12407), and the only
-  // terminal input an agent pane's own bearer reaches at this tier. Redundant
-  // for the assistant, which keeps the unscoped pair, but carried here for the
-  // same subset invariant as `terminal.closeOwned`: the external tier may not
-  // reach past what the assistant can.
+  // The session-scoped forms of that pair (#12407), and the only way an agent
+  // pane's own bearer submits text or injects context into a terminal that is
+  // already open. Redundant for the assistant, which keeps the unscoped pair,
+  // but carried here for the same subset invariant as `terminal.closeOwned`:
+  // the external tier may not reach past what the assistant can.
   "terminal.sendCommandOwned",
   "terminal.injectOwned",
   "terminal.close",

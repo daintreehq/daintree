@@ -502,13 +502,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // to be reachable by the in-app assistant (`tierAuth.test.ts`).
   //
   // 212_000 → 214_000 for #12407's `terminal.sendCommandOwned` and
-  // `terminal.injectOwned`, measured at 213_924 B. They sit on the action tier
-  // beside the unscoped pair, which the assistant keeps, so this cohort carries
-  // both. Most of the 1_924 B is the submission's output schema, repeated
-  // rather than trimmed: the owned tool returns the delegate's receipt, and a
-  // client needs the `submissionToken` in validated structured content to check
-  // delivery at all. The external ceiling above does not move — there the owned
-  // pair replaced the unscoped one.
+  // `terminal.injectOwned`, measured at 213_924 B — 1_943 B over the 211_981 B
+  // before them. They sit on the action tier beside the unscoped pair, which the
+  // assistant keeps, so this cohort carries both: 557 B of description, 659 B
+  // of input schema and 727 B for the submission's output schema, repeated
+  // rather than trimmed because the owned tool returns the delegate's receipt
+  // and a client needs the `submissionToken` in validated structured content to
+  // check delivery at all. The external ceiling above does not move — there the
+  // owned pair replaced the unscoped one.
   const MAX_COHORT_PAYLOAD_BYTES = 214_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
