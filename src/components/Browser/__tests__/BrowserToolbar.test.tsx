@@ -572,10 +572,10 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
     expect(onOpenExternal).not.toHaveBeenCalled();
   });
 
-  it("follows canOpenExternal rather than the address-bar draft", () => {
+  it("follows canOpenExternal rather than the URL or address-bar draft", () => {
     const onOpenExternal = vi.fn();
     const { getByRole, getByTestId } = renderToolbar({
-      url: "",
+      url: "http://localhost:5173/",
       onOpenExternal,
       canOpenExternal: false,
     });
@@ -648,6 +648,32 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
     expect(getByLabelText("Toggle console").getAttribute("aria-pressed")).toBe("false");
     expect(container.textContent).toContain("Show console");
     expect(container.textContent).not.toContain("Hide console");
+  });
+
+  it("wraps each button in a hover target only while it is disabled", () => {
+    const { getByRole, getByLabelText, rerender } = render(
+      <BrowserToolbar
+        {...defaultProps}
+        onToggleConsole={vi.fn()}
+        canOpenExternal={false}
+        canToggleConsole={false}
+      />
+    );
+    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).toBe("SPAN");
+    expect(getByLabelText("Toggle console").parentElement?.tagName).toBe("SPAN");
+
+    rerender(
+      <BrowserToolbar
+        {...defaultProps}
+        onToggleConsole={vi.fn()}
+        canOpenExternal={true}
+        canToggleConsole={true}
+      />
+    );
+    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).not.toBe(
+      "SPAN"
+    );
+    expect(getByLabelText("Toggle console").parentElement?.tagName).not.toBe("SPAN");
   });
 
   it("restores the pressed console once a terminal returns", () => {

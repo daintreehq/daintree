@@ -360,9 +360,20 @@ describe("BrowserPane webview lifecycle regression", () => {
     );
     unmount();
 
-    render(<BrowserPane {...baseProps} initialUrl="" initialHistory={undefined} />);
+    const { unmount: unmountEmpty } = render(
+      <BrowserPane {...baseProps} initialUrl="" initialHistory={undefined} />
+    );
     expect(browserToolbarPropsSpy).toHaveBeenLastCalledWith(
       expect.objectContaining({ canOpenExternal: false })
+    );
+    unmountEmpty();
+
+    // Present but unopenable: the handler guards on validity, not on truthiness.
+    render(
+      <BrowserPane {...baseProps} initialUrl="ftp://example.com/" initialHistory={undefined} />
+    );
+    expect(browserToolbarPropsSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: "ftp://example.com/", canOpenExternal: false })
     );
   });
 

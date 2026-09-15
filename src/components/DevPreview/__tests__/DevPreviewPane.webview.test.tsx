@@ -2034,7 +2034,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         id: "dev-preview-panel-1",
         browserHistory: { past: [], present, future: [] },
         browserZoom: 1,
-        devPreviewConsoleOpen: true,
+        devPreviewConsoleOpen: false,
         devCommand: "npm run dev",
       }));
     };
@@ -2065,6 +2065,20 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         status: "starting",
         url: null,
         terminalId: "dev-terminal-1",
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(false);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("keeps the console available when the server errors with its terminal attached", () => {
+      seedHistory("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "error",
+        url: null,
+        terminalId: "dev-terminal-1",
+        error: { type: "unknown", message: "Server never became ready" },
       };
       render(<DevPreviewPane {...baseProps} />);
       expect(latestToolbarProps().canOpenExternal).toBe(false);
