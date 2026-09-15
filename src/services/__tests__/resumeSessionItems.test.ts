@@ -136,6 +136,22 @@ describe("buildResumeSessionItems", () => {
     expect(item?.title).toBe("Claude session");
   });
 
+  it("carries the agent name for the accessible label, registered or not", () => {
+    const [claude] = buildResumeSessionItems([rec({ agentId: "claude", title: "Fix it" })], {
+      currentProjectId: "p1",
+      worktrees,
+    });
+    expect(claude?.agentName).toBe("Claude");
+    // An unregistered agent is named by its id, and that id is its placeholder title.
+    const [custom] = buildResumeSessionItems([rec({ agentId: "my-agent", title: "my-agent" })], {
+      currentProjectId: "p1",
+      worktrees,
+    });
+    expect(custom?.agentName).toBe("my-agent");
+    expect(custom?.hasTitle).toBe(false);
+    expect(custom?.title).toBe("my-agent session");
+  });
+
   it("keeps the agent out of the metadata line — the glyph already says it", () => {
     const [item] = buildResumeSessionItems(
       [rec({ agentId: "claude", title: "Fix the auth bug", agentModelId: "claude-opus-4-8" })],
@@ -180,6 +196,8 @@ describe("prettifyModelId", () => {
     expect(prettifyModelId("anthropic/claude-opus-4-8")).toBe("Opus 4.8");
     expect(prettifyModelId("gpt-5.5")).toBe("GPT 5.5");
     expect(prettifyModelId("gpt-5.3-codex")).toBe("GPT 5.3 Codex");
-    expect(prettifyModelId("claude-sonnet-4-5-20250929")).toBe("Sonnet 4.5.20250929");
+    // A date stamp is not another version component.
+    expect(prettifyModelId("claude-sonnet-4-5-20250929")).toBe("Sonnet 4.5 20250929");
+    expect(prettifyModelId("gpt-4o")).toBe("GPT 4o");
   });
 });

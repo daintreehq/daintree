@@ -452,6 +452,36 @@ describe("useSearchablePalette", () => {
       expect(result.current.results[result.current.selectedIndex]?.id).toBe("alpha");
     });
 
+    it("re-validates a selection whose row loses navigability while the list keeps its shape", () => {
+      // Same ids, same order, same length — the fingerprint fast path — but the
+      // selected row can no longer be chosen. Leaving the selection on it
+      // points Enter at nothing.
+      const items: PaletteItem[] = [
+        { id: "a", name: "Alpha", disabled: false },
+        { id: "b", name: "Beta", disabled: false },
+        { id: "c", name: "Charlie", disabled: false },
+      ];
+      const { result, rerender } = renderHook(
+        (props: { items: PaletteItem[] }) =>
+          useSearchablePalette<PaletteItem>({
+            items: props.items,
+            canNavigate: (item) => !item.disabled,
+          }),
+        { initialProps: { items } }
+      );
+      act(() => {
+        result.current.setSelectedIndex(2);
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("c");
+
+      act(() => {
+        rerender({
+          items: items.map((item) => (item.id === "c" ? { ...item, disabled: true } : item)),
+        });
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("a");
+    });
+
     it("does not move selection when results are unchanged (fingerprint stable)", () => {
       const items: PaletteItem[] = [
         { id: "a", name: "Alpha" },

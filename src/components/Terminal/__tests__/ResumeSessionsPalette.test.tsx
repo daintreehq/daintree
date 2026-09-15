@@ -88,6 +88,7 @@ function makeItem(id: string, overrides: Partial<ResumeSessionItem> = {}): Resum
     title: `Session ${id}`,
     hasTitle: true,
     name: `Resume: Session ${id}`,
+    agentName: "Claude",
     iconId: "claude",
     color: "#fff",
     modelName: "Opus 4.8",
@@ -186,14 +187,48 @@ describe("ResumeSessionsPalette", () => {
 
   it("says 'Worktree removed' once for the section, never once per row", () => {
     render(<ResumeSessionsPalette />);
-    const list = screen.getByRole("listbox");
-    const mentions = (list.textContent ?? "").match(/worktree removed/gi) ?? [];
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const mentions = (dialog.textContent ?? "").match(/worktree removed/gi) ?? [];
     expect(mentions).toHaveLength(1);
-    // Both removed rows are rendered under it, in a group the heading names.
-    const group = screen.getByRole("group", { name: /worktree removed/i });
-    expect(group.contains(rowFor("c"))).toBe(true);
-    expect(group.contains(rowFor("d"))).toBe(true);
-    expect(group.contains(rowFor("a"))).toBe(false);
+    // Both removed rows are rendered under it, in a listbox the heading names.
+    const removedList = screen.getByRole("listbox", { name: /worktree removed/i });
+    expect(removedList.contains(rowFor("c"))).toBe(true);
+    expect(removedList.contains(rowFor("d"))).toBe(true);
+    expect(removedList.contains(rowFor("a"))).toBe(false);
+  });
+
+  it("keeps every option inside a listbox and every control outside one", () => {
+    paletteState.hiddenCount = 3;
+    render(<ResumeSessionsPalette />);
+    const lists = screen.getAllByRole("listbox");
+    for (const option of screen.getAllByRole("option")) {
+      expect(lists.some((list) => list.contains(option))).toBe(true);
+    }
+    // The fold and the pager are buttons; a listbox may not contain them.
+    for (const button of [
+      screen.getByRole("button", { name: /worktree removed/i }),
+      screen.getByRole("button", { name: /load more/i }),
+    ]) {
+      expect(lists.some((list) => list.contains(button))).toBe(false);
+    }
+    paletteState.hiddenCount = 0;
+  });
+
+  it("never points the active descendant or the footer at a row that went stale", () => {
+    // The shared hook re-validates on the next commit; this render is the
+    // one in between, where the selection index still lands on a stale row.
+    paletteState.results = [makeItem("a", { isStale: true }), makeItem("b")];
+    paletteState.visibleResults = [paletteState.results[1]!];
+    paletteState.removedResults = [paletteState.results[0]!];
+    paletteState.selectedIndex = 0;
+    render(<ResumeSessionsPalette />);
+    expect(screen.getByRole("combobox").getAttribute("aria-activedescendant")).toBeNull();
+    expect(document.querySelector('[role="dialog"]')?.textContent ?? "").not.toMatch(/to resume/);
+  });
+
+  it("names the agent for assistive tech, since the glyph is hidden from it", () => {
+    render(<ResumeSessionsPalette />);
+    expect(rowFor("a").textContent).toContain("Claude");
   });
 
   it("drops the resume hint when nothing on screen can be resumed", () => {
@@ -205,7 +240,9 @@ describe("ResumeSessionsPalette", () => {
     // And with nothing to fold the history under, the heading is a label,
     // not a chevron that cannot collapse anything.
     expect(screen.queryByRole("button", { name: /worktree removed/i })).toBeNull();
-    expect(screen.getByRole("listbox").textContent).toMatch(/worktree removed/i);
+    expect(document.querySelector('[role="dialog"]')?.textContent ?? "").toMatch(
+      /worktree removed/i
+    );
   });
 
   it("only claims an expanded listbox while one is rendered", () => {
@@ -226,7 +263,11 @@ describe("ResumeSessionsPalette", () => {
     expect(input.getAttribute("aria-expanded")).toBe("true");
     const controls = input.getAttribute("aria-controls");
     expect(controls).not.toBeNull();
-    expect(document.getElementById(controls!)?.getAttribute("role")).toBe("listbox");
+    const ids = controls!.split(/\s+/);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) {
+      expect(document.getElementById(id)?.getAttribute("role")).toBe("listbox");
+    }
   });
 
   it("folds the removed rows away while browsing until the heading is opened", () => {
@@ -247,8 +288,9 @@ describe("ResumeSessionsPalette", () => {
     render(<ResumeSessionsPalette />);
 
     expect(screen.queryByRole("button", { name: /worktree removed/i })).toBeNull();
-    expect(screen.getByRole("listbox").textContent).toMatch(/worktree removed/i);
-    expect(rowFor("c")).not.toBeNull();
+    expect(screen.getByRole("listbox", { name: /worktree removed/i }).contains(rowFor("c"))).toBe(
+      true
+    );
   });
 
   it("renders the bare title with its age beside it, and never stutters the verb", () => {

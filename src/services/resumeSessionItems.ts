@@ -31,6 +31,12 @@ export interface ResumeSessionItem {
    * palette, the launcher line): `Resume: <title>` / `Resume <Agent> session`.
    */
   name: string;
+  /**
+   * Agent display name. The glyph carries it visually; this is for the
+   * accessible name, since the glyph is `aria-hidden` and two agents' rows
+   * would otherwise read identically.
+   */
+  agentName: string;
   /** Agent icon id for {@link PanelKindIcon}. */
   iconId: string;
   /** Agent accent color for the icon. */
@@ -108,8 +114,9 @@ export function prettifyModelId(modelId: string): string {
   if (slashIdx >= 0) name = name.slice(slashIdx + 1);
   name = name
     .replace(/^claude-/, "")
-    // A dash between two digits is a version separator ("opus-4-8"), not a word break.
-    .replace(/(\d)-(?=\d)/g, "$1.")
+    // A dash between short digit runs is a version separator ("opus-4-8"),
+    // not a word break; a long run after it is a date stamp and stays apart.
+    .replace(/(\d)-(?=\d{1,2}(?:-|$))/g, "$1.")
     .replace(/-/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .replace(/^Gpt\b/, "GPT");
@@ -161,7 +168,8 @@ export function buildResumeSessionItems(
       const hasTitle =
         !!taskTitle &&
         !isUselessTitle(taskTitle) &&
-        !isAgentPlaceholderTitle(taskTitle, agentConfig);
+        // An unregistered agent is named by its id, so that is its placeholder too.
+        !isAgentPlaceholderTitle(taskTitle, agentConfig ?? { name: agentName, command: agentName });
       const title = hasTitle ? taskTitle : `${agentName} session`;
       const name = hasTitle ? `Resume: ${title}` : `Resume ${title}`;
 
@@ -195,6 +203,7 @@ export function buildResumeSessionItems(
         title,
         hasTitle,
         name,
+        agentName,
         iconId: agentConfig?.iconId ?? "terminal",
         color: agentConfig?.color ?? "var(--color-text-primary)",
         modelName,

@@ -47,6 +47,9 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
     >
       <div className="shrink-0 mt-0.5">
         <PanelKindIcon iconId={item.iconId} color={item.color} size={16} />
+        {/* The glyph is aria-hidden; without this two agents' rows with the
+            same title read identically. */}
+        <span className="sr-only">{item.agentName} </span>
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-3">
@@ -72,10 +75,10 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
 /**
  * The heading over the removed-worktree rows. While browsing it is a fold, so
  * the dead history is one line rather than the bulk of the list; while
- * searching the rows are always shown and this is just their label. Inside
- * the listbox, so `tabIndex={-1}` and pointer-only: the rows under it cannot
- * take the selection anyway (#10851), so there is nothing for the keyboard
- * to reach by opening it.
+ * searching the rows are always shown and this is just their label. Pointer
+ * only (`tabIndex={-1}`), like the project switcher's band folds: the rows
+ * under it cannot take the selection anyway (#10851), so there is nothing for
+ * the keyboard to reach by opening it, and search shows them regardless.
  */
 function RemovedHeading({
   id,
@@ -93,14 +96,14 @@ function RemovedHeading({
   const className = cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1 px-3 pt-3 pb-1");
   if (!collapsible) {
     return (
-      <div id={id} role="presentation" className={className}>
+      <div id={id} className={className}>
         Worktree removed
       </div>
     );
   }
   const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
-    <div role="presentation">
+    <div>
       <button
         id={id}
         type="button"
@@ -120,6 +123,7 @@ function RemovedHeading({
 }
 
 const LIST_ID = "resume-session-list";
+const REMOVED_LIST_ID = "resume-session-removed-list";
 const REMOVED_HEADING_ID = "resume-session-removed-heading";
 
 export function ResumeSessionsPalette() {
@@ -174,10 +178,17 @@ export function ResumeSessionsPalette() {
     [close, resume]
   );
 
+  // A row can go stale under the selection (its worktree deleted while the
+  // palette is open); the shared hook re-validates on the next commit, but
+  // nothing here may point at it in the meantime.
+  const selected =
+    selectedIndex >= 0 && results[selectedIndex] && !results[selectedIndex]!.isStale
+      ? results[selectedIndex]
+      : undefined;
+
   const handleConfirm = useCallback(() => {
-    const selected = selectedIndex >= 0 ? results[selectedIndex] : undefined;
     if (selected) launch(selected);
-  }, [results, selectedIndex, launch]);
+  }, [selected, launch]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -230,9 +241,16 @@ export function ResumeSessionsPalette() {
     );
   };
 
-  const selected = selectedIndex >= 0 ? results[selectedIndex] : undefined;
   const activeDescendant = selected ? `resume-session-option-${selected.id}` : undefined;
-  const hasList = results.length > 0;
+  // Options live in two listboxes — the resumable rows, and the removed rows
+  // under their heading — so the paging and fold controls between them are
+  // never children of a listbox. The combobox controls whichever are rendered.
+  const showList = visibleResults.length > 0;
+  const showRemovedList = removedResults.length > 0 && removedVisible;
+  const controlledIds = [showList && LIST_ID, showRemovedList && REMOVED_LIST_ID]
+    .filter((id): id is string => !!id)
+    .join(" ");
+  const hasList = controlledIds.length > 0;
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Resume session" tier="command">
@@ -249,7 +267,7 @@ export function ResumeSessionsPalette() {
           aria-expanded={hasList}
           aria-haspopup="listbox"
           aria-label="Search closed sessions"
-          aria-controls={hasList ? LIST_ID : undefined}
+          aria-controls={hasList ? controlledIds : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
@@ -273,43 +291,43 @@ export function ResumeSessionsPalette() {
           )
         ) : (
           <>
-            <div id={LIST_ID} role="listbox" aria-label="Closed sessions">
-              {visibleResults.map(renderRow)}
-              {!isSearching && hiddenCount > 0 && (
-                <div role="presentation">
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    onPointerDown={(e) => e.preventDefault()}
-                    onClick={showMore}
-                    className="w-full px-3 py-2 rounded-[var(--radius-md)] text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary"
-                  >
-                    Load more ({hiddenCount})
-                  </button>
-                </div>
-              )}
-              {removedResults.length > 0 && (
-                <>
-                  <RemovedHeading
-                    id={REMOVED_HEADING_ID}
-                    count={removedResults.length}
-                    expanded={removedVisible}
-                    // A fold needs something to fold under: with nothing
-                    // resumable the history is all there is, so the heading
-                    // is a label and the chevron makes no promise.
-                    collapsible={!isSearching && visibleResults.length > 0}
-                    onToggle={toggleRemoved}
-                  />
-                  {removedVisible && (
-                    // The heading names the group for assistive tech too, so a
-                    // row read out of it is announced as one whose worktree is gone.
-                    <div role="group" aria-labelledby={REMOVED_HEADING_ID}>
-                      {removedResults.map(renderRow)}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
+            {showList && (
+              <div id={LIST_ID} role="listbox" aria-label="Closed sessions">
+                {visibleResults.map(renderRow)}
+              </div>
+            )}
+            {!isSearching && hiddenCount > 0 && (
+              <button
+                type="button"
+                tabIndex={-1}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={showMore}
+                className="w-full px-3 py-2 rounded-[var(--radius-md)] text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary"
+              >
+                Load more ({hiddenCount})
+              </button>
+            )}
+            {removedResults.length > 0 && (
+              <>
+                <RemovedHeading
+                  id={REMOVED_HEADING_ID}
+                  count={removedResults.length}
+                  expanded={removedVisible}
+                  // A fold needs something to fold under: with nothing
+                  // resumable the history is all there is, so the heading
+                  // is a label and the chevron makes no promise.
+                  collapsible={!isSearching && showList}
+                  onToggle={toggleRemoved}
+                />
+                {showRemovedList && (
+                  // Its own listbox, named by the heading, so a row read out
+                  // of it is announced as one whose worktree is gone.
+                  <div id={REMOVED_LIST_ID} role="listbox" aria-labelledby={REMOVED_HEADING_ID}>
+                    {removedResults.map(renderRow)}
+                  </div>
+                )}
+              </>
+            )}
             {/* Fully-paged browse and search both surface records beyond the
                 result cap — search is the only way to reach them. The notice
                 self-hides when nothing overflows. */}
