@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildResumeSessionItems,
+  isAgentPlaceholderTitle,
   pathBasename,
   prettifyModelId,
   type ResumeWorktreeLike,
@@ -147,6 +148,21 @@ describe("buildResumeSessionItems", () => {
     expect(item?.location).toBe("feature-a");
     // Still findable by agent, though.
     expect(item?.searchAliases).toContain("Claude");
+  });
+});
+
+describe("isAgentPlaceholderTitle", () => {
+  const claude = { name: "Claude", command: "claude" };
+  it("matches the agent's name, binary, and the Code / CLI spellings, case-insensitively", () => {
+    expect(isAgentPlaceholderTitle("Claude Code", claude)).toBe(true);
+    expect(isAgentPlaceholderTitle("claude code", claude)).toBe(true);
+    expect(isAgentPlaceholderTitle("Claude CLI", claude)).toBe(true);
+    expect(isAgentPlaceholderTitle("Claude", claude)).toBe(true);
+  });
+  it("keeps a task that merely mentions the product", () => {
+    expect(isAgentPlaceholderTitle("Claude Code onboarding review", claude)).toBe(false);
+    expect(isAgentPlaceholderTitle("Fix the auth bug", claude)).toBe(false);
+    expect(isAgentPlaceholderTitle("Claude Code", undefined)).toBe(false);
   });
 });
 

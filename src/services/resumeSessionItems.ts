@@ -70,6 +70,30 @@ export interface ResumeWorktreeLike {
   path?: string;
 }
 
+/**
+ * An agent's own product name is as empty a title as its binary: Claude Code
+ * sits on "Claude Code" until it has a task to summarise, and a resume row
+ * titled that way says nothing the agent glyph beside it does not. Exact
+ * matches only — a task that merely mentions the product is a task.
+ *
+ * Deliberately NOT in `isUselessTitle`: the live pane title treats the same
+ * echo as an identity to show in place of the default one, and that surface
+ * has its own ruling.
+ */
+export function isAgentPlaceholderTitle(
+  title: string,
+  agent: { name?: string; command?: string } | undefined
+): boolean {
+  const normalized = title.trim().toLowerCase();
+  const labels = [agent?.name, agent?.command]
+    .filter((label): label is string => !!label)
+    .map((label) => label.toLowerCase());
+  return labels.some(
+    (label) =>
+      normalized === label || normalized === `${label} code` || normalized === `${label} cli`
+  );
+}
+
 /** Last path segment of a POSIX or Windows path (for cwd-derived labels). */
 export function pathBasename(p: string | null | undefined): string {
   if (!p) return "";
@@ -134,7 +158,10 @@ export function buildResumeSessionItems(
       // Glyph-stripped so the resume label matches how the live tab rendered
       // the same task title.
       const taskTitle = cleanTaskTitle(session.title);
-      const hasTitle = !!taskTitle && !isUselessTitle(taskTitle);
+      const hasTitle =
+        !!taskTitle &&
+        !isUselessTitle(taskTitle) &&
+        !isAgentPlaceholderTitle(taskTitle, agentConfig);
       const title = hasTitle ? taskTitle : `${agentName} session`;
       const name = hasTitle ? `Resume: ${title}` : `Resume ${title}`;
 

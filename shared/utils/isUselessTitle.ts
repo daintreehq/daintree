@@ -35,35 +35,12 @@ const AGENT_BINARY_PATTERN =
     ? new RegExp(`^(${agentBinaries.map(escapeRegExp).join("|")})(\\.exe)?$`, "i")
     : /^claude$|^codex$|^gemini$/i;
 
-// An agent's own product name is as empty a title as its binary: Claude Code
-// sits on "Claude Code" until it has a task to summarise, and a resume row
-// titled that way says nothing the agent glyph beside it does not. Derived
-// from the registry display names, plus the "<name> Code" / "<name> CLI"
-// spellings the CLIs actually emit.
-let agentNames: string[] = [];
-try {
-  agentNames = [
-    ...new Set(
-      Object.values(AGENT_REGISTRY ?? {})
-        .map((a) => a.name?.trim())
-        .filter((n): n is string => !!n)
-    ),
-  ];
-} catch {
-  // Same fallback as above.
-}
-const AGENT_PRODUCT_PATTERN =
-  agentNames.length > 0
-    ? new RegExp(`^(${agentNames.map(escapeRegExp).join("|")})( code| cli)?$`, "i")
-    : /^(claude|codex|gemini)( code| cli)?$/i;
-
 const USELESS_TITLE_PATTERNS: readonly RegExp[] = [
   // Shell binaries
   /^(bash|zsh|fish|sh|cmd|powershell|pwsh|dash)(\.exe)?$/i,
   // Agent binary names (registry-derived; static core when the registry is mocked/empty)
   /^(claude|codex|gemini)$/i,
   AGENT_BINARY_PATTERN,
-  AGENT_PRODUCT_PATTERN,
   // Absolute/home paths (reject only when the whole string is path-shaped)
   /^(?:~\/?|\/)[^\s]*$/,
   /^[A-Z]:\\[^\s]*$/i,

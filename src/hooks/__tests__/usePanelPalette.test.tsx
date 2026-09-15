@@ -382,7 +382,7 @@ describe("usePanelPalette", () => {
       rerender();
       const resume = result.current.results.find((item) => item.id.startsWith("resume:"));
       expect(resume).toBeDefined();
-      expect(resume!.name).toBe("Resume Claude");
+      expect(resume!.name).toBe("Resume Claude session");
     });
   });
 
@@ -404,7 +404,7 @@ describe("usePanelPalette", () => {
       rerender();
       const resume = result.current.results.find((item) => item.id.startsWith("resume:"));
       expect(resume).toBeDefined();
-      expect(resume!.description).toContain("Opus 4 5");
+      expect(resume!.description).toContain("Opus 4.5");
       expect(resume!.description).toContain("ago");
     });
   });
