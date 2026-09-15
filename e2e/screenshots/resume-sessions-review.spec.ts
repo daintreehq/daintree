@@ -205,15 +205,21 @@ test("resume sessions palette — states, interactions and themes", async ({ pag
       expect(await selectedId(dialog)).not.toBeNull();
       written.push(await snap(page, dialog, `populated--${theme}.png`));
 
-      // Keyboard: the selection two rows down, so the rail is not on the first row.
+      // Keyboard: the selection walked down to the long-titled row, so the
+      // rail is off the first row and the footer carries a title that has to
+      // give way.
       const before = await selectedId(dialog);
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("ArrowDown");
+      const longRow = options(dialog).filter({ hasText: "Port the forge token banner" });
+      for (let i = 0; i < 12; i += 1) {
+        if (await longRow.evaluate((el) => el.getAttribute("aria-selected") === "true")) break;
+        await page.keyboard.press("ArrowDown");
+      }
       await page.waitForTimeout(150);
       const after = await selectedId(dialog);
       if (after === null || after === before) {
         throw new Error("ArrowDown did not move the selection — refusing to write");
       }
+      await expect(longRow).toHaveAttribute("aria-selected", "true");
       written.push(await snap(page, dialog, `populated--${theme}--keyboard.png`));
 
       // Search narrows the list and highlights the match.
@@ -252,6 +258,10 @@ test("resume sessions palette — states, interactions and themes", async ({ pag
     {
       const dialog = await open(page, "removed-only", theme);
       await expect(dialog.getByText(/worktree removed/i).first()).toBeVisible({ timeout });
+      // With nothing resumable the history is shown, not folded away.
+      await expect(options(dialog).filter({ hasText: "Delete work tree" })).toBeVisible({
+        timeout,
+      });
       written.push(await snap(page, dialog, `removed-only--${theme}.png`));
     }
 

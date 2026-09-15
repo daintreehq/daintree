@@ -141,7 +141,8 @@ describe("buildResumeSessionItems", () => {
       { currentProjectId: "p1", worktrees }
     );
     expect(item?.description).not.toMatch(/claude/i);
-    expect(item?.description).toBe(`Opus 4.8 · feature-a · ${item?.timeAgo}`);
+    // Location before model: the stronger identifier leads.
+    expect(item?.description).toBe(`feature-a · Opus 4.8 · ${item?.timeAgo}`);
     expect(item?.modelName).toBe("Opus 4.8");
     expect(item?.location).toBe("feature-a");
     // Still findable by agent, though.

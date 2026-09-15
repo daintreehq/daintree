@@ -93,7 +93,7 @@ function makeItem(id: string, overrides: Partial<ResumeSessionItem> = {}): Resum
     modelName: "Opus 4.8",
     location: "feature-a",
     timeAgo: "5m ago",
-    description: "Opus 4.8 · feature-a · 5m ago",
+    description: "feature-a · Opus 4.8 · 5m ago",
     searchAliases: [],
     isStale: false,
     ...overrides,
@@ -189,9 +189,19 @@ describe("ResumeSessionsPalette", () => {
     const list = screen.getByRole("listbox");
     const mentions = (list.textContent ?? "").match(/worktree removed/gi) ?? [];
     expect(mentions).toHaveLength(1);
-    // Both removed rows are rendered under it.
-    expect(rowFor("c")).not.toBeNull();
-    expect(rowFor("d")).not.toBeNull();
+    // Both removed rows are rendered under it, in a group the heading names.
+    const group = screen.getByRole("group", { name: /worktree removed/i });
+    expect(group.contains(rowFor("c"))).toBe(true);
+    expect(group.contains(rowFor("d"))).toBe(true);
+    expect(group.contains(rowFor("a"))).toBe(false);
+  });
+
+  it("drops the resume hint when nothing on screen can be resumed", () => {
+    paletteState.results = paletteState.removedResults;
+    paletteState.visibleResults = [];
+    paletteState.selectedIndex = -1;
+    render(<ResumeSessionsPalette />);
+    expect(document.querySelector('[role="dialog"]')?.textContent ?? "").not.toMatch(/to resume/);
   });
 
   it("folds the removed rows away while browsing until the heading is opened", () => {
@@ -225,6 +235,8 @@ describe("ResumeSessionsPalette", () => {
     // The age is its own element, not the tail of the metadata line.
     const meta = row.querySelector(".truncate:last-child");
     expect(meta?.textContent).not.toContain("5m ago");
+    // Location leads the metadata line; the model follows it.
+    expect(meta?.textContent).toBe("feature-a · Opus 4.8");
 
     const footer = document.querySelector('[role="dialog"]')?.textContent ?? "";
     expect(footer).toMatch(/to resume Session a/);

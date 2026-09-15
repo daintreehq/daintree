@@ -135,8 +135,12 @@ export function useResumeSessionsPalette() {
     showMore,
     /** Matching sessions whose worktree is gone, in journal order. */
     removedResults: removed,
-    /** Whether the removed-worktree rows are rendered: always while searching, else once unfolded. */
-    removedVisible: isSearching || removedExpanded,
+    /**
+     * Whether the removed-worktree rows are rendered: always while searching,
+     * always when there is nothing resumable to fold them under (a lone fold
+     * over an empty list hides the only history there is), else once unfolded.
+     */
+    removedVisible: isSearching || removedExpanded || available.length === 0,
     toggleRemoved,
     hasSessions: items.length > 0,
   };

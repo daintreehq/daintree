@@ -21,7 +21,9 @@ interface ResumeSessionRowProps {
 }
 
 function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: ResumeSessionRowProps) {
-  const meta = [item.modelName, item.location].filter(Boolean).join(" · ");
+  // Location first: it is the stronger identifier, and the one that must
+  // survive when a long branch name pushes the line into its ellipsis.
+  const meta = [item.location, item.modelName].filter(Boolean).join(" · ");
   return (
     <button
       id={`resume-session-option-${item.id}`}
@@ -76,11 +78,13 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
  * to reach by opening it.
  */
 function RemovedHeading({
+  id,
   count,
   expanded,
   collapsible,
   onToggle,
 }: {
+  id: string;
   count: number;
   expanded: boolean;
   collapsible: boolean;
@@ -89,7 +93,7 @@ function RemovedHeading({
   const className = cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1 px-3 pt-3 pb-1");
   if (!collapsible) {
     return (
-      <div role="presentation" className={className}>
+      <div id={id} role="presentation" className={className}>
         Worktree removed
       </div>
     );
@@ -98,6 +102,7 @@ function RemovedHeading({
   return (
     <div role="presentation">
       <button
+        id={id}
         type="button"
         tabIndex={-1}
         onPointerDown={(e) => e.preventDefault()}
@@ -113,6 +118,8 @@ function RemovedHeading({
     </div>
   );
 }
+
+const REMOVED_HEADING_ID = "resume-session-removed-heading";
 
 export function ResumeSessionsPalette() {
   const {
@@ -280,12 +287,19 @@ export function ResumeSessionsPalette() {
               {removedResults.length > 0 && (
                 <>
                   <RemovedHeading
+                    id={REMOVED_HEADING_ID}
                     count={removedResults.length}
                     expanded={removedVisible}
                     collapsible={!isSearching}
                     onToggle={toggleRemoved}
                   />
-                  {removedVisible && removedResults.map(renderRow)}
+                  {removedVisible && (
+                    // The heading names the group for assistive tech too, so a
+                    // row read out of it is announced as one whose worktree is gone.
+                    <div role="group" aria-labelledby={REMOVED_HEADING_ID}>
+                      {removedResults.map(renderRow)}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -300,14 +314,19 @@ export function ResumeSessionsPalette() {
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>
-        <PaletteFooterHints
-          primaryHint={{
-            keys: ["↵"],
-            // The title keeps its own case: these are sentences with names in
-            // them, not the noun a sibling palette lowercases.
-            label: selected ? `to resume ${selected.title}` : "to resume",
-          }}
-        />
+        {/* Only while Enter would do something. With nothing resumable on
+            screen — empty, no match, every worktree gone — the band would be
+            promising an action, and the footer primitive drops itself. */}
+        {selected && (
+          <PaletteFooterHints
+            primaryHint={{
+              keys: ["↵"],
+              // The title keeps its own case: these are sentences with names in
+              // them, not the noun a sibling palette lowercases.
+              label: `to resume ${selected.title}`,
+            }}
+          />
+        )}
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>
   );

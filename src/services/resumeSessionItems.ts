@@ -46,7 +46,7 @@ export interface ResumeSessionItem {
   location: string | null;
   /** Coarse relative age of the record ("5m ago"). */
   timeAgo: string;
-  /** One-line metadata for surfaces without a time column: model · location · time-ago. */
+  /** One-line metadata for surfaces without a time column: location · model · time-ago. */
   description: string;
   /** Extra fuzzy-search haystack (agent, model, branch, worktree, cwd). */
   searchAliases: string[];
@@ -149,7 +149,7 @@ export function buildResumeSessionItems(
       const location = worktreeName ?? branchName ?? pathBasename(session.cwd) ?? null;
       // The agent is not in here: every surface that shows this line draws
       // the agent glyph beside it, and the word said what the glyph already had.
-      const description = [modelName, location || null, timeAgo]
+      const description = [location || null, modelName, timeAgo]
         .filter((part): part is string => !!part)
         .join(" · ");
 
