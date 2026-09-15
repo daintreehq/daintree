@@ -682,15 +682,30 @@ export interface PaletteFooterHintsProps {
   hints?: PaletteFooterHint[];
 }
 
-function HintChip({ hint, className }: { hint: PaletteFooterHint; className?: string }) {
+function HintChip({
+  hint,
+  className,
+  truncate = false,
+}: {
+  hint: PaletteFooterHint;
+  className?: string;
+  /**
+   * Let the label give way with an ellipsis instead of pushing the band
+   * wider. For the primary chip, whose label carries the selection's own
+   * title and can be a sentence long; the keycaps never shrink.
+   */
+  truncate?: boolean;
+}) {
   return (
-    <span className={cn("inline-flex items-baseline shrink-0", className)}>
+    <span
+      className={cn("inline-flex items-baseline", truncate ? "min-w-0" : "shrink-0", className)}
+    >
       {hint.keys.map((key, i) => (
-        <kbd key={key} className={cn(KBD_CLASS, i > 0 && "ml-1")}>
+        <kbd key={key} className={cn(KBD_CLASS, "shrink-0", i > 0 && "ml-1")}>
           {key}
         </kbd>
       ))}
-      <span className="ml-1.5">{hint.label}</span>
+      <span className={cn("ml-1.5", truncate && "min-w-0 truncate")}>{hint.label}</span>
     </span>
   );
 }
@@ -708,7 +723,7 @@ const SECONDARY_DROP_CLASSES = [
 export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHintsProps) {
   return (
     <div className="@container/palette-footer w-full flex items-center justify-between gap-3">
-      <HintChip hint={primaryHint} />
+      <HintChip hint={primaryHint} truncate />
       {hints.length > 0 && (
         <div className="flex items-center gap-3 min-w-0">
           {hints.map((hint, i) => {

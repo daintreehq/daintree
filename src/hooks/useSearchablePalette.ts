@@ -231,7 +231,17 @@ export function useSearchablePalette<T>(
       const anchorId = selectedItemIdRef.current;
       if (anchorId == null) return;
       const atSelected = results[selectedIndexRef.current];
-      if (atSelected != null && getItemId(atSelected) === anchorId) return;
+      // Same row, same place — but only while it can still be selected. An
+      // item can lose navigability without the list changing shape (a resume
+      // row whose worktree is deleted while the palette is open), and a
+      // selection left on it points Enter at nothing.
+      if (
+        atSelected != null &&
+        getItemId(atSelected) === anchorId &&
+        (!canNavigate || canNavigate(atSelected))
+      ) {
+        return;
+      }
     } else {
       prevResultsRef.current = { ids, length };
     }
