@@ -8,6 +8,7 @@ import {
   isSafeNavigationUrl,
   stripAnsiAndOscCodes,
   isImplicitlyAllowedHost,
+  isLoopbackHostname,
 } from "../urlUtils.js";
 
 describe("urlUtils", () => {
@@ -555,6 +556,50 @@ describe("urlUtils", () => {
 
     it("names a local file rather than showing an empty host", () => {
       expect(formatDialogOrigin("file:///Users/x/report.html")).toBe("Local file");
+    });
+  });
+
+  describe("isLoopbackHostname", () => {
+    it.each([
+      "localhost",
+      "LOCALHOST",
+      "localhost.",
+      "127.0.0.1",
+      "127.0.0.0",
+      "127.255.255.255",
+      "::1",
+      "[::1]",
+      "::ffff:127.0.0.1",
+      "[::ffff:7f00:1]",
+    ])("treats %s as loopback", (hostname) => {
+      expect(isLoopbackHostname(hostname)).toBe(true);
+    });
+
+    it.each([
+      "",
+      "localhost..",
+      "0.0.0.0",
+      "::",
+      "[::]",
+      "10.0.0.1",
+      "172.16.0.1",
+      "192.168.1.1",
+      "169.254.169.254",
+      "[fd00::1]",
+      "[fe80::1]",
+      "[::ffff:808:808]",
+      "[::7f00:1]",
+      "[64:ff9b::7f00:1]",
+      "8.8.8.8",
+      "128.0.0.1",
+      "api.localhost",
+      "localhost.example.com",
+      "127.0.0.1.nip.io",
+      "ip6-localhost",
+      "myapp.local",
+      "example.com",
+    ])("does not treat %s as loopback", (hostname) => {
+      expect(isLoopbackHostname(hostname)).toBe(false);
     });
   });
 });

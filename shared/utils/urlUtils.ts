@@ -35,6 +35,23 @@ function isLoopbackHost(hostname: string): boolean {
   return LOOPBACK_HOSTS.includes(hostname);
 }
 
+/**
+ * Strict loopback check for a parsed `URL.hostname`, for deciding whether a credential
+ * may travel over plain HTTP. Deliberately narrower than `isImplicitlyAllowedHost`:
+ * no private ranges, no `*.localhost` or other local TLDs, no `0.0.0.0`.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+  if (!hostname) return false;
+  const host = stripBrackets(hostname.toLowerCase().replace(/\.$/, ""));
+  if (host === "localhost") return true;
+  if (!ipaddr.isValid(host)) return false;
+  try {
+    return ipaddr.process(host).range() === "loopback";
+  } catch {
+    return false;
+  }
+}
+
 // ipaddr.process() normalizes IPv4-mapped IPv6 to IPv4 before classification,
 // so ::ffff:127.0.0.1 → loopback, ::ffff:8.8.8.8 → unicast (denied).
 // No explicit "ipv4Mapped" entry needed — process() handles it implicitly.

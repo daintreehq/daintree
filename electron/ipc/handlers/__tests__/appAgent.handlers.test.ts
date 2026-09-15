@@ -65,4 +65,42 @@ describe("appAgent handlers", () => {
     expect(rejection?.message).not.toContain("received");
     expect(rejection?.message).not.toContain("123");
   });
+
+  it.each([
+    "http://api.example.com/v1",
+    "http://192.168.1.10:11434/v1",
+    "http://127.0.0.1@evil.example/v1",
+    "file:///etc/passwd",
+    "not a url",
+  ])("rejects set-config with the insecure or invalid base URL %s", async (baseUrl) => {
+    const handler = getInvokeHandler(CHANNELS.APP_AGENT_SET_CONFIG);
+
+    const rejection = await handler(mockEvent, { model: "valid-model", baseUrl }).then(
+      () => null,
+      (error: unknown) => error as Error
+    );
+
+    expect(rejection?.message).toBe(`IPC validation failed: ${CHANNELS.APP_AGENT_SET_CONFIG}`);
+    expect(rejection?.message).not.toContain(baseUrl);
+    expect(appAgentServiceMock.setConfig).not.toHaveBeenCalled();
+  });
+
+  it.each(["https://api.openai.com/v1", "http://localhost:11434/v1", "http://[::1]:8000/v1", ""])(
+    "accepts set-config with the base URL %j",
+    async (baseUrl) => {
+      const handler = getInvokeHandler(CHANNELS.APP_AGENT_SET_CONFIG);
+
+      await handler(mockEvent, { baseUrl });
+
+      expect(appAgentServiceMock.setConfig).toHaveBeenCalledWith({ baseUrl });
+    }
+  );
+
+  it("accepts set-config updates that leave the base URL untouched", async () => {
+    const handler = getInvokeHandler(CHANNELS.APP_AGENT_SET_CONFIG);
+
+    await handler(mockEvent, { model: "valid-model" });
+
+    expect(appAgentServiceMock.setConfig).toHaveBeenCalledWith({ model: "valid-model" });
+  });
 });
