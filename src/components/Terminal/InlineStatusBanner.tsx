@@ -484,7 +484,9 @@ export function InlineStatusBanner({
             // break: three actions and a dismiss run to ~400px, and a column
             // narrower than ~360px wraps a one-sentence description to four
             // lines before it would ever drop the controls.
-            isStrip && "@max-[52rem]/banner:basis-full @max-[52rem]/banner:ml-6",
+            // Padding, not margin: a full-basis row with a margin runs past the
+            // container, and the flush-right × with it.
+            isStrip && "@max-[52rem]/banner:basis-full @max-[52rem]/banner:pl-6",
             // `.app-no-drag *` carries the opt-out down to every control in the
             // row, including nested popover triggers.
             isTitleBarSurface && "app-no-drag"
