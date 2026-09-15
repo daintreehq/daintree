@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,8 @@ export interface TrashCountdown {
   /** Milliseconds left, which is how long the meter has to finish draining. */
   remainingMs: number;
   isCritical: boolean;
+  /** The deadline itself — identity for anything that must be seeked only once. */
+  expiresAt: number;
 }
 
 /**
@@ -37,10 +39,14 @@ export interface TrashCountdown {
  * to wall-clock time on return — Chromium coalesces hidden-document timers, so
  * a ticker that counts its own wake-ups drifts away from the expiry the store
  * actually scheduled.
+ *
+ * `enabled` is for a caller whose countdown is not on screen — a closed
+ * popover has nothing to tick for, and the value re-reads the wall clock when
+ * it comes back rather than carrying on from where it left off.
  */
-export function useTrashCountdown(expiresAt: number): TrashCountdown {
+export function useTrashCountdown(expiresAt: number, enabled = true): TrashCountdown {
   const [now, setNow] = useState(() => Date.now());
-  useVisibilityAwareInterval(() => setNow(Date.now()), 1000);
+  useVisibilityAwareInterval(() => setNow(Date.now()), 1000, enabled);
 
   const remainingMs = Math.max(0, expiresAt - now);
   return {
@@ -48,6 +54,7 @@ export function useTrashCountdown(expiresAt: number): TrashCountdown {
     fraction: Math.min(1, remainingMs / TRASH_TTL_MS),
     remainingMs,
     isCritical: Math.ceil(remainingMs / 1000) <= COUNTDOWN_CRITICAL_SECONDS,
+    expiresAt,
   };
 }
 
@@ -107,7 +114,25 @@ interface TrashTtlMeterProps {
  * `data-reduce-animations` setting as well as the media query.
  */
 export function TrashTtlMeter({ countdown }: TrashTtlMeterProps) {
-  const { fraction, remainingMs, isCritical } = countdown;
+  const { fraction, remainingMs, isCritical, expiresAt } = countdown;
+
+  // Seeked ONCE, when the animation is created, and never restated.
+  //
+  // `animation-delay` is measured from the moment the animation was applied to
+  // the element, not from now — so re-stating it every second counts the
+  // elapsed time twice over. Ten seconds into a twenty-second window, a delay
+  // of -10s against 10s of real playback put the bar at 0% while the label
+  // still read 10s left. Held constant, the animation's own clock does the
+  // whole job: local time is elapsed-at-mount plus real playback, which is the
+  // right position at every instant and needs no correction.
+  // Keyed on the deadline, so it is computed once per row and not once per
+  // tick. `useMemo` rather than a ref written during render: the React Compiler
+  // rejects the latter outright, and the worst a discarded memo can do here is
+  // re-seek to the position the bar is already at.
+  const seekDelayMs = useMemo(
+    () => TRASH_TTL_MS - Math.max(0, expiresAt - Date.now()),
+    [expiresAt]
+  );
   return (
     <span
       aria-hidden="true"
@@ -127,7 +152,7 @@ export function TrashTtlMeter({ countdown }: TrashTtlMeterProps) {
             // continuously between ticks.
             transform: `scaleX(${fraction})`,
             "--trash-meter-ttl": `${TRASH_TTL_MS}ms`,
-            "--trash-meter-elapsed": `-${TRASH_TTL_MS - remainingMs}ms`,
+            "--trash-meter-elapsed": `-${seekDelayMs}ms`,
           } as React.CSSProperties
         }
       />

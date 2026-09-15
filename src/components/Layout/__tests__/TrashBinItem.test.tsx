@@ -430,4 +430,36 @@ describe("TrashBinItem", () => {
       expect(onRequestRemove.mock.calls[0]![0]).toMatchObject({ ids: ["t1"] });
     });
   });
+
+  describe("the meter is seeked once, not re-seeked every tick", () => {
+    // The bug this pins: `animation-delay` is measured from when the animation
+    // was created, so restating it each second counts the elapsed time twice
+    // and the bar reaches empty at roughly the halfway mark.
+    it("holds its animation delay steady while the deadline runs down", () => {
+      vi.useFakeTimers();
+      try {
+        const expiresAt = Date.now() + 20000;
+        const { container } = render(
+          <TrashBinItem
+            onRequestRemove={onRequestRemove}
+            terminal={makeAgentTerminal()}
+            trashedInfo={{ id: "t1", expiresAt, originalLocation: "grid" }}
+          />
+        );
+        const fill = container.querySelector<HTMLElement>("[data-trash-meter]")!
+          .firstElementChild as HTMLElement;
+        const delayAtMount = fill.style.getPropertyValue("--trash-meter-elapsed");
+
+        act(() => vi.advanceTimersByTime(8000));
+
+        expect(countdownSeconds(container)).toBeLessThan(20);
+        expect(fill.style.getPropertyValue("--trash-meter-elapsed")).toBe(delayAtMount);
+        // The duration is the whole window, never the remaining slice — that
+        // was the other half of the same bug.
+        expect(fill.style.getPropertyValue("--trash-meter-ttl")).toBe("20000ms");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

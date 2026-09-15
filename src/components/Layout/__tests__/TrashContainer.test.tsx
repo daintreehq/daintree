@@ -609,4 +609,65 @@ describe("TrashContainer", () => {
       );
     });
   });
+
+  describe("an expiry is told apart from a rescue", () => {
+    afterEach(() => {
+      usePanelStore.setState({ panelsById: {} });
+      useAnnouncerStore.setState({ polite: null });
+    });
+
+    it("announces a pane that actually ran out", () => {
+      const doomed = makeTrashedItem("1", Date.now() + 400);
+      const { rerender } = render(<TrashContainer trashedTerminals={[doomed]} />);
+      useAnnouncerStore.setState({ polite: null });
+
+      // Gone from the trash AND gone from the registry: destroyed.
+      rerender(<TrashContainer trashedTerminals={[]} />);
+
+      expect(useAnnouncerStore.getState().polite?.msg).toMatch(/expired/i);
+    });
+
+    it("stays quiet when a pane is rescued in its last moments", () => {
+      const rescued = makeTrashedItem("1", Date.now() + 400);
+      const { rerender } = render(<TrashContainer trashedTerminals={[rescued]} />);
+      useAnnouncerStore.setState({ polite: null });
+
+      // Restored: out of the trash, but still a live panel. Telling someone who
+      // just saved their work that it was permanently removed is the worst
+      // thing this surface could say.
+      usePanelStore.setState({ panelsById: { "1": rescued.terminal } });
+      rerender(<TrashContainer trashedTerminals={[]} />);
+
+      expect(useAnnouncerStore.getState().polite).toBeNull();
+    });
+  });
+
+  describe("a confirm does not outlive what it is asking about", () => {
+    it("dismisses itself when its target expires underneath it", () => {
+      const doomed = makeTrashedItem("1", Date.now() + 400);
+      const survivor = makeTrashedItem("2", Date.now() + 15_000);
+      const { container, rerender } = render(
+        <TrashContainer trashedTerminals={[doomed, survivor]} />
+      );
+
+      // LIFO puts the survivor on top, so pick the doomed row by name.
+      const removeButton = Array.from(container.querySelectorAll("button")).find((b) =>
+        /Remove Terminal 1 permanently/i.test(b.getAttribute("aria-label") ?? "")
+      )!;
+      act(() => {
+        removeButton.click();
+      });
+      // By DOM, not by the captured props: two ConfirmDialogs are mounted here
+      // and the mock only remembers whichever rendered last.
+      const title = () =>
+        container.querySelector('[data-testid="confirm-dialog-title"]')?.textContent ?? "";
+      expect(title()).toMatch(/Remove Terminal 1/);
+
+      // The panel it names is gone; the dialog is now describing a future
+      // removal of something that no longer exists, over rows that can still
+      // be saved.
+      rerender(<TrashContainer trashedTerminals={[survivor]} />);
+      expect(title()).not.toMatch(/Remove Terminal 1/);
+    });
+  });
 });

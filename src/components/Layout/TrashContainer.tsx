@@ -30,6 +30,13 @@ interface TrashContainerProps {
     trashedInfo: TrashedTerminal;
   }>;
   compact?: boolean;
+  /**
+   * Called when the last entry expires while the keyboard was inside this
+   * surface. Both the popover and the trigger unmount at that moment, so there
+   * is no destination left in here to hand focus to — only the dock that owns
+   * the row this control sits in.
+   */
+  onFocusHandoff?: () => void;
 }
 
 interface GroupedTrashItem {
@@ -54,7 +61,11 @@ interface GroupedTrashGroup {
 
 type TrashDisplayItem = GroupedTrashItem | GroupedTrashGroup;
 
-export function TrashContainer({ trashedTerminals, compact = false }: TrashContainerProps) {
+export function TrashContainer({
+  trashedTerminals,
+  compact = false,
+  onFocusHandoff,
+}: TrashContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
   const [showMovedHint, setShowMovedHint] = useState(false);
@@ -79,19 +90,40 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   // left with is what says whether it expired or the user acted on it.
   const prevEntriesRef = useRef(new Map<string, number>());
 
-  // Expiry is the one departure nobody asked for: a restore or a remove is its
-  // own feedback, and a count that only went down cannot tell the three apart.
+  // Ids the user has just confirmed away, so their departure is not mistaken
+  // for an expiry. The confirm is the feedback for those; an announcement on
+  // top would be a second one.
+  const confirmedRemovalsRef = useRef(new Set<string>());
+
+  // Expiry is the one departure nobody asked for, and it is the one that has to
+  // be said out loud — a restore and a manual removal are each their own
+  // feedback, and a falling count cannot tell the three apart. Proximity to the
+  // deadline is not the discriminator either: a rescue with 600ms to spare
+  // would be announced as a permanent loss, which is the worst possible thing
+  // to say to someone who just saved their work.
   useEffect(() => {
     const next = new Map(trashedTerminals.map((t) => [t.terminal.id, t.trashedInfo.expiresAt]));
     const previous = prevEntriesRef.current;
     prevEntriesRef.current = next;
 
+    // Read, don't subscribe: this component already re-renders on every trash
+    // change, and watching the whole panel registry would wake it on every
+    // unrelated one.
+    const panels = usePanelStore.getState().panelsById;
+    const confirmed = confirmedRemovalsRef.current;
+
     const now = Date.now();
     let expired = 0;
     for (const [id, expiresAt] of previous) {
-      // A 1s grace covers the gap between the scheduled removal and this
-      // render; anything still well short of its deadline was acted on.
-      if (!next.has(id) && expiresAt - now <= 1000) expired += 1;
+      if (next.has(id)) continue;
+      if (confirmed.delete(id)) continue; // the user removed it, and saw it happen
+      if (panels[id]) continue; // still a panel, so it was restored, not destroyed
+      // And it has to have actually run out. Proximity alone is not enough —
+      // a rescue with 600ms to spare clears the first two tests and would
+      // otherwise be announced as a permanent loss — but nor is absence: a pane
+      // that left well short of its deadline went some other way.
+      if (expiresAt - now > 1000) continue;
+      expired += 1;
     }
     if (expired === 0) return;
     useAnnouncerStore
@@ -108,6 +140,15 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   // focused Restore button unmounting drops focus on document.body — exactly
   // when the remaining opportunities are shortest.
   const focusedRowRef = useRef<{ id: string; index: number } | null>(null);
+
+  // Whether the keyboard is anywhere in this control at all. The row ref only
+  // knows about rows, so opening from the pill and tabbing no further than
+  // Empty trash would leave it null — and the handoff below would then skip
+  // someone who is very much standing here.
+  const hasFocusRef = useRef(false);
+  const noteFocusEntered = useCallback(() => {
+    hasFocusRef.current = true;
+  }, []);
 
   // Removing a trashed pane ends it for good, and Restore is the inverse of
   // *closing* a pane, not of destroying one — so this is a D1 action and takes
@@ -127,6 +168,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   }, []);
 
   const handleListFocus = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+    hasFocusRef.current = true;
     const row = (event.target as HTMLElement).closest<HTMLElement>("[data-row-id]");
     const list = event.currentTarget;
     if (!row) {
@@ -303,6 +345,32 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
     measureOverflow();
   }, [isOpen, measureOverflow, trashedTerminals.length]);
 
+  // A confirm for a panel that has since expired is asking about something that
+  // no longer exists, and it sits over the rows that are still recoverable.
+  useEffect(() => {
+    if (!pendingRemoval) return;
+    const alive = new Set(trashedTerminals.map((t) => t.terminal.id));
+    if (pendingRemoval.ids.some((id) => alive.has(id))) return;
+    closeRemoval();
+  }, [pendingRemoval, trashedTerminals, closeRemoval]);
+
+  // The last row going takes the whole control with it, so the handoff has to
+  // leave the component. Fires once per emptying, and only if focus actually
+  // ended up on the body — a restore moves it somewhere real on purpose.
+  const handedOffRef = useRef(false);
+  useEffect(() => {
+    if (trashedTerminals.length > 0) {
+      handedOffRef.current = false;
+      return;
+    }
+    if (!hasFocusRef.current || handedOffRef.current) return;
+    focusedRowRef.current = null;
+    hasFocusRef.current = false;
+    handedOffRef.current = true;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    onFocusHandoff?.();
+  }, [trashedTerminals.length, onFocusHandoff]);
+
   // Hand focus on when the row holding it disappears. Only when focus actually
   // fell on the body: a restore moves focus deliberately, and stealing it back
   // would fight the user.
@@ -313,8 +381,11 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
     if (list.querySelector(`[data-row-id="${CSS.escape(focused.id)}"]`)) return;
 
     focusedRowRef.current = null;
+    // Anywhere real, not just anywhere in the list: focus may have moved on
+    // purpose to the header's Empty trash button, or out to the pane a restore
+    // just brought back, and pulling it into a surviving row fights the user.
     const active = document.activeElement;
-    if (active && active !== document.body && list.contains(active)) return;
+    if (active && active !== document.body) return;
 
     const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-row-id]"));
     // The row that slid into the vacated position, else the last one left.
@@ -330,8 +401,12 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
     return earliest;
   }, [trashedTerminals]);
 
-  // Ticks only while the footer is on screen; an unopened popover holds no timer.
-  const nextExpiry = useTrashCountdown(Number.isFinite(earliestExpiry) ? earliestExpiry : 0);
+  // Ticks only while the footer is actually on screen. A closed popover, or an
+  // open one whose list fits, has nothing to count for.
+  const nextExpiry = useTrashCountdown(
+    Number.isFinite(earliestExpiry) ? earliestExpiry : 0,
+    isOpen && isScrollable
+  );
   const nextExpirySeconds = nextExpiry.seconds;
 
   const trashPreviewTitles = useMemo(() => {
@@ -381,7 +456,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   const hintOpen = showMovedHint && !isOpen;
 
   return (
-    <div ref={setNodeRef} className="shrink-0">
+    <div ref={setNodeRef} onFocusCapture={noteFocusEntered} className="shrink-0">
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <Tooltip open={hintOpen}>
           <TooltipTrigger asChild>
@@ -430,11 +505,12 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           side="top"
           align="end"
           sideOffset={8}
+          onFocusCapture={noteFocusEntered}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-overlay-subtle flex justify-between items-start gap-2">
+            <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-start gap-2">
               <div className="flex min-w-0 flex-col">
                 <span className="text-xs font-medium text-text-secondary">Recently closed</span>
                 {/* The list is a twenty-second undo buffer, not storage. Saying
@@ -536,7 +612,10 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           hasPreview={(pendingRemoval?.panelTitles.length ?? 0) > 0}
           confirmLabel={(pendingRemoval?.ids.length ?? 0) === 1 ? "Remove panel" : "Remove panels"}
           onConfirm={() => {
-            for (const id of pendingRemoval?.ids ?? []) removePanel(id);
+            for (const id of pendingRemoval?.ids ?? []) {
+              confirmedRemovalsRef.current.add(id);
+              removePanel(id);
+            }
             closeRemoval();
           }}
         >

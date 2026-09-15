@@ -375,6 +375,21 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     [activeWorktreeId, cwd]
   );
 
+  // The trash control unmounts entirely when its last entry expires, so a
+  // keyboard user standing in it has nowhere to land. The action row it lives
+  // in outlives it and is the nearest stable destination.
+  const actionContainerRef = useRef<HTMLDivElement | null>(null);
+  const handleTrashFocusHandoff = useCallback(() => {
+    const row = actionContainerRef.current;
+    if (!row) return;
+    const next = row.querySelector<HTMLElement>(
+      "button:not([disabled]), [tabindex]:not([tabindex='-1'])"
+    );
+    // The row itself as a last resort — landing in the dock beats landing on
+    // the document, which is where focus goes if nobody claims it.
+    (next ?? row).focus({ preventScroll: true });
+  }, []);
+
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({
       terminal: trashedPanelsById[trashed.id] as PanelInstance | undefined,
@@ -555,11 +570,19 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           )}
 
           {/* Action containers: Background + Waiting + Errors + Trash */}
-          <div className="shrink-0 pl-1 flex items-center gap-2">
+          <div
+            ref={actionContainerRef}
+            tabIndex={-1}
+            className="shrink-0 pl-1 flex items-center gap-2 outline-hidden"
+          >
             <BackgroundContainer compact={isCompact} />
             <WaitingContainer compact={isCompact} />
             <ErrorsContainer compact={isCompact} />
-            <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
+            <TrashContainer
+              trashedTerminals={trashedItems}
+              compact={isCompact}
+              onFocusHandoff={handleTrashFocusHandoff}
+            />
           </div>
         </div>
       </ContextMenuTrigger>
