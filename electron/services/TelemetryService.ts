@@ -204,6 +204,23 @@ interface BufferedEvent {
 const preConsentBuffer: BufferedEvent[] = [];
 const BUFFER_MAX = 100;
 
+type SentryTransport = ReturnType<
+  (typeof import("@sentry/electron/main"))["makeElectronTransport"]
+>;
+
+// Every upload ends at the base transport's `send`: client events and sessions,
+// offline-queue retries, and the non-event envelopes the SDK forwards from
+// renderers straight to the transport without touching `beforeSend` or the
+// client's `enabled` flag. Gating here is what makes Off stop everything
+// mid-session. A dropped envelope resolves as delivered so the offline queue
+// discards it instead of persisting it for a later retry.
+function gateTransportOnConsent(transport: SentryTransport): SentryTransport {
+  return {
+    send: (envelope) => (isTelemetryEnabled() ? transport.send(envelope) : Promise.resolve({})),
+    flush: (timeout) => transport.flush(timeout),
+  };
+}
+
 export async function initializeTelemetry(): Promise<void> {
   if (initialized) return;
   if (initPromise) return initPromise;
@@ -216,10 +233,15 @@ export async function initializeTelemetry(): Promise<void> {
 
     try {
       const sentry = await import("@sentry/electron/main");
+      // Consent can be withdrawn while the SDK module graph loads.
+      if (getTelemetryLevel() === "off") return;
       sentry.init({
         dsn,
         release: app.getVersion(),
         environment: app.isPackaged ? "production" : "development",
+        transport: sentry.makeElectronOfflineTransport((options) =>
+          gateTransportOnConsent(sentry.makeElectronTransport(options))
+        ),
         // Drop the default minidump integration. Native .dmp payloads contain
         // stack/register memory that may include env vars (API keys, tokens) at
         // crash time, and JS-level beforeSend cannot scrub binary data. JS
@@ -245,9 +267,11 @@ export async function initializeTelemetry(): Promise<void> {
         beforeSend: (event) => {
           const sanitized = sanitizeEvent(event as unknown as SentryEvent);
           if (sanitized) capturePreviewFromSanitizedEvent(sanitized);
-          // Drop the SDK send under disk pressure but still mirror to the
-          // preview stream above — preview is in-memory only.
-          if (getWritesSuppressed()) return null;
+          // Drop the SDK send once consent is withdrawn or under disk pressure,
+          // but still mirror to the preview stream above — preview is
+          // in-memory only. Dropping here (not just at the transport) also
+          // keeps Off-period errors out of the release-health session counts.
+          if (!isTelemetryEnabled() || getWritesSuppressed()) return null;
           return sanitized as unknown as typeof event;
         },
         initialScope: {
@@ -382,6 +406,9 @@ function deriveTelemetryPreviewLabel(event: Record<string, unknown>): string {
 
 function flushPreConsentBuffer(): void {
   if (!captureEventFn) return;
+  // `setTelemetryLevel("full")` flushes after awaiting init; a later level
+  // change may have landed in that gap.
+  if (getTelemetryLevel() !== "full") return;
   // Under disk pressure `beforeSend` would drop each event, but invoking the
   // SDK still spins through serialisation and queueing — drop the buffer
   // contents up front so the flush is genuinely a no-op.

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import os from "os";
 
 const sentryInitMock = vi.hoisted(() => vi.fn());
@@ -6,6 +6,13 @@ const captureEventMock = vi.hoisted(() => vi.fn(() => "mock-event-id"));
 const sentryCloseMock = vi.hoisted(() => vi.fn(() => Promise.resolve(true)));
 const sentrySetTagMock = vi.hoisted(() => vi.fn());
 const sentryAddBreadcrumbMock = vi.hoisted(() => vi.fn());
+const baseTransportMock = vi.hoisted(() => ({
+  send: vi.fn(() => Promise.resolve({ statusCode: 200 })),
+  flush: vi.fn(() => Promise.resolve(true)),
+}));
+const makeElectronTransportMock = vi.hoisted(() => vi.fn(() => baseTransportMock));
+const offlineTransportFactory = vi.hoisted(() => vi.fn());
+const makeElectronOfflineTransportMock = vi.hoisted(() => vi.fn(() => offlineTransportFactory));
 
 const storeMock = vi.hoisted(() => {
   const data: Record<string, unknown> = {
@@ -64,6 +71,8 @@ vi.mock("@sentry/electron/main", () => ({
   close: sentryCloseMock,
   setTag: sentrySetTagMock,
   addBreadcrumb: sentryAddBreadcrumbMock,
+  makeElectronTransport: makeElectronTransportMock,
+  makeElectronOfflineTransport: makeElectronOfflineTransportMock,
 }));
 
 import {
@@ -1568,5 +1577,123 @@ describe("beforeSend wrapper (end-to-end via initializeTelemetry)", () => {
       unknown
     >;
     expect(vars.retries).toBe(3);
+  });
+});
+
+describe("consent withdrawn mid-session (#12404)", () => {
+  type BaseTransportFactory = (options: Record<string, unknown>) => {
+    send: (envelope: unknown) => PromiseLike<unknown>;
+    flush: (timeout?: number) => PromiseLike<boolean>;
+  };
+
+  async function loadFreshModule() {
+    vi.resetModules();
+    return await import("../TelemetryService.js");
+  }
+
+  async function loadBroadcaster() {
+    return await import("../TelemetryPreviewBroadcaster.js");
+  }
+
+  function registeredInitOptions() {
+    return sentryInitMock.mock.calls[0]?.[0] as {
+      transport?: unknown;
+      beforeSend?: (event: unknown) => unknown;
+    };
+  }
+
+  function consentGatedTransport() {
+    const factory = (makeElectronOfflineTransportMock.mock.calls[0] as unknown[] | undefined)?.[0];
+    expect(typeof factory).toBe("function");
+    return (factory as BaseTransportFactory)({ url: "https://test@sentry.io/123" });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sentryInitMock.mockReset();
+    setPrivacy({ telemetryLevel: "errors", hasSeenPrompt: true });
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+  });
+
+  afterEach(() => {
+    delete process.env.SENTRY_DSN;
+  });
+
+  it("routes every Sentry upload through a transport that stops sending on Off and resumes on re-consent", async () => {
+    const mod = await loadFreshModule();
+    await mod.initializeTelemetry();
+
+    expect(registeredInitOptions().transport).toBe(offlineTransportFactory);
+    const transport = consentGatedTransport();
+    expect(makeElectronTransportMock).toHaveBeenCalledWith({ url: "https://test@sentry.io/123" });
+
+    const envelope = [{}, []];
+    await expect(transport.send(envelope)).resolves.toEqual({ statusCode: 200 });
+    expect(baseTransportMock.send).toHaveBeenCalledTimes(1);
+
+    await mod.setTelemetryLevel("off");
+    baseTransportMock.send.mockClear();
+    // Resolves as delivered so the offline queue discards rather than re-queues.
+    await expect(transport.send(envelope)).resolves.toEqual({});
+    expect(baseTransportMock.send).not.toHaveBeenCalled();
+
+    await mod.setTelemetryLevel("errors");
+    await transport.send(envelope);
+    expect(baseTransportMock.send).toHaveBeenCalledTimes(1);
+    // Re-consent reuses the one client — Sentry.init is not idempotent.
+    expect(sentryInitMock).toHaveBeenCalledTimes(1);
+
+    await expect(transport.flush(500)).resolves.toBe(true);
+    expect(baseTransportMock.flush).toHaveBeenCalledWith(500);
+  });
+
+  it("drops events in beforeSend after Off while still mirroring them to the preview", async () => {
+    const mod = await loadFreshModule();
+    const broadcaster = await loadBroadcaster();
+    const enqueue = vi.fn();
+    broadcaster.setTelemetryPreviewEnqueue(enqueue);
+    broadcaster.setTelemetryPreviewActive(true);
+
+    try {
+      await mod.initializeTelemetry();
+      const { beforeSend } = registeredInitOptions();
+      const event = () => ({ exception: { values: [{ type: "Error", value: "boom" }] } });
+
+      expect(beforeSend?.(event())).not.toBeNull();
+
+      await mod.setTelemetryLevel("off");
+      enqueue.mockClear();
+      expect(beforeSend?.(event())).toBeNull();
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      expect(enqueue.mock.calls[0]![0].label).toContain("boom");
+    } finally {
+      broadcaster.setTelemetryPreviewActive(false);
+      broadcaster.setTelemetryPreviewEnqueue(null);
+    }
+  });
+
+  it("does not initialize Sentry when consent is withdrawn while the SDK module loads", async () => {
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: true });
+    const mod = await loadFreshModule();
+
+    const enabling = mod.setTelemetryLevel("errors");
+    await mod.setTelemetryLevel("off");
+    await enabling;
+
+    expect(sentryInitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not replay buffered analytics when the level drops below full while init is pending", async () => {
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+    const mod = await loadFreshModule();
+
+    const enablingFull = mod.setTelemetryLevel("full");
+    const downgrading = mod.setTelemetryLevel("errors");
+    mod.trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    expect(mod._getPreConsentBufferLength()).toBe(1);
+    await Promise.all([enablingFull, downgrading]);
+
+    expect(sentryInitMock).toHaveBeenCalledTimes(1);
+    expect(captureEventMock).not.toHaveBeenCalled();
   });
 });
