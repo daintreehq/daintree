@@ -636,12 +636,11 @@ export class ProjectViewManager {
   }
 
   /**
-   * Forget the frame evidence an open gate gathered for a renderer that has
-   * since gone away (#12394). A real instance method for the same reason as
-   * `waitForPaint`.
+   * Fail an open frame-confirmed gate whose renderer has gone away (#12394). A
+   * real instance method for the same reason as `waitForPaint`.
    */
-  discardFrameEvidence(webContentsId: number): void {
-    PaintGateController.discardFrameEvidence(this, webContentsId);
+  failFrameConfirmation(webContentsId: number): void {
+    PaintGateController.failFrameConfirmation(this, webContentsId);
   }
 
   /**

@@ -84,7 +84,8 @@ function abandonUnpaintedWarmSwitch(
   cached: ViewEntry,
   previousProjectId: string | null,
   previousEntry: ViewEntry | null,
-  unboundOutgoingView: WebContentsView | null
+  unboundOutgoingView: WebContentsView | null,
+  cachedRendererGone: boolean
 ): void {
   if (host.disposed || host.win.isDestroyed()) return;
   // switchChain serializes switches, so the only other writer is a teardown of
@@ -101,11 +102,15 @@ function abandonUnpaintedWarmSwitch(
   try {
     if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
       activateView(host, previousEntry);
-      // Same rebind as the cold rollback. Usually a no-op refresh — the
-      // outgoing view was never parked — but a cached view that crashed mid-gate
-      // was active, so its crash tore down the window's PTY port and its reload
-      // may have re-brokered ports to itself.
-      host.onViewReady?.(previousEntry.view.webContents);
+      // Only after the cached renderer crashed: it was the active view, so the
+      // crash tore down the window's PTY port and the outgoing view needs the
+      // cold rollback's rebind. Otherwise the outgoing view was never parked
+      // and still holds its ports, and re-running the ready hook would register
+      // it with the workspace host the window mapping still names — the
+      // incoming project's, until the switch handler restores it.
+      if (cachedRendererGone) {
+        host.onViewReady?.(previousEntry.view.webContents);
+      }
     } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
       registerAppView(host.win, unboundOutgoingView);
     }
@@ -237,11 +242,16 @@ export async function performSwitch(
           unpaintedHardMs: warmUnpaintedMs,
         }
       );
-      // A crash mid-gate takes the frame and the wake with it, and the crash
-      // handler reloads the view in place: evidence gathered against the dead
-      // document must not let the hard bound reveal its replacement.
-      const discardEvidenceOnCrash = () => host.discardFrameEvidence(cachedWc.id);
-      cachedWc.on("render-process-gone", discardEvidenceOnCrash);
+      // A crash mid-gate takes the woken document with it, and the crash handler
+      // reloads the view in place. Nothing gathered so far describes the
+      // replacement, which boots from scratch behind the bridge, so the switch
+      // fails now rather than revealing it (#12394).
+      let cachedRendererGone = false;
+      const failOnRendererGone = () => {
+        cachedRendererGone = true;
+        host.failFrameConfirmation(cachedWc.id);
+      };
+      cachedWc.on("render-process-gone", failOnRendererGone);
       // Deterministic wake trigger: a detached + setVisible(false) cached
       // view never gets `visibilitychange`, and `resume` only fires when the
       // Efficiency profile actually froze it — so on most reactivations the
@@ -259,7 +269,7 @@ export async function performSwitch(
       try {
         gateResult = await warmGate;
       } finally {
-        cachedWc.removeListener("render-process-gone", discardEvidenceOnCrash);
+        cachedWc.removeListener("render-process-gone", failOnRendererGone);
       }
       mark(PERF_MARKS.PROJECT_SWITCH_GATE_RESOLVED, {
         gateOutcome: gateResult,
@@ -273,19 +283,30 @@ export async function performSwitch(
         });
       }
       if (gateResult === "unpainted") {
+        const waitedMs = Math.round(performance.now() - warmStart);
         logWarn("projectview.warmpaintgate.unpainted", {
           projectId,
-          waitedMs: warmUnpaintedMs,
+          waitedMs,
+          rendererGone: cachedRendererGone,
           rollbackProjectId: previousProjectId,
         });
-        abandonUnpaintedWarmSwitch(host, cached, previousProjectId, previousEntry, unboundOutgoingView);
+        abandonUnpaintedWarmSwitch(
+          host,
+          cached,
+          previousProjectId,
+          previousEntry,
+          unboundOutgoingView,
+          cachedRendererGone
+        );
         // Discard the intent with the switch so a later unrelated one can't
         // deliver it.
         consumePendingFocusIntent(host, projectId);
         const unpaintedError = new AppError({
           code: "INTERNAL",
-          message: "View never painted: cached project view parked after warm paint gate timeout",
-          context: { phase: "paint", projectId, waitedMs: warmUnpaintedMs },
+          message: cachedRendererGone
+            ? "View never painted: cached project view renderer gone during warm paint gate"
+            : "View never painted: cached project view parked after warm paint gate timeout",
+          context: { phase: "paint", projectId, waitedMs },
         });
         if (!host.disposed && !host.win.isDestroyed()) {
           notifyError(unpaintedError, { source: "project-switch" });

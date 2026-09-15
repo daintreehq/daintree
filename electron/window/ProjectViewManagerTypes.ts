@@ -11,9 +11,10 @@ import type { ProjectSwitchTrace } from "../../shared/types/ipc/project.js";
 export type ViewState = "loading" | "active" | "cached";
 
 /**
- * `"unpainted"` is only reachable on a gate armed with `unpaintedHardMs`: the
- * hard bound passed without a single confirmed frame, and the extended wait for
- * one ran out too. `"hard-timeout"` on such a gate means a frame was confirmed.
+ * `"unpainted"` means a frame-confirmed gate gave up on its view: the hard bound
+ * passed without a single confirmed frame and the extended `unpaintedHardMs`
+ * wait for one ran out too, or its renderer went away mid-gate.
+ * `"hard-timeout"` on a gate with `unpaintedHardMs` means a frame was confirmed.
  */
 export type PaintGateOutcome = "signal" | "hard-timeout" | "unpainted" | "cancelled";
 
@@ -34,11 +35,6 @@ export interface PaintGateFrameConfirmation {
   readyProbeStarted: boolean;
   /** The hard bound passed with no frame; waiting on `unpaintedHardMs`. */
   awaitingFirstFrame: boolean;
-  /**
-   * Bumped when the evidence above is discarded (the renderer went away), so a
-   * probe started against the old document can never count for the new one.
-   */
-  generation: number;
 }
 
 export interface PaintGate {

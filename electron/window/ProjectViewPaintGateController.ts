@@ -90,7 +90,6 @@ export function waitForPaint(
             painted: false,
             readyProbeStarted: false,
             awaitingFirstFrame: false,
-            generation: 0,
           }
         : null,
       softTimeout: setTimeout(() => {
@@ -145,10 +144,8 @@ export function waitForPaint(
 function probeFrame(host: ProjectViewManager, gate: PaintGate, releaseOnConfirm: boolean): void {
   const frame = gate.frame;
   if (!frame) return;
-  const generation = frame.generation;
   void frame.confirm().then((confirmed) => {
     if (!confirmed || host.pendingPaintGate !== gate) return;
-    if (frame.generation !== generation) return;
     frame.painted = true;
     if (releaseOnConfirm) {
       gate.resolve("signal");
@@ -204,22 +201,18 @@ export function enableFrameConfirmation(host: ProjectViewManager, webContentsId:
 }
 
 /**
- * Discard what an open frame-confirmed gate has learned about its view: the
- * confirmed frame and the readiness it latched. Called when the incoming
- * renderer goes away mid-gate (#12394) — the frame and the wake belonged to a
- * document that no longer exists, and a warm hard bound that trusted them
- * would detach the outgoing view over the replacement document. Probes still
- * out against the old document are ignored; the gate then needs fresh
- * readiness and a fresh frame, or it runs to its unpainted bound.
+ * Settle an open frame-confirmed gate as `"unpainted"` because its renderer
+ * went away mid-gate (#12394). The readiness and frames it gathered belonged
+ * to a document that no longer exists, and the replacement the crash handler
+ * reloads boots from scratch behind the bridge — a readiness signal from it
+ * mid-boot, or a hard bound trusting the old frame, would reveal its skeleton
+ * entrance. Settling now hands the caller the same rollback as a view that
+ * never drew, without waiting out the bound.
  */
-export function discardFrameEvidence(host: ProjectViewManager, webContentsId: number): void {
+export function failFrameConfirmation(host: ProjectViewManager, webContentsId: number): void {
   const gate = host.pendingPaintGate;
   if (!gate?.frame || gate.webContentsId !== webContentsId) return;
-  const frame = gate.frame;
-  frame.generation += 1;
-  frame.painted = false;
-  frame.ready = false;
-  frame.readyProbeStarted = false;
+  gate.resolve("unpainted");
 }
 
 /**

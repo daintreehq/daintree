@@ -1853,6 +1853,8 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     bWc.send.mockClear();
     bWc.focus.mockClear();
     vi.mocked(registerAppView).mockClear();
+    const onViewReady = vi.fn();
+    manager.onViewReady = onViewReady as never;
 
     const rejected = expectRejection(manager.switchTo("proj-a", "/path/a"));
     await vi.advanceTimersByTimeAsync(0);
@@ -1873,6 +1875,9 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     expect((registrations.at(-1)?.[1] as { webContents: MockWc }).webContents).toBe(bWc);
     expect(bWc.focus).toHaveBeenCalled();
     expect(bWc.send).not.toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
+    // B was never parked, so its ports are intact; the ready hook would only
+    // register it against the host the window mapping still names.
+    expect(onViewReady).not.toHaveBeenCalled();
     expect(vi.mocked(notifyError)).toHaveBeenCalledWith(error, { source: "project-switch" });
     expect(
       vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.warmpaintgate.unpainted")
@@ -1939,33 +1944,60 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     expect(manager.getActiveProjectId()).toBe("proj-a");
   });
 
-  it("discards frame evidence when the cached view's renderer crashes mid-gate", async () => {
+  it("fails a warm switch at once when the cached view's renderer crashes mid-gate", async () => {
     const bWc = await switchToColdB();
     const frames = holdFrames(initialWc);
+    const onViewReady = vi.fn();
+    manager.onViewReady = onViewReady as never;
 
     const rejected = expectRejection(manager.switchTo("proj-a", "/path/a"));
     await vi.advanceTimersByTimeAsync(0);
+    // A frame was drawn and the wake finished — both against the document the
+    // crash is about to take away.
     frames.drawAll();
-    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
 
     // The warm switch's own listener — registered last on A's webContents.
     const crashListeners = initialWc.on.mock.calls.filter(
       ([event]) => event === "render-process-gone"
     );
-    const discardEvidence = crashListeners.at(-1)?.[1] as Handler;
-    discardEvidence({}, { reason: "crashed", exitCode: 1 });
+    const failOnRendererGone = crashListeners.at(-1)?.[1] as Handler;
+    failOnRendererGone({}, { reason: "crashed", exitCode: 1 });
 
-    // Without the discard, the frame drawn before the crash would let the warm
-    // hard bound reveal the reloading document.
-    await vi.advanceTimersByTimeAsync(WARM_HARD_MS + 50);
-    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+    // No bound to wait out: the reloaded replacement is never revealed.
+    const error = await rejected;
+    expect(error.message).toContain("renderer gone");
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(attachedWebContents()).toEqual([bWc]);
+    expect(initialWc.removeListener).toHaveBeenCalledWith(
+      "render-process-gone",
+      failOnRendererGone
+    );
+    // A was the active view when it crashed, which tears down the window's PTY
+    // port — B gets it back through the ready hook.
+    expect(onViewReady).toHaveBeenCalledWith(bWc);
+
+    // The frame probe resolving late changes nothing.
+    frames.drawAll();
+    await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("rolls a warm switch back to the outgoing view when the cached view is torn down mid-gate", async () => {
+    const bWc = await switchToColdB();
+    holdFrames(initialWc);
+
+    const rejected = expectRejection(manager.switchTo("proj-a", "/path/a"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.destroyView("proj-a")).toBe(true);
+    expect(manager.getActiveProjectId()).toBeNull();
 
     await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
     const error = await rejected;
     expect(error.message).toContain("View never painted");
     expect(manager.getActiveProjectId()).toBe("proj-b");
     expect(attachedWebContents()).toEqual([bWc]);
-    expect(initialWc.removeListener).toHaveBeenCalledWith("render-process-gone", discardEvidence);
+    expect(manager.getAllViews().map((entry) => entry.projectId)).toEqual(["proj-b"]);
   });
 
   it("delivers a focus intent only after the painted channel's frame is confirmed", async () => {
