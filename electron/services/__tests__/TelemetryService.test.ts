@@ -1714,18 +1714,10 @@ describe("consent withdrawn mid-session (#12404)", () => {
     const targets = (sentryInitMock.mock.calls[0]?.[0] as { tracePropagationTargets?: unknown })
       .tracePropagationTargets;
 
-    // An absent option means "propagate to every URL" in the SDK.
-    expect(Array.isArray(targets)).toBe(true);
-    for (const url of [
-      "https://api.github.com/repos/daintreehq/daintree",
-      "https://registry.npmjs.org/@anthropic-ai%2fclaude-code",
-      "http://localhost:5173/",
-    ]) {
-      const matched = (targets as Array<string | RegExp>).some((pattern) =>
-        typeof pattern === "string" ? url.includes(pattern) : pattern.test(url)
-      );
-      expect(matched).toBe(false);
-    }
+    // An absent option means "propagate to every URL" in the SDK, and any
+    // target at all would send headers the transport consent gate never sees.
+    // Fail closed so a reintroduced target is a deliberate test change.
+    expect(targets).toEqual([]);
   });
 
   it("does not initialize Sentry when consent is withdrawn while the SDK module loads", async () => {
