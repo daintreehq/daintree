@@ -11,6 +11,10 @@ const worktreeClientMock = vi.hoisted(() => ({
 
 vi.mock("@/clients", () => ({ worktreeClient: worktreeClientMock }));
 
+const dialogProps = vi.hoisted(() => ({
+  latest: null as null | { confirmCooldownMs?: number; cooldownKey?: string | number },
+}));
+
 // The dialog primitive has its own suite; this one is about what the approval
 // dialog feeds it and does with the answer.
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -24,12 +28,15 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     isConfirmLoading?: boolean;
     onConfirm: () => void;
     onClose?: () => void;
-  }) =>
-    props.isOpen ? (
+    confirmCooldownMs?: number;
+    cooldownKey?: string | number;
+  }) => {
+    dialogProps.latest = props;
+    return props.isOpen ? (
       <div>
         <h2>{props.title}</h2>
         {props.children}
-        <button type="button" onClick={props.onClose}>
+        <button type="button" disabled={!props.onClose} onClick={props.onClose}>
           {props.cancelLabel ?? "Cancel"}
         </button>
         <button
@@ -40,7 +47,8 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
           {props.confirmLabel}
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 import { LifecycleCommandApprovalDialog } from "../LifecycleCommandApprovalDialog";
@@ -128,6 +136,39 @@ describe("LifecycleCommandApprovalDialog", () => {
       "/repo-wt",
       REVIEW.fingerprint
     );
+  });
+
+  it("re-arms the read-time cooldown for each set of commands it shows", async () => {
+    const changed: LifecycleCommandReview = { ...REVIEW, fingerprint: "e".repeat(64) };
+    worktreeClientMock.getLifecycleCommandReview
+      .mockResolvedValueOnce(REVIEW)
+      .mockResolvedValueOnce(changed);
+    worktreeClientMock.approveLifecycleCommands.mockRejectedValue(new Error("changed"));
+
+    renderDialog();
+    await screen.findByText("/repo/.daintree/config.json");
+    expect(dialogProps.latest?.confirmCooldownMs).toBeGreaterThan(0);
+    expect(dialogProps.latest?.cooldownKey).toBe(REVIEW.fingerprint);
+
+    fireEvent.click(approveButton());
+    await waitFor(() => expect(dialogProps.latest?.cooldownKey).toBe(changed.fingerprint));
+  });
+
+  it("cannot be dismissed while an approval is still being saved", async () => {
+    worktreeClientMock.getLifecycleCommandReview.mockResolvedValue(REVIEW);
+    const saving = deferred<void>();
+    worktreeClientMock.approveLifecycleCommands.mockReturnValue(saving.promise);
+    const onClose = vi.fn();
+
+    renderDialog({ onClose });
+    await screen.findByText("/repo/.daintree/config.json");
+    fireEvent.click(approveButton());
+
+    const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+
+    await act(async () => saving.resolve());
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("stays open with the reason and re-reads the commands when approval is refused", async () => {

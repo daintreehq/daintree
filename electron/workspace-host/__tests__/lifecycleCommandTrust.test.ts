@@ -39,6 +39,8 @@ describe("lifecycle command fingerprints", () => {
       { ...base, resource: { ...base.resource, pause: ["other"] } },
       { ...base, resource: { ...base.resource, status: "other" } },
       { ...base, resource: { ...base.resource, connect: "other" } },
+      // Not a command, but it reaches every command as DAINTREE_RESOURCE_PROVIDER.
+      { ...base, resource: { ...base.resource, provider: "sh -c id" } },
     ];
     const fingerprints = variants.map(configFingerprint);
     for (const fingerprint of fingerprints) expect(fingerprint).not.toBe(original);
@@ -62,7 +64,6 @@ describe("lifecycle command fingerprints", () => {
       ...base,
       resource: {
         ...base.resource,
-        provider: "akash",
         statusInterval: 30,
         timeouts: { provision: 10 },
       },

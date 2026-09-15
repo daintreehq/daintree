@@ -184,8 +184,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   // this worktree would run, and/or its setup was skipped for want of approval.
   // The second outlives the first once the commands are approved elsewhere.
   const commandsNeedApproval = worktree.lifecycleCommandsNeedApproval === true;
+  // `setupStatus` first: `lifecycleStatus` is one slot every later resource
+  // action overwrites, so a status check would otherwise erase the only way
+  // back to a setup that never ran. The lifecycle read covers a setup skipped
+  // outside the create tail (an environment switch), which has no setup status.
   const setupNeedsApproval =
-    worktree.lifecycleStatus?.phase === "setup" && lifecycleState === "needs-approval";
+    worktree.setupStatus?.state === "needs-approval" ||
+    (worktree.lifecycleStatus?.phase === "setup" && lifecycleState === "needs-approval");
   const [isApprovalDialogOpen, setIsApprovalDialogOpen] = useState(false);
   const approvalDialogMounted = useKeepMounted(isApprovalDialogOpen);
   const handleReviewCommands = (e: React.MouseEvent) => {
@@ -634,46 +639,54 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 )}
               </div>
             )}
+          </div>
+        )}
 
-            {(commandsNeedApproval || setupNeedsApproval) && (
-              <div
-                className={cn(
-                  "flex items-center justify-between gap-2 py-1",
-                  isSidebar ? "mt-1" : "mt-1 pl-1.5 pr-2.5"
-                )}
-                data-testid="worktree-command-approval"
-              >
-                <span className="text-xs text-text-secondary truncate">
-                  {commandsNeedApproval
-                    ? setupNeedsApproval
-                      ? "Setup is waiting for you to approve its commands"
-                      : "Repository commands need your approval to run"
-                    : "Setup was skipped, and its commands are approved now"}
-                </span>
-                <button
-                  type="button"
-                  onClick={commandsNeedApproval ? handleReviewCommands : handleRetrySetup}
-                  disabled={!commandsNeedApproval && isRetryingSetup}
-                  className={cn(
-                    "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
-                    "text-status-warning hover:bg-status-warning/10",
-                    "disabled:opacity-50 disabled:cursor-not-allowed",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-                  )}
-                >
-                  {commandsNeedApproval ? (
-                    <ShieldAlert className="w-3 h-3" aria-hidden="true" />
-                  ) : (
-                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
-                  )}
-                  {commandsNeedApproval
-                    ? "Review commands"
-                    : isRetryingSetup
-                      ? "Starting…"
-                      : "Run setup"}
-                </button>
-              </div>
+        {(commandsNeedApproval || setupNeedsApproval) && (
+          <div
+            className={cn(
+              "flex items-center justify-between gap-2 py-1",
+              // Outside the Details disclosure on purpose: whether it is open
+              // must not decide whether an approval request can be seen.
+              isExpanded
+                ? isSidebar
+                  ? "px-2.5"
+                  : "px-3"
+                : isSidebar
+                  ? "mt-1"
+                  : "mt-1 pl-1.5 pr-2.5"
             )}
+            data-testid="worktree-command-approval"
+          >
+            <span className="text-xs text-text-secondary truncate">
+              {commandsNeedApproval
+                ? setupNeedsApproval
+                  ? "Setup is waiting for you to approve its commands"
+                  : "Repository commands need your approval to run"
+                : "Setup was skipped, and its commands are approved now"}
+            </span>
+            <button
+              type="button"
+              onClick={commandsNeedApproval ? handleReviewCommands : handleRetrySetup}
+              disabled={!commandsNeedApproval && isRetryingSetup}
+              className={cn(
+                "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
+                "text-status-warning hover:bg-status-warning/10",
+                "disabled:opacity-50 disabled:cursor-not-allowed",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+              )}
+            >
+              {commandsNeedApproval ? (
+                <ShieldAlert className="w-3 h-3" aria-hidden="true" />
+              ) : (
+                <RotateCcw className="w-3 h-3" aria-hidden="true" />
+              )}
+              {commandsNeedApproval
+                ? "Review commands"
+                : isRetryingSetup
+                  ? "Starting…"
+                  : "Run setup"}
+            </button>
           </div>
         )}
       </div>

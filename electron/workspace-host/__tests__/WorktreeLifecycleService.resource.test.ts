@@ -876,6 +876,24 @@ describe("WorktreeLifecycleService — Resource Config", () => {
         expect(result).toBe('deploy "feat/%%CD%%"');
       });
 
+      it("never re-expands placeholders inside a value it already substituted", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: "x{branch}$(id)",
+        });
+        expect(result).toBe("echo 'x{branch}$(id)'");
+      });
+
+      it("still expands both placeholder forms in one template", () => {
+        setPlatform("linux");
+        const result = service.substituteVariables("cd {{worktree_path}} && deploy {branch-slug}", {
+          ...baseVars,
+          "branch-slug": "feature-x",
+        });
+        expect(result).toBe("cd '/w' && deploy feature-x");
+      });
+
       it("falls back to escaping branch-slug if it contains unexpected characters", () => {
         setPlatform("darwin");
         const result = service.substituteVariables("deploy {branch-slug}", {

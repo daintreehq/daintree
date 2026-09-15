@@ -1589,7 +1589,7 @@ describe("WorktreeLifecycleService", () => {
       } as unknown as import("../WorktreeLifecycleService.js").WorkspaceHostContext;
     }
 
-    /** Serve config files by path suffix; everything else is missing. */
+    /** Serve config files by path suffix; everything else is missing. A string is served raw. */
     function serveFiles(files: Record<string, unknown>) {
       const lookup = (p: unknown) =>
         Object.entries(files).find(([suffix]) => n(p as string).endsWith(suffix))?.[1];
@@ -1599,7 +1599,7 @@ describe("WorktreeLifecycleService", () => {
       mockReadFile.mockImplementation(async (p: unknown) => {
         const content = lookup(p);
         if (content === undefined) throw new Error("ENOENT");
-        return JSON.stringify(content) as never;
+        return (typeof content === "string" ? content : JSON.stringify(content)) as never;
       });
     }
 
@@ -1618,9 +1618,13 @@ describe("WorktreeLifecycleService", () => {
       });
     }
 
+    let ownResource: typeof import("../WorktreeLifecycleService.js").ownResource;
+
     beforeEach(async () => {
       approved = new Set();
-      const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
+      const lifecycleModule = await import("../WorktreeLifecycleService.js");
+      ownResource = lifecycleModule.ownResource;
+      const { WorktreeLifecycleService } = lifecycleModule;
       service = new WorktreeLifecycleService("/home/testuser", {
         isApproved: async (_root, fingerprint) => approved.has(fingerprint),
         approve: async (_root, fingerprints) => {
@@ -1712,6 +1716,41 @@ describe("WorktreeLifecycleService", () => {
       expect(result).toEqual({ shouldProvision: false, needsApproval: true });
       expect(mockSpawn).not.toHaveBeenCalled();
       const review = await service.getCommandReview(WT, ROOT);
+      expect(review?.sources.map((source) => n(source.path))).toEqual([
+        "/root/.daintree/settings.json",
+      ]);
+    });
+
+    it("never resolves a settings environment the review cannot list", async () => {
+      // Raw JSON: an object literal would turn `__proto__` into a prototype
+      // before it ever reached the file.
+      serveFiles({
+        "/root/.daintree/settings.json":
+          '{"resourceEnvironments":{"plain":{},"__proto__":{"provision":["id"],"status":"id"}}}',
+      });
+      const monitor = makeMonitor({ worktreeMode: "__proto__" });
+
+      const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+      const environments = (await service.resolveProjectResourceEnvironments(ROOT))?.environments;
+
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
+      expect(Object.keys(environments ?? {})).toEqual(["plain"]);
+      expect(ownResource(environments, "__proto__")).toBeUndefined();
+      expect(ownResource(environments, "constructor")).toBeUndefined();
+      expect(monitor.hasResourceConfig).toBe(false);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it("asks about settings environments when the config's resources resolve nothing", async () => {
+      serveFiles({
+        "/wt/.daintree/config.json": { resources: {} },
+        "/root/.daintree/settings.json": {
+          resourceEnvironments: { cloud: { status: "cloud-status" } },
+        },
+      });
+
+      const review = await service.getCommandReview(WT, ROOT);
+
       expect(review?.sources.map((source) => n(source.path))).toEqual([
         "/root/.daintree/settings.json",
       ]);

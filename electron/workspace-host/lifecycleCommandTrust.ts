@@ -41,7 +41,12 @@ export interface LifecycleCommandApprovalStore {
   approve(projectRootPath: string, fingerprints: readonly string[]): Promise<void>;
 }
 
-/** The command-bearing fields of a resource block; everything else is metadata. */
+/**
+ * The fields of a resource block that decide what runs. `provider` is not a
+ * command, but it reaches every command as `DAINTREE_RESOURCE_PROVIDER`, so a
+ * template that runs `$DAINTREE_RESOURCE_PROVIDER` would otherwise run whatever
+ * a branch put there. Timeouts and poll intervals change nothing that runs.
+ */
 interface ResourceCommands {
   provision?: string[];
   teardown?: string[];
@@ -49,6 +54,7 @@ interface ResourceCommands {
   pause?: string[];
   status?: string;
   connect?: string;
+  provider?: string;
 }
 
 const RESOURCE_COMMAND_FIELDS = [
@@ -58,6 +64,7 @@ const RESOURCE_COMMAND_FIELDS = [
   "pause",
   "status",
   "connect",
+  "provider",
 ] as const;
 
 function nonEmpty(commands: readonly string[] | string | undefined): string[] {
@@ -206,7 +213,9 @@ export class FileLifecycleCommandApprovalStore implements LifecycleCommandApprov
  * one there is no location main agrees on, so nothing is approved — failing
  * closed rather than guessing at a folder the app never granted anything in.
  */
-export function resolveLifecycleCommandApprovalsDir(userDataDir: string | undefined): string | null {
+export function resolveLifecycleCommandApprovalsDir(
+  userDataDir: string | undefined
+): string | null {
   if (!userDataDir || !isAbsolute(userDataDir)) return null;
   return pathJoin(userDataDir, "lifecycle-command-approvals");
 }

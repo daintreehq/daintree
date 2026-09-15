@@ -114,7 +114,9 @@ import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExt
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
 import {
+  LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
   WorktreeLifecycleService,
+  ownResource,
   type ResolvedResourceEnvironments,
   type WorkspaceHostContext,
 } from "./WorktreeLifecycleService.js";
@@ -1765,9 +1767,9 @@ export class WorkspaceService {
       let resourceEnvironments: ResolvedResourceEnvironments | null = null;
       let resourceConfig = config?.resource;
       if (config?.resources) {
-        const envKey = monitor.worktreeMode;
-        if (envKey && config.resources[envKey]) {
-          resourceConfig = config.resources[envKey];
+        const named = ownResource(config.resources, monitor.worktreeMode);
+        if (named) {
+          resourceConfig = named;
         } else if (config.resources["default"]) {
           resourceConfig = config.resources["default"];
         } else {
@@ -1782,8 +1784,9 @@ export class WorkspaceService {
         const envs = resolvedEnvs?.environments;
         if (envs) {
           const envKey = monitor.worktreeMode;
-          if (envKey && envKey !== "local" && envs[envKey]) {
-            resourceConfig = envs[envKey];
+          const named = envKey !== "local" ? ownResource(envs, envKey) : undefined;
+          if (named) {
+            resourceConfig = named;
           } else {
             const keys = Object.keys(envs);
             if (keys.length > 0) resourceConfig = envs[keys[0]];
@@ -3757,6 +3760,23 @@ export class WorkspaceService {
       emitUpdate: (m) => this.emitUpdate(m),
     };
 
+    // Ids are paths, so the monitor is pinned before the first await: only the
+    // incarnation this run started against may record or clear what it was
+    // asked to do.
+    const monitorAtStart = this.monitors.get(worktreeId);
+    const recordAwaitingApproval = (awaiting: boolean): void => {
+      const live = this.monitors.get(worktreeId);
+      if (!live || live !== monitorAtStart) return;
+      if (!awaiting) {
+        this.setupAwaitingApproval.delete(live);
+        return;
+      }
+      this.setupAwaitingApproval.set(live, {
+        provisionResource: provisionResource ?? false,
+        ...(environmentId !== undefined ? { environmentId } : {}),
+      });
+    };
+
     const { shouldProvision, needsApproval } = await this.lifecycleService.runLifecycleSetup(
       worktreeId,
       worktreePath,
@@ -3765,22 +3785,16 @@ export class WorkspaceService {
       environmentId
     );
 
-    const monitor = this.monitors.get(worktreeId);
     if (needsApproval) {
-      if (monitor) {
-        this.setupAwaitingApproval.set(monitor, {
-          provisionResource: provisionResource ?? false,
-          ...(environmentId !== undefined ? { environmentId } : {}),
-        });
-      }
+      recordAwaitingApproval(true);
       return { ok: false, needsApproval: true };
     }
-    if (monitor) this.setupAwaitingApproval.delete(monitor);
 
     // Read immediately, before auto-provision can overwrite the slot.
     const settled = this.monitors.get(worktreeId)?.lifecycleStatus;
     if (settled?.phase === "setup" && settled.state !== "success") {
       if (settled.state === "failed" || settled.state === "timed-out") {
+        recordAwaitingApproval(false);
         return {
           ok: false,
           timedOut: settled.state === "timed-out",
@@ -3796,6 +3810,14 @@ export class WorkspaceService {
         "provision"
       );
       if (!provision.success) {
+        // Provisioning re-checks approval against the config as it is now, so
+        // commands that changed after setup read them are waiting for approval
+        // rather than failed — and approving them should finish the job.
+        if (provision.error === LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR) {
+          recordAwaitingApproval(true);
+          return { ok: false, needsApproval: true };
+        }
+        recordAwaitingApproval(false);
         return {
           ok: false,
           timedOut: false,
@@ -3804,6 +3826,7 @@ export class WorkspaceService {
       }
     }
 
+    recordAwaitingApproval(false);
     return { ok: true };
   }
 
@@ -3951,7 +3974,12 @@ export class WorkspaceService {
     await Promise.all(
       [...this.monitors.values()].map(async (m) => {
         try {
-          await this.initResourceConfigAsync(m, m.path);
+          // Only a monitor that was (or may have been) waiting had its connect
+          // command withheld. Re-deriving an approved sibling's would drop the
+          // endpoint its last status check substituted in.
+          if (m.lifecycleCommandsNeedApproval !== false) {
+            await this.initResourceConfigAsync(m, m.path);
+          }
           await this.refreshLifecycleCommandApproval(m);
         } catch (err) {
           console.warn("[WorkspaceService] Failed to refresh command approval:", err);
@@ -3961,7 +3989,14 @@ export class WorkspaceService {
 
     const live = this.monitors.get(worktreeId);
     if (live === monitor && this.setupAwaitingApproval.has(live)) {
-      void this.retryLifecycleSetup(worktreeId).catch((err) => {
+      void (async () => {
+        // A resource action in flight — an automatic status check, say — holds
+        // the lifecycle slot, and a retry started under it would be refused as
+        // "already running", losing the setup the user just approved.
+        await this.resourceActionExecutor.whenIdle(worktreeId);
+        if (this.monitors.get(worktreeId) !== monitor) return;
+        await this.retryLifecycleSetup(worktreeId);
+      })().catch((err) => {
         console.warn("[WorkspaceService] Setup after approval failed to start:", err);
       });
     }

@@ -80,6 +80,20 @@ export interface ResolvedResourceEnvironments {
   path: string;
 }
 
+/**
+ * A resource block the file itself names. Keys arrive from the file and from a
+ * worktree's mode, so a plain index can return something inherited from
+ * `Object.prototype` — a block no command review ever listed.
+ */
+export function ownResource(
+  resources: Record<string, ResourceConfig> | undefined,
+  key: string | undefined
+): ResourceConfig | undefined {
+  return resources && key !== undefined && Object.hasOwn(resources, key)
+    ? resources[key]
+    : undefined;
+}
+
 /** Recorded on a skipped phase and returned by a refused resource action. */
 export const LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR =
   "These commands come from the repository and haven't been approved. Review them on the worktree card.";
@@ -298,10 +312,13 @@ export class WorktreeLifecycleService {
     const resolved = await this.resolveConfig(worktreePath, projectRootPath);
     const sources: LifecycleCommandSource[] = [];
     if (resolved) sources.push(describeConfigSource(resolved));
-    // Every settings-environment fallback is reached only when the config has
-    // no resource block of its own, so a settings file shadowed by one never
-    // runs and is not worth asking about.
-    if (!resolved?.config.resource && !resolved?.config.resources) {
+    // Every settings-environment fallback is reached only when the config
+    // resolves no resource block of its own, so a settings file shadowed by one
+    // never runs and is not worth asking about. An empty `resources` resolves
+    // nothing, so it shadows nothing.
+    const configResolvesResource =
+      !!resolved?.config.resource || Object.keys(resolved?.config.resources ?? {}).length > 0;
+    if (!configResolvesResource) {
       const environments = await this.resolveProjectResourceEnvironments(projectRootPath);
       if (environments) sources.push(describeEnvironmentsSource(environments));
     }
@@ -337,8 +354,9 @@ export class WorktreeLifecycleService {
     if (!config) return null;
 
     if (config.resources) {
-      if (environmentId && config.resources[environmentId]) {
-        return config.resources[environmentId];
+      const named = ownResource(config.resources, environmentId);
+      if (named) {
+        return named;
       }
       if (config.resources["default"]) {
         return config.resources["default"];
@@ -733,6 +751,9 @@ export class WorktreeLifecycleService {
         for (const [key, value] of Object.entries(
           settings.resourceEnvironments as Record<string, unknown>
         )) {
+          // Skipped as z.record skips it: assigning `__proto__` would replace the
+          // result's prototype rather than add an environment the review lists.
+          if (key === "__proto__") continue;
           const parsed = ResourceConfigSchema.safeParse(value);
           if (parsed.success) result[key] = parsed.data;
         }
@@ -842,8 +863,9 @@ export class WorktreeLifecycleService {
     // Resolve resource config: prefer resources (plural) over resource (singular)
     let resolvedResource = config?.resource;
     if (config?.resources) {
-      if (environmentId && config.resources[environmentId]) {
-        resolvedResource = config.resources[environmentId];
+      const named = ownResource(config.resources, environmentId);
+      if (named) {
+        resolvedResource = named;
       } else if (config.resources["default"]) {
         resolvedResource = config.resources["default"];
       } else {
@@ -860,7 +882,7 @@ export class WorktreeLifecycleService {
       const envKey = monitor?.worktreeMode;
       if (envKey && envKey !== "local") {
         const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
-        resolvedResource = envs?.environments[envKey] ?? undefined;
+        resolvedResource = ownResource(envs?.environments, envKey);
         if (resolvedResource) resourceEnvironments = envs;
       }
     }
@@ -1033,7 +1055,7 @@ export class WorktreeLifecycleService {
       const envKey = monitor.worktreeMode;
       if (envKey && envKey !== "local") {
         const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
-        teardownResource = envs?.environments[envKey] ?? undefined;
+        teardownResource = ownResource(envs?.environments, envKey);
         if (teardownResource) teardownEnvironments = envs;
       }
     }
@@ -1336,23 +1358,26 @@ export class WorktreeLifecycleService {
    * (e.g. branch names containing shell metacharacters).
    */
   substituteVariables(command: string, vars: LifecycleVariables): string {
-    // Double-brace: {{variable}} with snake_case keys
-    let result = command.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
-      const key = name.toLowerCase() as keyof LifecycleVariables;
-      const value = vars[key];
-      return value != null ? shellEscapeValue(value) : match;
-    });
-    // Single-brace: {variable} with hyphenated keys — skip shell vars like ${foo}
-    // {branch-slug} is safe unquoted — its charset is locked to [a-z0-9-]
-    result = result.replace(/(?<!\$)\{([\w-]+)\}/g, (match, name: string) => {
-      const key = name.toLowerCase() as keyof LifecycleVariables;
-      const value = vars[key];
-      if (value == null) return match;
-      if (key === "branch-slug")
-        return /^[a-z0-9-]*$/.test(value) ? value : shellEscapeValue(value);
-      return shellEscapeValue(value);
-    });
-    return result;
+    // One pass over the template, never over what it inserts. Substituting in
+    // two passes let the second rescan values the first had already quoted, so
+    // a branch named `x{branch}$(id)` expanded inside its own quotes and ran
+    // `id` from a command template the user had approved unchanged.
+    //
+    // Double-brace: {{variable}} with snake_case keys.
+    // Single-brace: {variable} with hyphenated keys — skip shell vars like ${foo}.
+    return command.replace(
+      /\{\{(\w+)\}\}|(?<!\$)\{([\w-]+)\}/g,
+      (match, doubleName: string | undefined, singleName: string | undefined) => {
+        const key = (doubleName ?? singleName ?? "").toLowerCase() as keyof LifecycleVariables;
+        const value = vars[key];
+        if (value == null) return match;
+        // {branch-slug} is safe unquoted — its charset is locked to [a-z0-9-]
+        if (key === "branch-slug" && /^[a-z0-9-]*$/.test(value)) {
+          return value;
+        }
+        return shellEscapeValue(value);
+      }
+    );
   }
 }
 

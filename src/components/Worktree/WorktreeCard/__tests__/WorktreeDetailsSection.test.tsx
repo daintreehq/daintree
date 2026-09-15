@@ -583,6 +583,32 @@ describe("WorktreeDetailsSection — repository command approval", () => {
     );
   });
 
+  it("keeps the approval request visible while Details is expanded", () => {
+    renderSection({
+      isExpanded: true,
+      worktree: { ...baseWorktree, lifecycleCommandsNeedApproval: true },
+    });
+
+    expect(screen.getByRole("button", { name: /review commands/i })).toBeDefined();
+  });
+
+  it("still offers the skipped setup after a resource action overwrote the lifecycle slot", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        setupStatus: { state: "needs-approval", stage: "setup-script", startedAt: 1 },
+        lifecycleStatus: {
+          phase: "resource-status",
+          state: "success",
+          startedAt: 2,
+          completedAt: 3,
+        },
+      },
+    });
+
+    expect(screen.getByRole("button", { name: /run setup/i })).toBeDefined();
+  });
+
   it("stays out of the way when nothing needs approval", () => {
     renderSection();
     expect(screen.queryByTestId("worktree-command-approval")).toBeNull();
