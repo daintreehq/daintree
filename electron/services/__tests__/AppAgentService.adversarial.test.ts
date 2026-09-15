@@ -27,6 +27,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function mockFetch(impl: typeof fetch) {
@@ -301,6 +302,8 @@ describe.each(transportMethods)(
       "http://0.0.0.0:11434/v1",
       "http://[::]:11434/v1",
       "http://[::ffff:8.8.8.8]/v1",
+      "http://[::127.0.0.1]/v1",
+      "http://[64:ff9b::7f00:1]/v1",
       "http://134744072/v1",
       "http://api.localhost:8080/v1",
       "http://localhost.evil.example/v1",
@@ -312,7 +315,7 @@ describe.each(transportMethods)(
       setConfig({ apiKey: "stored-key", model: "m", baseUrl });
       const fetchSpy = vi.fn();
       mockFetch(fetchSpy as unknown as typeof fetch);
-      vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
       const result = await run(new AppAgentService());
 
@@ -321,7 +324,7 @@ describe.each(transportMethods)(
         error: "Base URL must use HTTPS except for loopback hosts",
       });
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -349,6 +352,7 @@ describe.each(transportMethods)(
       ["http://LOCALHOST.:1234/v1", "http://localhost.:1234/v1/chat/completions"],
       ["http://127.0.0.1:8000/v1", "http://127.0.0.1:8000/v1/chat/completions"],
       ["http://127.255.255.254/v1", "http://127.255.255.254/v1/chat/completions"],
+      ["http://127.0.0.1./v1", "http://127.0.0.1/v1/chat/completions"],
       ["http://[::1]:8080/v1", "http://[::1]:8080/v1/chat/completions"],
       ["http://[0:0:0:0:0:0:0:1]/v1", "http://[::1]/v1/chat/completions"],
       ["http://[::ffff:127.0.0.1]/v1", "http://[::ffff:7f00:1]/v1/chat/completions"],
