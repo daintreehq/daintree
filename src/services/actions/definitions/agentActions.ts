@@ -470,6 +470,20 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         force?: boolean;
         name?: string;
       };
+      // A requested id asks for a NEW panel. One this view already holds is
+      // refused here rather than handed to the launcher, whose in-place update
+      // would overwrite the live panel's record while its spawn is refused with
+      // the original process still running — and an MCP caller would then be
+      // recorded as having created it (#12407). Checked against the store a
+      // listing reads, so any id a caller could have learned is already in it.
+      if (
+        requestedId !== undefined &&
+        Object.hasOwn(usePanelStore.getState().panelsById, requestedId)
+      ) {
+        throw new Error(
+          `A panel with id '${requestedId}' already exists. Omit the requested id, or choose one no panel is using.`
+        );
+      }
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,

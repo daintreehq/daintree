@@ -7332,7 +7332,15 @@ describe("session-scoped resource ownership (#11909)", () => {
       ["terminal.injectOwned", "terminal.inject"],
     ])("%s keeps ownership and dispatches a repeat again", async (tool, delegate) => {
       const sessionId = `s-twice-${tool}`;
-      const { store, server, dispatchAction } = inputHarness(sessionId);
+      // The delegate claims the panel closed, so only `releasesOwnership: false`
+      // keeps the record — the structural `closedIds` check would otherwise
+      // mask a wrong flag, as it does for the interrupt above.
+      const { store, server, dispatchAction } = harness(sessionId, {
+        [delegate]: {
+          result: { ok: true, result: { ...SUBMIT_RESULT, closedIds: ["terminal-1"] } },
+        },
+      });
+      store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
       const args = { name: tool, arguments: { terminalId: "terminal-1", command: "ls" } };
 
       expect((await callTool(server, args)).isError).toBeUndefined();
