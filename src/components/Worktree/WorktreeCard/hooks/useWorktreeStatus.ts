@@ -249,6 +249,10 @@ export function useWorktreeStatus({
       const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
       return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} timed out`;
     }
+    if (lifecycle.state === "needs-approval") {
+      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} needs approval`;
+    }
     return undefined;
   }, [lifecycle]);
 

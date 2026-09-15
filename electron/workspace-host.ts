@@ -227,6 +227,21 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "get-lifecycle-command-approval": {
+        const review = await workspaceService.getLifecycleCommandReview(msg.payload.worktreeId);
+        result = { review };
+        break;
+      }
+
+      case "approve-lifecycle-commands": {
+        await workspaceService.approveLifecycleCommands(
+          msg.payload.worktreeId,
+          msg.payload.fingerprint
+        );
+        result = { ok: true };
+        break;
+      }
+
       case "switch-worktree-environment": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.switchWorktreeEnvironment(

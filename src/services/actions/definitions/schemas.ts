@@ -413,9 +413,9 @@ export const AgentSettingsEntrySchema = z
  * ambiguity `setupStatus` exists to remove.
  */
 export const WorktreeSetupStateSchema = z
-  .enum(["pending", "running", "ready", "failed", "timed-out", "unknown"])
+  .enum(["pending", "running", "ready", "failed", "timed-out", "needs-approval", "unknown"])
   .describe(
-    "Post-create initialization state: pending (worktree exists, setup not started), running (config copy, submodules, or the setup script and any configured resource provisioning are in flight), ready, failed, timed-out, or unknown (this host session has no record — it did not create the worktree, or it restarted since)."
+    "Post-create setup state: pending (not started), running (config copy, submodules, setup script or provisioning in flight), ready, failed, timed-out, needs-approval (repository setup commands skipped until the user approves them; you can't), or unknown (this host did not create it, or restarted since)."
   );
 
 export const WorktreeSummarySchema = z.object({

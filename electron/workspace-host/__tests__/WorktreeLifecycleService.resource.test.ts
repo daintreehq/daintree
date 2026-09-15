@@ -876,6 +876,36 @@ describe("WorktreeLifecycleService — Resource Config", () => {
         expect(result).toBe('deploy "feat/%%CD%%"');
       });
 
+      it("never re-expands placeholders inside a value it already substituted", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: "x{branch}$(id)",
+        });
+        expect(result).toBe("echo 'x{branch}$(id)'");
+      });
+
+      it("leaves placeholders straight after `$` alone", () => {
+        setPlatform("linux");
+        // Substituted, `${{endpoint}}` would become `$'…'`, where bash reads
+        // backslash escapes and a crafted value could close the quote.
+        const result = service.substituteVariables("ssh ${{endpoint}} ${branch-slug}", {
+          ...baseVars,
+          endpoint: "box\\'||id;#",
+          "branch-slug": "feature-x",
+        });
+        expect(result).toBe("ssh ${{endpoint}} ${branch-slug}");
+      });
+
+      it("still expands both placeholder forms in one template", () => {
+        setPlatform("linux");
+        const result = service.substituteVariables("cd {{worktree_path}} && deploy {branch-slug}", {
+          ...baseVars,
+          "branch-slug": "feature-x",
+        });
+        expect(result).toBe("cd '/w' && deploy feature-x");
+      });
+
       it("falls back to escaping branch-slug if it contains unexpected characters", () => {
         setPlatform("darwin");
         const result = service.substituteVariables("deploy {branch-slug}", {

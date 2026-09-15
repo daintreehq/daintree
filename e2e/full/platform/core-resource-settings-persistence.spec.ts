@@ -9,7 +9,11 @@ import { openSettings, selectSettingsScope } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { ensureWindowFocused } from "../../helpers/focus";
-import { commandArg, nodeScriptCommand } from "../../helpers/resource-lifecycle";
+import {
+  approveWorktreeCommands,
+  commandArg,
+  nodeScriptCommand,
+} from "../../helpers/resource-lifecycle";
 
 /**
  * E2E tests for resource settings persistence and GUI-driven configuration.
@@ -227,6 +231,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     const BRANCH = "e2e/gui-lifecycle";
     const newCard = window.locator(SEL.worktree.card(BRANCH));
     await expect(newCard).toBeVisible({ timeout: T_LONG });
+    await approveWorktreeCommands(window, BRANCH);
 
     // Trigger status check via action palette
     await ensureWindowFocused(ctx.app);

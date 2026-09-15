@@ -61,7 +61,7 @@ const MAX_WAIT_UNTIL_READY_TIMEOUT_MS = 25_000;
 const WAIT_UNTIL_READY_POLL_INTERVAL_MS = 500;
 
 /** States a wait stops on — every state that is not still in progress. */
-const SETTLED_SETUP_STATES = new Set(["ready", "failed", "timed-out", "unknown"]);
+const SETTLED_SETUP_STATES = new Set(["ready", "failed", "timed-out", "needs-approval", "unknown"]);
 
 export function registerWorktreeQueryActions(
   actions: ActionRegistry,

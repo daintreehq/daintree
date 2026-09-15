@@ -125,6 +125,31 @@ describe("worktree.waitUntilReady", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it("settles on needs-approval instead of waiting for an approval an agent cannot give", async () => {
+    setRows([
+      {
+        id: "wt-1",
+        setupStatus: {
+          state: "needs-approval",
+          stage: "setup-script",
+          startedAt: 1,
+          completedAt: 2,
+        },
+      },
+    ]);
+    const def = action("worktree.waitUntilReady", callbacks());
+
+    const started = Date.now();
+    const result = (await def.run!(
+      { worktreeId: "wt-1", timeoutMs: 20_000 },
+      {} as ActionContext
+    )) as Record<string, unknown>;
+
+    expect(result.setupState).toBe("needs-approval");
+    expect(result.timedOut).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it("reports the live state and timedOut when the budget runs out mid-run", async () => {
     setRows([
       { id: "wt-1", setupStatus: { state: "running", stage: "setup-script", startedAt: 1 } },

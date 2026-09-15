@@ -53,6 +53,7 @@ export interface SnapshotBuilderHost {
   readonly hasResumeCommand: boolean;
   readonly hasTeardownCommand: boolean;
   readonly hasProvisionCommand: boolean;
+  readonly lifecycleCommandsNeedApproval: boolean | undefined;
   readonly worktreeMode: string;
   readonly worktreeEnvironmentLabel: string | undefined;
   readonly hasPlanFile: boolean;
@@ -172,6 +173,9 @@ export class SnapshotBuilder {
       hasResumeCommand: this.host.hasResumeCommand || undefined,
       hasTeardownCommand: this.host.hasTeardownCommand || undefined,
       hasProvisionCommand: this.host.hasProvisionCommand || undefined,
+      // Only `true` is load-bearing; "checked, nothing waiting" and "not
+      // checked yet" both mean there is nothing to review.
+      lifecycleCommandsNeedApproval: this.host.lifecycleCommandsNeedApproval || undefined,
       worktreeMode: this.host.worktreeMode !== "local" ? this.host.worktreeMode : undefined,
       worktreeEnvironmentLabel: this.host.worktreeEnvironmentLabel,
       hasPlanFile: this.host.hasPlanFile || undefined,

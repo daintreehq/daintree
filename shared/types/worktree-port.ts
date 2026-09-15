@@ -17,6 +17,7 @@ import type {
   WorktreeEventVersion,
 } from "./workspace-host.js";
 import type { WorktreeChanges } from "./git.js";
+import type { LifecycleCommandReview } from "./worktree.js";
 import type { SubmoduleDeleteRisk } from "./submodule.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
@@ -124,6 +125,20 @@ export interface WorktreePortProtocol {
   };
   "run-lifecycle-setup": {
     payload: { worktreeId: string };
+    result: { ok: true };
+  };
+  // The repository commands this worktree would run that the user has not
+  // approved; `null` when there are none. Read fresh from disk by the host.
+  "get-lifecycle-command-approval": {
+    payload: { worktreeId: string };
+    result: { review: LifecycleCommandReview | null };
+  };
+  // Approve the commands a review showed. The host recomputes the review and
+  // refuses when its fingerprint no longer matches, so a change made while the
+  // dialog was open cannot be approved unseen. Renderer-only by construction:
+  // no action or MCP tool reaches this request (#12408).
+  "approve-lifecycle-commands": {
+    payload: { worktreeId: string; fingerprint: string };
     result: { ok: true };
   };
   "switch-worktree-environment": {

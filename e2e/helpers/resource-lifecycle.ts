@@ -99,6 +99,39 @@ export function writeResourceConfig(repoDir: string) {
   execFileSync("git", ["commit", "-m", "add resource config"], { cwd: repoDir, stdio: "ignore" });
 }
 
+/**
+ * Approve the repository commands a worktree would run, through the same host
+ * request the approval dialog uses. Commands from a repository config only run
+ * once approved (#12408); these specs exercise what happens after that
+ * decision, so they make it directly. Call it again after rewriting a config —
+ * any change to the commands needs a fresh approval.
+ */
+export async function approveWorktreeCommands(window: Page, branch: string) {
+  await expect
+    .poll(
+      async () =>
+        window.evaluate(async (targetBranch) => {
+          const electron = (window as any).electron;
+          const worktrees: Array<{ id: string; branch?: string }> =
+            await electron.worktree.getAll();
+          const worktree = worktrees.find((w) => w.branch === targetBranch);
+          if (!worktree) return "missing";
+          const { review } = await electron.worktreePort.request("get-lifecycle-command-approval", {
+            worktreeId: worktree.id,
+          });
+          if (review) {
+            await electron.worktreePort.request("approve-lifecycle-commands", {
+              worktreeId: worktree.id,
+              fingerprint: review.fingerprint,
+            });
+          }
+          return "approved";
+        }, branch),
+      { timeout: T_LONG, message: `Commands for ${branch} should be approvable` }
+    )
+    .toBe("approved");
+}
+
 export async function createWorktree(window: Page, branch: string) {
   const newBtn = window.locator('button[aria-label="Create new worktree"]');
   await newBtn.click();
@@ -122,6 +155,7 @@ export async function createWorktree(window: Page, branch: string) {
 
   const card = window.locator(SEL.worktree.card(branch));
   await expect(card).toBeVisible({ timeout: T_LONG });
+  await approveWorktreeCommands(window, branch);
   return card;
 }
 
