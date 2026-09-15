@@ -170,7 +170,7 @@ describe("buildSkeletonCss pre-read theme config (#10393)", () => {
   });
 });
 
-describe("buildSkeletonCss instantReveal (Doherty bypass for project switches)", () => {
+describe("buildSkeletonCss instantReveal (entrance bypass for project switches)", () => {
   beforeEach(() => {
     storeMock.get.mockReset();
     storeMock.get.mockImplementation((key: string) => {
@@ -180,26 +180,63 @@ describe("buildSkeletonCss instantReveal (Doherty bypass for project switches)",
     });
   });
 
-  it("drops the Doherty entry delay only when instantReveal is set", () => {
+  it("removes the skeleton entrance only when instantReveal is set", () => {
     const gated = buildSkeletonCss(undefined, undefined);
     const instant = buildSkeletonCss(undefined, undefined, { instantReveal: true });
-    // The override must be opt-in: the initial-launch path keeps the 400ms gate.
-    expect(gated).not.toContain("animation-delay");
-    expect(instant).toContain("#startup-skeleton { animation-delay: 0ms !important; }");
+    // The override must be opt-in: the initial-launch path keeps its entrance.
+    expect(gated).not.toContain("animation-name");
+    expect(instant).toContain("#startup-skeleton { animation-name: none !important; }");
   });
 
-  it("overrides only the delay longhand so reduced-motion's `animation: none` survives", () => {
+  it("pins the staggered sections and the identified title opaque (#12394)", () => {
     const instant = buildSkeletonCss(undefined, undefined, { instantReveal: true });
-    // Touching the `animation` shorthand would restore an animation-name that
-    // the reduced-motion media query set to none — the override must not do that.
-    expect(instant).not.toMatch(/#startup-skeleton\s*\{\s*animation:/);
+    // Both rest at opacity:0 in index.html and only reach 1 through their
+    // reveal animation, so dropping the animation alone would hide them.
+    const rule = instant
+      .split("\n")
+      .find((line) => line.includes(".skel-reveal") && line.includes("opacity"));
+    expect(rule).toBeDefined();
+    expect(rule).toContain("#startup-skeleton .skel-reveal");
+    expect(rule).toContain("#startup-skeleton .skeleton-title.skeleton-title--identified");
+    expect(rule).toContain("animation-name: none !important;");
+    expect(rule).toContain("opacity: 1 !important;");
+  });
+
+  it("never touches the animation shorthand or the container's opacity", () => {
+    const instant = buildSkeletonCss(undefined, undefined, { instantReveal: true });
+    // The `animation` shorthand would fight the reduced-motion `animation: none`
+    // rules, and pinning the container's opacity would defeat `.fade-out`.
+    // Property position only, so `--theme-*` token names can't match.
+    expect(instant).not.toMatch(/(^|[\s;{])animation\s*:/);
+    expect(instant).not.toMatch(/#startup-skeleton\s*\{[^}]*[\s;{]opacity\s*:/);
   });
 
   it("threads instantReveal through injectSkeletonCss to the inserted stylesheet", () => {
     const wc = makeWc();
-    injectSkeletonCss(wc as never, null, { instantReveal: true });
+    void injectSkeletonCss(wc as never, null, { instantReveal: true });
     const css = wc.insertCSS.mock.calls[0]?.[0] as string;
-    expect(css).toContain("animation-delay: 0ms !important;");
+    expect(css).toContain("animation-name: none !important;");
+  });
+
+  it("resolves once the stylesheet is inserted, and swallows an insert failure", async () => {
+    let finishInsert: () => void = () => {};
+    const wc = makeWc();
+    wc.insertCSS.mockImplementation(
+      () => new Promise<string>((resolve) => (finishInsert = () => resolve("")))
+    );
+    let applied = false;
+    const pending = injectSkeletonCss(wc as never, null, { instantReveal: true }).then(() => {
+      applied = true;
+    });
+    await Promise.resolve();
+    expect(applied).toBe(false);
+    finishInsert();
+    await pending;
+    expect(applied).toBe(true);
+
+    const failing = makeWc();
+    failing.insertCSS.mockImplementation(() => Promise.reject(new Error("navigated")));
+    await expect(injectSkeletonCss(failing as never)).resolves.toBeUndefined();
   });
 });
 

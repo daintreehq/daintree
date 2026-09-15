@@ -599,6 +599,9 @@ export class ProjectViewManager {
       releaseChannel?: "painted" | "warm-painted" | "skeleton-painted";
       softMs?: number;
       hardMs?: number;
+      confirmFrame?: () => Promise<boolean>;
+      deferFrameConfirmation?: boolean;
+      unpaintedHardMs?: number;
     }
   ): Promise<PaintGateOutcome> {
     return PaintGateController.waitForPaint(
@@ -624,15 +627,33 @@ export class ProjectViewManager {
   }
 
   /**
-   * Renderer-driven gate release. Called from the `APP_VIEW_PAINTED` IPC
-   * handler with the webContentsId of the renderer that just painted.
+   * Let an open gate armed with deferred frame confirmation start probing for
+   * a drawn frame, once the cold view's load has settled (#12394). A real
+   * instance method for the same reason as `waitForPaint`.
+   */
+  enableFrameConfirmation(webContentsId: number): boolean {
+    return PaintGateController.enableFrameConfirmation(this, webContentsId);
+  }
+
+  /**
+   * Fail an open frame-confirmed gate whose renderer has gone away (#12394). A
+   * real instance method for the same reason as `waitForPaint`.
+   */
+  failFrameConfirmation(webContentsId: number): void {
+    PaintGateController.failFrameConfirmation(this, webContentsId);
+  }
+
+  /**
+   * Renderer-driven gate readiness. Called from the `APP_VIEW_PAINTED` IPC
+   * handler with the webContentsId of the renderer that just painted; a
+   * frame-confirmed gate releases once a frame drawn after it is confirmed.
    */
   signalViewPainted(webContentsId: number): void {
     PaintGateController.signalViewPainted(this, webContentsId);
   }
 
   /**
-   * Early-reveal gate release. Called when an incoming cold-start view's
+   * Early-reveal gate readiness. Called when an incoming cold-start view's
    * `APP_SKELETON_PARSED` fires. See ProjectViewPaintGateController for
    * the full rationale.
    */
@@ -641,7 +662,7 @@ export class ProjectViewManager {
   }
 
   /**
-   * Warm-reactivation gate release. Called from the `APP_VIEW_WARM_PAINTED`
+   * Warm-reactivation gate readiness. Called from the `APP_VIEW_WARM_PAINTED`
    * IPC handler after a cached view's wake fan-out completes (#9679).
    */
   signalWarmViewPainted(webContentsId: number): void {
@@ -670,10 +691,11 @@ export class ProjectViewManager {
    * is non-evictable for the same reason as the active view. Eviction paths
    * must skip both (mirrors the LRU guard in `evictStaleViews`).
    *
-   * Spans the whole load, not just the paint gate: the gate resolves on the
-   * incoming skeleton signal — which lands during the load — and nulls itself,
-   * while the outgoing view stays attached until `loadView` settles, up to the
-   * load ceiling (#11459). Falling back to `pendingColdSwitch` closes that window
+   * Spans the whole load, not just the paint gate: a gate that settles before
+   * the load does (a painted-channel gate spent from arm, or one cleared
+   * mid-load) nulls itself, while the outgoing view stays attached until
+   * `loadView` settles, up to the load ceiling (#11459). Falling back to
+   * `pendingColdSwitch` closes that window
    * for every consumer (hibernation, idle auto-close, relocation, menu state),
    * any of which would otherwise destroy the visible outgoing view and leave
    * rollback with nothing to restore.

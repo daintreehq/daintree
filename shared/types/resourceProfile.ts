@@ -93,9 +93,11 @@ export interface ResourceProfileConfig {
   warmPaintGateTimeoutMs: number;
   /**
    * Warm-reactivation paint-gate HARD timeout (ms). Ceiling that drops the
-   * bridge view even without a paint signal. Should stay comfortably above
-   * `warmPaintGateTimeoutMs` so slow-but-live wake fan-outs complete via the
-   * signal path instead of revealing a partially repainted grid.
+   * bridge view even without a wake signal, provided the cached view has drawn
+   * a frame; one that has not keeps the bridge until the cold
+   * `paintGateHardTimeoutMs` and is then rolled back (#12394). Should stay
+   * comfortably above `warmPaintGateTimeoutMs` so slow-but-live wake fan-outs
+   * complete via the signal path instead of revealing a partially repainted grid.
    */
   warmPaintGateHardTimeoutMs: number;
   /**

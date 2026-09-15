@@ -221,12 +221,16 @@ import { logInfo, logWarn } from "../../utils/logger.js";
 import { registerAppView } from "../webContentsRegistry.js";
 import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { injectSkeletonCss } from "../skeletonCss.js";
+import { notifyError } from "../../ipc/errorHandlers.js";
 
 function createMockWindow() {
   const children: unknown[] = [];
   const win = {
     id: 1,
     isDestroyed: vi.fn(() => false),
+    isMinimized: vi.fn(() => false),
+    isVisible: vi.fn(() => true),
     on: vi.fn(),
     removeListener: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
@@ -879,7 +883,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
-  it("early-reveals on the real skeleton-parsed IPC signal (before React paints)", async () => {
+  it("reveals on the real skeleton-parsed IPC signal (before React paints) once a frame is confirmed", async () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
 
@@ -899,8 +903,9 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
     // Fire the renderer's skeleton-parsed send (well before any APP_VIEW_PAINTED)
-    // through the real listener — the outgoing view detaches and the branded
-    // skeleton reveals on the fast path.
+    // through the real listener — once the load settles and the (immediately
+    // resolving) frame probe confirms, the outgoing view detaches and the
+    // branded skeleton reveals on the fast path.
     incomingWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
     await switchPromise;
 
@@ -1150,7 +1155,9 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // The cold skeleton channel must not satisfy the warm gate (different
     // releaseChannel), even with a matching webContentsId.
     manager.signalSkeletonPainted(initialWc.id);
-    await Promise.resolve();
+    // A macrotask, not a microtask: a wrongly accepted signal would still be
+    // working through its frame probe after a single microtask.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
     manager.signalWarmViewPainted(initialWc.id);
@@ -1298,7 +1305,9 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
 
     // A mismatched warm signal must not release the bridge.
     manager.signalWarmViewPainted(99_999);
-    await Promise.resolve();
+    // A macrotask, not a microtask: a wrongly accepted signal would still be
+    // working through its frame probe after a single microtask.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
     // The correct signal does.
@@ -1325,7 +1334,9 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // The one-shot cold channel must not satisfy the warm gate (different
     // releaseChannel), even with a matching webContentsId.
     manager.signalViewPainted(initialWc.id);
-    await Promise.resolve();
+    // A macrotask, not a microtask: a wrongly accepted signal would still be
+    // working through its frame probe after a single microtask.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
     manager.signalWarmViewPainted(initialWc.id);
@@ -1624,5 +1635,505 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // The outgoing project-a view was cached → its renderer is told so it can
     // cancel any in-flight wake/repaint rAFs before being throttled/frozen.
     expect(initialWc.send).toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
+  });
+});
+
+/**
+ * Hold a view's frame probes until the test draws them. Only the double-rAF
+ * probe is held; every other script (bootstrap probe, idle GC) resolves as the
+ * default mock does.
+ */
+function holdFrames(wc: MockWc) {
+  const pending: Array<() => void> = [];
+  const isProbe = (code: unknown) =>
+    typeof code === "string" && code.includes("requestAnimationFrame");
+  wc.executeJavaScript.mockImplementation((code: unknown) => {
+    if (isProbe(code)) {
+      return new Promise((resolve) => pending.push(() => resolve(true)));
+    }
+    return Promise.resolve();
+  });
+  return {
+    probeCount: () => wc.executeJavaScript.mock.calls.filter(([code]) => isProbe(code)).length,
+    drawNext: () => pending.shift()?.(),
+    drawLatest: () => pending.pop()?.(),
+    drawAll: () => pending.splice(0).forEach((draw) => draw()),
+  };
+}
+
+describe("ProjectViewManager — frame confirmation before reveal (#12394)", () => {
+  const PAINT_HARD_MS = 400;
+  const WARM_HARD_MS = 100;
+
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let initialWc: MockWc;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    nextWebContentsId = 900;
+    wcQueue = [];
+    vi.mocked(logWarn).mockClear();
+    vi.mocked(notifyError).mockClear();
+
+    win = createMockWindow();
+    // The warm bound sits well inside the cold paint bound so the extended
+    // wait for a first warm frame is observable on its own.
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 50,
+      paintGateHardTimeoutMs: PAINT_HARD_MS,
+      warmPaintGateTimeoutMs: 20,
+      warmPaintGateHardTimeoutMs: WARM_HARD_MS,
+      viewLoadTimeoutMs: 1_000,
+      viewLoadHardTimeoutMs: 2_000,
+      cachedProjectViews: 3,
+    });
+
+    initialWc = createMockWebContents();
+    const initialView = { webContents: initialWc, setBounds: vi.fn() };
+    win.contentView.addChildView(initialView);
+    manager.registerInitialView(initialView as never, "proj-a", "/path/a");
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    vi.useRealTimers();
+  });
+
+  const attachedWebContents = () =>
+    win.contentView.children.map((view) => (view as { webContents: MockWc }).webContents);
+
+  /** Cold-switch to B with frames drawing immediately, leaving A cached. */
+  async function switchToColdB(): Promise<MockWc> {
+    const bWc = createMockWebContents();
+    wcQueue.push(bWc);
+    const switched = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalSkeletonPainted(bWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await switched;
+    win.contentView.removeChildView.mockClear();
+    vi.mocked(logWarn).mockClear();
+    return bWc;
+  }
+
+  it("holds a cold bridge after the skeleton signal until the load settles and a frame is drawn", async () => {
+    const bWc = createMockWebContents({ autoFinishLoad: false });
+    const frames = holdFrames(bWc);
+    wcQueue.push(bWc);
+
+    const switched = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(0);
+    // Parsed, mid-load: readiness only. No frame is probed for yet, because the
+    // switch skeleton CSS may not be applied until the load settles.
+    manager.signalSkeletonPainted(bWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.probeCount()).toBe(0);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    bWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.probeCount()).toBe(1);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+    expect(attachedWebContents()).toEqual([bWc, initialWc]);
+
+    frames.drawAll();
+    await switched;
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+    expect(attachedWebContents()).toEqual([bWc]);
+  });
+
+  it("does not confirm the reveal frame until the switch skeleton CSS is inserted", async () => {
+    const bWc = createMockWebContents({ autoFinishLoad: false });
+    const frames = holdFrames(bWc);
+    let applyCss: () => void = () => {};
+    vi.mocked(injectSkeletonCss).mockImplementationOnce(
+      () => new Promise<void>((resolve) => (applyCss = resolve))
+    );
+    wcQueue.push(bWc);
+
+    const switched = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalSkeletonPainted(bWc.id);
+    bWc._fireOnce("dom-ready");
+    bWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(0);
+    // A frame drawn before the CSS applies can still be the opacity-0 entrance.
+    expect(vi.mocked(injectSkeletonCss)).toHaveBeenLastCalledWith(bWc, null, {
+      instantReveal: true,
+    });
+    expect(frames.probeCount()).toBe(0);
+
+    applyCss();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.probeCount()).toBe(1);
+
+    frames.drawAll();
+    await switched;
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("rolls a cold switch back when its view draws no frame by the paint bound", async () => {
+    const bWc = createMockWebContents();
+    holdFrames(bWc);
+    wcQueue.push(bWc);
+
+    const rejected = expectRejection(manager.switchTo("proj-b", "/path/b"));
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalSkeletonPainted(bWc.id);
+    await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+
+    const error = await rejected;
+    expect(error.message).toContain("View never painted");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(attachedWebContents()).toEqual([initialWc]);
+    expect(bWc.close).toHaveBeenCalled();
+  });
+
+  it("holds the warm bridge after the wake signal until a frame drawn after it is confirmed", async () => {
+    await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    // A frame drawn before the wake finished is evidence the view draws, not
+    // the repaired frame the reveal needs.
+    expect(frames.probeCount()).toBe(1);
+    frames.drawAll();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.probeCount()).toBe(2);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    frames.drawAll();
+    const result = await switchedBack;
+    expect(result.isNew).toBe(false);
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through at the warm hard bound for a slow wake once a frame has been drawn", async () => {
+    await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    frames.drawAll();
+    await vi.advanceTimersByTimeAsync(WARM_HARD_MS);
+    await switchedBack;
+
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.warmpaintgate.hardtimeout")
+    ).toHaveLength(1);
+  });
+
+  it("keeps the warm bridge past the warm hard bound until the view draws its first frame", async () => {
+    await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(WARM_HARD_MS + 50);
+    // Falling through here would reveal a view with nothing drawn.
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    frames.drawNext();
+    await switchedBack;
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls a warm switch back to the outgoing view when nothing is drawn by the paint bound", async () => {
+    const bWc = await switchToColdB();
+    holdFrames(initialWc);
+    initialWc.send.mockClear();
+    bWc.send.mockClear();
+    bWc.focus.mockClear();
+    vi.mocked(registerAppView).mockClear();
+    const onViewReady = vi.fn();
+    manager.onViewReady = onViewReady as never;
+
+    const rejected = expectRejection(manager.switchTo("proj-a", "/path/a"));
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+
+    const error = await rejected;
+    expect(error.message).toContain("View never painted");
+    // B never left the screen and owns the window again; A is parked, not torn
+    // down, so a retry can still reactivate it warm.
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(attachedWebContents()).toEqual([bWc]);
+    expect(initialWc.close).not.toHaveBeenCalled();
+    expect(initialWc.send).toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
+    // Window-routed IPC and keyboard focus follow B back, and B itself was
+    // never parked along the way.
+    const registrations = vi.mocked(registerAppView).mock.calls;
+    expect((registrations.at(-1)?.[1] as unknown as { webContents: MockWc }).webContents).toBe(bWc);
+    expect(bWc.focus).toHaveBeenCalled();
+    expect(bWc.send).not.toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
+    // B was never parked, so its ports are intact; the ready hook would only
+    // register it against the host the window mapping still names.
+    expect(onViewReady).not.toHaveBeenCalled();
+    expect(vi.mocked(notifyError)).toHaveBeenCalledWith(error, { source: "project-switch" });
+    expect(
+      vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.warmpaintgate.unpainted")
+    ).toHaveLength(1);
+
+    initialWc.executeJavaScript.mockImplementation(() => Promise.resolve());
+    const retry = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await retry).isNew).toBe(false);
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(attachedWebContents()).toEqual([initialWc]);
+  });
+
+  it("completes a cold switch in a minimised window without waiting for frames", async () => {
+    const bWc = createMockWebContents();
+    const frames = holdFrames(bWc);
+    wcQueue.push(bWc);
+    // Animation frames stop in a minimised window, so a probe would never settle.
+    win.isMinimized.mockReturnValue(true);
+
+    const switched = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalSkeletonPainted(bWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await switched;
+
+    expect(frames.probeCount()).toBe(0);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(attachedWebContents()).toEqual([bWc]);
+    expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+  });
+
+  it("completes a warm switch in a hidden window without waiting for frames", async () => {
+    const bWc = await switchToColdB();
+    const frames = holdFrames(initialWc);
+    win.isVisible.mockReturnValue(false);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    const result = await switchedBack;
+
+    expect(result.isNew).toBe(false);
+    expect(frames.probeCount()).toBe(0);
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(attachedWebContents()).toEqual([initialWc]);
+    expect(bWc.close).not.toHaveBeenCalled();
+    expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+  });
+
+  it("completes a warm switch whose window is minimised while the frame probe waits", async () => {
+    await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.probeCount()).toBe(2);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    win.isMinimized.mockReturnValue(true);
+    win.on.mock.calls
+      .filter(([event]) => event === "minimize")
+      .forEach(([, handler]) => (handler as () => void)());
+    await switchedBack;
+
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(attachedWebContents()).toEqual([initialWc]);
+    expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+  });
+
+  it("releases on a wake signal that lands during the extended wait for a first frame", async () => {
+    await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(WARM_HARD_MS + 50);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.probeCount()).toBe(2);
+
+    // Only the post-readiness frame draws; the arm-time probe stays out.
+    frames.drawLatest();
+    await switchedBack;
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+
+    // Released on the signal: the extended timer is gone with the gate.
+    await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(
+      vi
+        .mocked(logWarn)
+        .mock.calls.filter(
+          ([e]) =>
+            e === "projectview.warmpaintgate.hardtimeout" ||
+            e === "projectview.warmpaintgate.unpainted"
+        )
+    ).toHaveLength(0);
+  });
+
+  it("starts a single post-readiness probe however many wake signals arrive", async () => {
+    await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const switchedBack = manager.switchTo("proj-a", "/path/a");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    // One arm-time probe, one post-readiness probe.
+    expect(frames.probeCount()).toBe(2);
+
+    frames.drawAll();
+    await switchedBack;
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+  });
+
+  it("fails a warm switch at once when the cached view's renderer crashes mid-gate", async () => {
+    const bWc = await switchToColdB();
+    const frames = holdFrames(initialWc);
+    const onViewReady = vi.fn();
+    manager.onViewReady = onViewReady as never;
+
+    const rejected = expectRejection(manager.switchTo("proj-a", "/path/a"));
+    await vi.advanceTimersByTimeAsync(0);
+    // A frame was drawn and the wake finished — both against the document the
+    // crash is about to take away.
+    frames.drawAll();
+    manager.signalWarmViewPainted(initialWc.id);
+
+    // The warm switch's own listener — registered last on A's webContents.
+    const crashListeners = initialWc.on.mock.calls.filter(
+      ([event]) => event === "render-process-gone"
+    );
+    const failOnRendererGone = crashListeners.at(-1)?.[1] as Handler;
+    failOnRendererGone({}, { reason: "crashed", exitCode: 1 });
+
+    // No bound to wait out: the reloaded replacement is never revealed.
+    const error = await rejected;
+    expect(error.message).toContain("renderer gone");
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(attachedWebContents()).toEqual([bWc]);
+    expect(initialWc.removeListener).toHaveBeenCalledWith(
+      "render-process-gone",
+      failOnRendererGone
+    );
+    // A was the active view when it crashed, which tears down the window's PTY
+    // port — B gets it back through the ready hook.
+    expect(onViewReady).toHaveBeenCalledWith(bWc);
+
+    // The frame probe resolving late changes nothing.
+    frames.drawAll();
+    await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("rolls a warm switch back to the outgoing view when the cached view is torn down mid-gate", async () => {
+    const bWc = await switchToColdB();
+    holdFrames(initialWc);
+
+    const rejected = expectRejection(manager.switchTo("proj-a", "/path/a"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.destroyView("proj-a")).toBe(true);
+    expect(manager.getActiveProjectId()).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+    const error = await rejected;
+    expect(error.message).toContain("View never painted");
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(attachedWebContents()).toEqual([bWc]);
+    expect(manager.getAllViews().map((entry) => entry.projectId)).toEqual(["proj-b"]);
+  });
+
+  it("delivers a focus intent only after the painted channel's frame is confirmed", async () => {
+    const bWc = createMockWebContents();
+    const frames = holdFrames(bWc);
+    wcQueue.push(bWc);
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+
+    const switched = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.pendingPaintGate?.releaseChannel).toBe("painted");
+    manager.signalViewPainted(bWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+    expect(bWc.send).not.toHaveBeenCalledWith(
+      CHANNELS.PROJECT_FOCUS_ON_ACTIVATE,
+      expect.anything()
+    );
+
+    frames.drawAll();
+    await switched;
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+    expect(bWc.send).toHaveBeenCalledWith(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, {
+      intent: "focus-next-waiting",
+    });
+  });
+
+  it("releases a gate without frame confirmation on its signal alone", async () => {
+    const gate = manager.waitForPaint(42, null, null, undefined, {
+      releaseChannel: "warm-painted",
+      softMs: 1_000,
+      hardMs: 1_000,
+    });
+    manager.signalWarmViewPainted(42);
+    await expect(gate).resolves.toBe("signal");
+  });
+
+  it("ignores a frame confirmation that outlives its gate", async () => {
+    const confirmations: Array<(painted: boolean) => void> = [];
+    const confirmFrame = () => new Promise<boolean>((resolve) => confirmations.push(resolve));
+    const options = {
+      releaseChannel: "warm-painted" as const,
+      softMs: 1_000,
+      hardMs: 1_000,
+      confirmFrame,
+    };
+
+    const first = manager.waitForPaint(42, null, null, undefined, options);
+    manager.signalWarmViewPainted(42);
+    // A second gate for the same view cancels the first while its probes are out.
+    const second = manager.waitForPaint(42, null, null, undefined, options);
+    await expect(first).resolves.toBe("cancelled");
+
+    confirmations.splice(0).forEach((confirm) => confirm(true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.pendingPaintGate).not.toBeNull();
+
+    manager.signalWarmViewPainted(42);
+    confirmations.splice(0).forEach((confirm) => confirm(true));
+    await expect(second).resolves.toBe("signal");
+  });
+
+  it("never releases on a probe that could not confirm a frame", async () => {
+    const gate = manager.waitForPaint(42, null, null, undefined, {
+      releaseChannel: "warm-painted",
+      softMs: 50,
+      hardMs: 100,
+      confirmFrame: () => Promise.resolve(false),
+      unpaintedHardMs: 300,
+    });
+    manager.signalWarmViewPainted(42);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(manager.pendingPaintGate).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(gate).resolves.toBe("unpainted");
   });
 });

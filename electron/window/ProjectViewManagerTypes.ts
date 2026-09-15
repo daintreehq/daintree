@@ -10,7 +10,32 @@ import type { ProjectSwitchTrace } from "../../shared/types/ipc/project.js";
 
 export type ViewState = "loading" | "active" | "cached";
 
-export type PaintGateOutcome = "signal" | "hard-timeout" | "cancelled";
+/**
+ * `"unpainted"` means a frame-confirmed gate gave up on its view: the hard bound
+ * passed without a single confirmed frame and the extended `unpaintedHardMs`
+ * wait for one ran out too, or its renderer went away mid-gate.
+ * `"hard-timeout"` on a gate with `unpaintedHardMs` means a frame was confirmed.
+ */
+export type PaintGateOutcome = "signal" | "hard-timeout" | "unpainted" | "cancelled";
+
+/**
+ * A gate armed with frame confirmation (#12394). Renderer signals latch
+ * `ready` instead of releasing the gate; the release is a main-driven probe
+ * started after readiness that proves the view drew a frame.
+ */
+export interface PaintGateFrameConfirmation {
+  confirm: () => Promise<boolean>;
+  /** Probes may run. Cold gates enable once the load settles; warm gates at arm. */
+  enabled: boolean;
+  /** A readiness signal has been latched. */
+  ready: boolean;
+  /** A probe started after enable has confirmed a frame. */
+  painted: boolean;
+  /** The post-readiness probe has been started — one per gate. */
+  readyProbeStarted: boolean;
+  /** The hard bound passed with no frame; waiting on `unpaintedHardMs`. */
+  awaitingFirstFrame: boolean;
+}
 
 export interface PaintGate {
   webContentsId: number;
@@ -25,7 +50,8 @@ export interface PaintGate {
    * and will never re-emit it (#9679). The discriminator keeps a stray signal of
    * the wrong kind from releasing the bridge early; `signalViewPainted` also
    * releases a `"skeleton-painted"` gate as a fallback (a committed React frame
-   * is a strict superset of the skeleton having parsed).
+   * is a strict superset of the skeleton having parsed). On a gate with
+   * `frame` confirmation the matching signal only latches readiness.
    */
   releaseChannel: "painted" | "warm-painted" | "skeleton-painted";
   /**
@@ -51,10 +77,17 @@ export interface PaintGate {
    * policy is per channel: a warm gate falls through and detaches, a cold one
    * must abandon and roll back BEFORE any detach, or it strands the user on a
    * view that never rendered (#11635). Replaced in place once when a cold
-   * skeleton gate is retimed after its load settles (#11765); `resolve` always
-   * clears whichever handle is current.
+   * skeleton gate is retimed after its load settles (#11765), and when a gate
+   * armed with `unpaintedHardMs` reaches its hard bound with no frame
+   * confirmed — a warm gate falls through only once one has been (#12394);
+   * `resolve` always clears whichever handle is current.
    */
   hardTimeout: ReturnType<typeof setTimeout>;
+  /**
+   * Present when the gate must see a drawn frame before it releases (#12394).
+   * Absent gates keep the original contract: a matching signal releases them.
+   */
+  frame: PaintGateFrameConfirmation | null;
   /**
    * Settle the gate. Clears both timers, clears `pendingPaintGate`, and
    * resolves the outer promise. Idempotent — repeat calls no-op.
