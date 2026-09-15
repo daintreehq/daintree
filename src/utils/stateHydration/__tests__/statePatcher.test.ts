@@ -1869,13 +1869,35 @@ describe("buildArgsForNonPtyRecreation", () => {
       expect(result.worktreeId).toBeUndefined();
     });
 
-    it("rescues a non-dockable dock panel to the grid and adopts the active worktree", () => {
-      // `dev-preview` is a non-dockable built-in. A persisted global dock
-      // dev-preview must land visibly in the active worktree's grid, not
-      // worktree-less in the global-only bucket.
+    it("keeps a persisted dock dev-preview in the dock (#12397)", () => {
       const result = buildArgsForNonPtyRecreation(
-        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock", worktreeId: "wt-1" },
         "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("dock");
+      expect(result.worktreeId).toBe("wt-1");
+    });
+
+    it("keeps a global dock dev-preview global rather than adopting the active worktree", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d2", kind: "dev-preview", title: "Dev", location: "dock", command: "npm run dev" },
+        "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("dock");
+      expect(result.worktreeId).toBeUndefined();
+    });
+
+    it("rescues a non-dockable dock panel to the grid and adopts the active worktree", () => {
+      // `review` is a non-dockable built-in. A persisted global dock review
+      // must land visibly in the active worktree's grid, not worktree-less in
+      // the global-only bucket.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "r1", kind: "review", title: "Review", location: "dock" },
+        "review",
         "/project",
         "wt-active"
       );
@@ -1899,8 +1921,8 @@ describe("buildArgsForNonPtyRecreation", () => {
 
     it("does not override an explicit saved worktree when rescuing", () => {
       const result = buildArgsForNonPtyRecreation(
-        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock", worktreeId: "wt-saved" },
-        "dev-preview",
+        { id: "r1", kind: "review", title: "Review", location: "dock", worktreeId: "wt-saved" },
+        "review",
         "/project",
         "wt-active"
       );
@@ -1910,8 +1932,8 @@ describe("buildArgsForNonPtyRecreation", () => {
 
     it("rescues to the grid worktree-less when no active worktree is known", () => {
       const result = buildArgsForNonPtyRecreation(
-        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
-        "dev-preview",
+        { id: "r1", kind: "review", title: "Review", location: "dock" },
+        "review",
         "/project",
         null
       );

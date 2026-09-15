@@ -531,11 +531,23 @@ function makeReviewPanel(id: string, worktreeId?: string) {
 // A DOCKABLE reading surface that shares review's `previous-focused` dock
 // fallback policy. Review itself is `dockable: false` and (post-#11375) can no
 // longer be moved to the dock, so the dock-move focus-policy cases below use a
-// browser panel — which CAN dock — to exercise the same policy on a real move.
+// browser (or dev-preview) panel — which CAN dock — to exercise the same policy
+// on a real move.
 function makeBrowserPanel(id: string, worktreeId?: string) {
   return {
     id,
     kind: "browser" as const,
+    worktreeId,
+    title: id,
+    location: "grid" as const,
+  };
+}
+
+function makeDevPreviewPanel(id: string, worktreeId?: string) {
+  return {
+    id,
+    kind: "dev-preview" as const,
+    cwd: "/repo",
     worktreeId,
     title: id,
     location: "grid" as const,
@@ -645,25 +657,32 @@ describe("reading-surface dock/trash fallback (#8946 — previous-focused policy
     expect(usePanelStore.getState().focusedId).toBe("shell-1");
   });
 
-  it("moveTerminalToDock: dockable reading surface restores focus to previousFocusedId", () => {
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    usePanelStore.setState({
-      panelsById: {
-        "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
-        "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
-        "browser-1": makeBrowserPanel("browser-1", "wt-1"),
-      },
-      panelIds: ["shell-first", "shell-last", "browser-1"],
-      focusedId: "browser-1",
-      previousFocusedId: "shell-last",
-    });
+  it.each([
+    ["browser", makeBrowserPanel],
+    ["dev-preview", makeDevPreviewPanel],
+  ] as const)(
+    "moveTerminalToDock: dockable reading surface (%s) restores focus to previousFocusedId",
+    (_kind, makePanel) => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+      usePanelStore.setState({
+        panelsById: {
+          "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+          "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
+          "browser-1": makePanel("browser-1", "wt-1"),
+        },
+        panelIds: ["shell-first", "shell-last", "browser-1"],
+        focusedId: "browser-1",
+        previousFocusedId: "shell-last",
+      });
 
-    usePanelStore.getState().moveTerminalToDock("browser-1");
+      usePanelStore.getState().moveTerminalToDock("browser-1");
 
-    // Without policy: would pick shell-first. With "previous-focused":
-    // restores shell-last as the user expected.
-    expect(usePanelStore.getState().focusedId).toBe("shell-last");
-  });
+      // Without policy: would pick shell-first. With "previous-focused":
+      // restores shell-last as the user expected.
+      expect(usePanelStore.getState().panelsById["browser-1"]?.location).toBe("dock");
+      expect(usePanelStore.getState().focusedId).toBe("shell-last");
+    }
+  );
 
   it("moveTerminalToPosition to dock: dockable reading surface restores focus to previousFocusedId", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });

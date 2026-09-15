@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { isAbsolute } from "@shared/utils/path";
@@ -21,6 +22,26 @@ function isDevPreviewStoppable(ctx: { projectId?: string }): boolean {
   const panel = getTerminal(focusedId);
   return Boolean(panel && isDevPreviewPanel(panel));
 }
+
+/**
+ * The dock launcher dispatches this action with the placement its heading
+ * advertised (`launchPanelKind`). `ActionService` drops undeclared fields, so
+ * without the schema a dock request would silently land in the grid (#12397).
+ */
+const devServerStartArgsSchema = z
+  .object({
+    location: z
+      .enum(["grid", "dock"])
+      .optional()
+      .describe("Surface to open on (default: grid). `dock` parks it as a chip in the sidebar."),
+    activateDockOnCreate: z
+      .boolean()
+      .optional()
+      .describe("Open the dock popover immediately (default: false). Ignored unless docking."),
+  })
+  .optional();
+
+type DevServerStartArgs = z.infer<typeof devServerStartArgsSchema>;
 
 function readActiveWorktreePath(activeWorktreeId: string | undefined): string | undefined {
   if (!activeWorktreeId) return undefined;
@@ -47,7 +68,11 @@ export function registerDevServerActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async (_args: unknown, ctx: ActionContext) => {
+    argsSchema: devServerStartArgsSchema,
+    run: async (args: DevServerStartArgs, ctx: ActionContext) => {
+      // Grid stays the default, so every caller that predates the dock
+      // launcher keeps landing exactly where it did.
+      const location = args?.location === "dock" ? "dock" : "grid";
       const currentProject =
         useProjectStore.getState().currentProject ??
         (await projectClient.getCurrent().catch(() => null));
@@ -73,7 +98,10 @@ export function registerDevServerActions(
         title: "Dev Server",
         cwd,
         worktreeId: ctx.activeWorktreeId,
-        location: "grid",
+        location,
+        // Folded into the same set() that commits the panel, so the offscreen
+        // container's watchdog can't close the popover in the render gap (#6590).
+        ...(location === "dock" && { activateDockOnCreate: args?.activateDockOnCreate === true }),
         devCommand: devServerCommand,
       });
     },

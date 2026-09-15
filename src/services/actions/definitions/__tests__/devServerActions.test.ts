@@ -21,11 +21,14 @@ function setupActions() {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
   registerDevServerActions(actions, callbacks);
-  return async (id: string, ctx: Partial<ActionContext> = {}): Promise<unknown> => {
+  return async (id: string, ctx: Partial<ActionContext> = {}, args?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;
-    return def.run(undefined, ctx as ActionContext);
+    // Parse like ActionService does, so a field the schema doesn't declare is
+    // dropped here exactly as it would be at dispatch.
+    const parsed = def.argsSchema ? def.argsSchema.parse(args) : args;
+    return def.run(parsed, ctx as ActionContext);
   };
 }
 
@@ -100,5 +103,49 @@ describe("devServerActions", () => {
     await expect(run("devServer.start", { projectId: "project-1" })).rejects.toThrow(
       "No absolute project path is available for Dev Preview"
     );
+  });
+
+  it("opens in the grid by default without activating the dock", async () => {
+    const run = setupActions();
+
+    await run("devServer.start", { projectId: "project-1" });
+
+    const call = panelStoreMock.getState().addPanel.mock.calls[0]![0];
+    expect(call.location).toBe("grid");
+    expect(call).not.toHaveProperty("activateDockOnCreate");
+  });
+
+  it("honours the dock placement the dock launcher dispatches with (#12397)", async () => {
+    const run = setupActions();
+
+    await run(
+      "devServer.start",
+      { projectId: "project-1" },
+      { agentId: "dev-preview", location: "dock", cwd: "/elsewhere", activateDockOnCreate: true }
+    );
+
+    expect(panelStoreMock.getState().addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "dev-preview",
+        location: "dock",
+        activateDockOnCreate: true,
+        cwd: "/repo",
+        devCommand: "npm run dev",
+      })
+    );
+  });
+
+  it("ignores activateDockOnCreate for a grid launch", async () => {
+    const run = setupActions();
+
+    await run(
+      "devServer.start",
+      { projectId: "project-1" },
+      { location: "grid", activateDockOnCreate: true }
+    );
+
+    const call = panelStoreMock.getState().addPanel.mock.calls[0]![0];
+    expect(call.location).toBe("grid");
+    expect(call).not.toHaveProperty("activateDockOnCreate");
   });
 });

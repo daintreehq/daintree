@@ -96,6 +96,7 @@ export function DevPreviewPane({
   onTitleChange,
   onMinimize,
   onRestore,
+  showRestoreControl,
   isMultiPanelGrid,
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
@@ -114,6 +115,9 @@ export function DevPreviewPane({
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
+  const isParkedInDock = usePanelStore(
+    (state) => location === "dock" && state.activeDockTerminalId !== id
+  );
 
   const terminal = usePanelStore((state) => {
     const p = state.getTerminal(id);
@@ -886,6 +890,7 @@ export function DevPreviewPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      showRestoreControl={showRestoreControl}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
       headerContent={headerContent}
@@ -1160,6 +1165,7 @@ export function DevPreviewPane({
             onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
             onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
             onStop={stop}
+            isPanelVisible={!isParkedInDock}
           />
         )}
         <DevPreviewDestructiveConfirmDialog

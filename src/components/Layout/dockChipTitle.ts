@@ -65,9 +65,9 @@ export function fileBrowserChipTitle(panel: FileBrowserPanelData): string {
 }
 
 // Chip label for a non-PTY dock panel. File, browser and file-browser get their
-// kind-specific derivations; every other dockable kind (dev-preview if opted
-// in, plugin view panels — #11332) falls back to the panel title so the chip is
-// never blank.
+// kind-specific derivations; every other dockable kind (dev-preview, plugin
+// view panels — #11332) falls back to the panel title so the chip is never
+// blank.
 export function dockChipTitle(panel: PanelInstance): string {
   if (isFilePanel(panel)) return fileChipTitle(panel);
   if (isBrowserPanel(panel)) return browserChipTitle(panel);
