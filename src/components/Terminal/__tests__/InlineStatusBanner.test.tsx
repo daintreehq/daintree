@@ -516,6 +516,49 @@ describe("InlineStatusBanner", () => {
       expect(controlsRow?.querySelector('[aria-label="Dismiss"]')).toBeTruthy();
     });
 
+    it("keeps dismiss in the controls row for a strip, even with a description", () => {
+      const { container } = render(
+        <InlineStatusBanner
+          icon={Info}
+          title="Enable this plugin?"
+          description="It runs with your account."
+          layout="strip"
+          severity="neutral"
+          animated={false}
+          actions={[{ id: "ok", label: "Enable", onClick: () => {} }]}
+          onClose={() => {}}
+        />
+      );
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      const controls = container.querySelector("[data-banner-controls]");
+      expect(controls).toBeTruthy();
+      expect(controls!.contains(dismiss)).toBe(true);
+      // Trailing: after every action, never in the title row.
+      const title = screen.getByText("Enable this plugin?");
+      expect(title.closest('[class*="justify-between"]')!.contains(dismiss)).toBe(false);
+      expect(controls!.lastElementChild).toBe(dismiss);
+      // The description still renders — a strip is not the single-line layout.
+      expect(screen.getByText("It runs with your account.")).toBeTruthy();
+    });
+
+    it("keeps a disabled dismiss in the row rather than unmounting it", () => {
+      render(
+        <InlineStatusBanner
+          icon={Info}
+          title="Saving"
+          description="One moment."
+          layout="strip"
+          severity="neutral"
+          animated={false}
+          actions={[]}
+          onClose={() => {}}
+          closeDisabled
+        />
+      );
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      expect(dismiss.hasAttribute("disabled")).toBe(true);
+    });
+
     it("renders dismiss in title row with descriptionExtras and no description prop", () => {
       const onClose = vi.fn();
       render(
