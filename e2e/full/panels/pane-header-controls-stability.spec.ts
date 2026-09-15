@@ -47,8 +47,8 @@ type TerminalGeometry = {
 };
 
 const STATUS_SLOT = '[data-testid="panel-header-status"]';
-// The agent glyph's box, past close. Always present on a terminal pane; its
-// position is part of the same guarantee.
+// The agent glyph's box, past close. Reserved only for agent terminals, so the
+// plain shells here must not have one.
 const AGENT_SLOT = '[data-testid="panel-header-agent-indicator"]';
 const STATUS_GLYPH = `${STATUS_SLOT} [role="status"]`;
 const HEADER_CONTENT = '[data-testid="panel-header-content"]';
@@ -272,10 +272,7 @@ async function runStatusSteps(page: Page, panel: Locator, terminalId: string): P
   const geometry = await waitForConvergedGeometry(page, terminalId);
   const baseline = await measureControls(panel);
   const slot = await boxOf(panel.locator(STATUS_SLOT), "Status slot");
-  const agentSlot = await boxOf(panel.locator(AGENT_SLOT), "Agent slot");
-  expect(agentSlot.x, "agent slot sits past close").toBeGreaterThanOrEqual(
-    baseline.close.x + baseline.close.width
-  );
+  await expect(panel.locator(AGENT_SLOT), "plain shell has no agent slot").toHaveCount(0);
 
   for (const step of STATUS_STEPS) {
     await step.apply(terminalId);
@@ -293,11 +290,7 @@ async function runStatusSteps(page: Page, panel: Locator, terminalId: string): P
       slot,
       `status slot after ${step.label}`
     );
-    expectSameBox(
-      await boxOf(panel.locator(AGENT_SLOT), "Agent slot"),
-      agentSlot,
-      `agent slot after ${step.label}`
-    );
+    await expect(panel.locator(AGENT_SLOT), `agent slot after ${step.label}`).toHaveCount(0);
     await expectGeometryUnchanged(page, terminalId, geometry, step.label);
   }
 }

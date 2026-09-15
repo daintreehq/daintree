@@ -25,6 +25,8 @@ export interface TabInfo {
   chrome: TerminalChromeDescriptor;
   kind: PanelKind;
   agentState?: AgentState;
+  /** The agent the terminal was launched with; survives exit, unlike `chrome.isAgent`. */
+  launchAgentId?: string;
   isActive: boolean;
   presetColor?: string;
   isUsingFallback?: boolean;

@@ -141,6 +141,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         }),
         kind: p.kind ?? "terminal",
         agentState: pty?.agentState,
+        launchAgentId: pty?.launchAgentId,
         isActive: p.id === activeTabId,
         presetColor,
         isUsingFallback: pty?.isUsingFallback,

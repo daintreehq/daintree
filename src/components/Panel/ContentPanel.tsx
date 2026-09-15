@@ -499,10 +499,26 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     return reservesTerminalSlots ? null : undefined;
   }, [isAutoTerminalHeader, reservesTerminalSlots, id, flowStatus, submitStatus]);
 
+  // Only agent terminals get the glyph box. A launched agent keeps it after
+  // exit so the controls don't shift; a plain shell gains it once an agent is
+  // detected in it, or once agent state arrives ahead of identity (#6650).
+  const isAgentTerminal =
+    agentId != null || terminalChrome.isAgent || headerAgentState !== undefined;
+  const reservesAgentSlot =
+    (isAutoTerminalHeader && isAgentTerminal) ||
+    (tabs?.some(
+      (tab) =>
+        panelKindHasPty(tab.kind) &&
+        (tab.launchAgentId != null ||
+          tab.chrome.isAgent ||
+          getTerminalAgentDisplayState(tab.chrome, tab.agentState) !== undefined)
+    ) ??
+      false);
+
   // The agent state glyph goes to PanelHeader's far-right box, past the close
   // button, and is never folded into the metadata row.
   const resolvedAgentIndicator = useMemo(() => {
-    if (isAutoTerminalHeader) {
+    if (isAutoTerminalHeader && isAgentTerminal) {
       return (
         <TerminalAgentIndicator
           id={id}
@@ -513,10 +529,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         />
       );
     }
-    return reservesTerminalSlots ? null : undefined;
+    return reservesAgentSlot ? null : undefined;
   }, [
     isAutoTerminalHeader,
-    reservesTerminalSlots,
+    isAgentTerminal,
+    reservesAgentSlot,
     id,
     headerAgentState,
     activity,
