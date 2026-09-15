@@ -11,6 +11,7 @@ import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
 import {
   type McpTier,
+  NON_RENDERER_OWNED_TIER_ALLOWLISTS,
   TIER_ALLOWLISTS,
   TIER_NOT_PERMITTED_CODE,
   minimumPermittingTier,
@@ -123,7 +124,11 @@ export function resolveTokenTier(
  * renderer-owned session additionally learns from `actions.list` / `actions.search`
  * / `actions.getSchema` is that a name EXISTS above its tier and which tier
  * would permit it — never a name it may call. This function still decides the
- * callable set alone, and it still answers the same for every session.
+ * callable set alone.
+ *
+ * It does not answer the same for every session at one tier: the origin decides
+ * whether unscoped terminal input is on the surface at all (#12407), through
+ * the same selector the dispatch gate reads.
  */
 export function shouldExposeTool(
   entry: ActionManifestEntry,
@@ -139,18 +144,29 @@ export function shouldExposeTool(
   if (isWithheldFromBoundSession(entry, tier, session)) {
     return false;
   }
-  return isTierPermitted(tier, entry.id);
+  return isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true);
+}
+
+export interface SessionSurfacePolicy {
+  /**
+   * Whether this session routes every call to one workspace it was bound to at
+   * handshake (#11789), rather than following window focus.
+   */
+  workspaceBound: boolean;
+  /**
+   * Whether the session's ORIGIN is renderer-owned — `sessionStore.isRendererOwnedOrigin`
+   * (#12407). Only such a session may be offered unscoped terminal input.
+   *
+   * Optional, and read as `=== true`, so a caller that never classified the
+   * session gets the narrower surface rather than the assistant's.
+   */
+  rendererOwnedOrigin?: boolean;
 }
 
 /**
- * Whether this session routes every call to one workspace it was bound to at
- * handshake (#11789), rather than following window focus.
+ * The default for every session that did not send a workspace selector, and
+ * whose origin is not known to be renderer-owned.
  */
-export interface SessionSurfacePolicy {
-  workspaceBound: boolean;
-}
-
-/** The default for every session that did not send a workspace selector. */
 export const UNBOUND_SESSION_SURFACE: SessionSurfacePolicy = { workspaceBound: false };
 
 /**
@@ -199,13 +215,25 @@ export function isWithheldFromBoundSession(
  * set so discovery filtering can enumerate the tier's surface instead of
  * probing it id-by-id; both callers share this one selector so the discovery
  * gate can never drift from the dispatch gate.
+ *
+ * `rendererOwnedOrigin` is asked of the session's origin, never inferred from
+ * its tier: an agent pane's bearer holds a ladder tier while its origin is
+ * `external` (#12407). It defaults to `false`, so a caller that forgets to pass
+ * it narrows the assistant's surface rather than widening anyone else's.
  */
-export function getTierPermittedActionIds(tier: McpTier): ReadonlySet<string> {
-  return TIER_ALLOWLISTS[tier];
+export function getTierPermittedActionIds(
+  tier: McpTier,
+  rendererOwnedOrigin = false
+): ReadonlySet<string> {
+  return rendererOwnedOrigin ? TIER_ALLOWLISTS[tier] : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
 }
 
-export function isTierPermitted(tier: McpTier, actionId: string): boolean {
-  return getTierPermittedActionIds(tier).has(actionId);
+export function isTierPermitted(
+  tier: McpTier,
+  actionId: string,
+  rendererOwnedOrigin = false
+): boolean {
+  return getTierPermittedActionIds(tier, rendererOwnedOrigin).has(actionId);
 }
 
 /**
@@ -468,7 +496,7 @@ export function buildTargetPolicy(
   // grant, then native grant — so a client reading this learns which mechanism
   // would actually admit its next call, and therefore whether that access can
   // lapse.
-  const authorizedBy = TIER_ALLOWLISTS[snapshot.tier].has(id)
+  const authorizedBy = isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin)
     ? "tier"
     : perToolGranted
       ? "grant"

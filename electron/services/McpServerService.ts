@@ -37,7 +37,7 @@ import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
 import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
 import type * as PluginServiceModule from "./PluginService.js";
-import { setMcpServerServiceRef } from "../window/serviceRefs.js";
+import { getPtyClient, setMcpServerServiceRef } from "../window/serviceRefs.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -267,6 +267,9 @@ export class McpServerService {
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
+      // The pty-host's own spawn tracking spans every view, which is what a
+      // collision check needs: a panel store only knows its own (#12407).
+      isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       getCachedManifestForWorkspace: (workspaceId) =>

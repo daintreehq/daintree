@@ -232,6 +232,25 @@ describe("agentActions adversarial", () => {
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
+  // A requested id is a request for a new panel; one this view already holds
+  // would have the launcher overwrite a live panel's record (#12407).
+  it("agent.launch refuses a requested id an existing panel already uses", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    panelStoreMock.getState.mockReturnValue({ panelsById: { "user-shell": { id: "user-shell" } } });
+
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", requestedId: "user-shell" })
+    ).rejects.toThrow(/already exists/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+
+    await callAction(actions, "agent.launch", { agentId: "claude", requestedId: "fresh-id" });
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ requestedId: "fresh-id" })
+    );
+  });
+
   it("agent.launch returns the identity the launcher resolved (#11547)", async () => {
     const callbacks = makeCallbacks();
     callbacks.onLaunchAgent.mockResolvedValueOnce({

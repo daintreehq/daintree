@@ -93,6 +93,38 @@ export function registerTerminalInputActions(
     },
   }));
 
+  // Registered here for manifest metadata only, on the same terms as
+  // `terminal.interruptOwned` below: main checks the session's ownership ledger,
+  // then delegates to `terminal.inject` above with the id and nothing else, so
+  // the injection path is the one already shipped (#12407). `run()` throws if
+  // the renderer ever invokes it directly.
+  actions.set("terminal.injectOwned", () => ({
+    id: "terminal.injectOwned",
+    title: "Inject Context to Owned Terminal",
+    description:
+      "Write the active worktree's prepared context into a terminal this connection created, which is how an agent it launched is handed a large codebase context. Any other panel is refused, the user's own shells included. Target an idle terminal.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["context", "inject", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The terminal to inject into, as an `id` this session got when it created the panel. Required: there is no focus fallback."
+        ),
+    }),
+    run: async () => {
+      throw new Error(
+        "terminal.injectOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("terminal.copy", () => ({
     id: "terminal.copy",
     title: "Copy Selection",

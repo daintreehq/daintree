@@ -408,7 +408,16 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // not have fit at any wording above the 120 B floor; this is the measured
   // total. What the prose has to carry is that the call opens a browser and
   // returns nothing, and that a provider with no repository page refuses it.
-  const MAX_COHORT_TOTAL_BYTES = 54_036;
+  // 54_036 → 54_593 for #12407's `terminal.sendCommandOwned` (317 B) and
+  // `terminal.injectOwned` (240 B). They sit on the action tier beside the
+  // unscoped pair the assistant keeps, so the in-app cohort carries both, and
+  // the 557 B is exactly their two descriptions. What the prose has to carry is
+  // the refusal — any panel this connection did not create is turned away, the
+  // user's own shells included — because a caller that misses it hands the
+  // tools ids from a listing and reads every refusal as a bug. The external
+  // total above falls instead: there the owned pair replaced the unscoped one,
+  // at 149 B less than the 706 B it removed.
+  const MAX_COHORT_TOTAL_BYTES = 54_593;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

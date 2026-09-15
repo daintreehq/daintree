@@ -574,7 +574,7 @@ describe("McpServerService", () => {
         // Command that is semantically a read-only lookup; both readOnly and
         // idempotent hints are forced on via override.
         createManifestEntry({
-          id: "terminal.inject" as ActionId,
+          id: "terminal.injectOwned" as ActionId,
           title: "Read Only Command",
           description: "Allowlisted command used for override coverage",
           kind: "command",
@@ -600,7 +600,7 @@ describe("McpServerService", () => {
 
     const result = await client.listTools();
     const newTerminal = result.tools.find((t) => t.name === "terminal.new");
-    const readOnlyCmd = result.tools.find((t) => t.name === "terminal.inject");
+    const readOnlyCmd = result.tools.find((t) => t.name === "terminal.injectOwned");
     const queryFalse = result.tools.find((t) => t.name === "terminal.getOutput");
 
     // Override flips destructiveHint off; readOnlyHint/idempotentHint still

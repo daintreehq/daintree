@@ -58,6 +58,7 @@ type ManagedStub = {
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: unknown) => Promise<unknown>;
   callbacks: ActionCallbacks;
+  actions: ActionRegistry;
 } {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {
@@ -73,6 +74,7 @@ function setupActions(): {
       return def.run(args, (ctx ?? {}) as never);
     },
     callbacks,
+    actions,
   };
 }
 
@@ -416,6 +418,40 @@ describe("terminalInputActions adversarial", () => {
       await run("terminal.inject", undefined, { dispatchSource: "keybinding" });
 
       expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", undefined);
+    });
+  });
+
+  // Ownership is main-process state keyed by MCP session id, so the renderer
+  // can never be the one to honour this tool (#12407).
+  describe("terminal.injectOwned (#12407)", () => {
+    function definition(): AnyActionDefinition {
+      const factory = setupActions().actions.get("terminal.injectOwned");
+      if (!factory) throw new Error("terminal.injectOwned not registered");
+      return factory();
+    }
+
+    it("refuses renderer dispatch and never injects", async () => {
+      const { run, callbacks } = setupActions();
+      vi.mocked(callbacks.getActiveWorktreeId).mockReturnValue("wt-1");
+
+      await expect(
+        run("terminal.injectOwned", { terminalId: "term-9" }, { dispatchSource: "agent" })
+      ).rejects.toThrow(/main-process path/);
+      expect(callbacks.onInject).not.toHaveBeenCalled();
+    });
+
+    it("requires a target, since there is no focus fallback to fall back to", () => {
+      const schema = definition().argsSchema!;
+      expect(schema.safeParse(undefined).success).toBe(false);
+      expect(schema.safeParse({}).success).toBe(false);
+      expect(schema.safeParse({ terminalId: "" }).success).toBe(false);
+      expect(schema.safeParse({ terminalId: "term-9" }).success).toBe(true);
+    });
+
+    it("stays off plugin dispatch and the palette", () => {
+      const def = definition();
+      expect(def.denyPluginDispatch).toBe(true);
+      expect(def.palette?.mode).toBe("hidden");
     });
   });
 

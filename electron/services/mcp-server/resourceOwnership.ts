@@ -198,9 +198,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * What each creation tool's *successful* result contributes to the ledger.
  *
  * Keyed by action id rather than sniffing result shapes, so adding a creation
- * path to the external surface is a deliberate entry here and not something a
- * lucky field name turns on by accident. Every id listed is one an external
- * session can actually reach (`MCP_EXTERNAL_TIER_TOOLS`).
+ * path is a deliberate entry here and not something a lucky field name turns on
+ * by accident. Every id listed is one a session that is not the assistant can
+ * reach — on the external surface, or on a ladder tier through an agent pane's
+ * bearer, whose terminal input is limited to what it created (#12407).
  *
  * `agent.launch` returns a `worktreeId`, and it is deliberately NOT recorded:
  * that field names the worktree the agent was launched *into*, which the
@@ -219,6 +220,21 @@ const SUCCESS_EXTRACTORS: Record<
     // is sufficient — but read the flag too, so a future result shape that
     // reports a failed launch beside a stale id cannot leak an attribution.
     if (result.launched === false) return [];
+    const terminalId = readString(result, "terminalId");
+    return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
+  },
+  // Both open a panel on a ladder tier and hand its id back (#12407). Without
+  // them a pane bearer that opened a shell or started work on an issue could
+  // not type into the terminal it had just opened.
+  "agent.terminal": (result) => {
+    const terminalId = readString(result, "terminalId");
+    return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
+  },
+  // The agent terminal only. The worktree it creates and any recipe children
+  // are left unrecorded: children come back as a count that identifies nothing,
+  // and attributing the worktree would extend owned-delete authority, which is
+  // a separate decision from terminal input.
+  "workflow.startWorkOnIssue": (result) => {
     const terminalId = readString(result, "terminalId");
     return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
   },

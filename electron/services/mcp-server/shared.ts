@@ -25,6 +25,7 @@ import {
 import {
   ACTION_TIER_ADDONS as ACTION_TIER_ADDONS_LIST,
   ACTIONS_LIST_TOOL,
+  RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
   SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
@@ -515,6 +516,35 @@ export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   external: MCP_TOOL_ALLOWLIST,
 };
 
+/** Tools only a renderer-owned session may reach, at any tier (#12407). */
+export const RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS: ReadonlySet<string> = new Set(
+  RENDERER_OWNED_ORIGIN_ONLY_TOOLS
+);
+
+function withoutSet(set: ReadonlySet<string>, removed: ReadonlySet<string>): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const value of set) {
+    if (!removed.has(value)) out.add(value);
+  }
+  return out;
+}
+
+/**
+ * The same four surfaces as {@link TIER_ALLOWLISTS}, admitted against by every
+ * session whose origin is not renderer-owned — an agent pane's bearer at a
+ * ladder tier, or an api-key client (#12407).
+ *
+ * `external` is filtered too even though its allowlist is curated without these
+ * ids: the subtraction is what keeps a future edit to that list from quietly
+ * handing unscoped terminal input back to a third-party client.
+ */
+export const NON_RENDERER_OWNED_TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
+  workbench: withoutSet(TIER_ALLOWLISTS.workbench, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+  action: withoutSet(TIER_ALLOWLISTS.action, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+  system: withoutSet(TIER_ALLOWLISTS.system, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+  external: withoutSet(TIER_ALLOWLISTS.external, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+};
+
 export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
 
 /**
@@ -597,7 +627,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
 
   "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. Neither widens access: discovery reports the surface, it does not extend it.",
 
-  'Resolve the target worktree and terminal ids before scoped actions. `terminal.sendCommand` returns once the text is submitted, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
+  'Resolve the target worktree and terminal ids before scoped actions. A terminal submission returns once the text is queued, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
 
   "Authorization is tiered: in-app `workbench`, `action`, and `system` progressively widen access, while `external` is an independently curated allowlist; a call outside the current authorized surface returns `TIER_NOT_PERMITTED`. Honor `retriable` on errors — retry a `false` only once arguments, context, or authorization have changed.",
 ].join("\n\n");
@@ -986,7 +1016,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "",
         "**Single terminals pace the same way.** Don't hold a blocking `terminal.waitUntilIdle` open to wait out a task — while the call is in flight the user can't talk to you, so an interactive session looks frozen until they cancel it (the server caps interactive waits at 60s for this reason). Kick off the task, then `ScheduleWakeup` → non-blocking check (`terminal.getStatus` or `waitUntilIdle({ timeoutMs: 0 })`) → repeat. A short bounded `waitUntilIdle` long-poll is fine when completion is expected within the minute; on `timedOut: true`, fall back to wakeup pacing instead of re-blocking back-to-back.",
         "",
-        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommand` per terminal and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
+        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommandOwned` per terminal you launched and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
       ].join("\n");
     },
   },

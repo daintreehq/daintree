@@ -571,6 +571,7 @@ export async function openSession(
       instantiateSchema(manifest.byId.get("project.runCheck")?.outputSchema) as never,
     handleTerminalGetStatusViewless: async () =>
       instantiateSchema(manifest.byId.get("terminal.getStatus")?.outputSchema) as never,
+    isTerminalIdInUse: () => false,
     appendAuditRecord: (input) => {
       audits.push({ toolId: input.toolId, tier: input.tier, outcomeKind: input.outcome.kind });
     },
@@ -814,6 +815,8 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
   "terminal.revealOwned",
   "terminal.interruptOwned",
+  "terminal.sendCommandOwned",
+  "terminal.injectOwned",
   "worktree.deleteOwned",
   "help.displayImage",
 ]);

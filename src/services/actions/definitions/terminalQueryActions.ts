@@ -732,4 +732,49 @@ export function registerTerminalQueryActions(
       };
     },
   }));
+
+  // Registered here for manifest metadata only — schema, description, tier and
+  // audit registration. Execution lives in the MCP CallTool handler
+  // (electron/services/mcp-server/sessionServer.ts): the ownership ledger it
+  // authorizes against is keyed by MCP session id, which the renderer cannot
+  // see and must never be told. Main checks ownership, then delegates to
+  // `terminal.sendCommand` above with only the id and the text, so the
+  // submission path and its receipt are the ones already shipped (#12407).
+  actions.set("terminal.sendCommandOwned", () => ({
+    id: "terminal.sendCommandOwned",
+    title: "Submit Text to Owned Terminal",
+    description:
+      "Queue text as one submission to a terminal this connection created: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused, the user's own shells included. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    // Same reason as `terminal.sendCommand`: a replay would submit the text twice.
+    nonRepeatable: true,
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["submit", "prompt", "command", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .max(512)
+        .describe(
+          "The terminal to submit to, as an `id` this session got when it created the panel."
+        ),
+      command: z
+        .string()
+        .min(1)
+        .describe(
+          "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
+        ),
+    }),
+    resultSchema: TerminalSendCommandResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.sendCommandOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
 }

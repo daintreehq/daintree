@@ -80,8 +80,8 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "workspace.list",
 
   // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
-  // deliberately NOT exposed — external orchestrators fan out
-  // `terminal.sendCommand` per terminal (see CLAUDE.tasks.md guidance).
+  // deliberately NOT exposed — an external orchestrator fans out one owned
+  // submission per terminal it created instead.
   "fleet.getRunStatus",
 
   "recipe.list",
@@ -96,8 +96,17 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "terminal.list",
   "terminal.getOutput",
   "terminal.getStatus",
-  "terminal.sendCommand",
-  "terminal.inject",
+  // Input only into terminals this session created (#12407). The unscoped
+  // `terminal.sendCommand` and `terminal.inject` used to sit here, and they
+  // accepted any id `terminal.list` returns — the user's own shells and other
+  // agents' terminals included — so an orchestrator could run commands as the
+  // user in a pane it never opened. That is the objection the note on
+  // `terminal.close` below records, applied to the more dangerous operation.
+  // Both delegate to the shipped actions once main has checked the ledger;
+  // `RENDERER_OWNED_ORIGIN_ONLY_TOOLS` keeps the unscoped pair off this
+  // surface even if they are ever listed here again.
+  "terminal.sendCommandOwned",
+  "terminal.injectOwned",
   "terminal.new",
   // The generic `terminal.close` is still deliberately NOT here, and the reason
   // it was excluded is the reason this entry exists. #11540's draft core set
@@ -216,9 +225,9 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "worktree.setActive",
 
   // A deliberate product exception rather than a clean pass of the rule above,
-  // so it is worth stating the reasoning plainly. A caller holding
-  // `terminal.sendCommand` could pipe files through `pbcopy` itself, so this is
-  // not a capability it categorically lacks. What it cannot reproduce is the
+  // so it is worth stating the reasoning plainly. A caller with its own shell
+  // could pipe files through `pbcopy` itself, so this is not a capability it
+  // categorically lacks. What it cannot reproduce is the
   // actual deliverable: one call that applies the project's own CopyTree policy
   // (ignore rules, budgets, format) and puts a FILE on the clipboard the same
   // way across macOS, Linux and Windows. The alternative is a brittle

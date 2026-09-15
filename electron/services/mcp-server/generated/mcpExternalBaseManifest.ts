@@ -1664,25 +1664,27 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Write the active worktree's prepared context into a terminal, which is how an agent is handed a large codebase context. Name the target terminal explicitly — focus can drift between the call and its execution, and a mistarget types a multi-kilobyte dump into whatever pane happened to be focused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created, which is how an agent it launched is handed a large codebase context. Any other panel is refused, the user's own shells included. Target an idle terminal.",
     enabled: true,
-    id: "terminal.inject",
+    id: "terminal.injectOwned",
     inputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
         terminalId: {
-          description:
-            "Identifies the terminal to inject into, using a panel id from the terminal-listing capability. An automated caller must name it: focus can drift between the call and its execution, so relying on the focused terminal can land a large context dump in the wrong pane.",
           type: "string",
           minLength: 1,
+          description:
+            "The terminal to inject into, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
         },
       },
+      required: ["terminalId"],
     },
+    keywords: ["context", "inject", "owned"],
     kind: "command",
-    name: "terminal.inject",
-    requiresArgs: false,
-    title: "Inject Context",
+    name: "terminal.injectOwned",
+    requiresArgs: true,
+    title: "Inject Context to Owned Terminal",
   },
   {
     band: "reversible",
@@ -1966,9 +1968,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing a partial message. This returns once the submission is queued, not once it was delivered or run: pass the returned `submissionToken` to the status capability to find out. Runs with the terminal's privileges.",
+      "Queue text as one submission to a terminal this connection created: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused, the user's own shells included. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
     enabled: true,
-    id: "terminal.sendCommand",
+    id: "terminal.sendCommandOwned",
     inputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
@@ -1978,19 +1980,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
           maxLength: 512,
           description:
-            "Identifies the terminal to submit to, using a panel id from the terminal-listing capability.",
+            "The terminal to submit to, as an `id` this session got when it created the panel.",
         },
         command: {
           type: "string",
           minLength: 1,
           description:
-            "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit.",
+            "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit.",
         },
       },
       required: ["terminalId", "command"],
     },
+    keywords: ["submit", "prompt", "command", "owned"],
     kind: "command",
-    name: "terminal.sendCommand",
+    name: "terminal.sendCommandOwned",
     outputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
@@ -2021,7 +2024,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Submit text to terminal",
+    title: "Submit Text to Owned Terminal",
   },
   {
     band: "reversible",

@@ -29,9 +29,14 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 import { ActionService } from "../../../ActionService";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
 
-function registerAll(): ActionService {
+function registerDefinitions(): ActionRegistry {
   const registry: ActionRegistry = new Map();
   registerTerminalQueryActions(registry, {} as ActionCallbacks);
+  return registry;
+}
+
+function registerAll(): ActionService {
+  const registry = registerDefinitions();
   const service = new ActionService();
   for (const [, factory] of registry) {
     service.register(factory() as AnyActionDefinition);
@@ -142,6 +147,44 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(schema?.type).toBe("object");
     const required = (schema?.required as string[] | undefined) ?? [];
     expect(required).toContain("submissionToken");
+  });
+});
+
+// #12407 — the session-scoped submission delegates to `terminal.sendCommand` in
+// main, so the receipt a client validates has to be the delegate's exactly.
+describe("terminal.sendCommandOwned (#12407)", () => {
+  function definition(): AnyActionDefinition {
+    const factory = registerDefinitions().get("terminal.sendCommandOwned");
+    if (!factory) throw new Error("terminal.sendCommandOwned not registered");
+    return factory();
+  }
+
+  it("advertises the same output schema as the submission it delegates to", () => {
+    const service = registerAll();
+    const owned = outputSchema(service, "terminal.sendCommandOwned");
+    expect(owned?.type).toBe("object");
+    expect(owned).toEqual(outputSchema(service, "terminal.sendCommand"));
+  });
+
+  it("requires both the target and the text", () => {
+    const schema = definition().argsSchema!;
+    expect(schema.safeParse({ command: "ls" }).success).toBe(false);
+    expect(schema.safeParse({ terminalId: "t-1" }).success).toBe(false);
+    expect(schema.safeParse({ terminalId: "t-1", command: "" }).success).toBe(false);
+    expect(schema.safeParse({ terminalId: "t-1", command: "ls" }).success).toBe(true);
+  });
+
+  it("refuses renderer dispatch — ownership is checked in main", async () => {
+    await expect(definition().run({ terminalId: "t-1", command: "ls" }, {})).rejects.toThrow(
+      /main-process path/
+    );
+  });
+
+  it("is never replayed, plugin-dispatched or offered in the palette", () => {
+    const def = definition();
+    expect(def.nonRepeatable).toBe(true);
+    expect(def.denyPluginDispatch).toBe(true);
+    expect(def.palette?.mode).toBe("hidden");
   });
 });
 

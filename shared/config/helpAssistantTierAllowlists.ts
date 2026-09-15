@@ -154,9 +154,19 @@ export const ACTION_TIER_ADDONS = [
   // run this same teardown implicitly, before removing the tree.
   "worktree.resource.teardown",
 
+  // `terminal.inject` and `terminal.sendCommand` reach any panel, so both are
+  // withheld from every session that is not Daintree's own assistant — see
+  // `RENDERER_OWNED_ORIGIN_ONLY_TOOLS` below.
   "terminal.inject",
   "terminal.new",
   "terminal.sendCommand",
+  // The session-scoped forms of that pair (#12407), and the only way an agent
+  // pane's own bearer submits text or injects context into a terminal that is
+  // already open. Redundant for the assistant, which keeps the unscoped pair,
+  // but carried here for the same subset invariant as `terminal.closeOwned`:
+  // the external tier may not reach past what the assistant can.
+  "terminal.sendCommandOwned",
+  "terminal.injectOwned",
   "terminal.close",
   // The session-scoped form of the line above (#11909). Redundant for this
   // caller — the assistant already holds the unrestricted `terminal.close` and
@@ -200,6 +210,7 @@ export const ACTION_TIER_ADDONS = [
   "recipe.editor.open",
   "recipe.editor.openFromLayout",
 
+  // Withheld from non-assistant sessions with the unscoped input pair above.
   "copyTree.injectToTerminal",
 
   "file.openInEditor",
@@ -319,6 +330,35 @@ export const SYSTEM_TIER_ADDONS = [
   // `source: "user"`, which no tier gates. The action is also
   // `mcpVisibility: "hidden"` so a future allowlist edit cannot re-advertise it
   // by accident.
+] as const satisfies readonly BuiltInActionId[];
+
+/**
+ * Terminal input that can land in any panel, reserved for Daintree's own
+ * assistant surfaces — `help` and `assistant-pane` sessions (#12407).
+ *
+ * The ladder tiers above are not only the assistant's. A Claude pane launched
+ * in a project with Daintree MCP enabled gets its own bearer at the project's
+ * tier, and that session's origin is `external`. Granting it these would let an
+ * agent running in a read-only sandbox, or one that asks before every command,
+ * type into a neighbouring shell and run whatever it likes as the user. So the
+ * tier decides which of these a session could reach, and the origin decides
+ * whether it reaches them at all: every session that is not renderer-owned is
+ * admitted against its tier with these removed, at discovery and at dispatch.
+ *
+ * What such a session keeps is the owned form — input only into a terminal it
+ * created, checked against the main-process ownership ledger. That is not a
+ * sandbox: a session holding `terminal.new` can still open a shell and run
+ * commands in it. It is what stops that authority reaching panels the session
+ * did not open.
+ *
+ * The assistant keeps the unscoped pair because sending a prompt to an agent
+ * the user launched is most of what it is asked to do, and it runs pinned to
+ * the window the user is looking at.
+ */
+export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
+  "terminal.sendCommand",
+  "terminal.inject",
+  "copyTree.injectToTerminal",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
