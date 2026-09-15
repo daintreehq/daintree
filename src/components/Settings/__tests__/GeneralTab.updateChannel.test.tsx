@@ -45,7 +45,14 @@ vi.mock("@/services/KeybindingService", () => ({
 
 vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude"],
-  getAgentConfig: (id: string) => ({ name: id.charAt(0).toUpperCase() + id.slice(1) }),
+  getAgentConfig: (id: string) => ({
+    name: id.charAt(0).toUpperCase() + id.slice(1),
+    color: "#888888",
+    icon: () => null,
+  }),
+  // GeneralTab now renders each row through AgentCard's `resolveIdentity`, which reads
+  // the brand mark, colour and blurb as well as the name.
+  AGENT_DESCRIPTIONS: {} as Record<string, string>,
 }));
 
 const mockLogError = vi.fn<(message: string, error?: unknown) => void>();

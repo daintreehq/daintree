@@ -15,14 +15,20 @@ import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import { InstallBlock } from "@/components/Setup/InstallBlock";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
-interface AgentIdentity {
+export interface AgentIdentity {
   name: string;
   color: string;
   Icon: ComponentType<AgentIconProps>;
   description: string;
 }
 
-function resolveIdentity(agentId: string): AgentIdentity | null {
+/**
+ * The single place the brand mark, display name and blurb for an agent are resolved.
+ * Exported so other surfaces that render an agent row — the System status list in
+ * Settings, for one — inherit the same description fallback chain rather than each
+ * growing its own.
+ */
+export function resolveIdentity(agentId: string): AgentIdentity | null {
   const config = getAgentConfig(agentId);
   if (!config) return null;
   return {

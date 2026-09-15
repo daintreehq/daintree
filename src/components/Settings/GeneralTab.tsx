@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   ChevronRight,
   History,
@@ -14,6 +14,8 @@ import {
   RefreshCw,
   Gauge,
   Type,
+  Bell,
+  MemoryStick,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon, Activity } from "@/components/icons";
@@ -22,8 +24,9 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
-import { getAgentIds, getAgentConfig } from "@/config/agents";
-import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
+import { getAgentIds } from "@/config/agents";
+import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
+import { Button } from "@/components/ui/button";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
@@ -31,7 +34,6 @@ import type {
   IdleTerminalNotifyConfig,
   IdleBackgroundAutoCloseConfig,
   CliAvailability,
-  AgentSettings,
 } from "@shared/types";
 import {
   isAgentInstalled,
@@ -153,7 +155,29 @@ export function GeneralTab({
   const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
   const [cliCheckFailed, setCliCheckFailed] = useState(false);
-  const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
+  const [isRecheckingAgents, setIsRecheckingAgents] = useState(false);
+
+  /**
+   * What the section header says about the roster. The old copy — "Agents ready to use on
+   * your system." — was a fixed claim that sat above blocked agents, a failed probe and
+   * even an empty machine. This reports what the probe actually returned, which is also
+   * where the positive "everything is fine" answer now lives: labelling every healthy row
+   * "Ready" would be fourteen repetitions of the same word, so the count says it once.
+   */
+  const systemStatusSummary = useMemo(() => {
+    if (cliCheckFailed) return "Which agents are installed on this machine.";
+    if (!cliAvailability) return "Checking which agents are installed on this machine.";
+    const installed = getAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
+    if (installed.length === 0) return "Which agents are installed on this machine.";
+    const attention = installed.filter((id) => !isAgentReady(cliAvailability[id]));
+    if (attention.length === 0) {
+      return installed.length === 1
+        ? "1 agent installed and ready to use."
+        : `All ${installed.length} installed agents are ready to use.`;
+    }
+    const ready = installed.length - attention.length;
+    return `${ready} of ${installed.length} installed agents are ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention.`;
+  }, [cliAvailability, cliCheckFailed]);
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
   const [updateChannelLoadFailed, setUpdateChannelLoadFailed] = useState(false);
@@ -390,8 +414,17 @@ export function GeneralTab({
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  /**
+   * Read agent availability. Extracted from the mount effect so the failure state can
+   * offer a Retry that runs the same path, rather than making the user close and reopen
+   * Settings to get another attempt.
+   *
+   * Deliberately does NOT wait on `agentSettings`: the list shows every installed agent
+   * regardless of pin state (#5117), so gating the render on a second request only
+   * widened the window where nothing was on screen and added a way for the whole section
+   * to report failure because an unrelated read failed.
+   */
+  const loadAgentAvailability = useCallback(async (): Promise<void> => {
     const STATUS_TIMEOUT_MS = 15_000;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -402,37 +435,31 @@ export function GeneralTab({
       );
     });
 
-    Promise.race([
-      Promise.all([
+    setIsRecheckingAgents(true);
+    try {
+      const availabilityResult = await Promise.race([
         actionService.dispatch("cliAvailability.get", undefined, { source: "user" }),
-        actionService.dispatch("agentSettings.get", undefined, { source: "user" }),
-      ]),
-      timeout,
-    ])
-      .then(([availabilityResult, settingsResult]) => {
-        if (cancelled) return;
-        if (!availabilityResult.ok) {
-          throw new Error(availabilityResult.error.message);
-        }
-        if (!settingsResult.ok) {
-          throw new Error(settingsResult.error.message);
-        }
-        setCliAvailability(availabilityResult.result as CliAvailability);
-        setCliCheckFailed(false);
-        setAgentSettings((settingsResult.result as AgentSettings) ?? DEFAULT_AGENT_SETTINGS);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        logError("[GeneralTab] Failed to load agent availability", error);
-        setCliCheckFailed(true);
-      })
-      .finally(() => clearTimeout(timeoutId));
-
-    return () => {
-      cancelled = true;
+        timeout,
+      ]);
+      if (!isMountedRef.current) return;
+      if (!availabilityResult.ok) {
+        throw new Error(availabilityResult.error.message);
+      }
+      setCliAvailability(availabilityResult.result as CliAvailability);
+      setCliCheckFailed(false);
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      logError("[GeneralTab] Failed to load agent availability", error);
+      setCliCheckFailed(true);
+    } finally {
       clearTimeout(timeoutId);
-    };
+      if (isMountedRef.current) setIsRecheckingAgents(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadAgentAvailability();
+  }, [loadAgentAvailability]);
 
   useEffect(() => {
     let isMounted = true;
@@ -762,61 +789,30 @@ export function GeneralTab({
 
       {effectiveSubtab === "overview" && (
         <>
-          <div
-            id="general-about"
-            className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-border-default"
-          >
-            <div className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0 bg-surface-panel-elevated">
-              <DaintreeIcon size={28} className="shrink-0 text-text-primary" />
-            </div>
-            <div className="flex-1 min-w-0 space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-text-primary">Daintree</span>
-                {buildChannelLabel && (
-                  <span
-                    data-testid="about-build-channel"
-                    className="text-3xs font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
-                  >
-                    {buildChannelLabel}
-                  </span>
-                )}
-                <span className="text-xs text-text-muted font-mono ml-auto">v{appVersion}</span>
-              </div>
-              {buildArch && (
-                <p data-testid="about-build-arch" className="text-xs text-text-muted font-mono">
-                  {buildArch}
-                </p>
-              )}
-              <p className="text-xs text-text-secondary leading-relaxed">
-                An orchestration board for AI coding agents. Start agents on worktrees, monitor
-                progress, and inject context.
-              </p>
-              <button
-                onClick={() =>
-                  void actionService.dispatch(
-                    "system.openExternal",
-                    { url: "https://daintree.org" },
-                    { source: "user" }
-                  )
-                }
-                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors pt-1"
-              >
-                <ExternalLink className="w-3 h-3" />
-                daintree.org
-              </button>
-            </div>
-          </div>
-
           <SettingsSection
             icon={Info}
             title="System status"
-            description="Agents ready to use on your system."
+            description={systemStatusSummary}
             id="general-system-status"
           >
             {cliCheckFailed ? (
-              <div className="text-sm text-status-error/80">Failed to check agent status</div>
-            ) : !cliAvailability || !agentSettings ? (
-              <div className="text-sm text-text-muted">Loading agent status...</div>
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-sm text-status-error">
+                  Couldn't check which agents are installed
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void loadAgentAvailability()}
+                  disabled={isRecheckingAgents}
+                  className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline disabled:opacity-60"
+                >
+                  {isRecheckingAgents ? "Checking…" : "Retry"}
+                </button>
+              </div>
+            ) : !cliAvailability ? (
+              <div className="text-sm text-text-secondary">
+                Checking which agents are installed…
+              </div>
             ) : (
               (() => {
                 const allAgentIds = getAgentIds();
@@ -827,12 +823,15 @@ export function GeneralTab({
 
                 if (installedAgentIds.length === 0) {
                   return (
-                    <div className="space-y-2">
-                      <p className="text-sm text-text-muted">No agents installed yet.</p>
-                      <div className="flex items-center gap-3">
-                        <button
-                          type="button"
-                          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
+                    <div className="space-y-3">
+                      <p className="text-sm text-text-secondary">
+                        No agent CLIs found on this machine. Install one and Daintree will pick it
+                        up.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() =>
                             window.dispatchEvent(
                               new CustomEvent("daintree:open-agent-setup-wizard")
@@ -840,15 +839,11 @@ export function GeneralTab({
                           }
                         >
                           Run setup wizard
-                        </button>
+                        </Button>
                         {onNavigateToAgents && (
-                          <button
-                            type="button"
-                            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
-                            onClick={() => onNavigateToAgents?.()}
-                          >
+                          <Button variant="ghost" size="sm" onClick={() => onNavigateToAgents?.()}>
                             Browse available agents
-                          </button>
+                          </Button>
                         )}
                       </div>
                     </div>
@@ -856,48 +851,78 @@ export function GeneralTab({
                 }
 
                 return (
-                  <div className="space-y-2">
-                    {installedAgentIds.map((id) => {
-                      const config = getAgentConfig(id);
-                      const name = config?.name ?? id;
-                      const ready = isAgentReady(cliAvailability[id]);
-                      const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
-                      const blocked = isAgentBlocked(cliAvailability[id]);
-                      // Ready is the expected state, so it gets no chrome at
-                      // all — only states needing the user's attention are
-                      // labelled. Each carries its own glyph: a blocked agent
-                      // is installed but can't run, and reads distinctly from
-                      // the authentication-needed case so the user doesn't
-                      // waste time re-authenticating a binary that an endpoint
-                      // security tool is blocking. Attention states are tested
-                      // before `ready` so a probe that ever reports both still
-                      // surfaces the problem rather than falling silent.
-                      const status = blocked
-                        ? { label: "Blocked", Icon: ShieldBan }
-                        : unauthenticated
-                          ? { label: "Login required", Icon: KeyRound }
-                          : ready
-                            ? null
-                            : { label: "Needs setup", Icon: Wrench };
+                  <div className="space-y-3">
+                    {/* A list, not a stack of divs: eighteen agents is a collection, and a
+                        screen-reader user gets the count and the position from the role. */}
+                    <ul className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
+                      {installedAgentIds.map((id, index) => {
+                        const identity = resolveIdentity(id);
+                        const name = identity?.name ?? id;
+                        const ready = isAgentReady(cliAvailability[id]);
+                        const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
+                        const blocked = isAgentBlocked(cliAvailability[id]);
+                        // Ready is the expected state, so it still gets no per-row chrome —
+                        // labelling fourteen rows "Ready" is noise, and the section's summary
+                        // line above already states how many are good. Only states needing the
+                        // user's attention are called out. Each carries its own glyph: a blocked
+                        // agent is installed but can't run, and reads distinctly from the
+                        // authentication-needed case so the user doesn't waste time
+                        // re-authenticating a binary that an endpoint security tool is blocking.
+                        // Attention states are tested before `ready` so a probe that ever reports
+                        // both still surfaces the problem rather than falling silent.
+                        const status = blocked
+                          ? { label: "Blocked", Icon: ShieldBan }
+                          : unauthenticated
+                            ? { label: "Login required", Icon: KeyRound }
+                            : ready
+                              ? null
+                              : { label: "Needs setup", Icon: Wrench };
 
-                      return (
-                        <button
-                          type="button"
-                          key={id}
-                          className="settings-list-item border-border-default hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))] flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                          aria-label={`Go to ${name} agent settings${status ? ` — ${status.label}` : ""}`}
-                          onClick={() => onNavigateToAgents?.(id)}
-                        >
-                          <span className="text-text-secondary">{name}</span>
-                          {status && (
-                            <span className="flex items-center gap-2 text-status-warning">
-                              <status.Icon className="w-3.5 h-3.5" aria-hidden="true" />
-                              <span className="text-xs">{status.label}</span>
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
+                        return (
+                          <li key={id}>
+                            <button
+                              type="button"
+                              className={cn(
+                                "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
+                                "cursor-pointer transition-colors",
+                                "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+                                index > 0 && "border-t border-border-default"
+                              )}
+                              aria-label={`${name} — ${status ? status.label : "ready"}. Open agent settings`}
+                              onClick={() => onNavigateToAgents?.(id)}
+                            >
+                              {identity ? (
+                                <AgentIdentityBlock
+                                  Icon={identity.Icon}
+                                  color={identity.color}
+                                  name={name}
+                                  description={identity.description}
+                                  compact
+                                />
+                              ) : (
+                                <span className="flex-1 text-sm text-text-primary">{name}</span>
+                              )}
+                              {status && (
+                                <span
+                                  data-agent-status={status.label}
+                                  className="flex shrink-0 items-center gap-1.5 text-status-warning"
+                                  aria-hidden="true"
+                                >
+                                  <status.Icon className="w-3.5 h-3.5" />
+                                  <span className="text-xs">{status.label}</span>
+                                </span>
+                              )}
+                              {/* The row has always navigated; nothing on it ever said so. */}
+                              <ChevronRight
+                                className="w-4 h-4 shrink-0 text-text-secondary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
 
                     {hiddenCount > 0 && onNavigateToAgents && (
                       <button
@@ -982,7 +1007,7 @@ export function GeneralTab({
                     ))}
                   </div>
                   {updateChannel === "nightly" && (
-                    <p className="text-xs text-status-warning/80">
+                    <p className="text-xs text-status-warning">
                       Nightly builds may contain unstable features. You can switch back to stable at
                       any time.
                     </p>
@@ -1046,6 +1071,48 @@ export function GeneralTab({
               </div>
             )}
           </SettingsSection>
+
+          {/* Identity sits at the FOOT of Overview, not the head of it. A user opens
+              General to change something; the version and the website are what they came
+              for least often, and as a banner they cost the whole first viewport. Kept in
+              Settings rather than moved to a macOS About panel because Daintree ships on
+              three platforms and only one of them has that panel. */}
+          <div
+            id="general-about"
+            className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-2 border-t border-border-default text-xs"
+          >
+            <DaintreeIcon size={16} className="shrink-0 text-text-secondary" />
+            <span className="font-medium text-text-primary">Daintree</span>
+            <span data-testid="about-version" className="text-text-secondary font-mono">
+              v{appVersion}
+            </span>
+            {buildArch && (
+              <span data-testid="about-build-arch" className="text-text-secondary font-mono">
+                {buildArch}
+              </span>
+            )}
+            {buildChannelLabel && (
+              <span
+                data-testid="about-build-channel"
+                className="text-3xs font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
+              >
+                {buildChannelLabel}
+              </span>
+            )}
+            <button
+              onClick={() =>
+                void actionService.dispatch(
+                  "system.openExternal",
+                  { url: "https://daintree.org" },
+                  { source: "user" }
+                )
+              }
+              className="flex items-center gap-1.5 text-text-secondary hover:text-text-primary transition-colors ml-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]"
+            >
+              <ExternalLink className="w-3 h-3" aria-hidden="true" />
+              daintree.org
+            </button>
+          </div>
         </>
       )}
 
@@ -1053,15 +1120,15 @@ export function GeneralTab({
         <>
           {idleNotifyConfig && (
             <SettingsSection
-              icon={Moon}
+              icon={Bell}
               title="Idle terminal notifications"
               description="Get a friendly reminder when terminals in background projects have been idle for a while. Doesn't kill anything — just lets you decide."
               id="general-idle-terminal-notify"
             >
               <SettingsSwitchCard
-                icon={Moon}
-                title="Idle terminal notifications"
-                subtitle="Notify when background project terminals have been idle past a threshold"
+                icon={Bell}
+                title="Notify me about idle terminals"
+                subtitle="Applies to background projects only — the active one is never flagged"
                 isEnabled={idleNotifyConfig.enabled}
                 onChange={handleIdleNotifyToggle}
                 ariaLabel="Idle Terminal Notifications Toggle"
@@ -1069,7 +1136,7 @@ export function GeneralTab({
 
               {idleNotifyConfig.enabled && (
                 <div id="general-idle-terminal-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-text-secondary">Idle Threshold</label>
+                  <label className="text-sm text-text-secondary">Idle threshold</label>
                   <div className="flex gap-2">
                     {IDLE_TERMINAL_THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -1096,15 +1163,15 @@ export function GeneralTab({
           )}
           {idleAutoCloseConfig && (
             <SettingsSection
-              icon={Moon}
+              icon={MemoryStick}
               title="Auto-close idle projects"
               description="Reclaim memory from background projects that have no terminals and have been idle for a while. They stay in the switcher and reopen right where you left off."
               id="general-idle-background-auto-close"
             >
               <SettingsSwitchCard
-                icon={Moon}
-                title="Auto-close idle projects"
-                subtitle="Free memory from idle background projects that have no open terminals"
+                icon={MemoryStick}
+                title="Close idle projects automatically"
+                subtitle="Only projects with no open terminals — panels are restored when you reopen them"
                 isEnabled={idleAutoCloseConfig.enabled}
                 onChange={handleIdleAutoCloseToggle}
                 ariaLabel="Auto-Close Idle Projects Toggle"
@@ -1112,7 +1179,7 @@ export function GeneralTab({
 
               {idleAutoCloseConfig.enabled && (
                 <div id="general-idle-background-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-text-secondary">Idle Threshold</label>
+                  <label className="text-sm text-text-secondary">Idle threshold</label>
                   <div className="flex gap-2">
                     {IDLE_BACKGROUND_THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -1152,8 +1219,8 @@ export function GeneralTab({
             >
               <SettingsSwitchCard
                 icon={Moon}
-                title="Auto-hibernation"
-                subtitle="Automatically stop terminals and servers for inactive projects"
+                title="Hibernate inactive projects"
+                subtitle="Stops their terminals and dev servers; the project reopens where you left it"
                 isEnabled={hibernationConfig.enabled}
                 onChange={handleHibernationToggle}
                 ariaLabel="Auto-Hibernation Toggle"
@@ -1161,7 +1228,7 @@ export function GeneralTab({
 
               {hibernationConfig.enabled && (
                 <div id="general-hibernation-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-text-secondary">Inactivity Threshold</label>
+                  <label className="text-sm text-text-secondary">Inactivity threshold</label>
                   <div className="flex gap-2">
                     {THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -1185,7 +1252,7 @@ export function GeneralTab({
               )}
             </SettingsSection>
           ) : (
-            <div className="text-sm text-text-secondary">Loading hibernation settings...</div>
+            <div className="text-sm text-text-secondary">Loading hibernation settings…</div>
           )}
         </>
       )}
@@ -1193,8 +1260,8 @@ export function GeneralTab({
       {effectiveSubtab === "display" && (
         <SettingsSection
           icon={Activity}
-          title="Display"
-          description="Control which interface elements are visible."
+          title="Interface elements"
+          description="Choose what Daintree shows while you work."
           id="general-project-pulse"
         >
           <SettingsSwitchCard
