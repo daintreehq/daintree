@@ -193,6 +193,8 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
         <div className="flex shrink-0 items-center gap-2">
           {hasCountdown && (
             <span
+              role="timer"
+              aria-label={`Next cleanup in ${remainingSeconds} seconds`}
               className="font-mono text-2xs tabular-nums text-text-muted"
               title={`Next cleanup in ${remainingSeconds}s`}
               data-testid="deleted-worktree-group-countdown"

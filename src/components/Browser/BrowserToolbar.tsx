@@ -990,7 +990,7 @@ export function BrowserToolbar({
                         setHighlightedIndex(remaining - 1);
                       }
                     }}
-                    className="shrink-0 p-0.5 rounded opacity-0 group-hover/row:opacity-100 hover:bg-overlay-strong transition-opacity text-daintree-text/40 hover:text-daintree-text/70"
+                    className="shrink-0 p-0.5 rounded opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-overlay-strong transition-opacity text-daintree-text/40 hover:text-daintree-text/70"
                     aria-label={`Remove ${getDisplayUrl(entry.url)} from history`}
                   >
                     <X className="w-3 h-3" />

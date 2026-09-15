@@ -283,6 +283,12 @@ export function DeletedWorktreeCard({
             )}
             {hasCountdown && (
               <span
+                role="timer"
+                aria-label={
+                  hold !== undefined
+                    ? `${hold.tooltip}, holding at ${remainingSeconds} seconds`
+                    : `Closes automatically in ${remainingSeconds} seconds`
+                }
                 className="font-mono text-2xs tabular-nums text-text-muted"
                 title={
                   hold !== undefined

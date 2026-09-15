@@ -1506,7 +1506,7 @@ function DockLaunchOption({
                     "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
                     "text-daintree-text/40 opacity-0 transition-[opacity,color,background-color]",
                     "hover:bg-overlay-soft hover:text-text-primary",
-                    "group-hover:opacity-100 group-aria-selected:opacity-100"
+                    "group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
                   )}
                 >
                   <Keyboard className="h-3 w-3" aria-hidden />
@@ -1546,7 +1546,7 @@ function DockLaunchOption({
                     // pointer or the selection.
                     pinTarget.onToolbar
                       ? "text-daintree-text/70 opacity-100"
-                      : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
+                      : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
                   )}
                 >
                   {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin

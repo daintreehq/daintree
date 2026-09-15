@@ -573,7 +573,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               <button
                                 type="button"
                                 onClick={(e) => handleUnpin(e, item)}
-                                className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
+                                className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Unpin this command"
                               >
                                 <PinOff className="h-3 w-3 text-text-muted hover:text-status-error" />
@@ -582,7 +582,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               <button
                                 type="button"
                                 onClick={(e) => handlePin(e, item)}
-                                className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
+                                className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Pin this command"
                               >
                                 <Pin className="h-3 w-3 text-text-muted hover:text-text-primary" />
