@@ -394,7 +394,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               </button>
             ))}
           </div>
-          <p className="text-xs text-text-secondary mt-2 select-text">Changes apply immediately.</p>
+          <p className="text-xs text-text-secondary mt-2 select-text">
+            Turning telemetry off stops sending immediately.
+          </p>
 
           <div className="mt-4 flex items-start gap-3 rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3">
             <Eye className="w-4 h-4 mt-0.5 text-daintree-accent/80 shrink-0" aria-hidden />

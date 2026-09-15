@@ -259,6 +259,11 @@ export async function initializeTelemetry(): Promise<void> {
         // (drag bursts, agent-state polls, file-watcher fanouts) don't rotate
         // the crash-triggering breadcrumb out before flush. See #7575.
         maxBreadcrumbs: 250,
+        // No tracing backend consumes these, and the default fetch / Electron
+        // net integrations otherwise stamp `sentry-trace` + `baggage` (public
+        // key, release, trace id) onto every outbound request to third-party
+        // hosts — the consent gate on the transport never sees those headers.
+        tracePropagationTargets: [],
         // Do not set `sampleRate` — it defaults to 1.0 (100% error capture). If
         // performance tracing is ever added, use `tracesSampleRate` instead.
         // The local `SentryEvent` interface is a narrower projection of the

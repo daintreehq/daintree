@@ -1619,35 +1619,39 @@ describe("consent withdrawn mid-session (#12404)", () => {
     delete process.env.SENTRY_DSN;
   });
 
-  it("routes every Sentry upload through a transport that stops sending on Off and resumes on re-consent", async () => {
-    const mod = await loadFreshModule();
-    await mod.initializeTelemetry();
+  it.each(["errors", "full"] as const)(
+    "routes every Sentry upload through a transport that stops sending on Off and resumes on re-consent (%s)",
+    async (level) => {
+      setPrivacy({ telemetryLevel: level, hasSeenPrompt: true });
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
 
-    expect(registeredInitOptions().transport).toBe(offlineTransportFactory);
-    const transport = consentGatedTransport();
-    expect(makeElectronTransportMock).toHaveBeenCalledWith({ url: "https://test@sentry.io/123" });
+      expect(registeredInitOptions().transport).toBe(offlineTransportFactory);
+      const transport = consentGatedTransport();
+      expect(makeElectronTransportMock).toHaveBeenCalledWith({ url: "https://test@sentry.io/123" });
 
-    const envelope = [{}, []];
-    await expect(transport.send(envelope)).resolves.toEqual({ statusCode: 200 });
-    expect(baseTransportMock.send).toHaveBeenCalledTimes(1);
+      const envelope = [{}, []];
+      await expect(transport.send(envelope)).resolves.toEqual({ statusCode: 200 });
+      expect(baseTransportMock.send).toHaveBeenCalledWith(envelope);
 
-    await mod.setTelemetryLevel("off");
-    baseTransportMock.send.mockClear();
-    // Resolves as delivered so the offline queue discards rather than re-queues.
-    await expect(transport.send(envelope)).resolves.toEqual({});
-    expect(baseTransportMock.send).not.toHaveBeenCalled();
+      await mod.setTelemetryLevel("off");
+      baseTransportMock.send.mockClear();
+      // Resolves as delivered so the offline queue discards rather than re-queues.
+      await expect(transport.send(envelope)).resolves.toEqual({});
+      expect(baseTransportMock.send).not.toHaveBeenCalled();
 
-    await mod.setTelemetryLevel("errors");
-    await transport.send(envelope);
-    expect(baseTransportMock.send).toHaveBeenCalledTimes(1);
-    // Re-consent reuses the one client — Sentry.init is not idempotent.
-    expect(sentryInitMock).toHaveBeenCalledTimes(1);
+      await mod.setTelemetryLevel(level);
+      await transport.send(envelope);
+      expect(baseTransportMock.send).toHaveBeenCalledTimes(1);
+      // Re-consent reuses the one client — Sentry.init is not idempotent.
+      expect(sentryInitMock).toHaveBeenCalledTimes(1);
 
-    await expect(transport.flush(500)).resolves.toBe(true);
-    expect(baseTransportMock.flush).toHaveBeenCalledWith(500);
-  });
+      await expect(transport.flush(500)).resolves.toBe(true);
+      expect(baseTransportMock.flush).toHaveBeenCalledWith(500);
+    }
+  );
 
-  it("drops events in beforeSend after Off while still mirroring them to the preview", async () => {
+  it("drops events in beforeSend while Off, still mirroring them to the preview, and sends again on re-consent", async () => {
     const mod = await loadFreshModule();
     const broadcaster = await loadBroadcaster();
     const enqueue = vi.fn();
@@ -1659,16 +1663,68 @@ describe("consent withdrawn mid-session (#12404)", () => {
       const { beforeSend } = registeredInitOptions();
       const event = () => ({ exception: { values: [{ type: "Error", value: "boom" }] } });
 
-      expect(beforeSend?.(event())).not.toBeNull();
+      const beforeOff = event();
+      expect(beforeSend?.(beforeOff)).toBe(beforeOff);
 
       await mod.setTelemetryLevel("off");
       enqueue.mockClear();
       expect(beforeSend?.(event())).toBeNull();
       expect(enqueue).toHaveBeenCalledTimes(1);
       expect(enqueue.mock.calls[0]![0].label).toContain("boom");
+
+      await mod.setTelemetryLevel("errors");
+      const afterReconsent = event();
+      expect(beforeSend?.(afterReconsent)).toBe(afterReconsent);
     } finally {
       broadcaster.setTelemetryPreviewActive(false);
       broadcaster.setTelemetryPreviewEnqueue(null);
+    }
+  });
+
+  it("still drops events in beforeSend under disk pressure while consent is given", async () => {
+    const mod = await loadFreshModule();
+    const broadcaster = await loadBroadcaster();
+    const diskPressure = await import("../diskPressureState.js");
+    const enqueue = vi.fn();
+    broadcaster.setTelemetryPreviewEnqueue(enqueue);
+    broadcaster.setTelemetryPreviewActive(true);
+
+    try {
+      await mod.initializeTelemetry();
+      const { beforeSend } = registeredInitOptions();
+      const event = () => ({ message: "disk full" });
+
+      diskPressure.setWritesSuppressed(true);
+      expect(beforeSend?.(event())).toBeNull();
+      expect(enqueue).toHaveBeenCalledTimes(1);
+
+      diskPressure.setWritesSuppressed(false);
+      const recovered = event();
+      expect(beforeSend?.(recovered)).toBe(recovered);
+    } finally {
+      diskPressure.resetWritesSuppressedForTesting();
+      broadcaster.setTelemetryPreviewActive(false);
+      broadcaster.setTelemetryPreviewEnqueue(null);
+    }
+  });
+
+  it("never propagates Sentry trace headers to the hosts the app talks to", async () => {
+    const mod = await loadFreshModule();
+    await mod.initializeTelemetry();
+    const targets = (sentryInitMock.mock.calls[0]?.[0] as { tracePropagationTargets?: unknown })
+      .tracePropagationTargets;
+
+    // An absent option means "propagate to every URL" in the SDK.
+    expect(Array.isArray(targets)).toBe(true);
+    for (const url of [
+      "https://api.github.com/repos/daintreehq/daintree",
+      "https://registry.npmjs.org/@anthropic-ai%2fclaude-code",
+      "http://localhost:5173/",
+    ]) {
+      const matched = (targets as Array<string | RegExp>).some((pattern) =>
+        typeof pattern === "string" ? url.includes(pattern) : pattern.test(url)
+      );
+      expect(matched).toBe(false);
     }
   });
 
