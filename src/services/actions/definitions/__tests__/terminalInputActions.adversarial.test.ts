@@ -419,6 +419,43 @@ describe("terminalInputActions adversarial", () => {
     });
   });
 
+  // Ownership is main-process state keyed by MCP session id, so the renderer
+  // can never be the one to honour this tool (#12407).
+  describe("terminal.injectOwned (#12407)", () => {
+    function definition(): AnyActionDefinition {
+      const actions: ActionRegistry = new Map();
+      registerTerminalInputActions(actions, {
+        getActiveWorktreeId: vi.fn(),
+        onInject: vi.fn(),
+      } as unknown as ActionCallbacks);
+      return actions.get("terminal.injectOwned")!() as AnyActionDefinition;
+    }
+
+    it("refuses renderer dispatch and never injects", async () => {
+      const { run, callbacks } = setupActions();
+      (callbacks.getActiveWorktreeId as ReturnType<typeof vi.fn>).mockReturnValue("wt-1");
+
+      await expect(
+        run("terminal.injectOwned", { terminalId: "term-9" }, { dispatchSource: "agent" })
+      ).rejects.toThrow(/main-process path/);
+      expect(callbacks.onInject).not.toHaveBeenCalled();
+    });
+
+    it("requires a target, since there is no focus fallback to fall back to", () => {
+      const schema = definition().argsSchema!;
+      expect(schema.safeParse(undefined).success).toBe(false);
+      expect(schema.safeParse({}).success).toBe(false);
+      expect(schema.safeParse({ terminalId: "" }).success).toBe(false);
+      expect(schema.safeParse({ terminalId: "term-9" }).success).toBe(true);
+    });
+
+    it("stays off plugin dispatch and the palette", () => {
+      const def = definition();
+      expect(def.denyPluginDispatch).toBe(true);
+      expect(def.palette?.mode).toBe("hidden");
+    });
+  });
+
   // The same ambient-focus fallback as terminal.inject, on the rest of this
   // file's target-taking actions (#11532). None are on an agent/MCP allowlist
   // today, so these guards are defense in depth against a future exposure.

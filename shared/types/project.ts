@@ -767,7 +767,7 @@ export interface ProjectSettings {
    * Tier of Daintree MCP access exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
    * - `workbench`: read-only introspection (worktree/files/terminal output, project state, history)
-   * - `action`: workbench + in-app orchestration (create worktrees from recipes, inject context, send terminal commands, confirm-gated worktree cleanup)
+   * - `action`: workbench + in-app orchestration (create worktrees from recipes, open terminals and send input to the ones the agent's own session opened, confirm-gated worktree cleanup)
    * - `system`: action + worktree creation at an explicit root, terminal arm/disarm, git stage/fetch/commit/push, clipboard and CopyTree-to-disk writes, forge reads and writes
    */
   daintreeMcpTier?: DaintreeMcpTier;

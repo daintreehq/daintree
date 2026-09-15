@@ -3108,6 +3108,9 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
     async (tool) => {
       const dispatchAction = twoDistinctDispatches();
       const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      // Unscoped submission is only reachable from the assistant's own origin
+      // (#12407); what this pins is the dedup boundary, not that reservation.
+      deps.sessionStore.sessionOriginMap.set(`bounded-8468-${tool}`, "help");
       const server = createSessionServer(`bounded-8468-${tool}`, deps);
 
       const args = { target: "x" };
@@ -4049,6 +4052,32 @@ describe("sessionServer introspection tier filtering", () => {
     const text = (res.content as Array<{ text: string }>)[0]!.text;
     expect(text).not.toContain("git.push");
     expect(res.structuredContent).toEqual(JSON.parse(text));
+  });
+
+  // The same allowlist the call gate reads, narrowed by origin (#12407): an
+  // agent pane's bearer at `action` must not discover unscoped terminal input
+  // its dispatch would refuse, while the assistant at that tier still does.
+  it("narrows discovery of unscoped terminal input by origin, not tier", async () => {
+    const manifest = {
+      actions: [
+        entry("terminal.sendCommand"),
+        entry("terminal.sendCommandOwned"),
+        entry("copyTree.injectToTerminal"),
+      ],
+    };
+    const ids = async (origin: "help" | "external") => {
+      const deps = introspectionDeps("action", manifest);
+      deps.sessionStore.sessionOriginMap.set("s1", origin);
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, { name: "actions.list" });
+      return payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
+    };
+    expect(await ids("external")).toEqual(["terminal.sendCommandOwned"]);
+    expect(await ids("help")).toEqual([
+      "terminal.sendCommand",
+      "terminal.sendCommandOwned",
+      "copyTree.injectToTerminal",
+    ]);
   });
 
   it("returns strictly more to a higher tier", async () => {
@@ -6606,6 +6635,22 @@ describe("session-scoped resource ownership (#11909)", () => {
         kind: "command",
         danger: "safe" as const,
       },
+      // With an outputSchema, so the submission receipt is checked on the
+      // structuredContent block the owned tool advertises, not only the text.
+      {
+        ...makeManifestEntry("terminal.sendCommandOwned"),
+        kind: "command",
+        danger: "safe" as const,
+        outputSchema: {
+          type: "object",
+          properties: { sent: { type: "boolean" }, submissionToken: { type: "string" } },
+        },
+      },
+      {
+        ...makeManifestEntry("terminal.injectOwned"),
+        kind: "command",
+        danger: "safe" as const,
+      },
       {
         ...makeManifestEntry("worktree.deleteOwned"),
         kind: "command",
@@ -7154,6 +7199,154 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  describe("owned terminal input (#12407)", () => {
+    const SUBMIT_RESULT = {
+      sent: true,
+      terminalId: "terminal-1",
+      command: "ls",
+      submissionToken: "token-1",
+      message: "Submission queued.",
+    };
+
+    function inputHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.sendCommand": { result: { ok: true, result: SUBMIT_RESULT } },
+        "terminal.inject": { result: { ok: true, result: undefined } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    it("submits to a terminal the session created with only the id and the text", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-1", command: "npm test\nnpm run lint" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { terminalId: "terminal-1", command: "npm test\nnpm run lint" },
+        expect.anything()
+      );
+      expect(result.structuredContent).toMatchObject({ sent: true, submissionToken: "token-1" });
+    });
+
+    // The rebuilt arguments are the enforcement: whatever else the caller
+    // sends, the delegate sees the checked id and the text, so no extra field
+    // can retarget the submission or pre-approve anything.
+    it("strips every other argument, including ones that name another target", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit-strip");
+
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          command: "ls",
+          id: "user-shell",
+          terminalIds: ["user-shell"],
+          worktreeId: "/tmp/other",
+          confirmed: true,
+        },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { terminalId: "terminal-1", command: "ls" },
+        expect.anything()
+      );
+    });
+
+    it("injects into a terminal the session created with only the id", async () => {
+      const { server, dispatchAction } = inputHarness("s-inject");
+
+      const result = await callTool(server, {
+        name: "terminal.injectOwned",
+        arguments: { terminalId: "terminal-1", worktreeId: "/tmp/other", text: "rm -rf /" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.inject",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+    });
+
+    it.each(["terminal.sendCommandOwned", "terminal.injectOwned"])(
+      "%s refuses the user's terminal and another session's, without dispatching",
+      async (tool) => {
+        const { store, server, dispatchAction } = inputHarness(`s-foreign-${tool}`);
+        store.resourceOwnership.record("other-session", [
+          { kind: "terminal", id: "terminal-theirs" },
+        ]);
+
+        for (const terminalId of ["terminal-theirs", "user-shell"]) {
+          const result = await callTool(server, {
+            name: tool,
+            arguments: { terminalId, command: "ls" },
+          });
+          expect(result.isError).toBe(true);
+          expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+        }
+        expect(dispatchAction).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["terminal.sendCommandOwned", "terminal.injectOwned"])(
+      "%s rejects a missing id before anything reaches the renderer",
+      async (tool) => {
+        const { server, dispatchAction } = inputHarness(`s-noid-${tool}`);
+
+        const result = await callTool(server, { name: tool, arguments: { command: "ls" } });
+
+        expect(result.isError).toBe(true);
+        expect(errorText(result)).toContain("VALIDATION_ERROR");
+        expect(dispatchAction).not.toHaveBeenCalled();
+      }
+    );
+
+    // Submitting is not a claim the panel stopped existing, and a repeat is a
+    // second submission rather than a replay to absorb.
+    it("keeps ownership and dispatches a repeated submission again", async () => {
+      const { store, server, dispatchAction } = inputHarness("s-submit-twice");
+      const args = {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-1", command: "ls" },
+      };
+
+      expect((await callTool(server, args)).isError).toBeUndefined();
+      expect((await callTool(server, args)).isError).toBeUndefined();
+
+      expect(
+        dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === "terminal.sendCommand")
+      ).toHaveLength(2);
+      expect(store.resourceOwnership.owns("s-submit-twice", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("reaches a terminal the session opened through terminal.new", async () => {
+      const { server, dispatchAction } = harness("s-new-then-submit", {
+        "terminal.new": { result: { ok: true, result: { terminalId: "terminal-9" } } },
+        "terminal.sendCommand": { result: { ok: true, result: SUBMIT_RESULT } },
+      });
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-9", command: "ls" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { terminalId: "terminal-9", command: "ls" },
+        expect.anything()
+      );
+    });
+  });
+
   describe("terminal.revealOwned (#12315)", () => {
     /**
      * A reveal harness with the bridge's reveal route wired. One dep, because
@@ -7967,5 +8160,95 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(listedIds(result)).toEqual(["terminal-new"]);
     });
+  });
+});
+
+// #12407 — the ladder tiers reach agent panes as well as the assistant. A Claude
+// pane's bearer holds the project's tier with an `external` origin, and at
+// `action` that used to include input into any terminal. The tier still decides
+// what a session could reach; the origin now decides whether unscoped terminal
+// input is part of it, at both gates.
+describe("unscoped terminal input by session origin (#12407)", () => {
+  const RESERVED = ["terminal.sendCommand", "terminal.inject", "copyTree.injectToTerminal"];
+
+  function originDeps(origin: "help" | "assistant-pane" | "external", tier: "action" | "system") {
+    const manifest = [
+      ...RESERVED.map((id) => ({ ...makeManifestEntry(id), kind: "command" as const })),
+      { ...makeManifestEntry("terminal.sendCommandOwned"), kind: "command" as const },
+      { ...makeManifestEntry("terminal.injectOwned"), kind: "command" as const },
+    ];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore(tier),
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+    });
+    deps.sessionStore.sessionOriginMap.set("s-origin", origin);
+    return deps;
+  }
+
+  it.each(["action", "system"] as const)(
+    "lists only the owned forms to an agent pane's bearer at %s",
+    async (tier) => {
+      const server = createSessionServer("s-origin", originDeps("external", tier));
+      const names = (await listTools(server)).tools.map((t) => t.name).sort();
+      expect(names).toEqual(["terminal.injectOwned", "terminal.sendCommandOwned"]);
+    }
+  );
+
+  it.each(["help", "assistant-pane"] as const)(
+    "lists unscoped terminal input to the assistant's %s session",
+    async (origin) => {
+      const server = createSessionServer("s-origin", originDeps(origin, "action"));
+      const names = (await listTools(server)).tools.map((t) => t.name);
+      for (const id of RESERVED) expect(names).toContain(id);
+    }
+  );
+
+  it.each(RESERVED)(
+    "refuses %s from a non-renderer-owned session without dispatching",
+    async (tool) => {
+      const deps = originDeps("external", "action");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: tool,
+        arguments: { terminalId: "user-shell", command: "ls" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      // Names the actual reason: the session holds the tier this tool sits at.
+      expect(text).toContain("reserved for Daintree's own assistant");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
+
+  it("dispatches unscoped submission for the assistant's own session", async () => {
+    const deps = originDeps("help", "action");
+    const server = createSessionServer("s-origin", deps);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: "user-agent", command: "run the tests" },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(deps.dispatchAction).toHaveBeenCalledWith(
+      "terminal.sendCommand",
+      { terminalId: "user-agent", command: "run the tests" },
+      expect.anything()
+    );
+  });
+
+  // A session whose origin was never recorded — or was already torn down — is
+  // the least-privileged classification, so it gets the narrower surface.
+  it("treats an unrecorded origin as not renderer-owned", async () => {
+    const deps = originDeps("help", "action");
+    deps.sessionStore.sessionOriginMap.delete("s-origin");
+    const server = createSessionServer("s-origin", deps);
+
+    const names = (await listTools(server)).tools.map((t) => t.name);
+    for (const id of RESERVED) expect(names).not.toContain(id);
   });
 });

@@ -41,6 +41,8 @@ import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntr
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
+import { RENDERER_OWNED_ORIGIN_ONLY_TOOLS } from "../../../../shared/config/helpAssistantTierAllowlists.js";
+import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 import type { McpTargetPolicy } from "../../../../shared/types/mcpTargetPolicy.js";
 import {
@@ -628,6 +630,11 @@ describe("external tool surface budget (#11585)", () => {
   // capped at 2KB, and the read rides `terminal.list` behind a flag rather than
   // taking a second slot. It confers nothing — metadata cannot reach the
   // ownership ledger, so it buys no `closeOwned` or `revealOwned` authority.
+  //
+  // Unchanged at 32 by #12407, which swapped `terminal.sendCommand` and
+  // `terminal.inject` for their session-scoped forms rather than adding beside
+  // them: the unscoped pair reached any panel a listing returns, and the
+  // surface needs input into the terminals it creates, not into the user's.
   const EXTERNAL_BUDGET_MAX = 32;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
@@ -649,7 +656,12 @@ describe("external tool surface budget (#11585)", () => {
   // list would make every assertion above vacuous rather than red.
   it("still carries a usable orchestration surface", () => {
     expect(TIER_ALLOWLISTS.external.size).toBeGreaterThanOrEqual(15);
-    for (const id of ["actions.list", "agent.launch", "terminal.sendCommand", "worktree.list"]) {
+    for (const id of [
+      "actions.list",
+      "agent.launch",
+      "terminal.sendCommandOwned",
+      "worktree.list",
+    ]) {
       expect(isTierPermitted("external", id)).toBe(true);
     }
   });
@@ -744,6 +756,21 @@ describe("external tool surface budget (#11585)", () => {
     expect(shouldExposeTool(makeEntry({ id: "terminal.interrupt" }), "external")).toBe(false);
     expect(isTierPermitted("external", "fleet.interrupt")).toBe(false);
     expect(shouldExposeTool(makeEntry({ id: "fleet.interrupt" }), "external")).toBe(false);
+  });
+
+  // Terminal input for an external client is the owned form only (#12407): the
+  // unscoped pair takes any panel id a listing returns, the user's own shells
+  // included, and neither is on the surface.
+  it("admits only session-scoped terminal input externally (#12407)", () => {
+    for (const id of ["terminal.sendCommandOwned", "terminal.injectOwned"]) {
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+      expect(isTierPermitted("external", id)).toBe(true);
+      expect(shouldExposeTool(makeEntry({ id, kind: "command" }), "external")).toBe(true);
+    }
+    for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
+      expect(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).not.toContain(id);
+      expect(isTierPermitted("external", id)).toBe(false);
+    }
   });
 
   // A cut PR that quietly widens is the failure #10710 documents, so assert the
@@ -944,7 +971,9 @@ describe("help-session tier policy (#10640)", () => {
   it.each(ASSISTANT_REQUIRED_TOOLS)(
     "permits the assistant's required tool %s at the action tier",
     (toolId) => {
-      expect(isTierPermitted("action", toolId)).toBe(true);
+      // The assistant's own sessions are renderer-owned, which is what keeps
+      // unscoped terminal input on this list (#12407).
+      expect(isTierPermitted("action", toolId, true)).toBe(true);
     }
   );
 
@@ -2436,6 +2465,69 @@ describe("isWithheldFromBoundSession (#11789)", () => {
   );
 });
 
+// The ladder tiers are not only the assistant's (#12407). An agent pane's bearer
+// holds the project's tier with an `external` origin, and at `action` that used
+// to hand it input into any terminal — so an agent in a read-only sandbox could
+// type into the user's shell. These pin the split: the tier decides whether the
+// unscoped input could be reached, the origin decides whether it is.
+describe("unscoped terminal input is reserved for renderer-owned origins (#12407)", () => {
+  const ASSISTANT = { workspaceBound: false, rendererOwnedOrigin: true };
+
+  it.each(RENDERER_OWNED_ORIGIN_ONLY_TOOLS)("%s is reachable by tier, withheld by origin", (id) => {
+    // Pin to ground truth, so a rename cannot turn the refusals below vacuous.
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    expect(TIER_ALLOWLISTS.action.has(id)).toBe(true);
+
+    for (const tier of ["action", "system"] as const) {
+      const entry = makeEntry({ id, kind: "command" });
+      expect(isTierPermitted(tier, id, true)).toBe(true);
+      expect(shouldExposeTool(entry, tier, ASSISTANT)).toBe(true);
+
+      expect(isTierPermitted(tier, id, false)).toBe(false);
+      expect(
+        shouldExposeTool(entry, tier, { workspaceBound: false, rendererOwnedOrigin: false })
+      ).toBe(false);
+      // An unclassified caller gets the narrower surface, never the assistant's.
+      expect(isTierPermitted(tier, id)).toBe(false);
+      expect(shouldExposeTool(entry, tier)).toBe(false);
+    }
+  });
+
+  it("leaves the owned forms on every ladder tier above workbench, for either origin", () => {
+    for (const id of ["terminal.sendCommandOwned", "terminal.injectOwned"]) {
+      expect(isTierPermitted("workbench", id, true)).toBe(false);
+      for (const tier of ["action", "system"] as const) {
+        expect(isTierPermitted(tier, id, true)).toBe(true);
+        expect(isTierPermitted(tier, id, false)).toBe(true);
+      }
+    }
+  });
+
+  it("removes exactly the reserved ids and nothing else", () => {
+    const reserved = new Set<string>(RENDERER_OWNED_ORIGIN_ONLY_TOOLS);
+    for (const tier of ["workbench", "action", "system", "external"] as const) {
+      const full = getTierPermittedActionIds(tier, true);
+      const narrowed = getTierPermittedActionIds(tier, false);
+      expect([...narrowed].filter((id) => !full.has(id))).toEqual([]);
+      expect([...full].filter((id) => !narrowed.has(id)).sort()).toEqual(
+        [...full].filter((id) => reserved.has(id)).sort()
+      );
+    }
+  });
+
+  it("reports no authorization to a non-renderer-owned session in its target policy", () => {
+    const entry = makeEntry({ id: "terminal.sendCommand", kind: "command" });
+    const snapshot = (rendererOwnedOrigin: boolean): TargetPolicySessionSnapshot => ({
+      tier: "action",
+      rendererOwnedOrigin,
+      perToolGrantedActionIds: new Set(),
+      nativeGrantedActionIds: new Set(),
+    });
+    expect(buildTargetPolicy(entry, snapshot(false))).toBeNull();
+    expect(buildTargetPolicy(entry, snapshot(true))).not.toBeNull();
+  });
+});
+
 describe("shouldExposeTool with a workspace-bound session (#11789)", () => {
   const BOUND = { workspaceBound: true };
 
@@ -2449,7 +2541,7 @@ describe("shouldExposeTool with a workspace-bound session (#11789)", () => {
     // The bound surface is not "read-only" — losing terminal/agent/worktree
     // tools would gut the feature rather than narrow it.
     for (const id of [
-      "terminal.sendCommand",
+      "terminal.sendCommandOwned",
       "terminal.new",
       "agent.launch",
       "worktree.createWithRecipe",

@@ -145,6 +145,44 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
   });
 });
 
+// #12407 — the session-scoped submission delegates to `terminal.sendCommand` in
+// main, so the receipt a client validates has to be the delegate's exactly.
+describe("terminal.sendCommandOwned (#12407)", () => {
+  function definition(): AnyActionDefinition {
+    const registry: ActionRegistry = new Map();
+    registerTerminalQueryActions(registry, {} as ActionCallbacks);
+    return registry.get("terminal.sendCommandOwned")!() as AnyActionDefinition;
+  }
+
+  it("advertises the same output schema as the submission it delegates to", () => {
+    const service = registerAll();
+    const owned = outputSchema(service, "terminal.sendCommandOwned");
+    expect(owned?.type).toBe("object");
+    expect(owned).toEqual(outputSchema(service, "terminal.sendCommand"));
+  });
+
+  it("requires both the target and the text", () => {
+    const schema = definition().argsSchema!;
+    expect(schema.safeParse({ command: "ls" }).success).toBe(false);
+    expect(schema.safeParse({ terminalId: "t-1" }).success).toBe(false);
+    expect(schema.safeParse({ terminalId: "t-1", command: "" }).success).toBe(false);
+    expect(schema.safeParse({ terminalId: "t-1", command: "ls" }).success).toBe(true);
+  });
+
+  it("refuses renderer dispatch — ownership is checked in main", async () => {
+    await expect(
+      definition().run({ terminalId: "t-1", command: "ls" } as never, {} as never)
+    ).rejects.toThrow(/main-process path/);
+  });
+
+  it("is never replayed, plugin-dispatched or offered in the palette", () => {
+    const def = definition();
+    expect(def.nonRepeatable).toBe(true);
+    expect(def.denyPluginDispatch).toBe(true);
+    expect(def.palette?.mode).toBe("hidden");
+  });
+});
+
 // #12339 — both wait tools carry a hand-written rawOutputSchema but never set
 // `mcpOutputSchema`, so `computeSchemas` left `outputSchema` undefined and
 // tools/list advertised nothing — while the main-process path was already

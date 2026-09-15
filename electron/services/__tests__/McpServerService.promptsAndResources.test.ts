@@ -20,6 +20,19 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { BUILT_IN_ACTION_IDS } from "../../../shared/config/actionIds.js";
 import { TIER_ALLOWLISTS } from "../mcp-server/shared.js";
 
+function namesActionId(line: string, id: string): boolean {
+  let from = line.indexOf(id);
+  while (from !== -1) {
+    const before = from === 0 ? "" : line[from - 1];
+    // A trailing dot followed by a word character continues a longer id; one
+    // that ends the sentence does not.
+    const rest = line.slice(from + id.length);
+    if (!/[\w.]/.test(before) && !/^(?:\w|\.\w)/.test(rest)) return true;
+    from = line.indexOf(id, from + 1);
+  }
+  return false;
+}
+
 const testHomeDir = vi.hoisted(
   () => `${process.cwd()}/.vitest-mcp-home-${Math.random().toString(36).slice(2)}`
 );
@@ -487,10 +500,13 @@ describe("McpServerService", () => {
 
         // Match action ids wherever they appear — backticked, bare, or followed
         // by call syntax — rather than only the backticked form, so a reference
-        // does not escape the guard by dropping its markup.
+        // does not escape the guard by dropping its markup. Whole ids only: an
+        // owned variant's name contains the unscoped id it narrows
+        // (`terminal.sendCommandOwned`), and naming the reachable one is not a
+        // reference to the other.
         for (const line of text.split("\n")) {
           for (const id of BUILT_IN_ACTION_IDS) {
-            if (!line.includes(id)) continue;
+            if (!namesActionId(line, id)) continue;
             if (TIER_ALLOWLISTS.external.has(id)) continue;
             // Naming an unreachable tool is allowed only alongside a fallback the
             // caller can actually run. The fallback must be on the SAME line as

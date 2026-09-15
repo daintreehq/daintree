@@ -46,7 +46,7 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
     value: "action",
     label: "Action",
     description:
-      "Workbench + create worktrees, inject context, send terminal commands, confirm-gated worktree deletes.",
+      "Workbench + create worktrees, open terminals and run commands in them, confirm-gated worktree deletes. An agent can only type into terminals it opened.",
   },
   {
     value: "system",

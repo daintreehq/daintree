@@ -56,6 +56,7 @@ import {
   SESSION_GONE,
   INVALID_URL_CODE,
   RESOURCE_NOT_OWNED_CODE,
+  RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS,
   buildToolError,
   buildMcpErrorPayload,
   withResolvedWorkspace,
@@ -192,6 +193,12 @@ const OWNED_RESOURCE_TOOLS: Record<
      * simply would not reach an action that spells it differently.
      */
     delegateIdArg?: string;
+    /**
+     * Arguments beyond the id that reach the delegate, copied by name (#12407).
+     * Everything else the caller sent is dropped, and the checked id is written
+     * after these so no forwarded field can name a different target.
+     */
+    forwardArgs?: readonly string[];
     releasesOwnership: boolean;
     /**
      * Whether this tool's job is to bring the user to the resource. Only a
@@ -239,6 +246,25 @@ const OWNED_RESOURCE_TOOLS: Record<
   "terminal.interruptOwned": {
     resourceKind: "terminal",
     delegateTo: "terminal.interrupt",
+    idArg: "terminalId",
+    releasesOwnership: false,
+  },
+  // Terminal input, scoped to panels this session created (#12407). Neither
+  // keeps nor drops anything beyond the record an interrupt keeps: submitting to
+  // a panel is not a claim it stopped existing. The submission is the one entry
+  // that forwards more than the id — its text — while the injection forwards
+  // nothing, because the context it writes is the active worktree's and never
+  // the caller's.
+  "terminal.sendCommandOwned": {
+    resourceKind: "terminal",
+    delegateTo: "terminal.sendCommand",
+    idArg: "terminalId",
+    forwardArgs: ["command"],
+    releasesOwnership: false,
+  },
+  "terminal.injectOwned": {
+    resourceKind: "terminal",
+    delegateTo: "terminal.inject",
     idArg: "terminalId",
     releasesOwnership: false,
   },
@@ -828,8 +854,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // fix.
     if (tier === null) throw sessionGoneError();
     const manifest = await resolveManifest("tools/list");
+    // Origin read once for the whole listing, and the same way the dispatch
+    // gate reads it, so a tool withheld here is refused there (#12407).
+    const listSurface: SessionSurfacePolicy = {
+      ...sessionSurface,
+      rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
+    };
     const tools = manifest
-      .filter((entry) => shouldExposeTool(entry, tier, sessionSurface))
+      .filter((entry) => shouldExposeTool(entry, tier, listSurface))
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);
         const _meta =
@@ -871,6 +903,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // records — receives this same value so one tool call can never split
     // across two turn groupings in the Assistant panel.
     const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
+    // Asked of the ORIGIN, never inferred from the tier: an unrecognised bearer
+    // resolves to `workbench` while its origin still defaults to `external`,
+    // and an agent pane's bearer holds a ladder tier with an `external` origin.
+    // Captured once so discovery, the tier gate and `mcp.surface` all describe
+    // the same session (#12407).
+    const rendererOwnedOrigin = sessionStore.isRendererOwnedOrigin(sessionId);
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
     const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
@@ -910,7 +948,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           );
           return {
             permittedActionIds: new Set<string>([
-              ...getTierPermittedActionIds(tier),
+              ...getTierPermittedActionIds(tier, rendererOwnedOrigin),
               ...perToolGrantedActionIds,
               ...nativeGrantedActionIds,
             ]),
@@ -919,11 +957,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             ...(listPaging ? { listPaging } : {}),
             policySnapshot: {
               tier,
-              // Asked of the ORIGIN, never inferred from the tier: an
-              // unrecognised bearer token resolves to `workbench` while its
-              // origin still defaults to `external`, and grant issuance gates
-              // on the origin.
-              rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
+              // Grant issuance gates on the origin too, which is why the
+              // policy record carries it rather than re-deriving it.
+              rendererOwnedOrigin,
               perToolGrantedActionIds,
               nativeGrantedActionIds,
             } satisfies TargetPolicySessionSnapshot,
@@ -966,7 +1002,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * `worktree.delete`'s schema, which still accepts `force`, `deleteBranch`
      * and `closeTerminals`, so anything the caller sent beyond the id would
      * otherwise pass straight through the narrower tool that deliberately omits
-     * them. It is also what lets a delegate spell the id differently —
+     * them. An entry that needs more than the id names each field in
+     * `forwardArgs`; the values are left for the delegate's own schema to
+     * validate. It is also what lets a delegate spell the id differently —
      * `pilot.openRun` takes `runId` where the public tool takes `terminalId`.
      *
      * A reveal differs in both of the ways that matter (#12315). It carries the
@@ -980,9 +1018,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       entry: (typeof OWNED_RESOURCE_TOOLS)[string],
       resourceId: string
     ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
-      const delegateArgs: Record<string, unknown> = {
-        [entry.delegateIdArg ?? entry.idArg]: resourceId,
-      };
+      const delegateArgs: Record<string, unknown> = {};
+      if (entry.forwardArgs !== undefined && args !== null && typeof args === "object") {
+        const callerArgs = args as Record<string, unknown>;
+        for (const key of entry.forwardArgs) {
+          if (Object.hasOwn(callerArgs, key)) delegateArgs[key] = callerArgs[key];
+        }
+      }
+      delegateArgs[entry.delegateIdArg ?? entry.idArg] = resourceId;
       if (entry.reveals !== true) {
         return {
           envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
@@ -1084,7 +1127,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // the floor allows the call. Native grants are not ordered that way: see
     // the peek below for why nesting them under any one admission source is
     // what made them unreachable in the first place.
-    const tierPermitted = isTierPermitted(tier, actionId);
+    const tierPermitted = isTierPermitted(tier, actionId, rendererOwnedOrigin);
     let grantIssuedAt: number | undefined;
     // Set when a native session-scoped automation grant (#10648) authorized
     // this call. Captured here so the post-dispatch path can refresh the
@@ -1188,9 +1231,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
       }
+      // A tool the tier admits but the origin does not would otherwise be
+      // refused "for the 'action' tier" while the session holds exactly that
+      // tier — true of the gate, and useless to a caller deciding what to do
+      // next (#12407).
+      const withheldByOrigin =
+        !rendererOwnedOrigin &&
+        RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS.has(actionId) &&
+        isTierPermitted(tier, actionId, true);
       return buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
-        message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        message: withheldByOrigin
+          ? `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only send input to terminals it created.`
+          : `action '${actionId}' is not permitted for the '${tier}' tier.`,
       });
     }
 
@@ -1812,10 +1865,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               manifest,
               tier,
               app.getVersion(),
-              // Same binding the gate above authorized this call against, and
-              // the same one `tools/list` filters by — so the report can never
-              // advertise a tool the listing withholds (#11789).
-              sessionSurface
+              // Same binding and origin the gate above authorized this call
+              // against, and the same ones `tools/list` filters by — so the
+              // report can never advertise a tool the listing withholds
+              // (#11789, #12407).
+              { ...sessionSurface, rendererOwnedOrigin }
             );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {

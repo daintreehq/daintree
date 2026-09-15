@@ -19,6 +19,7 @@ import type {
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   ACTION_TIER_ADDONS,
+  RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
   SYSTEM_TIER_ADDONS,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
@@ -585,6 +586,8 @@ describe("McpServerService", () => {
         "terminal.list",
         "terminal.inject",
         "terminal.sendCommand",
+        "terminal.sendCommandOwned",
+        "terminal.injectOwned",
         "recipe.run",
         "agent.getState",
         // Ids the RENDERER offers but the external tier must refuse. They have to
@@ -699,17 +702,60 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((t) => t.name);
       expect(ids).toContain("worktree.createWithRecipe");
       expect(ids).not.toContain("worktree.create");
+      expect(ids).toContain("terminal.sendCommandOwned");
+      expect(ids).toContain("terminal.injectOwned");
 
-      const result = getTextResult(
-        await client.callTool({
-          name: "terminal.sendCommand",
-          arguments: { id: "t", text: "ls" },
-        })
-      );
+      const result = getTextResult(await client.callTool({ name: "terminal.list", arguments: {} }));
       expect(result.isError).not.toBe(true);
       expect(dispatchMock).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "terminal.sendCommand" })
+        expect.objectContaining({ actionId: "terminal.list" })
       );
+    });
+
+    // Terminal input is the one orchestration capability that changed shape
+    // (#12407). The unscoped pair reached any panel `terminal.list` returns, the
+    // user's own shells included; an api-key client now reaches input only
+    // through the owned forms, which refuse a panel it did not create before
+    // anything is dispatched.
+    it("external tier: terminal input reaches only terminals the session created (#12407)", async () => {
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      }));
+      const { window } = createMockWindow({
+        getManifest: manifestForAllAllowlistedTools,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const offered = manifestForAllAllowlistedTools().map((e) => e.id);
+      const ids = (await client.listTools()).tools.map((t) => t.name);
+      for (const id of ["terminal.sendCommand", "terminal.inject"]) {
+        expect(offered).toContain(id);
+        expect(ids).not.toContain(id);
+      }
+
+      const unscoped = getTextResult(
+        await client.callTool({
+          name: "terminal.sendCommand",
+          arguments: { terminalId: "user-shell", command: "ls" },
+        })
+      );
+      expect(unscoped.isError).toBe(true);
+      expect(unscoped.content[0].text).toContain("TIER_NOT_PERMITTED");
+
+      const notOwned = getTextResult(
+        await client.callTool({
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId: "user-shell", command: "ls" },
+        })
+      );
+      expect(notOwned.isError).toBe(true);
+      expect(notOwned.content[0].text).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
 
     // The other half, and an intentional breaking change (#11585). These ids
@@ -941,6 +987,16 @@ describe("McpServerService", () => {
         id: "terminal.interruptOwned" as ActionId,
         title: "Interrupt Owned Agent",
         description: "Stop the turn an agent this MCP session created is running",
+      }),
+      createManifestEntry({
+        id: "terminal.sendCommandOwned" as ActionId,
+        title: "Submit Text to Owned Terminal",
+        description: "Submit text to a terminal this MCP session created",
+      }),
+      createManifestEntry({
+        id: "terminal.injectOwned" as ActionId,
+        title: "Inject Context to Owned Terminal",
+        description: "Inject context into a terminal this MCP session created",
       }),
       createManifestEntry({
         id: "terminal.closeAll" as ActionId,
@@ -1548,6 +1604,12 @@ describe("McpServerService", () => {
     // help-assistant tiers. Focus and theme actions live in ACTION_TIER_ADDONS
     // for assistant-driven UI shifts but are intentionally absent from the
     // external surface — guard against accidental cross-curation.
+    // A pane bearer's origin is `external` whatever its tier, so the unscoped
+    // terminal input its tier would otherwise carry is withheld (#12407). The
+    // assistant's own sessions keep it; that half is pinned in sessionServer's
+    // origin tests, which can seed a renderer-owned origin.
+    const PANE_BEARER_WITHHELD = new Set<string>(RENDERER_OWNED_ORIGIN_ONLY_TOOLS);
+
     const NOT_IN_EXTERNAL_TIER = [
       "agent.focusNextWaiting",
       "agent.focusNextWorking",
@@ -1606,7 +1668,8 @@ describe("McpServerService", () => {
       expect(ids).not.toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_ADDONS) {
-        expect(ids).toContain(id);
+        if (PANE_BEARER_WITHHELD.has(id)) expect(ids).not.toContain(id);
+        else expect(ids).toContain(id);
       }
       for (const id of SYSTEM_TIER_ADDONS) {
         expect(ids).not.toContain(id);
@@ -1631,7 +1694,8 @@ describe("McpServerService", () => {
       expect(ids).toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_ADDONS) {
-        expect(ids).toContain(id);
+        if (PANE_BEARER_WITHHELD.has(id)) expect(ids).not.toContain(id);
+        else expect(ids).toContain(id);
       }
       for (const id of SYSTEM_TIER_ADDONS) {
         expect(ids).toContain(id);
