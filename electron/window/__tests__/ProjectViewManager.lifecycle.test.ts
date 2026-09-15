@@ -342,6 +342,7 @@ function createManager(opts?: {
   cachedProjectViews?: number;
   zeroGates?: boolean;
   evictedThrows?: boolean;
+  paintHardMs?: number;
 }): ManagerSetup {
   const win = createMockWindow();
   const windowRegistry = createWindowRegistryMock();
@@ -365,7 +366,7 @@ function createManager(opts?: {
     dirname: "/test",
     windowRegistry: windowRegistry as never,
     paintGateTimeoutMs: gateMs.soft,
-    paintGateHardTimeoutMs: gateMs.hard,
+    paintGateHardTimeoutMs: opts?.paintHardMs ?? gateMs.hard,
     warmPaintGateTimeoutMs: gateMs.soft,
     warmPaintGateHardTimeoutMs: gateMs.hard,
     cachedProjectViews: opts?.cachedProjectViews ?? 3,
@@ -544,13 +545,17 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       setup.ledger.assertNoPortsForDeadViews(manager as never);
     });
 
-    it("destroying the incoming project mid-cold-gate leaves consistent maps and closes the dead view's ports", async () => {
-      const setup = createManager();
+    it("destroying the incoming project mid-cold-gate rolls back at the paint bound with consistent maps and closed ports", async () => {
+      const setup = createManager({ paintHardMs: 100 });
       const { manager, win } = setup;
 
       const bWc = createMockWebContents();
       wcQueue.push(bWc);
       const switchPromise = manager.switchTo("proj-b", "/b");
+      const settled = switchPromise.then(
+        () => null,
+        (error: unknown) => error as Error
+      );
       await flushMicrotasks();
       // Load finished, gate open, incoming B is the active project.
       expect(manager.getActiveProjectId()).toBe("proj-b");
@@ -561,15 +566,16 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       expect(setup.onViewEvicted).toHaveBeenCalledWith(bWc.id);
       expect(setup.ledger.openIds).not.toContain(bWc.id);
       expect(bWc.close).toHaveBeenCalled();
-      // The gate was waiting on B's frame, which can no longer come, so the
-      // destroy settles it instead of holding A to the hard bound (#12394).
-      expect(manager.pendingPaintGate).toBeNull();
 
-      // A late paint signal from the dead renderer is inert and revives nothing.
+      // A late readiness signal from the dead renderer cannot be followed by a
+      // confirmed frame (#12394), so the gate runs to its paint bound and the
+      // switch rolls back to A rather than committing onto a view that is gone.
       manager.signalViewPainted(bWc.id);
-      await switchPromise;
+      const error = await settled;
+      expect(error?.message).toContain("View never painted");
       await flushImmediates();
 
+      expect(manager.getActiveProjectId()).toBe("proj-a");
       expect(manager.getProjectIdForWebContents(bWc.id)).toBeNull();
       expect(manager.getAllViews().map((entry) => entry.projectId)).toEqual(["proj-a"]);
       assertLifecycleInvariants(manager as never, win as never);

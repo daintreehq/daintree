@@ -34,6 +34,11 @@ export interface PaintGateFrameConfirmation {
   readyProbeStarted: boolean;
   /** The hard bound passed with no frame; waiting on `unpaintedHardMs`. */
   awaitingFirstFrame: boolean;
+  /**
+   * Bumped when the evidence above is discarded (the renderer went away), so a
+   * probe started against the old document can never count for the new one.
+   */
+  generation: number;
 }
 
 export interface PaintGate {
@@ -76,8 +81,10 @@ export interface PaintGate {
    * policy is per channel: a warm gate falls through and detaches, a cold one
    * must abandon and roll back BEFORE any detach, or it strands the user on a
    * view that never rendered (#11635). Replaced in place once when a cold
-   * skeleton gate is retimed after its load settles (#11765); `resolve` always
-   * clears whichever handle is current.
+   * skeleton gate is retimed after its load settles (#11765), and when a gate
+   * armed with `unpaintedHardMs` reaches its hard bound with no frame
+   * confirmed — a warm gate falls through only once one has been (#12394);
+   * `resolve` always clears whichever handle is current.
    */
   hardTimeout: ReturnType<typeof setTimeout>;
   /**

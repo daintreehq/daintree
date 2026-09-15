@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import vm from "node:vm";
 import { waitForRenderedFrame } from "../renderedFrameProbe.js";
 
 function makeWc(opts: { destroyed?: boolean; execute?: () => Promise<unknown> } = {}) {
@@ -16,6 +17,33 @@ describe("waitForRenderedFrame (#12394)", () => {
     const script = wc.executeJavaScript.mock.calls[0]?.[0] as string;
     // Double rAF: the second callback runs only after the first frame committed.
     expect(script.match(/requestAnimationFrame/g)).toHaveLength(2);
+  });
+
+  it("evaluates to a promise that resolves only after the second nested frame", async () => {
+    const wc = makeWc();
+    await waitForRenderedFrame(wc as never);
+    const script = wc.executeJavaScript.mock.calls[0]?.[0] as string;
+
+    const frameCallbacks: Array<() => void> = [];
+    const requestAnimationFrame = (callback: () => void) => frameCallbacks.push(callback);
+    let settled = false;
+    const result = Promise.resolve(
+      vm.runInNewContext(script, { requestAnimationFrame }) as Promise<unknown>
+    ).then((value) => {
+      settled = true;
+      return value;
+    });
+
+    expect(frameCallbacks).toHaveLength(1);
+    frameCallbacks.shift()?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    // One frame is not enough: the second is requested from inside the first.
+    expect(settled).toBe(false);
+    expect(frameCallbacks).toHaveLength(1);
+
+    frameCallbacks.shift()?.();
+    await expect(result).resolves.toBe(true);
   });
 
   it("stays pending until the page's frames run", async () => {

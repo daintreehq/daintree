@@ -610,9 +610,10 @@ async function activateProjectView(
       // window names someone else's project and would re-point the mapping at it.
       //
       // Deliberately NOT pvm.getActiveProjectId(): the rollback it performs on a
-      // cold-start failure looks like the right answer, but a warm activation
-      // that throws leaves the INCOMING project active with no rollback, and the
-      // manager itself may be another window's under the deps fallback (#11100).
+      // cold-start or unpainted warm failure looks like the right answer, but any
+      // other warm activation that throws leaves the INCOMING project active with
+      // no rollback, and the manager itself may be another window's under the
+      // deps fallback (#11100).
       // The captured id is the one thing here that cannot be wrong about which
       // window sent the request.
       const previousPath = outgoingProjectId

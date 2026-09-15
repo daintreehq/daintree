@@ -11,8 +11,9 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { PaintGate, PaintGateOutcome } from "./ProjectViewManagerTypes.js";
 
 /**
- * Resolve when the renderer with `webContentsId` posts `APP_VIEW_PAINTED`
- * via {@link signalViewPainted}, when the hard timeout elapses, or when a
+ * Resolve when the renderer with `webContentsId` signals it is ready (via
+ * {@link signalViewPainted} and its siblings) — after a confirmed frame when
+ * the gate requires one — when the hard timeout elapses, or when a
  * superseding switch cancels the gate. Only one paint gate is tracked at
  * a time — opening a new gate cancels any prior pending one.
  *
@@ -22,7 +23,7 @@ import type { PaintGate, PaintGateOutcome } from "./ProjectViewManagerTypes.js";
  *   - Hard (`paintGateHardTimeoutMs`): resolves the gate as
  *     `"hard-timeout"`. The caller owns the policy: cold starts abandon the
  *     switch and roll back (#11635), warm reactivations fall through and
- *     detach the bridge.
+ *     detach the bridge — once a frame has been confirmed (see below).
  *
  * Frame confirmation (#12394): with `confirmFrame`, a renderer signal no
  * longer releases the gate by itself. Every one of them proves work ran, not
@@ -89,6 +90,7 @@ export function waitForPaint(
             painted: false,
             readyProbeStarted: false,
             awaitingFirstFrame: false,
+            generation: 0,
           }
         : null,
       softTimeout: setTimeout(() => {
@@ -143,8 +145,10 @@ export function waitForPaint(
 function probeFrame(host: ProjectViewManager, gate: PaintGate, releaseOnConfirm: boolean): void {
   const frame = gate.frame;
   if (!frame) return;
+  const generation = frame.generation;
   void frame.confirm().then((confirmed) => {
     if (!confirmed || host.pendingPaintGate !== gate) return;
+    if (frame.generation !== generation) return;
     frame.painted = true;
     if (releaseOnConfirm) {
       gate.resolve("signal");
@@ -197,6 +201,25 @@ export function enableFrameConfirmation(host: ProjectViewManager, webContentsId:
   if (gate.frame.enabled) return false;
   startFrameConfirmation(host, gate);
   return true;
+}
+
+/**
+ * Discard what an open frame-confirmed gate has learned about its view: the
+ * confirmed frame and the readiness it latched. Called when the incoming
+ * renderer goes away mid-gate (#12394) — the frame and the wake belonged to a
+ * document that no longer exists, and a warm hard bound that trusted them
+ * would detach the outgoing view over the replacement document. Probes still
+ * out against the old document are ignored; the gate then needs fresh
+ * readiness and a fresh frame, or it runs to its unpainted bound.
+ */
+export function discardFrameEvidence(host: ProjectViewManager, webContentsId: number): void {
+  const gate = host.pendingPaintGate;
+  if (!gate?.frame || gate.webContentsId !== webContentsId) return;
+  const frame = gate.frame;
+  frame.generation += 1;
+  frame.painted = false;
+  frame.ready = false;
+  frame.readyProbeStarted = false;
 }
 
 /**

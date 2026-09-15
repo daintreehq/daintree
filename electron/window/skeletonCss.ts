@@ -284,8 +284,9 @@ export async function insertSkeletonCss(wc: WebContents, css: string): Promise<v
  * skeleton's entrance animations so it is opaque the moment the incoming view
  * is revealed instead of fading up from a blank canvas (see buildSkeletonCss).
  *
- * Resolves once the stylesheet is inserted (never rejects), so a caller that
- * must not reveal before it applies can wait for it.
+ * Settles once the insertion attempt has finished — including a swallowed
+ * failure, so resolution does not certify the stylesheet landed. Never
+ * rejects, so a caller that must not reveal before it applies can wait for it.
  */
 export function injectSkeletonCss(
   wc: WebContents,

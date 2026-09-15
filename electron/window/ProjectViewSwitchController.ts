@@ -74,9 +74,10 @@ function deliverFocusIntent(view: WebContentsView, intent: ProjectFocusOnActivat
  * Undo a warm reactivation whose view never drew a frame (#12394). The
  * outgoing view is still attached on top, so this parks the cached view again
  * and hands the window back to what the user is looking at — the warm mirror
- * of the cold-start rollback. The cached renderer is alive and stays cached, so
- * the next switch to it retries a warm reactivation rather than recreating a
- * project that may have running agents.
+ * of the cold-start rollback. The cached renderer stays cached, so the next
+ * switch to it retries a warm reactivation rather than recreating a project
+ * that may have running agents. Each step is independent: a throw from one
+ * must not leave the window pointed at the view it failed to park.
  */
 function abandonUnpaintedWarmSwitch(
   host: ProjectViewManager,
@@ -86,15 +87,30 @@ function abandonUnpaintedWarmSwitch(
   unboundOutgoingView: WebContentsView | null
 ): void {
   if (host.disposed || host.win.isDestroyed()) return;
-  if (host.activeProjectId !== cached.projectId) return;
-  deactivateEntry(host, cached);
+  // switchChain serializes switches, so the only other writer is a teardown of
+  // the cached view mid-gate (destroyView nulls the pointer). Either way the
+  // outgoing view is still what the user sees, and it gets the window back.
+  if (host.activeProjectId !== cached.projectId && host.activeProjectId !== null) return;
   host.activeProjectId = previousProjectId;
-  if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
-    // Never deactivated during this switch, so its ports and renderer state are
-    // intact; only the app-view registration and focus moved to the cached view.
-    activateView(host, previousEntry);
-  } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
-    registerAppView(host.win, unboundOutgoingView);
+  try {
+    // Stale-entry guarded: a torn-down cached view is only detached.
+    deactivateEntry(host, cached);
+  } catch (error) {
+    console.error("[ProjectViewManager] deactivateEntry threw during warm rollback:", error);
+  }
+  try {
+    if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
+      activateView(host, previousEntry);
+      // Same rebind as the cold rollback. Usually a no-op refresh — the
+      // outgoing view was never parked — but a cached view that crashed mid-gate
+      // was active, so its crash tore down the window's PTY port and its reload
+      // may have re-brokered ports to itself.
+      host.onViewReady?.(previousEntry.view.webContents);
+    } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
+      registerAppView(host.win, unboundOutgoingView);
+    }
+  } catch (error) {
+    console.error("[ProjectViewManager] restoring the outgoing view threw:", error);
   }
   try {
     pruneOrphanedChildren(host);
@@ -177,10 +193,10 @@ export async function performSwitch(
       // renderer's visibilitychange-driven wake fan-out repairs each atlas.
       // Mirror the cold-start bridge: keep the outgoing view ON TOP, reattach
       // the cached view BEHIND it (occluded, but unfrozen so its rAF + wake run),
-      // and only detach the outgoing once the renderer signals a clean
-      // post-repair frame via APP_VIEW_WARM_PAINTED — or the hard timeout fires.
-      // notifyViewPainted is one-shot per V8 context, so the warm path needs its
-      // own re-fireable channel.
+      // and only detach the outgoing once the renderer signals its wake finished
+      // via APP_VIEW_WARM_PAINTED and a frame is confirmed after it — or the
+      // hard timeout fires with a frame drawn. notifyViewPainted is one-shot per
+      // V8 context, so the warm path needs its own re-fireable channel.
       //
       // The wake signal proves the repair ran, not that it was drawn: this
       // view went through setVisible(false) and may have been frozen or purged,
@@ -221,6 +237,11 @@ export async function performSwitch(
           unpaintedHardMs: warmUnpaintedMs,
         }
       );
+      // A crash mid-gate takes the frame and the wake with it, and the crash
+      // handler reloads the view in place: evidence gathered against the dead
+      // document must not let the hard bound reveal its replacement.
+      const discardEvidenceOnCrash = () => host.discardFrameEvidence(cachedWc.id);
+      cachedWc.on("render-process-gone", discardEvidenceOnCrash);
       // Deterministic wake trigger: a detached + setVisible(false) cached
       // view never gets `visibilitychange`, and `resume` only fires when the
       // Efficiency profile actually froze it — so on most reactivations the
@@ -234,7 +255,12 @@ export async function performSwitch(
           switchId: switchTrace.switchId,
         });
       }
-      const gateResult = await warmGate;
+      let gateResult: Awaited<typeof warmGate>;
+      try {
+        gateResult = await warmGate;
+      } finally {
+        cachedWc.removeListener("render-process-gone", discardEvidenceOnCrash);
+      }
       mark(PERF_MARKS.PROJECT_SWITCH_GATE_RESOLVED, {
         gateOutcome: gateResult,
         releaseChannel: "warm-painted",
@@ -431,7 +457,7 @@ export async function performSwitch(
   // EXCEPTION: when a focus intent is pending we must keep waiting for the
   // real React paint. The focus-intent IPC listener isn't mounted until React
   // commits, so delivering it into a bare pre-React skeleton would be dropped
-  // (#4670). Those (rare) switches keep the legacy `"painted"` gating verbatim.
+  // (#4670). Those (rare) switches keep `"painted"` readiness, spent from arm.
   const hasPendingFocusIntent = host.pendingFocusIntent?.projectId === projectId;
   const coldReleaseChannel: "painted" | "skeleton-painted" = hasPendingFocusIntent
     ? "painted"
@@ -608,8 +634,9 @@ export async function performSwitch(
       // Abandon rather than commit. Both readiness signals are document-owned
       // (APP_SKELETON_PARSED from a script tag in index.html, APP_VIEW_PAINTED
       // from React), and the release also needs a frame the view drew, so
-      // exhausting the budget means this view gave no evidence it can render. Reaching here now means specifically
-      // that: the load already settled and `verifyProjectBootstrap` already
+      // exhausting the budget means this view gave no evidence it can render:
+      // no readiness, or no frame drawn after it. Reaching here now means
+      // specifically that: the load already settled and `verifyProjectBootstrap` already
       // vouched for the document (#11635), so what timed out is a verified
       // application document that produced no frame — not a wrong document, and
       // not merely a slow one (#11765). Detaching the outgoing view here strands
