@@ -2017,6 +2017,27 @@ describe("WorkspaceService — repository command approval", () => {
     expect(service["monitors"].get("/test/worktree")).toBe(monitor);
   });
 
+  it("resumes an approved setup once, however many approvals arrive", async () => {
+    createAndRegisterMonitor();
+    await setupConfig({ setup: ["npm install"] });
+    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root");
+    let releaseAction!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      releaseAction = resolve;
+    });
+    vi.spyOn(service.resourceActionExecutor, "whenIdle").mockReturnValue(inFlight);
+    const retrySpy = vi.spyOn(service, "retryLifecycleSetup").mockResolvedValue(undefined);
+
+    const review = await service.getLifecycleCommandReview("/test/worktree");
+    await service.approveLifecycleCommands("/test/worktree", review!.fingerprint);
+    await service.approveLifecycleCommands("/test/worktree", review!.fingerprint);
+
+    releaseAction();
+    await vi.waitFor(() => expect(retrySpy).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(retrySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves an approved sibling's resolved connect command alone", async () => {
     const sibling = createAndRegisterMonitor({ id: "/test/sibling", path: "/test/sibling" });
     sibling.setLifecycleCommandsNeedApproval(false);

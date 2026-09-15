@@ -509,6 +509,9 @@ export class WorkspaceService {
   // Keyed by monitor, not id, so a setup intent dies with the incarnation it
   // was recorded for: delete-then-recreate at the same path must not inherit it.
   private setupAwaitingApproval = new WeakMap<WorktreeMonitor, SetupAwaitingApproval>();
+  // Monitors whose approved setup is already being resumed, so a second
+  // approval arriving meanwhile does not run it again once the first settles.
+  private resumingApprovedSetup = new WeakSet<WorktreeMonitor>();
   private listService = new WorktreeListService();
   private prService: PRIntegrationService;
   private fetchCoordinator: RepoFetchCoordinator;
@@ -3974,10 +3977,11 @@ export class WorkspaceService {
     await Promise.all(
       [...this.monitors.values()].map(async (m) => {
         try {
-          // Only a monitor that was (or may have been) waiting had its connect
-          // command withheld. Re-deriving an approved sibling's would drop the
-          // endpoint its last status check substituted in.
-          if (m.lifecycleCommandsNeedApproval !== false) {
+          // Only a monitor that was (or may have been) waiting, or that has no
+          // connect command published, can have had one withheld. Re-deriving
+          // an approved sibling's would drop the endpoint its last status check
+          // substituted in.
+          if (m.lifecycleCommandsNeedApproval !== false || m.resourceConnectCommand === undefined) {
             await this.initResourceConfigAsync(m, m.path);
           }
           await this.refreshLifecycleCommandApproval(m);
@@ -3988,17 +3992,27 @@ export class WorkspaceService {
     );
 
     const live = this.monitors.get(worktreeId);
-    if (live === monitor && this.setupAwaitingApproval.has(live)) {
+    if (
+      live === monitor &&
+      this.setupAwaitingApproval.has(live) &&
+      !this.resumingApprovedSetup.has(live)
+    ) {
+      this.resumingApprovedSetup.add(live);
       void (async () => {
         // A resource action in flight — an automatic status check, say — holds
         // the lifecycle slot, and a retry started under it would be refused as
         // "already running", losing the setup the user just approved.
         await this.resourceActionExecutor.whenIdle(worktreeId);
         if (this.monitors.get(worktreeId) !== monitor) return;
+        if (!this.setupAwaitingApproval.has(monitor)) return;
         await this.retryLifecycleSetup(worktreeId);
-      })().catch((err) => {
-        console.warn("[WorkspaceService] Setup after approval failed to start:", err);
-      });
+      })()
+        .catch((err) => {
+          console.warn("[WorkspaceService] Setup after approval failed to start:", err);
+        })
+        .finally(() => {
+          this.resumingApprovedSetup.delete(monitor);
+        });
     }
   }
 

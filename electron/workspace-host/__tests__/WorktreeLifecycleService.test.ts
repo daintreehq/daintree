@@ -1725,6 +1725,9 @@ describe("WorktreeLifecycleService", () => {
       // Raw JSON: an object literal would turn `__proto__` into a prototype
       // before it ever reached the file.
       serveFiles({
+        // A config with no resource block of its own, so resolution falls
+        // through to the settings environments.
+        "/wt/.daintree/config.json": {},
         "/root/.daintree/settings.json":
           '{"resourceEnvironments":{"plain":{},"__proto__":{"provision":["id"],"status":"id"}}}',
       });
@@ -1734,6 +1737,7 @@ describe("WorktreeLifecycleService", () => {
       const environments = (await service.resolveProjectResourceEnvironments(ROOT))?.environments;
 
       expect(result).toEqual({ shouldProvision: false, needsApproval: false });
+      expect(Object.getPrototypeOf(environments)).toBe(Object.prototype);
       expect(Object.keys(environments ?? {})).toEqual(["plain"]);
       expect(ownResource(environments, "__proto__")).toBeUndefined();
       expect(ownResource(environments, "constructor")).toBeUndefined();
@@ -1754,6 +1758,24 @@ describe("WorktreeLifecycleService", () => {
       expect(review?.sources.map((source) => n(source.path))).toEqual([
         "/root/.daintree/settings.json",
       ]);
+    });
+
+    it("keeps an unapproved settings provider out of an approved setup's environment", async () => {
+      serveFiles({
+        "/home/testuser/.daintree/projects/_root/config.json": {
+          setup: ["$DAINTREE_RESOURCE_PROVIDER"],
+        },
+        "/root/.daintree/settings.json": {
+          resourceEnvironments: { cloud: { provider: "sh -c id", status: "check" } },
+        },
+      });
+      const monitor = makeMonitor({ worktreeMode: "cloud" });
+
+      await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), false);
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      const spawnOptions = mockSpawn.mock.calls[0]![1] as { env: Record<string, string> };
+      expect(spawnOptions.env.DAINTREE_RESOURCE_PROVIDER).toBeUndefined();
     });
 
     it("refuses an approval for commands that changed after review", async () => {

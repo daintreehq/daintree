@@ -899,6 +899,7 @@ export class WorktreeLifecycleService {
           const v = this.buildVariables(worktreePath, projectRootPath, m.name, m.branch);
           const subCache = (cmd: string) => this.substituteVariables(cmd, v);
           applyResourceConfigToMonitor(m, resolvedResource, subCache, resourceApproved);
+          if (!resourceApproved) m.setLifecycleCommandsNeedApproval(true);
           ctx.emitUpdate(m);
         }
       }
@@ -946,7 +947,8 @@ export class WorktreeLifecycleService {
       worktreeName,
       monitor.branch,
       {
-        provider: resolvedResource?.provider,
+        // An approved setup must not carry a provider from an unapproved file.
+        provider: resourceApproved ? resolvedResource?.provider : undefined,
         endpoint: monitor.resourceStatus?.endpoint,
         lastOutput: monitor.resourceStatus?.lastOutput,
       },
@@ -1074,23 +1076,25 @@ export class WorktreeLifecycleService {
 
     const vars = this.buildVariables(monitor.path, projectRootPath, monitor.name, monitor.branch);
     const sub = (cmd: string) => this.substituteVariables(cmd, vars);
+    const teardownResourceApproved = teardownResource
+      ? await this.isResourceApproved(resolvedConfig, teardownEnvironments, projectRootPath)
+      : false;
     const env = this.buildEnv(
       monitor.path,
       projectRootPath,
       monitor.name,
       monitor.branch,
       {
-        provider: teardownResource?.provider,
+        // Local teardown can be approved while the resource block is not; the
+        // provider it would export belongs to the resource block's file.
+        provider: teardownResourceApproved ? teardownResource?.provider : undefined,
         endpoint: monitor.resourceStatus?.endpoint,
         lastOutput: monitor.resourceStatus?.lastOutput,
       },
       ctx.projectEnvVars
     );
 
-    const resourceTeardownApproved =
-      !hasResourceTeardown ||
-      (await this.isResourceApproved(resolvedConfig, teardownEnvironments, projectRootPath));
-    if (hasResourceTeardown && !resourceTeardownApproved) {
+    if (hasResourceTeardown && !teardownResourceApproved) {
       this.recordSkippedForApproval(
         worktreeId,
         "resource-teardown",
@@ -1364,9 +1368,12 @@ export class WorktreeLifecycleService {
     // `id` from a command template the user had approved unchanged.
     //
     // Double-brace: {{variable}} with snake_case keys.
-    // Single-brace: {variable} with hyphenated keys — skip shell vars like ${foo}.
+    // Single-brace: {variable} with hyphenated keys.
+    // Neither form is touched straight after `$` — `${foo}` is the shell's, and
+    // `${{foo}}` substituted would put the single-quoted value in `$'…'`, where
+    // bash reads backslash escapes and the escaping no longer holds.
     return command.replace(
-      /\{\{(\w+)\}\}|(?<!\$)\{([\w-]+)\}/g,
+      /(?<!\$)\{\{(\w+)\}\}|(?<!\$\{?)\{([\w-]+)\}/g,
       (match, doubleName: string | undefined, singleName: string | undefined) => {
         const key = (doubleName ?? singleName ?? "").toLowerCase() as keyof LifecycleVariables;
         const value = vars[key];

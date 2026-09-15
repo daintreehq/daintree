@@ -668,7 +668,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             <button
               type="button"
               onClick={commandsNeedApproval ? handleReviewCommands : handleRetrySetup}
-              disabled={!commandsNeedApproval && isRetryingSetup}
+              disabled={!commandsNeedApproval && (isRetryingSetup || lifecycleState === "running")}
               className={cn(
                 "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
                 "text-status-warning hover:bg-status-warning/10",
