@@ -24,6 +24,7 @@
  *   rest-<theme>-hover.png         a row under the pointer
  *   grouped-<theme>-expanded.png   the tab group expanded
  *   spread-<theme>-confirm.png     the empty-trash confirm over the popover
+ *   spread-<theme>-row-confirm.png the single-row removal confirm
  *   rest-<theme>-pill.png          the trigger pill, popover closed
  *   rest-<theme>-pill-compact.png  the compact pill with its count badge
  *   spread-<theme>-reduced.png     the same rows under prefers-reduced-motion
@@ -269,6 +270,22 @@ test("recently-closed trash — every state, every theme", async ({ context }) =
       await expect(page.getByText(/permanently removed/)).toBeVisible();
       await page.waitForTimeout(250);
       return snap(page.locator("body"), `spread-${theme}-confirm.png`);
+    })
+  );
+
+  // Removing one row is a D1 destruction with its own confirm, and the popover
+  // has to be out of its way — the same layering that clipped the bulk one.
+  written.push(
+    await withPage(context, "row-remove confirm", async (page) => {
+      const popover = await open(page, "spread", theme);
+      await popover
+        .locator("[data-trash-row]")
+        .first()
+        .getByRole("button", { name: /permanently/i })
+        .click();
+      await expect(page.getByText(/will be permanently removed/)).toBeVisible();
+      await page.waitForTimeout(250);
+      return snap(page.locator("body"), `spread-${theme}-row-confirm.png`);
     })
   );
 

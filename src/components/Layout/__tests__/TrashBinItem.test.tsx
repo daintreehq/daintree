@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TrashBinItem } from "../TrashBinItem";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
@@ -92,6 +92,8 @@ function meterFraction(container: HTMLElement): number {
   return Number(match![1]);
 }
 
+const onRequestRemove = vi.fn();
+
 describe("TrashBinItem", () => {
   describe("label rendering", () => {
     it("does not duplicate worktree name when the agent title falls back to agent name", () => {
@@ -102,7 +104,12 @@ describe("TrashBinItem", () => {
         originalLocation: "grid",
       };
       const { container } = render(
-        <TrashBinItem terminal={terminal} trashedInfo={trashedInfo} worktreeName="feature-auth" />
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+          worktreeName="feature-auth"
+        />
       );
       const text = container.textContent ?? "";
       // The worktree is named once, on the metadata line — never folded into
@@ -124,7 +131,12 @@ describe("TrashBinItem", () => {
         originalLocation: "grid",
       };
       const { container } = render(
-        <TrashBinItem terminal={terminal} trashedInfo={trashedInfo} worktreeName="feature-auth" />
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+          worktreeName="feature-auth"
+        />
       );
       expect(container.textContent).toContain("Fixing auth bug");
     });
@@ -136,7 +148,13 @@ describe("TrashBinItem", () => {
         expiresAt: Date.now() + 20000,
         originalLocation: "grid",
       };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
+      const { container } = render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+        />
+      );
       expect(container.textContent).toContain("Claude");
     });
 
@@ -155,7 +173,13 @@ describe("TrashBinItem", () => {
         expiresAt: Date.now() + 20000,
         originalLocation: "grid",
       };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
+      const { container } = render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+        />
+      );
       expect(container.textContent).toContain("my dev shell");
     });
   });
@@ -211,7 +235,13 @@ describe("TrashBinItem", () => {
         expiresAt: Date.now() + 20000,
         originalLocation: "grid",
       };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
+      const { container } = render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+        />
+      );
       expect(countdownSeconds(container)).toBeGreaterThan(0);
     });
 
@@ -222,7 +252,13 @@ describe("TrashBinItem", () => {
         expiresAt: Date.now() + 20000,
         originalLocation: "grid",
       };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
+      const { container } = render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+        />
+      );
       const initialSeconds = countdownSeconds(container);
 
       act(() => vi.advanceTimersByTime(2000));
@@ -238,7 +274,13 @@ describe("TrashBinItem", () => {
         expiresAt: Date.now() + 20000,
         originalLocation: "grid",
       };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
+      const { container } = render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+        />
+      );
       act(() => vi.advanceTimersByTime(1000));
       const beforeHide = countdownSeconds(container);
 
@@ -256,7 +298,13 @@ describe("TrashBinItem", () => {
         expiresAt: Date.now() + 20000,
         originalLocation: "grid",
       };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
+      const { container } = render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+        />
+      );
       act(() => fireVisibilityChange("hidden"));
       act(() => vi.advanceTimersByTime(10000));
       act(() => fireVisibilityChange("visible"));
@@ -274,7 +322,13 @@ describe("TrashBinItem", () => {
         expiresAt: Date.now() - 5000,
         originalLocation: "grid",
       };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
+      const { container } = render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={terminal}
+          trashedInfo={trashedInfo}
+        />
+      );
       expect(countdownSeconds(container)).toBe(0);
     });
   });
@@ -283,6 +337,7 @@ describe("TrashBinItem", () => {
     function renderAt(remainingMs: number) {
       return render(
         <TrashBinItem
+          onRequestRemove={onRequestRemove}
           terminal={makeAgentTerminal()}
           trashedInfo={{ id: "t1", expiresAt: Date.now() + remainingMs, originalLocation: "grid" }}
         />
@@ -355,6 +410,24 @@ describe("TrashBinItem", () => {
           .container.querySelector("[data-trash-countdown]")!
           .getAttribute("data-critical")
       ).toBeNull();
+    });
+  });
+
+  describe("permanent removal is confirmed, not immediate", () => {
+    it("raises a removal request instead of destroying the pane on the spot", () => {
+      onRequestRemove.mockClear();
+      render(
+        <TrashBinItem
+          onRequestRemove={onRequestRemove}
+          terminal={makeAgentTerminal()}
+          trashedInfo={{ id: "t1", expiresAt: Date.now() + 20000, originalLocation: "grid" }}
+        />
+      );
+      // Restore undoes *closing* a pane; nothing undoes destroying one, which
+      // is what puts this button in the tier that owes a confirmation.
+      fireEvent.click(screen.getByRole("button", { name: /permanently/i }));
+      expect(onRequestRemove).toHaveBeenCalledTimes(1);
+      expect(onRequestRemove.mock.calls[0]![0]).toMatchObject({ ids: ["t1"] });
     });
   });
 });

@@ -15,7 +15,12 @@ import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
-import { TrashCountdownLabel, TrashTtlMeter, useTrashCountdown } from "./trashCountdown";
+import {
+  TrashCountdownLabel,
+  TrashTtlMeter,
+  useTrashCountdown,
+  type TrashRemovalRequest,
+} from "./trashCountdown";
 
 interface TrashGroupItemProps {
   groupRestoreId: string;
@@ -26,6 +31,8 @@ interface TrashGroupItemProps {
   }>;
   worktreeName?: string;
   earliestExpiry: number;
+  /** Raise a permanent removal for the container to confirm. */
+  onRequestRemove: (request: TrashRemovalRequest) => void;
 }
 
 export function TrashGroupItem({
@@ -34,10 +41,10 @@ export function TrashGroupItem({
   terminals,
   worktreeName,
   earliestExpiry,
+  onRequestRemove,
 }: TrashGroupItemProps) {
   const restoreTrashedGroup = usePanelStore((s) => s.restoreTrashedGroup);
   const restoreTerminal = usePanelStore((s) => s.restoreTerminal);
-  const removePanel = usePanelStore((s) => s.removePanel);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   // Re-render when a plugin loads/unloads mid-session so trashed terminals'
   // icon/name pick up the updated registry (#9879). Subscription is the
@@ -58,12 +65,6 @@ export function TrashGroupItem({
       restoreTrashedGroup(groupRestoreId);
     }
   }, [restoreTrashedGroup, groupRestoreId, isOrphan, activeWorktreeId]);
-
-  const handleRemoveAll = useCallback(() => {
-    for (const { terminal } of terminals) {
-      removePanel(terminal.id);
-    }
-  }, [removePanel, terminals]);
 
   const tabCount = terminals.length;
 
@@ -98,9 +99,22 @@ export function TrashGroupItem({
       : resolvedActiveTitle
     : fallbackName;
 
+  const childName = useCallback((terminal: PanelInstance) => terminal.title || "Terminal", []);
+
+  const handleRemoveAll = useCallback(() => {
+    // Every member by name, not just the count: a bundled destruction owes the
+    // user a preview of what it is actually destroying.
+    onRequestRemove({
+      ids: terminals.map(({ terminal }) => terminal.id),
+      label: groupName,
+      panelTitles: terminals.map(({ terminal }) => childName(terminal)),
+    });
+  }, [onRequestRemove, terminals, groupName, childName]);
+
   return (
     <div
       data-trash-row
+      data-row-id={groupRestoreId}
       className="relative shrink-0 overflow-hidden rounded-[var(--radius-sm)] bg-transparent transition-colors hover:bg-tint/5"
     >
       <div className="flex items-start gap-2 px-2.5 py-1.5 group">
@@ -266,7 +280,13 @@ export function TrashGroupItem({
                           variant="ghost-danger"
                           size="icon-sm"
                           className="h-4 w-4"
-                          onClick={() => removePanel(terminal.id)}
+                          onClick={() =>
+                            onRequestRemove({
+                              ids: [terminal.id],
+                              label: terminalName,
+                              panelTitles: [],
+                            })
+                          }
                           aria-label={`Remove ${terminalName} permanently`}
                         >
                           <X className="w-2.5 h-2.5" aria-hidden="true" />

@@ -94,8 +94,9 @@ interface TrashTtlMeterProps {
  * accessibility tree (`aria-hidden`) because the label beside it already
  * carries the value as text.
  *
- * Motion: the bar drains over the row's *actual* remaining milliseconds, which
- * is a duration the shared motion tiers deliberately exempt — decay is the
+ * Motion: the bar drains over the whole twenty-second window, seeked to the
+ * row's current position with a negative `animation-delay` — a duration the
+ * shared motion tiers deliberately exempt — decay is the
  * signal here, not a transition between two UI states
  * (`.claude/rules/design-system.md`, semantic exceptions). One CSS animation
  * does the whole drain, so the 1 Hz re-render costs no extra paint. The
@@ -120,12 +121,37 @@ export function TrashTtlMeter({ countdown }: TrashTtlMeterProps) {
         )}
         style={
           {
+            // The inline transform is the truth under reduced motion, where
+            // the animation is off. With motion on, the animation's own
+            // position — seeked by the negative delay — covers the same value
+            // continuously between ticks.
             transform: `scaleX(${fraction})`,
-            "--trash-meter-start": fraction,
-            "--trash-meter-duration": `${remainingMs}ms`,
+            "--trash-meter-ttl": `${TRASH_TTL_MS}ms`,
+            "--trash-meter-elapsed": `-${TRASH_TTL_MS - remainingMs}ms`,
           } as React.CSSProperties
         }
       />
     </span>
   );
+}
+
+/**
+ * A permanent removal waiting on its confirmation.
+ *
+ * The rows raise this rather than calling `removePanel` themselves: the confirm
+ * has to outlive the popover, because the popover is anchored to the toolbar
+ * and paints over any dialog opened beneath it. `TrashContainer` owns the one
+ * dialog, closes the popover, and the row never has to know either fact.
+ */
+export interface TrashRemovalRequest {
+  /** Every panel this removal destroys. */
+  ids: string[];
+  /** The entity the confirm question names. */
+  label: string;
+  /**
+   * Each panel by name, for the preview a bundled destruction owes the user —
+   * a count alone is not enough (`docs/architecture/destructive-action-safeguards.md`).
+   * Empty for a single panel, where the title already names it.
+   */
+  panelTitles: string[];
 }

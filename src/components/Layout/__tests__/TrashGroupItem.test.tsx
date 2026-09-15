@@ -121,11 +121,14 @@ function meterFraction(container: HTMLElement): number {
   return Number(match![1]);
 }
 
+const onRequestRemove = vi.fn();
+
 describe("TrashGroupItem", () => {
   describe("rendering", () => {
     it("shows active tab title with +N more for multi-tab groups", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -148,6 +151,7 @@ describe("TrashGroupItem", () => {
       ];
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={{ ...groupMetadata, panelIds: ["t1"] }}
           terminals={single}
@@ -184,6 +188,7 @@ describe("TrashGroupItem", () => {
       ];
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={withObserved}
@@ -219,6 +224,7 @@ describe("TrashGroupItem", () => {
       ];
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={uselessObserved}
@@ -253,6 +259,7 @@ describe("TrashGroupItem", () => {
       ];
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={agentOnly}
@@ -283,6 +290,7 @@ describe("TrashGroupItem", () => {
       ];
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={useless}
@@ -295,6 +303,7 @@ describe("TrashGroupItem", () => {
     it("uses the active tab when activeTabId points to non-first panel", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={{ ...groupMetadata, activeTabId: "t2" }}
           terminals={terminals}
@@ -311,6 +320,7 @@ describe("TrashGroupItem", () => {
       // render in the expanded list either.
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={{ ...groupMetadata, activeTabId: "t-removed" }}
           terminals={terminals}
@@ -325,6 +335,7 @@ describe("TrashGroupItem", () => {
     it("shows active tab marker on the correct tab", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={{ ...groupMetadata, activeTabId: "t2" }}
           terminals={terminals}
@@ -345,6 +356,7 @@ describe("TrashGroupItem", () => {
     it("shows worktree name when provided", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -358,6 +370,7 @@ describe("TrashGroupItem", () => {
     it("shows deleted tree marker for orphaned groups", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={{ ...groupMetadata, worktreeId: "wt-ghost" }}
           terminals={terminals}
@@ -372,6 +385,7 @@ describe("TrashGroupItem", () => {
     it("starts collapsed", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -386,6 +400,7 @@ describe("TrashGroupItem", () => {
     it("expands to show child terminals on click", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -446,6 +461,7 @@ describe("TrashGroupItem", () => {
     it("renders seconds remaining based on earliestExpiry", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -458,6 +474,7 @@ describe("TrashGroupItem", () => {
     it("decrements displayed seconds when time advances while visible", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -475,6 +492,7 @@ describe("TrashGroupItem", () => {
     it("does not decrement while document is hidden", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -494,6 +512,7 @@ describe("TrashGroupItem", () => {
     it("catches up to wall-clock time on visibility restore", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -512,6 +531,7 @@ describe("TrashGroupItem", () => {
     it("shows 0s for already-expired earliestExpiry", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -526,6 +546,7 @@ describe("TrashGroupItem", () => {
     function renderAt(remainingMs: number) {
       return render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -607,6 +628,7 @@ describe("TrashGroupItem", () => {
     it("reveals a child row's actions on focus as well as hover", () => {
       const { container } = render(
         <TrashGroupItem
+          onRequestRemove={onRequestRemove}
           groupRestoreId="grp1"
           groupMetadata={groupMetadata}
           terminals={terminals}
@@ -619,6 +641,28 @@ describe("TrashGroupItem", () => {
       // A control that is focusable but invisible strands the keyboard user on
       // a button they cannot see — the row one level up already pairs these.
       expect(actions.className).toContain("group-focus-within/panel:opacity-100");
+    });
+  });
+
+  describe("permanent removal is confirmed, not immediate", () => {
+    it("names every member when the whole group is removed", () => {
+      onRequestRemove.mockClear();
+      render(
+        <TrashGroupItem
+          onRequestRemove={onRequestRemove}
+          groupRestoreId="grp1"
+          groupMetadata={groupMetadata}
+          terminals={terminals}
+          earliestExpiry={Date.now() + 20000}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Remove all/i }));
+      expect(onRequestRemove).toHaveBeenCalledTimes(1);
+      const request = onRequestRemove.mock.calls[0]![0];
+      // A count alone is not a preview: a bundled destruction has to say what
+      // it is destroying, one name per panel.
+      expect(request.ids).toHaveLength(terminals.length);
+      expect(request.panelTitles).toHaveLength(terminals.length);
     });
   });
 });

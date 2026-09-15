@@ -15,17 +15,28 @@ import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
-import { TrashCountdownLabel, TrashTtlMeter, useTrashCountdown } from "./trashCountdown";
+import {
+  TrashCountdownLabel,
+  TrashTtlMeter,
+  useTrashCountdown,
+  type TrashRemovalRequest,
+} from "./trashCountdown";
 
 interface TrashBinItemProps {
   terminal: PanelInstance;
   trashedInfo: TrashedTerminal;
   worktreeName?: string;
+  /** Raise a permanent removal for the container to confirm. */
+  onRequestRemove: (request: TrashRemovalRequest) => void;
 }
 
-export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinItemProps) {
+export function TrashBinItem({
+  terminal,
+  trashedInfo,
+  worktreeName,
+  onRequestRemove,
+}: TrashBinItemProps) {
   const restoreTerminal = usePanelStore((s) => s.restoreTerminal);
-  const removePanel = usePanelStore((s) => s.removePanel);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   // Re-render when a plugin loads/unloads mid-session so the trashed terminal's
   // icon/name pick up the updated registry (#9879). Subscription is the
@@ -46,10 +57,6 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
     }
   }, [restoreTerminal, terminal.id, isOrphan, activeWorktreeId]);
 
-  const handleKill = useCallback(() => {
-    removePanel(terminal.id);
-  }, [removePanel, terminal.id]);
-
   const terminalName = (() => {
     if (isPtyPanel(terminal)) {
       // A user-locked title is fully frozen — it outranks the observed task.
@@ -67,9 +74,14 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
     return terminal.title || "Terminal";
   })();
 
+  const handleKill = useCallback(() => {
+    onRequestRemove({ ids: [terminal.id], label: terminalName, panelTitles: [] });
+  }, [onRequestRemove, terminal.id, terminalName]);
+
   return (
     <div
       data-trash-row
+      data-row-id={terminal.id}
       className="relative flex shrink-0 items-start gap-2 overflow-hidden rounded-[var(--radius-sm)] bg-transparent px-2.5 py-1.5 transition-colors hover:bg-tint/5 group"
     >
       <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">

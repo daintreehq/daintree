@@ -16,7 +16,7 @@ import {
 } from "@/components/DragDrop";
 import { DURATION_200, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import { usePanelStore } from "@/store";
-import { TRASH_TTL_SECONDS, useTrashCountdown } from "./trashCountdown";
+import { TRASH_TTL_SECONDS, useTrashCountdown, type TrashRemovalRequest } from "./trashCountdown";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
@@ -59,18 +59,83 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
   const [showMovedHint, setShowMovedHint] = useState(false);
   const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<TrashRemovalRequest | null>(null);
   const [isScrollable, setIsScrollable] = useState(false);
   const prevLengthRef = useRef(trashedTerminals.length);
   const hintShowCountRef = useRef(0);
   const isExecutingRef = useRef(false);
   const { worktreeMap } = useWorktrees();
   const emptyTrash = usePanelStore((s) => s.emptyTrash);
+  const removePanel = usePanelStore((s) => s.removePanel);
   // Only show the ghost pill for panel drags — worktree-card sort drags also flip
   // isDragging but cannot drop on trash, and a phantom drop target is misleading.
   const isDragging = useIsDragging();
   const isWorktreeSortDragging = useIsWorktreeSortDragging();
   const isPanelDragging = isDragging && !isWorktreeSortDragging;
   const { setNodeRef, isOver } = useDroppable({ id: TRASH_DROPPABLE_ID });
+
+  // What was in the trash last render, and when each entry was due. The
+  // container is the only place that sees an entry leave, and the deadline it
+  // left with is what says whether it expired or the user acted on it.
+  const prevEntriesRef = useRef(new Map<string, number>());
+
+  // Expiry is the one departure nobody asked for: a restore or a remove is its
+  // own feedback, and a count that only went down cannot tell the three apart.
+  useEffect(() => {
+    const next = new Map(trashedTerminals.map((t) => [t.terminal.id, t.trashedInfo.expiresAt]));
+    const previous = prevEntriesRef.current;
+    prevEntriesRef.current = next;
+
+    const now = Date.now();
+    let expired = 0;
+    for (const [id, expiresAt] of previous) {
+      // A 1s grace covers the gap between the scheduled removal and this
+      // render; anything still well short of its deadline was acted on.
+      if (!next.has(id) && expiresAt - now <= 1000) expired += 1;
+    }
+    if (expired === 0) return;
+    useAnnouncerStore
+      .getState()
+      .announce(
+        expired === 1
+          ? "A closed panel expired and was removed permanently"
+          : `${expired} closed panels expired and were removed permanently`
+      );
+  }, [trashedTerminals]);
+
+  // Which row owns focus, so a row expiring under the keyboard has somewhere to
+  // hand it to. Radix declines auto-focus on this popover, so without this a
+  // focused Restore button unmounting drops focus on document.body — exactly
+  // when the remaining opportunities are shortest.
+  const focusedRowRef = useRef<{ id: string; index: number } | null>(null);
+
+  // Removing a trashed pane ends it for good, and Restore is the inverse of
+  // *closing* a pane, not of destroying one — so this is a D1 action and takes
+  // a confirm. The dialog is owned here rather than by the row because the
+  // popover is anchored to the toolbar and paints over anything opened beneath
+  // it; the popover steps aside, which it cannot do while hosting the dialog.
+  const requestRemoval = useCallback((request: TrashRemovalRequest) => {
+    setIsOpen(false);
+    setPendingRemoval(request);
+  }, []);
+
+  // Reopen where they were: the popover only closed to get out of the dialog's
+  // way, and a cancelled removal that also loses your place is two losses.
+  const closeRemoval = useCallback(() => {
+    setPendingRemoval(null);
+    setIsOpen(true);
+  }, []);
+
+  const handleListFocus = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+    const row = (event.target as HTMLElement).closest<HTMLElement>("[data-row-id]");
+    const list = event.currentTarget;
+    if (!row) {
+      focusedRowRef.current = null;
+      return;
+    }
+    const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-row-id]"));
+    focusedRowRef.current = { id: row.dataset.rowId ?? "", index: rows.indexOf(row) };
+  }, []);
 
   useEffect(() => {
     const increased = trashedTerminals.length > prevLengthRef.current;
@@ -238,6 +303,25 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
     measureOverflow();
   }, [isOpen, measureOverflow, trashedTerminals.length]);
 
+  // Hand focus on when the row holding it disappears. Only when focus actually
+  // fell on the body: a restore moves focus deliberately, and stealing it back
+  // would fight the user.
+  useEffect(() => {
+    const focused = focusedRowRef.current;
+    const list = listNodeRef.current;
+    if (!isOpen || !focused || !list) return;
+    if (list.querySelector(`[data-row-id="${CSS.escape(focused.id)}"]`)) return;
+
+    focusedRowRef.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body && list.contains(active)) return;
+
+    const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-row-id]"));
+    // The row that slid into the vacated position, else the last one left.
+    const heir = rows[Math.min(focused.index, rows.length - 1)];
+    heir?.querySelector<HTMLElement>("button:not([disabled])")?.focus();
+  }, [isOpen, trashedTerminals]);
+
   const earliestExpiry = useMemo(() => {
     let earliest = Infinity;
     for (const { trashedInfo } of trashedTerminals) {
@@ -348,15 +432,6 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={(e) => e.preventDefault()}
-          onPointerDownOutside={(e) => {
-            if (emptyTrashConfirmOpen) e.preventDefault();
-          }}
-          onInteractOutside={(e) => {
-            if (emptyTrashConfirmOpen) e.preventDefault();
-          }}
-          onEscapeKeyDown={(e) => {
-            if (emptyTrashConfirmOpen) e.preventDefault();
-          }}
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-overlay-subtle flex justify-between items-start gap-2">
@@ -366,7 +441,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                     so once in the header is what stops the trash-can framing
                     promising a durability the surface does not have — the
                     per-row deadline alone never explains the rule. */}
-                <span className="text-3xs text-text-muted">
+                <span className="text-3xs text-text-secondary">
                   Gone for good {TRASH_TTL_SECONDS}s after closing
                 </span>
               </div>
@@ -390,6 +465,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
 
             <div
               ref={listRef}
+              onFocusCapture={handleListFocus}
               // The rows carry `shrink-0`: a flex column compresses its
               // children to fit before it will scroll, which squashed the
               // metadata line under the row's own TTL meter and left
@@ -410,6 +486,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                       terminals={item.terminals}
                       worktreeName={worktreeName}
                       earliestExpiry={item.earliestExpiry}
+                      onRequestRemove={requestRemoval}
                     />
                   );
                 } else {
@@ -422,6 +499,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                       terminal={item.terminal}
                       trashedInfo={item.trashedInfo}
                       worktreeName={worktreeName}
+                      onRequestRemove={requestRemoval}
                     />
                   );
                 }
@@ -444,6 +522,36 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
             )}
           </div>
         </PopoverContent>
+
+        <ConfirmDialog
+          isOpen={pendingRemoval !== null}
+          onClose={closeRemoval}
+          title={`Remove ${pendingRemoval?.label ?? ""}?`}
+          description={
+            (pendingRemoval?.ids.length ?? 0) === 1
+              ? `${pendingRemoval?.label ?? "This panel"} will be permanently removed.`
+              : `${pendingRemoval?.ids.length ?? 0} panels will be permanently removed.`
+          }
+          variant="destructive"
+          hasPreview={(pendingRemoval?.panelTitles.length ?? 0) > 0}
+          confirmLabel={(pendingRemoval?.ids.length ?? 0) === 1 ? "Remove panel" : "Remove panels"}
+          onConfirm={() => {
+            for (const id of pendingRemoval?.ids ?? []) removePanel(id);
+            closeRemoval();
+          }}
+        >
+          {(pendingRemoval?.panelTitles.length ?? 0) > 0 && (
+            <div className="max-h-40 overflow-y-auto">
+              <ul className="space-y-0.5 text-xs text-text-secondary">
+                {(pendingRemoval?.panelTitles ?? []).map((title, i) => (
+                  <li key={i} className="truncate">
+                    {title}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </ConfirmDialog>
 
         <ConfirmDialog
           isOpen={emptyTrashConfirmOpen}
