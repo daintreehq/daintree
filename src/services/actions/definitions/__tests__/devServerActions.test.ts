@@ -21,11 +21,7 @@ function setupActions() {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
   registerDevServerActions(actions, callbacks);
-  return async (
-    id: string,
-    ctx: Partial<ActionContext> = {},
-    args?: unknown
-  ): Promise<unknown> => {
+  return async (id: string, ctx: Partial<ActionContext> = {}, args?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;

@@ -657,18 +657,18 @@ describe("reading-surface dock/trash fallback (#8946 — previous-focused policy
     expect(usePanelStore.getState().focusedId).toBe("shell-1");
   });
 
-  it.each(["browser", "dev-preview"] as const)(
+  it.each([
+    ["browser", makeBrowserPanel],
+    ["dev-preview", makeDevPreviewPanel],
+  ] as const)(
     "moveTerminalToDock: dockable reading surface (%s) restores focus to previousFocusedId",
-    (kind) => {
+    (_kind, makePanel) => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
       usePanelStore.setState({
         panelsById: {
           "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
           "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
-          "browser-1":
-            kind === "browser"
-              ? makeBrowserPanel("browser-1", "wt-1")
-              : makeDevPreviewPanel("browser-1", "wt-1"),
+          "browser-1": makePanel("browser-1", "wt-1"),
         },
         panelIds: ["shell-first", "shell-last", "browser-1"],
         focusedId: "browser-1",
