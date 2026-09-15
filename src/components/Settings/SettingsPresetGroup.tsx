@@ -20,6 +20,12 @@ interface SettingsPresetGroupProps<T extends string | number> {
   disabled?: boolean;
   /** Help text under the row, associated with the group for assistive tech. */
   description?: string;
+  /**
+   * Keep the label in the accessibility tree but out of the layout. For a group that is
+   * the only control in its section, the section heading is already the visible label and
+   * repeating it reads as a stutter — but the radiogroup still needs a name.
+   */
+  labelHidden?: boolean;
 }
 
 /**
@@ -40,6 +46,7 @@ export function SettingsPresetGroup<T extends string | number>({
   id,
   disabled,
   description,
+  labelHidden,
 }: SettingsPresetGroupProps<T>) {
   const labelId = useId();
   const descriptionId = useId();
@@ -110,7 +117,7 @@ export function SettingsPresetGroup<T extends string | number>({
 
   return (
     <div id={id} className="space-y-2 scroll-mt-12">
-      <span id={labelId} className="block text-sm text-text-secondary">
+      <span id={labelId} className={labelHidden ? "sr-only" : "block text-sm text-text-secondary"}>
         {label}
       </span>
       <div
