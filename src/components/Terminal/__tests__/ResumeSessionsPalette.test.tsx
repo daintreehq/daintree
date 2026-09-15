@@ -20,6 +20,9 @@ const paletteState = {
   visibleResults: [] as ResumeSessionItem[],
   hiddenCount: 0,
   showMore: vi.fn(),
+  removedResults: [] as ResumeSessionItem[],
+  removedVisible: false,
+  toggleRemoved: vi.fn(),
 };
 
 vi.mock("@/hooks/useResumeSessionsPalette", () => ({
@@ -82,10 +85,15 @@ function makeItem(id: string, overrides: Partial<ResumeSessionItem> = {}): Resum
     // Only forwarded to the resume launcher, which is mocked out here.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- journal-record fixture stub
     session: { sessionId: id } as ResumeSessionItem["session"],
-    name: `Session ${id}`,
+    title: `Session ${id}`,
+    hasTitle: true,
+    name: `Resume: Session ${id}`,
     iconId: "claude",
     color: "#fff",
-    description: "model · agent · location",
+    modelName: "Opus 4.8",
+    location: "feature-a",
+    timeAgo: "5m ago",
+    description: "Opus 4.8 · feature-a · 5m ago",
     searchAliases: [],
     isStale: false,
     ...overrides,
@@ -101,10 +109,14 @@ function rowFor(id: string): HTMLElement {
 describe("ResumeSessionsPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    const items = [makeItem("a"), makeItem("b"), makeItem("c", { isStale: true })];
-    paletteState.results = items;
-    paletteState.visibleResults = items;
-    paletteState.totalResults = items.length;
+    const live = [makeItem("a"), makeItem("b")];
+    const removed = [makeItem("c", { isStale: true }), makeItem("d", { isStale: true })];
+    paletteState.results = [...live, ...removed];
+    paletteState.visibleResults = live;
+    paletteState.removedResults = removed;
+    paletteState.removedVisible = true;
+    paletteState.isSearching = false;
+    paletteState.totalResults = live.length + removed.length;
     paletteState.selectedIndex = 0;
   });
 
@@ -165,5 +177,57 @@ describe("ResumeSessionsPalette", () => {
     // item, not of the selection, so it must not have been folded away.
     expect(rowFor("c").className).not.toBe(rowFor("b").className);
     expect(rowFor("c").getAttribute("aria-disabled")).toBe("true");
+    // And an inert row makes no hover promise a live one keeps.
+    const hoverTokens = (el: HTMLElement) =>
+      el.className.split(/\s+/).filter((token) => token.startsWith("hover:"));
+    expect(hoverTokens(rowFor("b")).length).toBeGreaterThan(0);
+    expect(hoverTokens(rowFor("c"))).toEqual([]);
+  });
+
+  it("says 'Worktree removed' once for the section, never once per row", () => {
+    render(<ResumeSessionsPalette />);
+    const list = screen.getByRole("listbox");
+    const mentions = (list.textContent ?? "").match(/worktree removed/gi) ?? [];
+    expect(mentions).toHaveLength(1);
+    // Both removed rows are rendered under it.
+    expect(rowFor("c")).not.toBeNull();
+    expect(rowFor("d")).not.toBeNull();
+  });
+
+  it("folds the removed rows away while browsing until the heading is opened", () => {
+    paletteState.removedVisible = false;
+    render(<ResumeSessionsPalette />);
+
+    expect(document.getElementById("resume-session-option-c")).toBeNull();
+    const fold = screen.getByRole("button", { name: /worktree removed/i });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(fold.textContent).toContain("2");
+    fold.click();
+    expect(paletteState.toggleRemoved).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels rather than folds the removed matches while searching", () => {
+    paletteState.isSearching = true;
+    paletteState.query = "sess";
+    render(<ResumeSessionsPalette />);
+
+    expect(screen.queryByRole("button", { name: /worktree removed/i })).toBeNull();
+    expect(screen.getByRole("listbox").textContent).toMatch(/worktree removed/i);
+    expect(rowFor("c")).not.toBeNull();
+  });
+
+  it("renders the bare title with its age beside it, and never stutters the verb", () => {
+    render(<ResumeSessionsPalette />);
+    const row = rowFor("a");
+    expect(row.textContent).not.toMatch(/resume/i);
+    expect(row.textContent).toContain("Session a");
+    expect(row.textContent).toContain("5m ago");
+    // The age is its own element, not the tail of the metadata line.
+    const meta = row.querySelector(".truncate:last-child");
+    expect(meta?.textContent).not.toContain("5m ago");
+
+    const footer = document.querySelector('[role="dialog"]')?.textContent ?? "";
+    expect(footer).toMatch(/to resume Session a/);
+    expect(footer).not.toMatch(/resume resume/i);
   });
 });

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
-import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
@@ -20,6 +21,7 @@ interface ResumeSessionRowProps {
 }
 
 function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: ResumeSessionRowProps) {
+  const meta = [item.modelName, item.location].filter(Boolean).join(" · ");
   return (
     <button
       id={`resume-session-option-${item.id}`}
@@ -33,8 +35,11 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         PALETTE_ROW_CLASS,
         "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
         "text-text-secondary",
-        "hover:bg-overlay-subtle hover:text-text-primary",
-        item.isStale && "opacity-50"
+        // A removed-worktree row is inert: no hover lift promising an action
+        // Enter will not take, and its title steps down the text hierarchy
+        // rather than fading the whole row — the title is still what says
+        // which session this was.
+        item.isStale ? "cursor-default" : "hover:bg-overlay-subtle hover:text-text-primary"
       )}
       onClick={() => onSelect(item)}
     >
@@ -42,19 +47,70 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         <PanelKindIcon iconId={item.iconId} color={item.color} size={16} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-text-primary truncate">
-          <HighlightedText text={item.name} indices={findMatchIndices(matches, "name")} />
+        <div className="flex items-baseline gap-3">
+          <div
+            className={cn(
+              "flex-1 min-w-0 text-sm font-medium truncate",
+              item.isStale ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
+            <HighlightedText text={item.title} indices={findMatchIndices(matches, "title")} />
+          </div>
+          {/* Recency is the strongest ranking signal a user has, so it gets a
+              column of its own instead of the tail of a run of grey text — and
+              it can never be the part that truncates. */}
+          <span className="shrink-0 text-xs text-text-secondary tabular-nums">{item.timeAgo}</span>
         </div>
-        {item.description && (
-          <div className="text-xs text-text-secondary truncate">{item.description}</div>
-        )}
+        {meta && <div className="text-xs text-text-secondary truncate">{meta}</div>}
       </div>
-      {item.isStale && (
-        <span className="shrink-0 mt-0.5 text-3xs font-medium text-text-secondary">
-          Worktree removed
-        </span>
-      )}
     </button>
+  );
+}
+
+/**
+ * The heading over the removed-worktree rows. While browsing it is a fold, so
+ * the dead history is one line rather than the bulk of the list; while
+ * searching the rows are always shown and this is just their label. Inside
+ * the listbox, so `tabIndex={-1}` and pointer-only: the rows under it cannot
+ * take the selection anyway (#10851), so there is nothing for the keyboard
+ * to reach by opening it.
+ */
+function RemovedHeading({
+  count,
+  expanded,
+  collapsible,
+  onToggle,
+}: {
+  count: number;
+  expanded: boolean;
+  collapsible: boolean;
+  onToggle: () => void;
+}) {
+  const className = cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1 px-3 pt-3 pb-1");
+  if (!collapsible) {
+    return (
+      <div role="presentation" className={className}>
+        Worktree removed
+      </div>
+    );
+  }
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+  return (
+    <div role="presentation">
+      <button
+        type="button"
+        tabIndex={-1}
+        onPointerDown={(e) => e.preventDefault()}
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className={cn(className, "w-full text-left transition-colors hover:text-text-primary")}
+      >
+        <Chevron className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span>Worktree removed</span>
+        <span aria-hidden="true">·</span>
+        <span className="tabular-nums">{count}</span>
+      </button>
+    </div>
   );
 }
 
@@ -75,6 +131,9 @@ export function ResumeSessionsPalette() {
     visibleResults,
     hiddenCount,
     showMore,
+    removedResults,
+    removedVisible,
+    toggleRemoved,
   } = useResumeSessionsPalette();
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -205,18 +264,31 @@ export function ResumeSessionsPalette() {
           <>
             <div id="resume-session-list" role="listbox" aria-label="Closed sessions">
               {visibleResults.map(renderRow)}
+              {!isSearching && hiddenCount > 0 && (
+                <div role="presentation">
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={showMore}
+                    className="w-full px-3 py-2 rounded-[var(--radius-md)] text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary"
+                  >
+                    Load more ({hiddenCount})
+                  </button>
+                </div>
+              )}
+              {removedResults.length > 0 && (
+                <>
+                  <RemovedHeading
+                    count={removedResults.length}
+                    expanded={removedVisible}
+                    collapsible={!isSearching}
+                    onToggle={toggleRemoved}
+                  />
+                  {removedVisible && removedResults.map(renderRow)}
+                </>
+              )}
             </div>
-            {!isSearching && hiddenCount > 0 && (
-              <button
-                type="button"
-                tabIndex={-1}
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={showMore}
-                className="w-full px-3 py-2 rounded-[var(--radius-md)] text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary"
-              >
-                Load more ({hiddenCount})
-              </button>
-            )}
             {/* Fully-paged browse and search both surface records beyond the
                 result cap — search is the only way to reach them. The notice
                 self-hides when nothing overflows. */}
@@ -231,7 +303,9 @@ export function ResumeSessionsPalette() {
         <PaletteFooterHints
           primaryHint={{
             keys: ["↵"],
-            label: selected ? `to resume ${selected.name.toLowerCase()}` : "to resume",
+            // The title keeps its own case: these are sentences with names in
+            // them, not the noun a sibling palette lowercases.
+            label: selected ? `to resume ${selected.title}` : "to resume",
           }}
         />
       </AppPaletteDialog.Footer>

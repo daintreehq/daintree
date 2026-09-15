@@ -32,6 +32,15 @@ describe("isUselessTitle", () => {
     expect(isUselessTitle("gemini")).toBe(true);
   });
 
+  it("filters an agent's product name — the idle title before any task", () => {
+    expect(isUselessTitle("Claude Code")).toBe(true);
+    expect(isUselessTitle("claude code")).toBe(true);
+    expect(isUselessTitle("Gemini CLI")).toBe(true);
+    expect(isUselessTitle("Claude")).toBe(true);
+    // A task that merely mentions the product is a task.
+    expect(isUselessTitle("Claude Code onboarding review")).toBe(false);
+  });
+
   it("filters path-like strings", () => {
     expect(isUselessTitle("/Users/alice/project")).toBe(true);
     expect(isUselessTitle("~/project")).toBe(true);

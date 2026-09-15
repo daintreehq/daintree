@@ -62,7 +62,10 @@ describe("buildResumeSessionItems", () => {
       worktrees,
     });
     expect(item?.isStale).toBe(true);
-    expect(item?.description).toContain("Worktree removed");
+    // The row says where it ran; the heading it sits under says the worktree
+    // is gone. Saying it on the row too is how it came to be printed twice.
+    expect(item?.location).toBe("old/branch");
+    expect(item?.description).not.toContain("Worktree removed");
   });
 
   it("keeps a stale entry findable by its cwd basename when it has no branch", () => {
@@ -113,8 +116,36 @@ describe("buildResumeSessionItems", () => {
       currentProjectId: "p1",
       worktrees,
     });
+    expect(withTitle?.title).toBe("Fix the auth bug");
+    expect(withTitle?.hasTitle).toBe(true);
     expect(withTitle?.name).toBe("Resume: Fix the auth bug");
-    expect(noTitle?.name).toBe("Resume test-agent");
+    expect(noTitle?.title).toBe("test-agent session");
+    expect(noTitle?.hasTitle).toBe(false);
+    expect(noTitle?.name).toBe("Resume test-agent session");
+  });
+
+  it("treats an agent's own product name as no title", () => {
+    // Claude Code sits on "Claude Code" until it has a task to summarise; a
+    // row titled that way carries nothing the agent glyph beside it does not.
+    const [item] = buildResumeSessionItems([rec({ agentId: "claude", title: "✳ Claude Code" })], {
+      currentProjectId: "p1",
+      worktrees,
+    });
+    expect(item?.hasTitle).toBe(false);
+    expect(item?.title).toBe("Claude session");
+  });
+
+  it("keeps the agent out of the metadata line — the glyph already says it", () => {
+    const [item] = buildResumeSessionItems(
+      [rec({ agentId: "claude", title: "Fix the auth bug", agentModelId: "claude-opus-4-8" })],
+      { currentProjectId: "p1", worktrees }
+    );
+    expect(item?.description).not.toMatch(/claude/i);
+    expect(item?.description).toBe(`Opus 4.8 · feature-a · ${item?.timeAgo}`);
+    expect(item?.modelName).toBe("Opus 4.8");
+    expect(item?.location).toBe("feature-a");
+    // Still findable by agent, though.
+    expect(item?.searchAliases).toContain("Claude");
   });
 });
 
@@ -129,7 +160,9 @@ describe("pathBasename", () => {
 
 describe("prettifyModelId", () => {
   it("strips the provider prefix and claude- prefix, then title-cases", () => {
-    expect(prettifyModelId("anthropic/claude-opus-4-8")).toBe("Opus 4 8");
-    expect(prettifyModelId("gpt-5.5")).toBe("Gpt 5.5");
+    expect(prettifyModelId("anthropic/claude-opus-4-8")).toBe("Opus 4.8");
+    expect(prettifyModelId("gpt-5.5")).toBe("GPT 5.5");
+    expect(prettifyModelId("gpt-5.3-codex")).toBe("GPT 5.3 Codex");
+    expect(prettifyModelId("claude-sonnet-4-5-20250929")).toBe("Sonnet 4.5.20250929");
   });
 });
