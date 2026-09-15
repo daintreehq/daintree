@@ -2037,8 +2037,7 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
 
   it("ignores a frame confirmation that outlives its gate", async () => {
     const confirmations: Array<(painted: boolean) => void> = [];
-    const confirmFrame = () =>
-      new Promise<boolean>((resolve) => confirmations.push(resolve));
+    const confirmFrame = () => new Promise<boolean>((resolve) => confirmations.push(resolve));
     const options = {
       releaseChannel: "warm-painted" as const,
       softMs: 1_000,
