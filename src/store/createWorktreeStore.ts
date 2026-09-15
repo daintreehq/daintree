@@ -2179,6 +2179,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.hasResumeCommand === b.hasResumeCommand &&
     a.hasTeardownCommand === b.hasTeardownCommand &&
     a.resourceConnectCommand === b.resourceConnectCommand &&
+    a.lifecycleCommandsNeedApproval === b.lifecycleCommandsNeedApproval &&
     a.isExternal === b.isExternal &&
     a.isWslPath === b.isWslPath &&
     a.wslDistro === b.wslDistro &&

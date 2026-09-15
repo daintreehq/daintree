@@ -44,6 +44,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     hasResumeCommand: false,
     hasTeardownCommand: false,
     hasProvisionCommand: false,
+    lifecycleCommandsNeedApproval: undefined,
     worktreeMode: "local",
     worktreeEnvironmentLabel: undefined,
     hasPlanFile: false,
@@ -161,6 +162,18 @@ describe("SnapshotBuilder", () => {
 
     const trueHost = makeHost({ hasResourceConfig: true });
     expect(new SnapshotBuilder(trueHost).build().hasResourceConfig).toBe(true);
+  });
+
+  it("carries the command approval flag only when approval is outstanding", () => {
+    expect(new SnapshotBuilder(makeHost()).build().lifecycleCommandsNeedApproval).toBeUndefined();
+    expect(
+      new SnapshotBuilder(makeHost({ lifecycleCommandsNeedApproval: false })).build()
+        .lifecycleCommandsNeedApproval
+    ).toBeUndefined();
+    expect(
+      new SnapshotBuilder(makeHost({ lifecycleCommandsNeedApproval: true })).build()
+        .lifecycleCommandsNeedApproval
+    ).toBe(true);
   });
 
   it("copies lifecyclePhaseResults defensively and omits when empty", () => {

@@ -9,6 +9,7 @@ import type { WorktreeState } from "@/types";
 import type { WorktreeChanges } from "@shared/types/git";
 import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { actionService } from "@/services/ActionService";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
@@ -46,6 +47,16 @@ vi.mock("react-dom", async () => {
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
+}));
+
+vi.mock("../../LifecycleCommandApprovalDialog", () => ({
+  LifecycleCommandApprovalDialog: (props: { isOpen: boolean; setupAwaitingApproval: boolean }) =>
+    props.isOpen ? (
+      <div
+        data-testid="approval-dialog"
+        data-setup-awaiting-approval={String(props.setupAwaitingApproval)}
+      />
+    ) : null,
 }));
 
 const noop = () => {};
@@ -516,5 +527,64 @@ describe("worktree error banners (issue #12087)", () => {
     rerender(<WorktreeIssueErrorBanner message="disk on fire" mutationType="detach-issue" />);
     expect(screen.getByRole("alert").textContent).toContain("disk on fire");
     expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+describe("WorktreeDetailsSection — repository command approval", () => {
+  beforeEach(() => {
+    vi.mocked(actionService.dispatch).mockClear();
+  });
+
+  it("offers a review when the host reports commands waiting for approval", async () => {
+    const onCardClick = vi.fn();
+    render(
+      <div onClick={onCardClick}>
+        <TooltipProvider>
+          <WorktreeDetailsSection
+            {...baseProps}
+            worktree={{
+              ...baseWorktree,
+              lifecycleCommandsNeedApproval: true,
+              lifecycleStatus: {
+                phase: "setup",
+                state: "needs-approval",
+                startedAt: 1,
+                completedAt: 1,
+              },
+            }}
+          />
+        </TooltipProvider>
+      </div>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /review commands/i }));
+
+    const dialog = await screen.findByTestId("approval-dialog");
+    expect(dialog.getAttribute("data-setup-awaiting-approval")).toBe("true");
+    expect(onCardClick).not.toHaveBeenCalled();
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("runs a skipped setup once its commands are already approved", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        lifecycleStatus: { phase: "setup", state: "needs-approval", startedAt: 1, completedAt: 1 },
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: /review commands/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /run setup/i }));
+
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "worktree.lifecycle.retrySetup",
+      { worktreeId: baseWorktree.id },
+      expect.objectContaining({ source: "user" })
+    );
+  });
+
+  it("stays out of the way when nothing needs approval", () => {
+    renderSection();
+    expect(screen.queryByTestId("worktree-command-approval")).toBeNull();
   });
 });

@@ -4,7 +4,11 @@ import PQueue from "p-queue";
 import type { WorkspaceHostEvent } from "../../shared/types/workspace-host.js";
 import type { WorktreeResourceStatus } from "../../shared/types/worktree.js";
 import { WorktreeMonitor } from "./WorktreeMonitor.js";
-import { WorktreeLifecycleService } from "./WorktreeLifecycleService.js";
+import {
+  LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
+  WorktreeLifecycleService,
+  type ResolvedResourceEnvironments,
+} from "./WorktreeLifecycleService.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
@@ -74,7 +78,12 @@ export class ResourceActionExecutor {
       return { success: false, error: "Aborted" };
     }
 
-    const config = await this.ctx.lifecycleService.loadConfig(monitor.path, projectRootPath);
+    const resolvedConfig = await this.ctx.lifecycleService.resolveConfig(
+      monitor.path,
+      projectRootPath
+    );
+    const config = resolvedConfig?.config ?? null;
+    let resourceEnvironments: ResolvedResourceEnvironments | null = null;
 
     // Resolve resource config: prefer resources (plural) over resource (singular)
     let resourceConfig = config?.resource;
@@ -96,8 +105,9 @@ export class ResourceActionExecutor {
       const envKey = monitor.worktreeMode;
       if (envKey && envKey !== "local") {
         const envs =
-          await this.ctx.lifecycleService.loadProjectResourceEnvironments(projectRootPath);
-        resourceConfig = envs?.[envKey] ?? undefined;
+          await this.ctx.lifecycleService.resolveProjectResourceEnvironments(projectRootPath);
+        resourceConfig = envs?.environments[envKey] ?? undefined;
+        if (resourceConfig) resourceEnvironments = envs;
       }
     }
 
@@ -119,7 +129,38 @@ export class ResourceActionExecutor {
     );
     const sub = (cmd: string) => this.ctx.lifecycleService.substituteVariables(cmd, vars);
 
-    applyResourceConfigToMonitor(monitor, resourceConfig, sub);
+    // Checked here, after dequeue and against the config just read, so neither
+    // a queued action nor the automatic status poll can run commands that were
+    // approved when it was scheduled but have changed since.
+    const commandsApproved = await this.ctx.lifecycleService.isResourceApproved(
+      resolvedConfig,
+      resourceEnvironments,
+      projectRootPath
+    );
+
+    const previousConnectCommand = monitor.resourceConnectCommand;
+    applyResourceConfigToMonitor(monitor, resourceConfig, sub, commandsApproved);
+
+    if (!commandsApproved) {
+      // No status is written: nothing ran, so there is nothing observed to
+      // report, and the last real status stays truthful.
+      const liveMonitor = this.ctx.getMonitor(worktreeId);
+      if (
+        liveMonitor &&
+        (liveMonitor.lifecycleCommandsNeedApproval !== true ||
+          liveMonitor.resourceConnectCommand !== previousConnectCommand)
+      ) {
+        liveMonitor.setLifecycleCommandsNeedApproval(true);
+        this.ctx.emitUpdate(liveMonitor);
+      }
+      this.ctx.sendEvent({
+        type: "resource-action-result",
+        requestId,
+        success: false,
+        error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
+      });
+      return { success: false, error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR };
+    }
 
     const env = this.ctx.lifecycleService.buildEnv(
       monitor.path,

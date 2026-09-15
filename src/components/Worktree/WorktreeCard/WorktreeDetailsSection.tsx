@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
@@ -19,9 +19,11 @@ import {
   Plug,
   Play,
   RotateCcw,
+  ShieldAlert,
   Square,
   Trash2,
 } from "lucide-react";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
 import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
@@ -34,6 +36,12 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+
+const LazyLifecycleCommandApprovalDialog = lazy(() =>
+  import("../LifecycleCommandApprovalDialog").then((m) => ({
+    default: m.LifecycleCommandApprovalDialog,
+  }))
+);
 
 export interface WorktreeDetailsSectionProps {
   worktree: WorktreeState;
@@ -172,6 +180,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const lifecycleError = worktree.lifecycleStatus?.error;
   const lifecycleOutput = worktree.lifecycleStatus?.output;
   const hasLifecycleDetails = lifecycleFailed && Boolean(lifecycleError || lifecycleOutput);
+  // Two separate observations: the host found unapproved repository commands
+  // this worktree would run, and/or its setup was skipped for want of approval.
+  // The second outlives the first once the commands are approved elsewhere.
+  const commandsNeedApproval = worktree.lifecycleCommandsNeedApproval === true;
+  const setupNeedsApproval =
+    worktree.lifecycleStatus?.phase === "setup" && lifecycleState === "needs-approval";
+  const [isApprovalDialogOpen, setIsApprovalDialogOpen] = useState(false);
+  const approvalDialogMounted = useKeepMounted(isApprovalDialogOpen);
+  const handleReviewCommands = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsApprovalDialogOpen(true);
+  };
   const [isRetryingSetup, setIsRetryingSetup] = useState(false);
   const handleRetrySetup = async (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
@@ -373,7 +393,15 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   ) : lifecycleLabel &&
                     !isLifecycleRunning &&
                     worktree.lifecycleStatus?.state !== "success" ? (
-                    <span className="text-status-error">{lifecycleLabel}</span>
+                    <span
+                      className={
+                        lifecycleState === "needs-approval"
+                          ? "text-status-warning"
+                          : "text-status-error"
+                      }
+                    >
+                      {lifecycleLabel}
+                    </span>
                   ) : isConflicted ? (
                     <span className="flex items-center gap-1.5 text-status-error">
                       <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
@@ -606,9 +634,60 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 )}
               </div>
             )}
+
+            {(commandsNeedApproval || setupNeedsApproval) && (
+              <div
+                className={cn(
+                  "flex items-center justify-between gap-2 py-1",
+                  isSidebar ? "mt-1" : "mt-1 pl-1.5 pr-2.5"
+                )}
+                data-testid="worktree-command-approval"
+              >
+                <span className="text-xs text-text-secondary truncate">
+                  {commandsNeedApproval
+                    ? setupNeedsApproval
+                      ? "Setup is waiting for you to approve its commands"
+                      : "Repository commands need your approval to run"
+                    : "Setup was skipped, and its commands are approved now"}
+                </span>
+                <button
+                  type="button"
+                  onClick={commandsNeedApproval ? handleReviewCommands : handleRetrySetup}
+                  disabled={!commandsNeedApproval && isRetryingSetup}
+                  className={cn(
+                    "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
+                    "text-status-warning hover:bg-status-warning/10",
+                    "disabled:opacity-50 disabled:cursor-not-allowed",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+                  )}
+                >
+                  {commandsNeedApproval ? (
+                    <ShieldAlert className="w-3 h-3" aria-hidden="true" />
+                  ) : (
+                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                  )}
+                  {commandsNeedApproval
+                    ? "Review commands"
+                    : isRetryingSetup
+                      ? "Starting…"
+                      : "Run setup"}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {approvalDialogMounted && (
+        <Suspense fallback={null}>
+          <LazyLifecycleCommandApprovalDialog
+            isOpen={isApprovalDialogOpen}
+            worktreeId={worktree.id}
+            setupAwaitingApproval={setupNeedsApproval}
+            onClose={() => setIsApprovalDialogOpen(false)}
+          />
+        </Suspense>
+      )}
     </>
   );
 }

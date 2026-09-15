@@ -230,6 +230,9 @@ export class WorktreeMonitor {
   private _hasResumeCommand: boolean = false;
   private _hasTeardownCommand: boolean = false;
   private _hasProvisionCommand: boolean = false;
+  // `undefined` until the host has checked, which is a different answer from
+  // "checked, nothing waiting" — see `Worktree.lifecycleCommandsNeedApproval`.
+  private _lifecycleCommandsNeedApproval: boolean | undefined;
   private _worktreeMode: string = "local";
   private _worktreeEnvironmentLabel: string | undefined;
 
@@ -550,6 +553,9 @@ export class WorktreeMonitor {
       },
       get hasProvisionCommand() {
         return monitor._hasProvisionCommand;
+      },
+      get lifecycleCommandsNeedApproval() {
+        return monitor._lifecycleCommandsNeedApproval;
       },
       get worktreeMode() {
         return monitor._worktreeMode;
@@ -1259,6 +1265,14 @@ export class WorktreeMonitor {
 
   get resourceConnectCommand(): string | undefined {
     return this._resourceConnectCommand;
+  }
+
+  get lifecycleCommandsNeedApproval(): boolean | undefined {
+    return this._lifecycleCommandsNeedApproval;
+  }
+
+  setLifecycleCommandsNeedApproval(needsApproval: boolean): void {
+    this._lifecycleCommandsNeedApproval = needsApproval;
   }
 
   setResourceConnectCommand(cmd: string | undefined): void {

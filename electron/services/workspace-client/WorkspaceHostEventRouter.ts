@@ -116,10 +116,16 @@ export class WorkspaceHostEventRouter {
         // (local cleanup) failures. The directory is about to be removed and the
         // user cannot act differently than by ignoring the signal — notify()'s
         // four-question checklist demotes it. Do not "fix" this asymmetry.
+        //
+        // A resource teardown skipped because its commands were never approved
+        // leaves the resource running exactly as a failed one does, so it takes
+        // the same route with its own reason.
         const status = worktree.lifecycleStatus;
         if (
           status?.phase === "resource-teardown" &&
-          (status.state === "failed" || status.state === "timed-out")
+          (status.state === "failed" ||
+            status.state === "timed-out" ||
+            status.state === "needs-approval")
         ) {
           const key = `${worktree.worktreeId}:${status.startedAt}`;
           if (!this.cloudTeardownFailureToastKeys.has(key)) {
@@ -128,7 +134,9 @@ export class WorkspaceHostEventRouter {
               type: "error",
               title: "Cloud resource may still be running",
               message:
-                "The teardown script didn't complete — your cloud resource may still be active and billing",
+                status.state === "needs-approval"
+                  ? "The teardown commands were skipped because they come from the repository and weren't approved — your cloud resource may still be active and billing"
+                  : "The teardown script didn't complete — your cloud resource may still be active and billing",
               // Dedicated bucket so an unrelated error burst can't absorb this
               // billing-critical notification into a generic overflow row.
               rateLimitKey: "cloud-teardown-failure",

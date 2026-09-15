@@ -283,6 +283,9 @@ export interface WorktreeSnapshot {
   /** Whether the resource config has a provision command */
   hasProvisionCommand?: boolean;
 
+  /** Repository-supplied commands are waiting for approval (mirrors `Worktree.lifecycleCommandsNeedApproval`). */
+  lifecycleCommandsNeedApproval?: boolean;
+
   /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
   worktreeMode?: string;
 

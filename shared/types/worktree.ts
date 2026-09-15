@@ -32,8 +32,15 @@ export type WorktreeLifecyclePhase =
   | "resource-pause"
   | "resource-status";
 
-/** State of worktree lifecycle script execution */
-export type WorktreeLifecycleState = "running" | "success" | "failed" | "timed-out";
+/**
+ * State of worktree lifecycle script execution.
+ *
+ * `needs-approval` — the commands come from the repository and the user has
+ * not approved them, so nothing ran. A settled outcome, not a failure: the
+ * commands never got the chance to fail.
+ */
+export type WorktreeLifecycleState =
+  "running" | "success" | "failed" | "timed-out" | "needs-approval";
 
 /** Status of worktree lifecycle script execution (serializable) */
 export interface WorktreeLifecycleStatus {
@@ -95,8 +102,12 @@ export interface WorktreeSetupStatus {
  * configured resource provisioning, is in flight.
  * `ready` — every stage finished, including the no-setup-commands path.
  * `failed` / `timed-out` — a stage failed; `stage` says which.
+ * `needs-approval` — the setup commands come from the repository and the user
+ * has not approved them, so they were skipped. Only the user can approve them,
+ * from the worktree card; the worktree itself is usable.
  */
-export type WorktreeSetupState = "pending" | "running" | "ready" | "failed" | "timed-out";
+export type WorktreeSetupState =
+  "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
 
 /**
  * The three stages of the create tail, in the order they run. `setup-script`
@@ -105,6 +116,31 @@ export type WorktreeSetupState = "pending" | "running" | "ready" | "failed" | "t
  * both.
  */
 export type WorktreeSetupStage = "copy-config" | "submodules" | "setup-script";
+
+/** One labelled run of command templates, exactly as the config file declares them. */
+export interface LifecycleCommandReviewGroup {
+  label: string;
+  commands: string[];
+}
+
+/** A repository file whose commands are waiting for approval. */
+export interface LifecycleCommandReviewSource {
+  /** Absolute path of the config or settings file the commands were read from. */
+  path: string;
+  groups: LifecycleCommandReviewGroup[];
+}
+
+/**
+ * Everything a worktree would run that the user has not yet approved.
+ *
+ * `fingerprint` identifies exactly this set of commands. Approval is submitted
+ * against it, so commands that change between being shown and being approved
+ * are rejected rather than approved sight unseen.
+ */
+export interface LifecycleCommandReview {
+  fingerprint: string;
+  sources: LifecycleCommandReviewSource[];
+}
 
 /** Longest failure text carried on a setup status. See {@link WorktreeSetupStatus.error}. */
 export const WORKTREE_SETUP_ERROR_MAX_LENGTH = 200;
@@ -394,6 +430,13 @@ export interface Worktree {
 
   /** Whether the configured resource environment has a provision command */
   hasProvisionCommand?: boolean;
+
+  /**
+   * True when the lifecycle or resource commands this worktree would run come
+   * from the repository and have not been approved, so none of them will run.
+   * Absent until the host has checked.
+   */
+  lifecycleCommandsNeedApproval?: boolean;
 
   /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
   worktreeMode?: string;

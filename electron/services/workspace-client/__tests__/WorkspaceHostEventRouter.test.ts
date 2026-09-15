@@ -604,6 +604,37 @@ describe("WorkspaceHostEventRouter", () => {
       );
     });
 
+    it("fires when resource teardown is skipped because its commands were not approved", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({
+        lifecycleStatus: lifecycleStatus("resource-teardown", "needs-approval", 1000),
+      });
+
+      router.routeHostEvent(entry, event);
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      const [channel, payload] = vi.mocked(broadcastToRenderer).mock.calls[0]!;
+      expect(channel).toBe(CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(payload).toMatchObject({
+        type: "error",
+        title: expectedToast.title,
+        rateLimitKey: expectedToast.rateLimitKey,
+      });
+      expect((payload as { message: string }).message).toMatch(/weren't approved/);
+    });
+
+    it("does not fire when a local teardown is skipped for approval", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("teardown", "needs-approval", 1000),
+        })
+      );
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
     it("still emits the normal worktree-update side-effects when a toast fires", () => {
       const entry = makeEntry();
       const event = makeWorktreeUpdateEvent({
