@@ -962,9 +962,13 @@ export function GeneralTab({
                                 )}
                                 {/* The row has always navigated; nothing on it said so. A
                                     hover-only chevron answers that only after the user has
-                                    already guessed, so it rests visible and lifts on hover. */}
+                                    already guessed, so it rests visible and brightens on
+                                    hover. Solid tokens rather than an opacity ramp: dimming
+                                    an icon with opacity is lint-banned here, and at 60% this
+                                    one measured about 1.7:1 under forced-colors — well under
+                                    the 3:1 floor for the only cue that the row is a link. */}
                                 <ChevronRight
-                                  className="w-4 h-4 shrink-0 text-text-secondary opacity-60 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 forced-colors:opacity-100"
+                                  className="w-4 h-4 shrink-0 text-text-secondary transition-colors group-hover:text-text-primary group-focus-visible:text-text-primary"
                                   aria-hidden="true"
                                 />
                               </button>
