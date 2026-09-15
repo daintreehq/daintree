@@ -202,6 +202,31 @@ describe("ResumeSessionsPalette", () => {
     paletteState.selectedIndex = -1;
     render(<ResumeSessionsPalette />);
     expect(document.querySelector('[role="dialog"]')?.textContent ?? "").not.toMatch(/to resume/);
+    // And with nothing to fold the history under, the heading is a label,
+    // not a chevron that cannot collapse anything.
+    expect(screen.queryByRole("button", { name: /worktree removed/i })).toBeNull();
+    expect(screen.getByRole("listbox").textContent).toMatch(/worktree removed/i);
+  });
+
+  it("only claims an expanded listbox while one is rendered", () => {
+    paletteState.results = [];
+    paletteState.visibleResults = [];
+    paletteState.removedResults = [];
+    paletteState.selectedIndex = -1;
+    render(<ResumeSessionsPalette />);
+    const input = screen.getByRole("combobox");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(input.getAttribute("aria-controls")).toBeNull();
+  });
+
+  it("points aria-controls at the listbox it renders", () => {
+    render(<ResumeSessionsPalette />);
+    const input = screen.getByRole("combobox");
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    const controls = input.getAttribute("aria-controls");
+    expect(controls).not.toBeNull();
+    expect(document.getElementById(controls!)?.getAttribute("role")).toBe("listbox");
   });
 
   it("folds the removed rows away while browsing until the heading is opened", () => {

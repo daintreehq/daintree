@@ -119,6 +119,7 @@ function RemovedHeading({
   );
 }
 
+const LIST_ID = "resume-session-list";
 const REMOVED_HEADING_ID = "resume-session-removed-heading";
 
 export function ResumeSessionsPalette() {
@@ -231,6 +232,7 @@ export function ResumeSessionsPalette() {
 
   const selected = selectedIndex >= 0 ? results[selectedIndex] : undefined;
   const activeDescendant = selected ? `resume-session-option-${selected.id}` : undefined;
+  const hasList = results.length > 0;
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Resume session" tier="command">
@@ -242,10 +244,12 @@ export function ResumeSessionsPalette() {
           onKeyDown={handleKeyDown}
           placeholder="Search closed sessions…"
           role="combobox"
-          aria-expanded={isOpen}
+          // The listbox only exists once there are rows; an expanded combobox
+          // controlling an id that is not in the tree points at nothing.
+          aria-expanded={hasList}
           aria-haspopup="listbox"
           aria-label="Search closed sessions"
-          aria-controls="resume-session-list"
+          aria-controls={hasList ? LIST_ID : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
@@ -269,7 +273,7 @@ export function ResumeSessionsPalette() {
           )
         ) : (
           <>
-            <div id="resume-session-list" role="listbox" aria-label="Closed sessions">
+            <div id={LIST_ID} role="listbox" aria-label="Closed sessions">
               {visibleResults.map(renderRow)}
               {!isSearching && hiddenCount > 0 && (
                 <div role="presentation">
@@ -290,7 +294,10 @@ export function ResumeSessionsPalette() {
                     id={REMOVED_HEADING_ID}
                     count={removedResults.length}
                     expanded={removedVisible}
-                    collapsible={!isSearching}
+                    // A fold needs something to fold under: with nothing
+                    // resumable the history is all there is, so the heading
+                    // is a label and the chevron makes no promise.
+                    collapsible={!isSearching && visibleResults.length > 0}
                     onToggle={toggleRemoved}
                   />
                   {removedVisible && (
