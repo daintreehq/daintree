@@ -85,7 +85,7 @@ const TELEMETRY_DISCLOSURE: Array<{
     level: "full",
     title: "Full Usage level",
     summary:
-      "Everything above, plus anonymous usage analytics events, including those listed below. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Analytics events recorded before you chose a level may be sent when you choose Full Usage.",
+      "Crash reports and error details, plus anonymous usage analytics events, including those listed below. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Analytics events recorded before you chose a level may be sent when you choose Full Usage.",
     fields: [],
     events: ANALYTICS_EVENTS,
   },

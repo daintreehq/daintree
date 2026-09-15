@@ -182,9 +182,17 @@ describe("PrivacyDataTab", () => {
 
     const heading = await waitFor(() => screen.getByText(/What's collected at each level/i));
 
-    const text = (heading.parentElement as HTMLElement).textContent ?? "";
-    expect(text).not.toMatch(/sampl/i);
-    expect(text).not.toMatch(/\d+\s*%/);
+    // Scoped to the per-level summaries: field lists may legitimately carry
+    // percentages (CPU, memory) that aren't sampling claims.
+    const summaries = Array.from(
+      (heading.parentElement as HTMLElement).querySelectorAll("dd > p"),
+      (p) => p.textContent ?? ""
+    );
+    expect(summaries).toHaveLength(3);
+    for (const summary of summaries) {
+      expect(summary).not.toMatch(/sampl/i);
+      expect(summary).not.toMatch(/\d+\s*%/);
+    }
   });
 
   it("does not render telemetry disclosure on the storage subtab", async () => {
