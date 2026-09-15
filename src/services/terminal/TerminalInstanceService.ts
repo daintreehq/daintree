@@ -411,8 +411,8 @@ class TerminalInstanceService {
       updateScrollState: (id, isScrolledBack) =>
         this.unseenTracker.updateScrollState(id, isScrolledBack),
       clearUnseen: (id, fromUser) => this.unseenTracker.clearUnseen(id, fromUser),
-      getUnseen: (id) => this.unseenTracker.getUnseen(id),
-      restoreUnseen: (id, count) => this.unseenTracker.restoreUnseen(id, count),
+      holdUnseen: (id) => this.unseenTracker.holdUnseen(id),
+      releaseUnseen: (id, count) => this.unseenTracker.releaseUnseen(id, count),
       onWriteParsedReflow: (managed) => this.maybeReflowTerminal(managed),
       setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
       deleteCachedSelection: (id) => this.cachedSelections.delete(id),

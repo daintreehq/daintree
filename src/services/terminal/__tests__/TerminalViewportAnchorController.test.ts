@@ -23,8 +23,8 @@ interface FakeTerminal extends ViewportAnchorTerminal {
   baseY: number;
   bufferType: "normal" | "alternate";
   synchronizedOutput: boolean;
-  /** Whether `scrollToLine` moves the buffer — false simulates a scroll against stale DOM dimensions. */
-  scrollTakes: boolean;
+  /** Rows short of the request a `scrollToLine` lands — a scroll against stale DOM dimensions. */
+  scrollShortBy: number;
   ed3(): void;
   esu(): void;
   writeParsed(): void;
@@ -32,6 +32,9 @@ interface FakeTerminal extends ViewportAnchorTerminal {
   scrollToLine: ReturnType<typeof vi.fn<(line: number) => void>>;
   disposed: string[];
 }
+
+const ORIGINAL_LINES = 200;
+const originalLines = (): string[] => Array.from({ length: ORIGINAL_LINES }, (_, i) => `line ${i}`);
 
 function makeFakeTerminal(): FakeTerminal {
   const csi = new Map<string, (params: CsiParams) => boolean>();
@@ -42,12 +45,12 @@ function makeFakeTerminal(): FakeTerminal {
   const fake: FakeTerminal = {
     cols: 80,
     rows: 24,
-    lines: Array.from({ length: 200 }, (_, i) => `line ${i}`),
+    lines: originalLines(),
     viewportY: 100,
-    baseY: 176,
+    baseY: ORIGINAL_LINES - 24,
     bufferType: "normal",
     synchronizedOutput: false,
-    scrollTakes: true,
+    scrollShortBy: 0,
     disposed,
     get buffer() {
       return {
@@ -87,8 +90,7 @@ function makeFakeTerminal(): FakeTerminal {
       return { dispose: () => disposed.push("onWriteParsed") };
     },
     scrollToLine: vi.fn<(line: number) => void>((line) => {
-      if (!fake.scrollTakes) return;
-      fake.viewportY = Math.max(0, Math.min(fake.baseY, line));
+      fake.viewportY = Math.max(0, Math.min(fake.baseY, line - fake.scrollShortBy));
       fake.fireScroll();
     }),
     ed3: () => {
@@ -126,11 +128,10 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
   let deps: {
     isOwnClear: ReturnType<typeof vi.fn<() => boolean>>;
     syncViewport: ReturnType<typeof vi.fn<() => void>>;
-    getUnseen: ReturnType<typeof vi.fn<() => number>>;
-    restoreUnseen: ReturnType<typeof vi.fn<(count: number) => void>>;
+    holdUnseen: ReturnType<typeof vi.fn<() => number>>;
+    releaseUnseen: ReturnType<typeof vi.fn<(count: number) => void>>;
   };
   let controller: ViewportAnchorController;
-  const originalLines = (): string[] => Array.from({ length: 200 }, (_, i) => `line ${i}`);
 
   const flushRender = (): void => {
     for (const callback of renders.splice(0)) callback();
@@ -157,8 +158,8 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     deps = {
       isOwnClear: vi.fn<() => boolean>(() => false),
       syncViewport: vi.fn<() => void>(),
-      getUnseen: vi.fn<() => number>(() => 3),
-      restoreUnseen: vi.fn<(count: number) => void>(),
+      holdUnseen: vi.fn<() => number>(() => 3),
+      releaseUnseen: vi.fn<(count: number) => void>(),
     };
   });
 
@@ -193,6 +194,7 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     install();
     terminal.ed3();
     expect(controller.phase).toBe("armed");
+    expect(deps.holdUnseen).toHaveBeenCalledTimes(1);
   });
 
   it("scrolls to the anchor after the sync block closes and a frame renders", () => {
@@ -201,10 +203,13 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     replay(terminal, originalLines());
     terminal.esu();
     expect(controller.phase).toBe("restoring");
-    expect(deps.restoreUnseen).toHaveBeenCalledWith(3);
     expect(terminal.scrollToLine).not.toHaveBeenCalled();
+    // Held until the redraw has landed — the chunk carrying the ESU has not
+    // run its parse callback when the handler fires.
+    expect(deps.releaseUnseen).not.toHaveBeenCalled();
 
     flushRender();
+    expect(deps.releaseUnseen).toHaveBeenCalledWith(3);
     expect(terminal.scrollToLine).toHaveBeenCalledWith(100);
     expect(deps.syncViewport).toHaveBeenCalledTimes(1);
     expect(terminal.viewportY).toBe(100);
@@ -212,17 +217,18 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     flushRender();
     expect(controller.phase).toBe("idle");
     expect(terminal.scrollToLine).toHaveBeenCalledTimes(1);
+    expect(deps.releaseUnseen).toHaveBeenCalledTimes(1);
   });
 
-  it("prefers the anchor text nearest the distance guess over the guess itself", () => {
+  it("prefers the anchor text over the distance guess when the two disagree", () => {
     install();
     terminal.ed3();
-    // The rebuilt transcript has three extra lines at the top, so the reader's
-    // content sits three rows further down than the distance alone suggests.
-    replay(terminal, ["extra a", "extra b", "extra c", ...originalLines()]);
+    // Three lines appended: the distance guess moves three rows down the
+    // rebuilt transcript while the reader's content stays where it was.
+    replay(terminal, [...originalLines(), "tail a", "tail b", "tail c"]);
     terminal.esu();
     flushRender();
-    expect(terminal.scrollToLine).toHaveBeenCalledWith(103);
+    expect(terminal.scrollToLine).toHaveBeenCalledWith(100);
   });
 
   it("uses the distance from bottom when the anchor was blank", () => {
@@ -231,16 +237,19 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     );
     install();
     terminal.ed3();
-    replay(terminal, ["extra a", "extra b", "extra c", ...originalLines()]);
+    // A blank block nearer the guess than anything else would be the "match"
+    // of an all-blank anchor; the guess itself is what the reader gets.
+    const rebuilt = ["extra a", "extra b", "extra c", ...originalLines()];
+    for (let i = 90; i < 90 + ANCHOR_LINE_COUNT; i++) rebuilt[i] = "";
+    replay(terminal, rebuilt);
     terminal.esu();
     flushRender();
-    // 179 - 76 rows from bottom: the guess, not the (blank) anchor.
     expect(terminal.scrollToLine).toHaveBeenCalledWith(103);
   });
 
   it("retries once when the first scroll does not take, then gives up", () => {
     install();
-    terminal.scrollTakes = false;
+    terminal.scrollShortBy = 100;
     terminal.ed3();
     replay(terminal, originalLines());
     terminal.esu();
@@ -256,6 +265,29 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     expect(controller.phase).toBe("idle");
     expect(terminal.scrollToLine).toHaveBeenCalledTimes(2);
     expect(renders).toHaveLength(0);
+  });
+
+  it("output scrolling past a short landing does not cancel the retry; reaching the target ends it", () => {
+    install();
+    terminal.scrollShortBy = 20;
+    terminal.ed3();
+    replay(terminal, originalLines());
+    terminal.esu();
+    flushRender();
+    expect(terminal.viewportY).toBe(80);
+
+    // Buffer-driven scrolls report the parked (short) position unchanged.
+    terminal.fireScroll();
+    expect(controller.phase).toBe("restoring");
+
+    // The queued viewport sync carries it the rest of the way.
+    terminal.viewportY = 100;
+    terminal.fireScroll();
+    expect(controller.phase).toBe("restoring");
+
+    flushRender();
+    expect(controller.phase).toBe("idle");
+    expect(terminal.scrollToLine).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to quiescence when no sync block follows the erase", () => {
@@ -316,26 +348,60 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     expect(renders).toHaveLength(0);
   });
 
-  it("cancel before the replay ends leaves the unseen count alone", () => {
+  it("cancel before the replay ends publishes the held count without scrolling", () => {
     install();
     terminal.ed3();
     controller.cancel();
+    expect(deps.releaseUnseen).toHaveBeenCalledWith(3);
     replay(terminal, originalLines());
     terminal.esu();
     expect(controller.phase).toBe("idle");
-    expect(deps.restoreUnseen).not.toHaveBeenCalled();
+    expect(deps.releaseUnseen).toHaveBeenCalledTimes(1);
+    expect(terminal.scrollToLine).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("a second erase while pending keeps the original anchor", () => {
+  it("a second erase while armed keeps the original anchor and deadline", () => {
     install();
     terminal.ed3();
+    // A sync block that never closes: quiescence defers, the deadline decides.
+    terminal.synchronizedOutput = true;
+    vi.advanceTimersByTime(REPLAY_DEADLINE_MS - 10);
+    expect(controller.phase).toBe("armed");
     replay(terminal, originalLines().slice(0, 30));
+    terminal.ed3();
+    expect(controller.phase).toBe("armed");
+    expect(deps.holdUnseen).toHaveBeenCalledTimes(1);
+    replay(terminal, originalLines());
+    // The first erase's deadline still applies — not a fresh two seconds.
+    vi.advanceTimersByTime(10);
+    expect(controller.phase).toBe("restoring");
+    flushRender();
+    expect(terminal.scrollToLine).toHaveBeenCalledWith(100);
+  });
+
+  it("a second erase while the restore is being verified restarts the cycle with the original anchor", () => {
+    install();
     terminal.ed3();
     replay(terminal, originalLines());
     terminal.esu();
     flushRender();
-    expect(terminal.scrollToLine).toHaveBeenCalledWith(100);
+    expect(terminal.viewportY).toBe(100);
+    expect(deps.releaseUnseen).toHaveBeenCalledTimes(1);
+
+    terminal.ed3();
+    expect(controller.phase).toBe("armed");
+    // The count was published; the next redraw must be held back again.
+    expect(deps.holdUnseen).toHaveBeenCalledTimes(2);
+    replay(terminal, originalLines());
+    expect(controller.phase).toBe("armed");
+    terminal.esu();
+    flushRender();
+    expect(terminal.scrollToLine).toHaveBeenLastCalledWith(100);
+    expect(terminal.viewportY).toBe(100);
+    flushRender();
+    expect(controller.phase).toBe("idle");
+    expect(deps.releaseUnseen).toHaveBeenCalledTimes(2);
   });
 
   it("gives up rather than scrolling a buffer that switched to the alternate screen", () => {
@@ -347,6 +413,7 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     flushRender();
     expect(terminal.scrollToLine).not.toHaveBeenCalled();
     expect(controller.phase).toBe("idle");
+    expect(deps.releaseUnseen).toHaveBeenCalledWith(3);
   });
 
   it("dispose drops timers, the pending render, and every parser handler", () => {

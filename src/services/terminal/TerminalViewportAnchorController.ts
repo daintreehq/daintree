@@ -14,6 +14,11 @@
 // back to the same content once the redraw's synchronized-output block closes
 // and the browser viewport has re-synced to the rebuilt buffer. Agent-agnostic:
 // only the byte sequence and the buffer position decide anything.
+//
+// Pinned to @xterm 6.1.0-beta.300 behaviour: CSI handlers run newest-first and
+// `false` falls through to xterm's own; ED3 fires no public onScroll and keeps
+// isUserScrolling; a DECSTBM region with a top margin of 0 still scrolls lines
+// into scrollback; public onRender precedes the Viewport's deferred sync.
 
 type CsiParams = (number | number[])[];
 
@@ -46,9 +51,9 @@ export interface ViewportAnchorTerminal {
 
 export interface ViewportAnchorDeps {
   /**
-   * True while a Daintree-owned clear is queued or parsing — a serialized
-   * scrollback restore, or a worker-mirror snapshot apply (`mirrorApply.ts`
-   * writes ESC[3J of its own). Those manage their own position.
+   * True while a Daintree-owned clear is queued or parsing — a worker-mirror
+   * snapshot apply (`mirrorApply.ts` writes ESC[3J of its own). Those manage
+   * their own position.
    */
   isOwnClear(): boolean;
   /**
@@ -59,14 +64,20 @@ export interface ViewportAnchorDeps {
   afterRender(callback: () => void): () => void;
   /** Re-sync the DOM viewport to the buffer after a programmatic scroll (the #11709 seam). */
   syncViewport(): void;
-  getUnseen(): number;
-  restoreUnseen(count: number): void;
+  /**
+   * The redraw begins: stop publishing unseen-output changes and hand back
+   * the count the redraw must not raise. Output the reader already had is not
+   * new output, so the pill must neither light nor flash while it re-lands.
+   */
+  holdUnseen(): number;
+  /** The redraw is over: lower the count back to `count` and publish once. */
+  releaseUnseen(count: number): void;
 }
 
 export type ViewportAnchorPhase = "idle" | "armed" | "restoring";
 
 export interface ViewportAnchorController {
-  /** The reader took over (wheel, scroll keys): drop any pending restore. */
+  /** The reader took over (wheel, scroll keys, scrollbar): drop any pending restore. */
   cancel(): void;
   dispose(): void;
   readonly phase: ViewportAnchorPhase;
@@ -85,16 +96,21 @@ export const ANCHOR_SEARCH_RADIUS = 2000;
 const MAX_RESTORE_ATTEMPTS = 2;
 const SYNCHRONIZED_OUTPUT_MODE = 2026;
 
-interface PendingAnchor {
-  phase: "armed" | "restoring";
+/** What the reader was looking at — survives a repeated erase unchanged. */
+interface Anchor {
   distanceFromBottom: number;
   cols: number;
   lines: string[];
   unseen: number;
-  /** Where the buffer should sit unless the reader moves it; anything else is a cancel. */
+}
+
+interface PendingAnchor extends Anchor {
+  phase: "armed" | "restoring";
+  /** Where the buffer sits unless the reader moves it; anything else is a cancel. */
   expectedViewportY: number;
   target?: number;
   attempts: number;
+  unseenHeld: boolean;
   quietTimer?: ReturnType<typeof setTimeout>;
   deadlineTimer?: ReturnType<typeof setTimeout>;
   renderWaitTimer?: ReturnType<typeof setTimeout>;
@@ -125,18 +141,28 @@ export function installViewportAnchorController(
     p.quietTimer = p.deadlineTimer = p.renderWaitTimer = undefined;
   };
 
+  const releaseUnseen = (p: PendingAnchor): void => {
+    if (!p.unseenHeld) return;
+    p.unseenHeld = false;
+    deps.releaseUnseen(p.unseen);
+  };
+
   const release = (): void => {
     if (!pending) return;
     clearTimers(pending);
     pending.cancelRender?.();
+    releaseUnseen(pending);
     pending = undefined;
   };
 
   const captureAnchorLines = (): string[] => {
     const buffer = terminal.buffer.active;
     const lines: string[] = [];
-    for (let i = 0; i < ANCHOR_LINE_COUNT; i++) {
-      const line = buffer.getLine(buffer.viewportY + i);
+    // Codex sends ED2 before ED3, so the screen rows are already blank by the
+    // time the erase we observe arrives; only scrollback still holds content.
+    const end = Math.min(buffer.viewportY + ANCHOR_LINE_COUNT, buffer.baseY);
+    for (let y = buffer.viewportY; y < end; y++) {
+      const line = buffer.getLine(y);
       if (!line) break;
       lines.push(line.translateToString(true));
     }
@@ -150,20 +176,37 @@ export function installViewportAnchorController(
     pending.quietTimer = setTimeout(onQuiet, REPLAY_QUIET_MS);
   };
 
-  const arm = (): void => {
-    const buffer = terminal.buffer.active;
+  /**
+   * Start (or restart) the cycle. A repeated erase keeps the anchor captured
+   * at the first one — by then the buffer holds the previous redraw, not the
+   * reader's content — and keeps its deadline unless that cycle had already
+   * reached the restore.
+   */
+  const arm = (anchor: Anchor, previous?: PendingAnchor): void => {
+    const deadlineTimer =
+      previous?.phase === "armed" && previous.deadlineTimer !== undefined
+        ? previous.deadlineTimer
+        : setTimeout(onDeadline, REPLAY_DEADLINE_MS);
+    if (previous) {
+      previous.deadlineTimer = undefined;
+      clearTimers(previous);
+      previous.cancelRender?.();
+    }
     pending = {
+      distanceFromBottom: anchor.distanceFromBottom,
+      cols: anchor.cols,
+      lines: anchor.lines,
+      // A cycle that already reached its restore published the count; the
+      // next redraw must be held back from lighting the pill all the same.
+      unseen: previous?.unseenHeld === false ? deps.holdUnseen() : anchor.unseen,
+      unseenHeld: true,
       phase: "armed",
-      distanceFromBottom: buffer.baseY - buffer.viewportY,
-      cols: terminal.cols,
-      lines: captureAnchorLines(),
-      unseen: deps.getUnseen(),
       // ED3 leaves ydisp at 0 and buffer-driven scrolling keeps it there while
       // the reader is scrolled back; a different value means the reader moved.
       expectedViewportY: 0,
       attempts: 0,
+      deadlineTimer,
     };
-    pending.deadlineTimer = setTimeout(onDeadline, REPLAY_DEADLINE_MS);
     restartQuietTimer();
   };
 
@@ -201,10 +244,6 @@ export function installViewportAnchorController(
     if (!pending || pending.phase !== "armed") return;
     pending.phase = "restoring";
     clearTimers(pending);
-    // The redraw re-inserted content the reader already had. Counts are write
-    // batches incremented on enqueue, so at most the batch carrying the erase
-    // itself stays counted — within the pill's threshold tolerance.
-    deps.restoreUnseen(pending.unseen);
     waitForRender(attemptRestore);
   };
 
@@ -243,6 +282,9 @@ export function installViewportAnchorController(
       release();
       return;
     }
+    // Every replay chunk has parsed by the first render after the block
+    // closed, so its increments are all in the count being lowered.
+    releaseUnseen(pending);
     if (pending.target === undefined) pending.target = resolveTarget(pending);
     const target = Math.min(pending.target, buffer.baseY);
     // Also the verification leg: a scroll that took ends here.
@@ -251,7 +293,7 @@ export function installViewportAnchorController(
       return;
     }
     pending.attempts += 1;
-    pending.expectedViewportY = target;
+    pending.target = target;
     // The browser build scrolls through the DOM viewport, and inside a sync
     // block the viewport defers its sync to the next render — so this runs
     // after one, and the read-back on the following frame retries once if
@@ -262,6 +304,9 @@ export function installViewportAnchorController(
     } finally {
       selfScrolling = false;
     }
+    // Where it actually landed is the parked position until the retry; the
+    // queued viewport sync may still carry it the rest of the way to target.
+    pending.expectedViewportY = buffer.viewportY;
     deps.syncViewport();
     waitForRender(attemptRestore);
   };
@@ -269,10 +314,20 @@ export function installViewportAnchorController(
   const disposables = [
     // Runs before xterm's own ED handler (newest first); `false` lets the erase proceed.
     terminal.parser.registerCsiHandler({ final: "J" }, (params) => {
-      if (firstParam(params) !== 3 || pending) return false;
+      if (firstParam(params) !== 3) return false;
+      if (pending) {
+        arm(pending, pending);
+        return false;
+      }
       const buffer = terminal.buffer.active;
       if (buffer.type === "normal" && buffer.viewportY < buffer.baseY && !deps.isOwnClear()) {
-        arm();
+        const lines = captureAnchorLines();
+        arm({
+          distanceFromBottom: buffer.baseY - buffer.viewportY,
+          cols: terminal.cols,
+          lines,
+          unseen: deps.holdUnseen(),
+        });
       }
       return false;
     }),
@@ -290,11 +345,12 @@ export function installViewportAnchorController(
       return false;
     }),
     terminal.onWriteParsed(restartQuietTimer),
-    // Buffer-driven scrolls during the redraw report the unchanged ydisp; a
+    // Buffer-driven scrolls during the redraw report the parked ydisp; a
     // scrollbar drag, scroll key, or scroll-to-bottom reports a new one.
     terminal.onScroll(() => {
       if (!pending || selfScrolling) return;
-      if (terminal.buffer.active.viewportY !== pending.expectedViewportY) release();
+      const viewportY = terminal.buffer.active.viewportY;
+      if (viewportY !== pending.expectedViewportY && viewportY !== pending.target) release();
     }),
   ];
 

@@ -39,9 +39,13 @@ const transcript = (count = TRANSCRIPT_LINES, prefix = ""): string[] =>
  * ESU.
  */
 function codexReplayBurst(lines: string[]): string {
+  return `${ESU}${CODEX_CLEAR}${codexReplay(lines)}`;
+}
+
+function codexReplay(lines: string[]): string {
   const layout = `${ESC}[1;${ROWS - 1}r${`${ESC}M`.repeat(ROWS - 1)}`;
   const body = lines.map((line) => `${line}\r\n`).join("");
-  return `${ESU}${CODEX_CLEAR}${BSU}${layout}${ESC}[1;10r${body}${ESC}[r${ESU}`;
+  return `${BSU}${layout}${ESC}[1;10r${body}${ESC}[r${ESU}`;
 }
 
 const writeAndFlush = (terminal: Terminal, data: string): Promise<void> =>
@@ -53,16 +57,17 @@ function makeTerminal(): Terminal {
   return new Terminal({ cols: COLS, rows: ROWS, scrollback: 1000, allowProposedApi: true });
 }
 
-const topLine = (terminal: Terminal): string =>
-  terminal.buffer.active.getLine(terminal.buffer.active.viewportY)?.translateToString(true) ?? "";
+const lineAt = (terminal: Terminal, y: number): string =>
+  terminal.buffer.active.getLine(y)?.translateToString(true) ?? "";
+const topLine = (terminal: Terminal): string => lineAt(terminal, terminal.buffer.active.viewportY);
 
 interface Harness {
   controller: ViewportAnchorController;
   deps: {
     isOwnClear: ReturnType<typeof vi.fn<() => boolean>>;
     syncViewport: ReturnType<typeof vi.fn<() => void>>;
-    getUnseen: ReturnType<typeof vi.fn<() => number>>;
-    restoreUnseen: ReturnType<typeof vi.fn<(count: number) => void>>;
+    holdUnseen: ReturnType<typeof vi.fn<() => number>>;
+    releaseUnseen: ReturnType<typeof vi.fn<(count: number) => void>>;
   };
   /** Run every render callback the controller is waiting on, once. */
   flushRender: () => void;
@@ -74,8 +79,8 @@ function install(terminal: Terminal, overrides: Partial<ViewportAnchorDeps> = {}
   const deps = {
     isOwnClear: vi.fn<() => boolean>(() => false),
     syncViewport: vi.fn<() => void>(),
-    getUnseen: vi.fn<() => number>(() => 0),
-    restoreUnseen: vi.fn<(count: number) => void>(),
+    holdUnseen: vi.fn<() => number>(() => 0),
+    releaseUnseen: vi.fn<(count: number) => void>(),
   };
   const controller = installViewportAnchorController(terminal, {
     ...deps,
@@ -98,14 +103,16 @@ function install(terminal: Terminal, overrides: Partial<ViewportAnchorDeps> = {}
   };
 }
 
-/** A terminal full of transcript, scrolled back by `SCROLL_BACK_BY` rows. */
-async function scrolledBackTerminal(): Promise<{ terminal: Terminal; anchorLine: string }> {
+/** A terminal full of transcript, scrolled back by `by` rows. */
+async function scrolledBackTerminal(
+  by = SCROLL_BACK_BY
+): Promise<{ terminal: Terminal; anchorLine: string }> {
   const terminal = makeTerminal();
   await writeAndFlush(terminal, transcript().join("\r\n") + "\r\n");
   const buffer = terminal.buffer.active;
-  expect(buffer.baseY).toBeGreaterThan(SCROLL_BACK_BY);
-  terminal.scrollLines(-SCROLL_BACK_BY);
-  expect(buffer.viewportY).toBe(buffer.baseY - SCROLL_BACK_BY);
+  expect(buffer.baseY).toBeGreaterThan(by);
+  terminal.scrollLines(-by);
+  expect(buffer.viewportY).toBe(buffer.baseY - by);
   return { terminal, anchorLine: topLine(terminal) };
 }
 
@@ -133,6 +140,23 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(topLine(terminal)).toBe(transcriptLine(1));
   });
 
+  it("pins the beta.300 premise: ESC[3J reaches no public onScroll and keeps the reader scrolled back", async () => {
+    const { terminal } = await scrolledBackTerminal();
+    track(terminal);
+    const onScroll = vi.fn();
+    terminal.onScroll(onScroll);
+
+    await writeAndFlush(terminal, CODEX_CLEAR);
+    expect(onScroll).not.toHaveBeenCalled();
+    expect(terminal.buffer.active.baseY).toBe(0);
+    expect(terminal.buffer.active.viewportY).toBe(0);
+
+    // The re-inserted lines do reach it — with the parked ydisp, not the bottom.
+    await writeAndFlush(terminal, codexReplay(transcript()));
+    expect(onScroll).toHaveBeenCalled();
+    expect(terminal.buffer.active.viewportY).toBe(0);
+  });
+
   it("restores a scrolled-back reader to the same content after the replay", async () => {
     const { terminal, anchorLine } = await scrolledBackTerminal();
     const harness = install(terminal);
@@ -141,7 +165,11 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     await writeAndFlush(terminal, codexReplayBurst(transcript()));
     // The parser saw ESC[3J then the closing ESU; the scroll waits for a render.
     expect(harness.controller.phase).toBe("restoring");
-    expect(terminal.buffer.active.viewportY).toBe(0);
+    const buffer = terminal.buffer.active;
+    expect(buffer.viewportY).toBe(0);
+    // The replay's DECSTBM layout shifts the transcript, so the distance guess
+    // alone would land on different content — the text anchor is load-bearing.
+    expect(lineAt(terminal, buffer.baseY - SCROLL_BACK_BY)).not.toBe(anchorLine);
 
     harness.flushRender();
     expect(topLine(terminal)).toBe(anchorLine);
@@ -154,6 +182,20 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(harness.pendingRenders()).toBe(0);
   });
 
+  it.each([1, 2])(
+    "anchors a reader only %i row(s) back on scrollback alone — ED2 has already blanked the screen",
+    async (by) => {
+      const { terminal, anchorLine } = await scrolledBackTerminal(by);
+      const harness = install(terminal);
+      track(terminal, harness);
+
+      await writeAndFlush(terminal, codexReplayBurst(transcript()));
+      harness.flushRender();
+
+      expect(topLine(terminal)).toBe(anchorLine);
+    }
+  );
+
   it("leaves a bottom-pinned reader following the rebuilt transcript", async () => {
     const terminal = makeTerminal();
     const harness = install(terminal);
@@ -165,19 +207,50 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(harness.controller.phase).toBe("idle");
     const buffer = terminal.buffer.active;
     expect(buffer.viewportY).toBe(buffer.baseY);
-    expect(harness.deps.restoreUnseen).not.toHaveBeenCalled();
+    expect(harness.deps.holdUnseen).not.toHaveBeenCalled();
   });
 
-  it("hands the unseen count back to its value at the erase", async () => {
+  it("holds the unseen count from the erase and hands it back once the redraw has landed", async () => {
     const { terminal } = await scrolledBackTerminal();
     const harness = install(terminal);
-    harness.deps.getUnseen.mockReturnValue(7);
+    harness.deps.holdUnseen.mockReturnValue(7);
     track(terminal, harness);
 
     await writeAndFlush(terminal, codexReplayBurst(transcript()));
+    expect(harness.deps.holdUnseen).toHaveBeenCalledTimes(1);
+    // Still held: the chunk carrying the ESU has not run its parse callback
+    // until after the handler, so releasing here would leave it counted.
+    expect(harness.deps.releaseUnseen).not.toHaveBeenCalled();
 
-    expect(harness.deps.restoreUnseen).toHaveBeenCalledTimes(1);
-    expect(harness.deps.restoreUnseen).toHaveBeenCalledWith(7);
+    harness.flushRender();
+    expect(harness.deps.releaseUnseen).toHaveBeenCalledTimes(1);
+    expect(harness.deps.releaseUnseen).toHaveBeenCalledWith(7);
+
+    harness.flushRender();
+    expect(harness.deps.releaseUnseen).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second replay arriving while the first restore is being verified keeps the reader in place", async () => {
+    const { terminal, anchorLine } = await scrolledBackTerminal();
+    const harness = install(terminal);
+    track(terminal, harness);
+
+    await writeAndFlush(terminal, codexReplayBurst(transcript()));
+    harness.flushRender();
+    expect(topLine(terminal)).toBe(anchorLine);
+    expect(harness.controller.phase).toBe("restoring");
+
+    // One more wrapped line in the input bar: the next height change replays again.
+    await writeAndFlush(terminal, codexReplayBurst(transcript()));
+    expect(harness.controller.phase).toBe("restoring");
+    harness.flushRender();
+    harness.flushRender();
+
+    expect(harness.controller.phase).toBe("idle");
+    expect(topLine(terminal)).toBe(anchorLine);
+    // The count was published after the first redraw and held again for the second.
+    expect(harness.deps.holdUnseen).toHaveBeenCalledTimes(2);
+    expect(harness.deps.releaseUnseen).toHaveBeenCalledTimes(2);
   });
 
   it("drops the restore when the reader scrolls during the replay", async () => {
@@ -197,9 +270,10 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(terminal.buffer.active.viewportY).toBe(5);
   });
 
-  it("a wheel gesture cancels even before the replay ends", async () => {
+  it("a wheel gesture cancels even before the replay ends, publishing the held count", async () => {
     const { terminal } = await scrolledBackTerminal();
     const harness = install(terminal);
+    harness.deps.holdUnseen.mockReturnValue(2);
     track(terminal, harness);
 
     await writeAndFlush(terminal, `${ESU}${CODEX_CLEAR}${BSU}`);
@@ -207,10 +281,11 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
 
     harness.controller.cancel();
     expect(harness.controller.phase).toBe("idle");
+    expect(harness.deps.releaseUnseen).toHaveBeenCalledWith(2);
 
     await writeAndFlush(terminal, `${transcript().join("\r\n")}\r\n${ESU}`);
     expect(harness.controller.phase).toBe("idle");
-    expect(harness.deps.restoreUnseen).not.toHaveBeenCalled();
+    expect(harness.deps.releaseUnseen).toHaveBeenCalledTimes(1);
     expect(terminal.buffer.active.viewportY).toBe(0);
   });
 
@@ -253,7 +328,7 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
 
     expect(harness.controller.phase).toBe("idle");
     expect(terminal.buffer.active.viewportY).toBe(0);
-    expect(harness.deps.restoreUnseen).not.toHaveBeenCalled();
+    expect(harness.deps.holdUnseen).not.toHaveBeenCalled();
   });
 
   it("falls back to the distance from bottom when the anchor text is gone", async () => {
@@ -278,10 +353,7 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     // Nothing here wraps at 70 columns, so a text search would still find the
     // anchor; the guard must not trust it once the grid width moved.
     terminal.resize(COLS - 10, ROWS);
-    await writeAndFlush(
-      terminal,
-      codexReplayBurst(transcript()).slice(ESU.length + CODEX_CLEAR.length)
-    );
+    await writeAndFlush(terminal, codexReplay(transcript()));
     harness.flushRender();
 
     const buffer = terminal.buffer.active;
@@ -315,8 +387,7 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     await writeAndFlush(terminal, `${BSU}${CODEX_CLEAR}${ESU}`);
     expect(harness.controller.phase).toBe("armed");
 
-    const replay = codexReplayBurst(transcript()).slice(ESU.length + CODEX_CLEAR.length);
-    await writeAndFlush(terminal, replay);
+    await writeAndFlush(terminal, codexReplay(transcript()));
     harness.flushRender();
 
     expect(topLine(terminal)).toBe(anchorLine);

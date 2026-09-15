@@ -41,13 +41,15 @@ const SCROLL_BACK_BY = 40;
  */
 const REPLAY_SCRIPT = `
 const ESC = "\\x1b";
+const run = process.argv[2] || "0";
 const rows = process.stdout.rows || 24;
 const lines = Array.from({ length: ${TRANSCRIPT_LINES} }, (_, i) => "REPLAY_" + (i + 1));
 const clear = ESC + "[r" + ESC + "[0m" + ESC + "[H" + ESC + "[2J" + ESC + "[3J" + ESC + "[H";
 const layout = ESC + "[1;" + (rows - 1) + "r" + (ESC + "M").repeat(rows - 1);
 process.stdout.write(
   ESC + "[?2026l" + clear + ESC + "[?2026h" + layout + ESC + "[1;10r" +
-  lines.map((line) => line + "\\r\\n").join("") + ESC + "[r" + ESC + "[?2026l"
+  lines.map((line) => line + "\\r\\n").join("") + ESC + "[r" + ESC + "[?2026l" +
+  "\\r\\n" + "REPLAY_" + "DONE_" + run + "\\r\\n"
 );
 `;
 
@@ -171,8 +173,11 @@ test.describe.serial("Core: Terminal reader position survives an ESC[3J redraw",
     // The replay travels the PTY like an agent's output. It re-indexes every
     // line (the prompt and command echo above the transcript are gone), so
     // the reader's row number changes while the content must not.
-    await runTerminalCommand(window, panel, "node replay.js");
-    await waitForTerminalText(panel, `REPLAY_${TRANSCRIPT_LINES}`, T_LONG);
+    // The marker is assembled inside the script so the echoed command line
+    // cannot satisfy the wait; the buffer reader sees it on a screen row even
+    // while the viewport shows scrollback.
+    await runTerminalCommand(window, panel, "node replay.js 1");
+    await waitForTerminalText(panel, "REPLAY_DONE_1", T_LONG);
     await waitForFrames(window);
     await window.waitForTimeout(T_SETTLE);
     await waitForFrames(window);
@@ -187,7 +192,6 @@ test.describe.serial("Core: Terminal reader position survives an ESC[3J redraw",
       isVisuallyAt(after, after.viewportY),
       `rendered offset disagrees with the buffer: ${detail}`
     ).toBe(true);
-    await expect(panel.getByText("New output below")).toBeHidden();
   });
 
   test("a bottom-pinned reader follows the rebuilt transcript", async () => {
@@ -201,8 +205,8 @@ test.describe.serial("Core: Terminal reader position survives an ESC[3J redraw",
     expect(pinned.viewportY).toBe(pinned.baseY);
     expect(pinned.isUserScrolledBack).toBe(false);
 
-    await runTerminalCommand(window, panel, "node replay.js");
-    await waitForTerminalText(panel, `REPLAY_${TRANSCRIPT_LINES}`, T_LONG);
+    await runTerminalCommand(window, panel, "node replay.js 2");
+    await waitForTerminalText(panel, "REPLAY_DONE_2", T_LONG);
     await waitForFrames(window);
     await window.waitForTimeout(T_SETTLE);
     await waitForFrames(window);

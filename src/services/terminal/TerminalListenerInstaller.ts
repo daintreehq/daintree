@@ -261,9 +261,13 @@ export interface TerminalListenerInstallDeps {
   scrollToBottomSafe: (managed: ManagedTerminal) => void;
   updateScrollState: (id: string, isScrolledBack: boolean) => void;
   clearUnseen: (id: string, fromUser: boolean) => void;
-  /** Raw unseen count, snapshotted before an ESC[3J redraw and handed back after it (#12398). */
-  getUnseen: (id: string) => number;
-  restoreUnseen: (id: string, count: number) => void;
+  /**
+   * Unseen-output accounting across an ESC[3J redraw (#12398): hold stops
+   * publishing and returns the count the redraw must not raise; release
+   * lowers back to it and publishes once.
+   */
+  holdUnseen: (id: string) => number;
+  releaseUnseen: (id: string, count: number) => void;
   onWriteParsedReflow?: (managed: ManagedTerminal) => void;
 
   // Selection cache
@@ -628,9 +632,10 @@ export function installTerminalBoundListeners(
   // A fresh terminal has no queued writes; a counter stranded by a rebuild
   // (the old terminal's parse callback never fires) must not disarm the anchor.
   managed.pendingOwnClearWrites = 0;
+  // Serialized restores need no guard here: they go through `terminal.reset()`,
+  // which bypasses the parser, and the serialize addon never emits ESC[3J.
   const viewportAnchor = installViewportAnchorController(terminal, {
-    isOwnClear: () =>
-      managed.isSerializedRestoreInProgress || (managed.pendingOwnClearWrites ?? 0) > 0,
+    isOwnClear: () => (managed.pendingOwnClearWrites ?? 0) > 0,
     afterRender: (callback) => {
       let settled = false;
       const renderOnce = terminal.onRender(() => {
@@ -648,10 +653,35 @@ export function installTerminalBoundListeners(
       };
     },
     syncViewport: () => invalidateXtermViewportScrollCache(terminal),
-    getUnseen: () => deps.getUnseen(id),
-    restoreUnseen: (count) => deps.restoreUnseen(id, count),
+    holdUnseen: () => deps.holdUnseen(id),
+    releaseUnseen: (count) => deps.releaseUnseen(id, count),
   });
   managed.listeners.push(() => viewportAnchor.dispose());
+
+  // Reader navigation drops a pending restore. Capture phase, unlike the
+  // intent listeners below: xterm's scrollable element stops propagation of
+  // any wheel it consumed, and a drag straight to the top while the DOM still
+  // shows the pre-erase position produces no scroll event at all.
+  const ANCHOR_CANCEL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
+  const cancelAnchorOnWheel = () => viewportAnchor.cancel();
+  const cancelAnchorOnKey = (e: KeyboardEvent) => {
+    if (ANCHOR_CANCEL_KEYS.has(e.key)) viewportAnchor.cancel();
+  };
+  const cancelAnchorOnScrollbar = (e: PointerEvent) => {
+    if (e.target instanceof Element && e.target.closest(".xterm-scrollbar")) {
+      viewportAnchor.cancel();
+    }
+  };
+  hostElement.addEventListener("wheel", cancelAnchorOnWheel, { capture: true, passive: true });
+  hostElement.addEventListener("keydown", cancelAnchorOnKey, { capture: true });
+  hostElement.addEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+  hostElement.addEventListener("touchstart", cancelAnchorOnWheel, { capture: true, passive: true });
+  managed.listeners.push(() => {
+    hostElement.removeEventListener("wheel", cancelAnchorOnWheel, { capture: true });
+    hostElement.removeEventListener("keydown", cancelAnchorOnKey, { capture: true });
+    hostElement.removeEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+    hostElement.removeEventListener("touchstart", cancelAnchorOnWheel, { capture: true });
+  });
 
   const writeParsedDisposable = terminal.onWriteParsed(() => {
     deps.notifyParsed(id);
@@ -689,7 +719,6 @@ export function installTerminalBoundListeners(
   const onWheel = (ev: WheelEvent) => {
     managed._userScrollIntent = true;
     managed.lastWheelAt = Date.now();
-    viewportAnchor.cancel();
     // Skip the synthetic per-line events the alt-buffer mouse-reporting
     // amplifier dispatches (already drives the profile hold via onActiveWheel)
     // and modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
@@ -702,7 +731,6 @@ export function installTerminalBoundListeners(
   const onKeydownScroll = (e: KeyboardEvent) => {
     if (SCROLL_KEYS.has(e.key)) {
       managed._userScrollIntent = true;
-      viewportAnchor.cancel();
       deps.onUserScrollIntent(id);
     }
   };
