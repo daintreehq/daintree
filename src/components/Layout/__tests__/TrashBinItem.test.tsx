@@ -68,6 +68,30 @@ function makeAgentTerminal(overrides: Partial<PanelInstance> = {}): PanelInstanc
   } as PanelInstance;
 }
 
+/**
+ * The row's remaining seconds, read from the timer element rather than from the
+ * copy around it. The wording of the deadline is a design decision that has
+ * already changed once; that the row *reports* a deadline is the invariant.
+ */
+function countdownSeconds(container: HTMLElement): number {
+  const el = container.querySelector<HTMLElement>("[data-trash-countdown]");
+  expect(el).not.toBeNull();
+  const match = el!.textContent?.match(/(\d+)/);
+  expect(match).not.toBeNull();
+  return Number(match![1]);
+}
+
+/** The fraction of the window the meter is currently drawing, 0-1. */
+function meterFraction(container: HTMLElement): number {
+  const meter = container.querySelector<HTMLElement>("[data-trash-meter]");
+  expect(meter).not.toBeNull();
+  const fill = meter!.firstElementChild as HTMLElement | null;
+  expect(fill).not.toBeNull();
+  const match = fill!.style.transform.match(/scaleX\(([\d.]+)\)/);
+  expect(match).not.toBeNull();
+  return Number(match![1]);
+}
+
 describe("TrashBinItem", () => {
   describe("label rendering", () => {
     it("does not duplicate worktree name when the agent title falls back to agent name", () => {
@@ -81,11 +105,12 @@ describe("TrashBinItem", () => {
         <TrashBinItem terminal={terminal} trashedInfo={trashedInfo} worktreeName="feature-auth" />
       );
       const text = container.textContent ?? "";
-      const occurrences = text.split("feature-auth").length - 1;
-      expect(occurrences).toBe(1);
-      expect(text).not.toContain("Claude · feature-auth");
+      // The worktree is named once, on the metadata line — never folded into
+      // the title as well, which is what the agent-name fallback used to do.
+      expect(text.split("feature-auth").length - 1).toBe(1);
       expect(text).toContain("Claude");
-      expect(text).toContain("(feature-auth)");
+      const title = container.querySelector<HTMLElement>("[data-trash-row] > div > div")!;
+      expect(title.textContent).toBe("Claude");
     });
 
     it("prefers lastObservedTitle over plain title for agent terminals", () => {
@@ -187,7 +212,7 @@ describe("TrashBinItem", () => {
         originalLocation: "grid",
       };
       const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      expect(container.textContent).toMatch(/\d+s remaining/);
+      expect(countdownSeconds(container)).toBeGreaterThan(0);
     });
 
     it("decrements displayed seconds when time advances while visible", () => {
@@ -198,14 +223,10 @@ describe("TrashBinItem", () => {
         originalLocation: "grid",
       };
       const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      const initialMatch = container.textContent?.match(/(\d+)s remaining/);
-      expect(initialMatch).toBeTruthy();
-      const initialSeconds = parseInt(initialMatch?.[1] ?? "0", 10);
+      const initialSeconds = countdownSeconds(container);
 
       act(() => vi.advanceTimersByTime(2000));
-      const laterMatch = container.textContent?.match(/(\d+)s remaining/);
-      expect(laterMatch).toBeTruthy();
-      const laterSeconds = parseInt(laterMatch?.[1] ?? "0", 10);
+      const laterSeconds = countdownSeconds(container);
 
       expect(laterSeconds).toBeLessThan(initialSeconds);
     });
@@ -219,11 +240,11 @@ describe("TrashBinItem", () => {
       };
       const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
       act(() => vi.advanceTimersByTime(1000));
-      const beforeHide = container.textContent?.match(/(\d+)s remaining/)?.[1];
+      const beforeHide = countdownSeconds(container);
 
       act(() => fireVisibilityChange("hidden"));
       act(() => vi.advanceTimersByTime(10000));
-      const afterHide = container.textContent?.match(/(\d+)s remaining/)?.[1];
+      const afterHide = countdownSeconds(container);
 
       expect(afterHide).toBe(beforeHide);
     });
@@ -240,9 +261,8 @@ describe("TrashBinItem", () => {
       act(() => vi.advanceTimersByTime(10000));
       act(() => fireVisibilityChange("visible"));
 
-      const afterRestore = container.textContent?.match(/(\d+)s remaining/);
-      expect(afterRestore).toBeTruthy();
-      const seconds = parseInt(afterRestore?.[1] ?? "0", 10);
+      const afterRestore = countdownSeconds(container);
+      const seconds = afterRestore;
       // 20s initial - 1s tick before hide - 10s hidden ≈ 9s remaining
       expect(seconds).toBeLessThanOrEqual(10);
     });
@@ -255,86 +275,86 @@ describe("TrashBinItem", () => {
         originalLocation: "grid",
       };
       const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      expect(container.textContent).toContain("0s remaining");
+      expect(countdownSeconds(container)).toBe(0);
     });
   });
 
-  describe("countdown accessibility and visibility", () => {
-    function findCountdownEl(container: HTMLElement): HTMLElement {
-      const matches = Array.from(container.querySelectorAll<HTMLElement>("[aria-hidden]")).filter(
-        (el) => el.textContent?.includes("s remaining")
+  describe("the deadline is always on screen", () => {
+    function renderAt(remainingMs: number) {
+      return render(
+        <TrashBinItem
+          terminal={makeAgentTerminal()}
+          trashedInfo={{ id: "t1", expiresAt: Date.now() + remainingMs, originalLocation: "grid" }}
+        />
       );
-      expect(matches.length).toBe(1);
-      return matches[0]!;
     }
 
-    it("removes aria-live and marks the countdown aria-hidden", () => {
-      const terminal = makeAgentTerminal();
-      const trashedInfo: TrashedTerminal = {
-        id: "t1",
-        expiresAt: Date.now() + 20000,
-        originalLocation: "grid",
-      };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      const el = findCountdownEl(container);
-      expect(el.getAttribute("aria-hidden")).toBe("true");
+    // The rule, not the styling that implements it: a row whose content is
+    // seconds from destruction never makes the user hover to find that out.
+    // Sampled right across the window so a threshold cannot creep back in.
+    it.each([20000, 12000, 6000, 3000, 1000])(
+      "reports the deadline without hover or focus at %ims left",
+      (remainingMs) => {
+        const { container } = renderAt(remainingMs);
+        const el = container.querySelector<HTMLElement>("[data-trash-countdown]")!;
+        expect(el).not.toBeNull();
+        expect(el.className).not.toContain("opacity-0");
+        expect(el.className).not.toContain("group-hover:");
+        expect(countdownSeconds(container)).toBe(Math.ceil(remainingMs / 1000));
+      }
+    );
+
+    it("exposes the deadline to assistive tech without announcing it once a second", () => {
+      const { container } = renderAt(20000);
+      const el = container.querySelector<HTMLElement>("[data-trash-countdown]")!;
+      // role="timer" is implicitly aria-live="off": readable on demand, never
+      // interrupting. An explicit aria-live here would clobber speech at 1Hz.
+      expect(el.getAttribute("role")).toBe("timer");
       expect(el.hasAttribute("aria-live")).toBe(false);
+      expect(el.getAttribute("aria-label")).toMatch(/second/i);
+      expect(el.getAttribute("aria-hidden")).not.toBe("true");
     });
 
-    it("hides the countdown by default outside the final approach window", () => {
-      const terminal = makeAgentTerminal();
-      const trashedInfo: TrashedTerminal = {
-        id: "t1",
-        expiresAt: Date.now() + 20000,
-        originalLocation: "grid",
-      };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-0");
-      expect(el.className).toContain("group-hover:opacity-100");
-      expect(el.className).toContain("group-focus-within:opacity-100");
-      expect(el.className).not.toContain("motion-reduce:opacity-100");
-      expect(el.className).not.toContain("text-status-warning");
+    it("draws a meter whose length falls as the window runs out", () => {
+      const early = renderAt(20000);
+      const late = renderAt(4000);
+      const earlyFraction = meterFraction(early.container);
+      const lateFraction = meterFraction(late.container);
+      expect(earlyFraction).toBeGreaterThan(lateFraction);
+      expect(lateFraction).toBeGreaterThan(0);
     });
 
-    it("surfaces the countdown unconditionally at the 5s threshold", () => {
-      const terminal = makeAgentTerminal();
-      const trashedInfo: TrashedTerminal = {
-        id: "t1",
-        expiresAt: Date.now() + 5000,
-        originalLocation: "grid",
-      };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-100");
-      expect(el.className).toContain("text-status-warning");
-      expect(el.className).not.toContain("opacity-0");
+    it("hides the meter from assistive tech, since the timer already carries the value", () => {
+      const { container } = renderAt(20000);
+      expect(container.querySelector("[data-trash-meter]")!.getAttribute("aria-hidden")).toBe(
+        "true"
+      );
     });
 
-    it("keeps the warning treatment below the threshold", () => {
-      const terminal = makeAgentTerminal();
-      const trashedInfo: TrashedTerminal = {
-        id: "t1",
-        expiresAt: Date.now() + 4000,
-        originalLocation: "grid",
-      };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-100");
-      expect(el.className).toContain("text-status-warning");
+    it("separates a nearly-expired row from a fresh one by more than colour", () => {
+      const fresh = renderAt(20000);
+      const nearly = renderAt(2000);
+      // Length and number both differ, so the distinction survives a viewer who
+      // cannot tell the warning tone from the neutral one (SC 1.4.1).
+      const nearlyFraction = meterFraction(nearly.container);
+      const freshFraction = meterFraction(fresh.container);
+      expect(nearlyFraction).toBeLessThan(freshFraction);
+      const nearlySeconds = countdownSeconds(nearly.container);
+      const freshSeconds = countdownSeconds(fresh.container);
+      expect(nearlySeconds).toBeLessThan(freshSeconds);
     });
 
-    it("stays quiet just above the threshold", () => {
-      const terminal = makeAgentTerminal();
-      const trashedInfo: TrashedTerminal = {
-        id: "t1",
-        expiresAt: Date.now() + 6000,
-        originalLocation: "grid",
-      };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-0");
-      expect(el.className).not.toContain("text-status-warning");
+    it("marks the final approach so the warning treatment is testable, not incidental", () => {
+      expect(
+        renderAt(4000)
+          .container.querySelector("[data-trash-countdown]")!
+          .getAttribute("data-critical")
+      ).toBe("true");
+      expect(
+        renderAt(9000)
+          .container.querySelector("[data-trash-countdown]")!
+          .getAttribute("data-critical")
+      ).toBeNull();
     });
   });
 });

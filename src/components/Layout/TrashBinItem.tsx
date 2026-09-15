@@ -1,5 +1,5 @@
-import { useCallback, useState, useSyncExternalStore } from "react";
-import { RotateCcw, X } from "lucide-react";
+import { useCallback, useSyncExternalStore } from "react";
+import { RotateCcw, Unlink, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
@@ -15,13 +15,7 @@ import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
-import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
-import { cn } from "@/lib/utils";
-
-// Reveal precise seconds only when the deadline is imminent (≤5s, the M3/WCAG
-// "final approach" window). Outside that, the row stays quiet and the value is
-// available on hover or keyboard focus. Sub-threshold meta-info should not tick.
-const COUNTDOWN_CRITICAL_SECONDS = 5;
+import { TrashCountdownLabel, TrashTtlMeter, useTrashCountdown } from "./trashCountdown";
 
 interface TrashBinItemProps {
   terminal: PanelInstance;
@@ -40,10 +34,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
 
   const isOrphan = !!terminal.worktreeId && !worktreeName;
 
-  const [now, setNow] = useState(() => Date.now());
-  useVisibilityAwareInterval(() => setNow(Date.now()), 1000);
-  const timeRemaining = Math.max(0, trashedInfo.expiresAt - now);
-  const seconds = Math.ceil(timeRemaining / 1000);
+  const countdown = useTrashCountdown(trashedInfo.expiresAt);
 
   const canRestore = !isOrphan || !!activeWorktreeId;
 
@@ -79,9 +70,9 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   return (
     <div
       data-trash-row
-      className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors group"
+      className="relative flex shrink-0 items-start gap-2 overflow-hidden rounded-[var(--radius-sm)] bg-transparent px-2.5 py-1.5 transition-colors hover:bg-tint/5 group"
     >
-      <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+      <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
         <TerminalIcon
           kind={terminal.kind}
           chrome={deriveTerminalChrome(terminal)}
@@ -92,26 +83,38 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       <div className="flex-1 min-w-0">
         <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
           {terminalName}
-          {worktreeName ? (
-            <span className="text-text-secondary ml-1 font-normal">({worktreeName})</span>
-          ) : isOrphan ? (
-            <span className="text-status-warning/70 ml-1 font-normal text-2xs">(deleted tree)</span>
-          ) : null}
         </div>
-        <div
-          className={cn(
-            "text-2xs tabular-nums transition-opacity",
-            seconds <= COUNTDOWN_CRITICAL_SECONDS
-              ? "opacity-100 text-status-warning/70"
-              : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-          )}
-          aria-hidden="true"
-        >
-          {seconds}s remaining
+        {/* The deadline leads the metadata line, at the same x on every row, so
+            a list of them can be ranked without reading any of the numbers.
+            The identity that follows it is what truncates under width pressure;
+            the deadline never does. */}
+        <div className="flex items-center gap-1.5 mt-0.5 text-2xs">
+          <TrashCountdownLabel countdown={countdown} name={terminalName} />
+          {worktreeName ? (
+            <>
+              <span aria-hidden="true" className="text-text-muted">
+                &middot;
+              </span>
+              <span className="truncate text-text-secondary">{worktreeName}</span>
+            </>
+          ) : isOrphan ? (
+            <>
+              <span aria-hidden="true" className="text-text-muted">
+                &middot;
+              </span>
+              {/* A glyph, not just a colour: at the final approach the deadline
+                  beside it is warning-coloured too, and two warnings that differ
+                  only in hue read as one. */}
+              <span className="inline-flex shrink-0 items-center gap-1 text-status-warning">
+                <Unlink className="h-2.5 w-2.5" aria-hidden="true" />
+                Worktree deleted
+              </span>
+            </>
+          ) : null}
         </div>
       </div>
 
-      <div className="flex gap-1">
+      <div className="flex shrink-0 gap-1">
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="inline-flex">
@@ -154,6 +157,8 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
           <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
         </Tooltip>
       </div>
+
+      <TrashTtlMeter countdown={countdown} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TrashGroupItem } from "../TrashGroupItem";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
@@ -96,6 +96,30 @@ const terminals = [
     } as TrashedTerminal,
   },
 ];
+
+/**
+ * The row's remaining seconds, read from the timer element rather than from the
+ * copy around it. The wording of the deadline is a design decision that has
+ * already changed once; that the row *reports* a deadline is the invariant.
+ */
+function countdownSeconds(container: HTMLElement): number {
+  const el = container.querySelector<HTMLElement>("[data-trash-countdown]");
+  expect(el).not.toBeNull();
+  const match = el!.textContent?.match(/(\d+)/);
+  expect(match).not.toBeNull();
+  return Number(match![1]);
+}
+
+/** The fraction of the window the meter is currently drawing, 0-1. */
+function meterFraction(container: HTMLElement): number {
+  const meter = container.querySelector<HTMLElement>("[data-trash-meter]");
+  expect(meter).not.toBeNull();
+  const fill = meter!.firstElementChild as HTMLElement | null;
+  expect(fill).not.toBeNull();
+  const match = fill!.style.transform.match(/scaleX\(([\d.]+)\)/);
+  expect(match).not.toBeNull();
+  return Number(match![1]);
+}
 
 describe("TrashGroupItem", () => {
   describe("rendering", () => {
@@ -328,7 +352,7 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() + 20000}
         />
       );
-      expect(container.textContent).toContain("(feature-auth)");
+      expect(container.textContent).toContain("feature-auth");
     });
 
     it("shows deleted tree marker for orphaned groups", () => {
@@ -340,7 +364,7 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() + 20000}
         />
       );
-      expect(container.textContent).toContain("(deleted tree)");
+      expect(container.textContent).toContain("Worktree deleted");
     });
   });
 
@@ -428,7 +452,7 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() + 15000}
         />
       );
-      expect(container.textContent).toMatch(/\d+s remaining/);
+      expect(countdownSeconds(container)).toBeGreaterThan(0);
     });
 
     it("decrements displayed seconds when time advances while visible", () => {
@@ -440,14 +464,10 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() + 20000}
         />
       );
-      const initialMatch = container.textContent?.match(/(\d+)s remaining/);
-      expect(initialMatch).toBeTruthy();
-      const initialSeconds = parseInt(initialMatch?.[1] ?? "0", 10);
+      const initialSeconds = countdownSeconds(container);
 
       act(() => vi.advanceTimersByTime(2000));
-      const laterMatch = container.textContent?.match(/(\d+)s remaining/);
-      expect(laterMatch).toBeTruthy();
-      const laterSeconds = parseInt(laterMatch?.[1] ?? "0", 10);
+      const laterSeconds = countdownSeconds(container);
 
       expect(laterSeconds).toBeLessThan(initialSeconds);
     });
@@ -462,11 +482,11 @@ describe("TrashGroupItem", () => {
         />
       );
       act(() => vi.advanceTimersByTime(1000));
-      const beforeHide = container.textContent?.match(/(\d+)s remaining/)?.[1];
+      const beforeHide = countdownSeconds(container);
 
       act(() => fireVisibilityChange("hidden"));
       act(() => vi.advanceTimersByTime(10000));
-      const afterHide = container.textContent?.match(/(\d+)s remaining/)?.[1];
+      const afterHide = countdownSeconds(container);
 
       expect(afterHide).toBe(beforeHide);
     });
@@ -484,9 +504,8 @@ describe("TrashGroupItem", () => {
       act(() => vi.advanceTimersByTime(10000));
       act(() => fireVisibilityChange("visible"));
 
-      const afterRestore = container.textContent?.match(/(\d+)s remaining/);
-      expect(afterRestore).toBeTruthy();
-      const seconds = parseInt(afterRestore?.[1] ?? "0", 10);
+      const afterRestore = countdownSeconds(container);
+      const seconds = afterRestore;
       expect(seconds).toBeLessThanOrEqual(10);
     });
 
@@ -499,34 +518,93 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() - 5000}
         />
       );
-      expect(container.textContent).toContain("0s remaining");
+      expect(countdownSeconds(container)).toBe(0);
     });
   });
 
-  describe("countdown accessibility and visibility", () => {
-    function findCountdownEl(container: HTMLElement): HTMLElement {
-      const matches = Array.from(container.querySelectorAll<HTMLElement>("[aria-hidden]")).filter(
-        (el) => el.textContent?.includes("s remaining")
+  describe("the deadline is always on screen", () => {
+    function renderAt(remainingMs: number) {
+      return render(
+        <TrashGroupItem
+          groupRestoreId="grp1"
+          groupMetadata={groupMetadata}
+          terminals={terminals}
+          earliestExpiry={Date.now() + remainingMs}
+        />
       );
-      expect(matches.length).toBe(1);
-      return matches[0]!;
     }
 
-    it("removes aria-live and marks the countdown aria-hidden", () => {
-      const { container } = render(
-        <TrashGroupItem
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 20000}
-        />
-      );
-      const el = findCountdownEl(container);
-      expect(el.getAttribute("aria-hidden")).toBe("true");
+    // The rule, not the styling that implements it: a group seconds from
+    // destruction never makes the user hover to find that out. Sampled right
+    // across the window so a threshold cannot creep back in.
+    it.each([20000, 12000, 6000, 3000, 1000])(
+      "reports the deadline without hover or focus at %ims left",
+      (remainingMs) => {
+        const { container } = renderAt(remainingMs);
+        const el = container.querySelector<HTMLElement>("[data-trash-countdown]")!;
+        expect(el).not.toBeNull();
+        expect(el.className).not.toContain("opacity-0");
+        expect(el.className).not.toContain("group-hover:");
+        expect(countdownSeconds(container)).toBe(Math.ceil(remainingMs / 1000));
+      }
+    );
+
+    it("exposes the deadline to assistive tech without announcing it once a second", () => {
+      const { container } = renderAt(20000);
+      const el = container.querySelector<HTMLElement>("[data-trash-countdown]")!;
+      // role="timer" is implicitly aria-live="off": readable on demand, never
+      // interrupting. An explicit aria-live here would clobber speech at 1Hz.
+      expect(el.getAttribute("role")).toBe("timer");
       expect(el.hasAttribute("aria-live")).toBe(false);
+      expect(el.getAttribute("aria-label")).toMatch(/second/i);
+      expect(el.getAttribute("aria-hidden")).not.toBe("true");
     });
 
-    it("hides the countdown by default outside the final approach window", () => {
+    it("draws a meter whose length falls as the window runs out", () => {
+      const early = renderAt(20000);
+      const late = renderAt(4000);
+      const earlyFraction = meterFraction(early.container);
+      const lateFraction = meterFraction(late.container);
+      expect(earlyFraction).toBeGreaterThan(lateFraction);
+      expect(lateFraction).toBeGreaterThan(0);
+    });
+
+    it("hides the meter from assistive tech, since the timer already carries the value", () => {
+      const { container } = renderAt(20000);
+      expect(container.querySelector("[data-trash-meter]")!.getAttribute("aria-hidden")).toBe(
+        "true"
+      );
+    });
+
+    it("separates a nearly-expired group from a fresh one by more than colour", () => {
+      const fresh = renderAt(20000);
+      const nearly = renderAt(2000);
+      // Length and number both differ, so the distinction survives a viewer who
+      // cannot tell the warning tone from the neutral one (SC 1.4.1).
+      const nearlyFraction = meterFraction(nearly.container);
+      const freshFraction = meterFraction(fresh.container);
+      expect(nearlyFraction).toBeLessThan(freshFraction);
+      const nearlySeconds = countdownSeconds(nearly.container);
+      const freshSeconds = countdownSeconds(fresh.container);
+      expect(nearlySeconds).toBeLessThan(freshSeconds);
+    });
+
+    it("marks the final approach so the warning treatment is testable, not incidental", () => {
+      expect(
+        renderAt(4000)
+          .container.querySelector("[data-trash-countdown]")!
+          .getAttribute("data-critical")
+      ).toBe("true");
+      expect(
+        renderAt(9000)
+          .container.querySelector("[data-trash-countdown]")!
+          .getAttribute("data-critical")
+      ).toBeNull();
+    });
+  });
+
+  describe("expanded members keep their controls reachable by keyboard", () => {
+    it("reveals a child row's actions on focus as well as hover", () => {
       const { container } = render(
         <TrashGroupItem
           groupRestoreId="grp1"
@@ -535,55 +613,12 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() + 20000}
         />
       );
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-0");
-      expect(el.className).toContain("group-hover:opacity-100");
-      expect(el.className).toContain("group-focus-within:opacity-100");
-      expect(el.className).not.toContain("motion-reduce:opacity-100");
-      expect(el.className).not.toContain("text-status-warning");
-    });
-
-    it("surfaces the countdown unconditionally at the 5s threshold", () => {
-      const { container } = render(
-        <TrashGroupItem
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 5000}
-        />
-      );
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-100");
-      expect(el.className).toContain("text-status-warning");
-      expect(el.className).not.toContain("opacity-0");
-    });
-
-    it("keeps the warning treatment below the threshold", () => {
-      const { container } = render(
-        <TrashGroupItem
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 4000}
-        />
-      );
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-100");
-      expect(el.className).toContain("text-status-warning");
-    });
-
-    it("stays quiet just above the threshold", () => {
-      const { container } = render(
-        <TrashGroupItem
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 6000}
-        />
-      );
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("opacity-0");
-      expect(el.className).not.toContain("text-status-warning");
+      fireEvent.click(screen.getByRole("button", { name: "Expand group" }));
+      const actions = container.querySelector<HTMLElement>("[class*='group-hover/panel']")!;
+      expect(actions).not.toBeNull();
+      // A control that is focusable but invisible strands the keyboard user on
+      // a button they cannot see — the row one level up already pairs these.
+      expect(actions.className).toContain("group-focus-within/panel:opacity-100");
     });
   });
 });

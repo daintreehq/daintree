@@ -1,5 +1,5 @@
 import { useState, useCallback, useSyncExternalStore } from "react";
-import { RotateCcw, X, Layers, ChevronDown, ChevronRight } from "lucide-react";
+import { RotateCcw, X, Layers, ChevronDown, ChevronRight, Unlink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
@@ -8,7 +8,6 @@ import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slic
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import { cleanTaskTitle } from "@shared/utils/taskTitle";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -16,9 +15,7 @@ import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
-import { cn } from "@/lib/utils";
-
-const COUNTDOWN_CRITICAL_SECONDS = 5;
+import { TrashCountdownLabel, TrashTtlMeter, useTrashCountdown } from "./trashCountdown";
 
 interface TrashGroupItemProps {
   groupRestoreId: string;
@@ -52,10 +49,7 @@ export function TrashGroupItem({
   const isOrphan = !!groupMetadata.worktreeId && !worktreeName;
   const canRestore = !isOrphan || !!activeWorktreeId;
 
-  const [now, setNow] = useState(() => Date.now());
-  useVisibilityAwareInterval(() => setNow(Date.now()), 1000);
-  const timeRemaining = Math.max(0, earliestExpiry - now);
-  const seconds = Math.ceil(timeRemaining / 1000);
+  const countdown = useTrashCountdown(earliestExpiry);
 
   const handleRestoreGroup = useCallback(() => {
     if (isOrphan && activeWorktreeId) {
@@ -107,13 +101,13 @@ export function TrashGroupItem({
   return (
     <div
       data-trash-row
-      className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors"
+      className="relative shrink-0 overflow-hidden rounded-[var(--radius-sm)] bg-transparent transition-colors hover:bg-tint/5"
     >
-      <div className="flex items-center gap-2 px-2.5 py-1.5 group">
+      <div className="flex items-start gap-2 px-2.5 py-1.5 group">
         <Button
           variant="ghost"
           size="icon-sm"
-          className="shrink-0 h-4 w-4 p-0 hover:bg-transparent"
+          className="shrink-0 mt-0.5 h-4 w-4 p-0 hover:bg-transparent"
           onClick={() => setIsExpanded(!isExpanded)}
           aria-label={isExpanded ? "Collapse group" : "Expand group"}
           aria-expanded={isExpanded}
@@ -126,35 +120,40 @@ export function TrashGroupItem({
           )}
         </Button>
 
-        <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+        <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
           <Layers className="w-3 h-3 text-daintree-text/70" />
         </div>
 
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
-            {worktreeName ? (
-              <span className="text-text-secondary ml-1 font-normal">({worktreeName})</span>
-            ) : isOrphan ? (
-              <span className="text-status-warning/70 ml-1 font-normal text-2xs">
-                (deleted tree)
-              </span>
-            ) : null}
           </div>
-          <div
-            className={cn(
-              "text-2xs tabular-nums transition-opacity",
-              seconds <= COUNTDOWN_CRITICAL_SECONDS
-                ? "opacity-100 text-status-warning/70"
-                : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-            )}
-            aria-hidden="true"
-          >
-            {seconds}s remaining
+          {/* Same metadata line as a single row, so the deadline sits at the
+              same x in both and the two kinds of row can be ranked together. */}
+          <div className="flex items-center gap-1.5 mt-0.5 text-2xs">
+            <TrashCountdownLabel countdown={countdown} name={groupName} />
+            {worktreeName ? (
+              <>
+                <span aria-hidden="true" className="text-text-muted">
+                  &middot;
+                </span>
+                <span className="truncate text-text-secondary">{worktreeName}</span>
+              </>
+            ) : isOrphan ? (
+              <>
+                <span aria-hidden="true" className="text-text-muted">
+                  &middot;
+                </span>
+                <span className="inline-flex shrink-0 items-center gap-1 text-status-warning">
+                  <Unlink className="h-2.5 w-2.5" aria-hidden="true" />
+                  Worktree deleted
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
 
-        <div className="flex gap-1">
+        <div className="flex shrink-0 gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="inline-flex">
@@ -222,7 +221,7 @@ export function TrashGroupItem({
               return (
                 <div
                   key={terminal.id}
-                  className="flex items-center gap-2 px-2 py-1 text-2xs rounded hover:bg-tint/5 group/panel"
+                  className="flex items-center gap-2 px-2 py-1 text-2xs rounded-[var(--radius-sm)] hover:bg-tint/5 group/panel"
                 >
                   <TerminalIcon
                     kind={terminal.kind}
@@ -230,12 +229,14 @@ export function TrashGroupItem({
                     className="w-2.5 h-2.5 text-text-muted"
                   />
                   <span
-                    className={`truncate flex-1 ${isActiveTab ? "text-text-secondary font-medium" : "text-daintree-text/50"}`}
+                    className={`truncate flex-1 ${isActiveTab ? "text-text-primary font-medium" : "text-text-secondary"}`}
                   >
                     {terminalName}
-                    {isActiveTab && <span className="ml-1 text-text-secondary">(active)</span>}
+                    {isActiveTab && (
+                      <span className="ml-1 font-normal text-text-secondary">(active)</span>
+                    )}
                   </span>
-                  <div className="flex gap-0.5 opacity-0 group-hover/panel:opacity-100 transition-opacity">
+                  <div className="flex gap-0.5 opacity-0 transition-opacity group-hover/panel:opacity-100 group-focus-within/panel:opacity-100">
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <span className="inline-flex">
@@ -279,6 +280,8 @@ export function TrashGroupItem({
             })}
         </div>
       )}
+
+      <TrashTtlMeter countdown={countdown} />
     </div>
   );
 }

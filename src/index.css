@@ -893,6 +893,42 @@ body,
   animation: trash-pulse 200ms var(--ease-out-expo) both;
 }
 
+/* Trash TTL meter: the remaining-time bar on a recently-closed row. Its
+ * duration IS the signal — it is the twenty-second destruction window, not a
+ * transition between two UI states — so it is one of the semantic exceptions
+ * the shared motion tiers exempt. One animation drains the whole window, so
+ * the row's 1Hz re-render costs no extra paint.
+ *
+ * Deliberately NOT in the reduced-motion list below: that block also forces
+ * `transform: none`, which would snap every meter to full width and report
+ * twenty seconds left on a row with two. The element's inline `transform`
+ * already holds the current fraction, so `motion-reduce:animate-none` on the
+ * element leaves a correct bar that steps down once a second instead of
+ * sliding. */
+@keyframes trash-meter-drain {
+  from {
+    transform: scaleX(var(--trash-meter-start));
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.animate-trash-meter {
+  animation: trash-meter-drain var(--trash-meter-duration) linear forwards;
+}
+
+/* Its own override rather than a line in the shared list below, because that
+ * list also forces `transform: none` — which would snap every meter back to
+ * full width and report twenty seconds left on a row with two. Dropping only
+ * the animation leaves the element's inline `transform`, so the bar stays
+ * correct and steps down once a second instead of sliding. */
+@variant reduce-motion {
+  .animate-trash-meter {
+    animation: none;
+  }
+}
+
 /* All-clear flash: subtle full-screen overlay when all agents complete */
 @keyframes all-clear-flash {
   0% {

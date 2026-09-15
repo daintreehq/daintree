@@ -69,11 +69,14 @@ const WORKTREES: WorktreeSnapshot[] = [
   },
 ];
 
-function pane(id: string, title: string, extra: Partial<PtyPanelData> = {}): PanelInstance {
+/** `PtyPanelData` pins `kind` to "terminal"; a fixture needs the other kinds too. */
+type PaneOverrides = Omit<Partial<PtyPanelData>, "kind"> & { kind?: PanelInstance["kind"] };
+
+function pane(id: string, title: string, extra: PaneOverrides = {}): PanelInstance {
   return {
     id,
     title,
-    kind: "terminal",
+    kind: "terminal" as PanelInstance["kind"],
     cwd: "/Users/greg/Projects/daintree",
     cols: 120,
     rows: 40,
@@ -101,7 +104,7 @@ function single(
   id: string,
   title: string,
   secondsLeft: number,
-  paneExtra: Partial<PtyPanelData> = {}
+  paneExtra: PaneOverrides = {}
 ): Entry {
   return { terminal: pane(id, title, paneExtra), trashedInfo: trashed(id, secondsLeft) };
 }
@@ -221,6 +224,7 @@ const fixture = FIXTURES[fixtureName];
 if (!fixture) {
   throw new Error(`unknown fixture "${fixtureName}" — expected one of ${FIXTURE_NAMES.join(", ")}`);
 }
+const entries = fixture.entries;
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
@@ -234,8 +238,8 @@ setCurrentViewStore(worktreeStore);
 // transitions — the harness photographs a state, not an arrival.
 useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-thumbs" });
 usePanelStore.setState({
-  panelsById: Object.fromEntries(fixture.entries.map((e) => [e.terminal.id, e.terminal])),
-  panelIds: fixture.entries.map((e) => e.terminal.id),
+  panelsById: Object.fromEntries(entries.map((e) => [e.terminal.id, e.terminal])),
+  panelIds: entries.map((e) => e.terminal.id),
 });
 
 /**
@@ -263,7 +267,7 @@ function Frame() {
           className="h-2 w-24 rounded-full bg-overlay-soft"
         />
         <div className="ml-auto flex items-center gap-2">
-          <TrashContainer trashedTerminals={fixture.entries} compact={compact} />
+          <TrashContainer trashedTerminals={entries} compact={compact} />
         </div>
       </div>
     </div>

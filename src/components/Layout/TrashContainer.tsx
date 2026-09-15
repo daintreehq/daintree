@@ -16,6 +16,7 @@ import {
 } from "@/components/DragDrop";
 import { DURATION_200, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import { usePanelStore } from "@/store";
+import { TRASH_TTL_SECONDS, useTrashCountdown } from "./trashCountdown";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
@@ -58,6 +59,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
   const [showMovedHint, setShowMovedHint] = useState(false);
   const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
+  const [isScrollable, setIsScrollable] = useState(false);
   const prevLengthRef = useRef(trashedTerminals.length);
   const hintShowCountRef = useRef(0);
   const isExecutingRef = useRef(false);
@@ -85,7 +87,11 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
       setShowMovedHint(true);
     }
     const shortcut = isMac() ? "Cmd+Shift+T" : "Ctrl+Shift+T";
-    useAnnouncerStore.getState().announce(`Panel closed — press ${shortcut} to restore`);
+    // The window is the whole point of the announcement: "press this to
+    // restore" without it invites someone to come back to a pane that is gone.
+    useAnnouncerStore
+      .getState()
+      .announce(`Panel closed — press ${shortcut} to restore within ${TRASH_TTL_SECONDS} seconds`);
   }, [trashedTerminals.length]);
 
   const handleTrashAnimationEnd = useCallback(() => {
@@ -189,6 +195,61 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
     return items.sort((a, b) => b.sortKey - a.sortKey);
   }, [trashedTerminals]);
 
+  // The footer only earns its space when rows are actually out of sight, so the
+  // question is whether the list overflows, not how many items it holds — a
+  // count threshold would guess wrong the moment a row grows a second line.
+  //
+  // Measured from a callback ref rather than an effect alone: Radix mounts the
+  // popover's content in a later commit than this component's effects run, so
+  // an effect reading the node finds null, records "not scrollable", and never
+  // looks again.
+  const listNodeRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  const measureOverflow = useCallback(() => {
+    const node = listNodeRef.current;
+    setIsScrollable(!!node && node.scrollHeight > node.clientHeight + 1);
+  }, []);
+
+  const listRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+      listNodeRef.current = node;
+      measureOverflow();
+      if (!node || typeof ResizeObserver === "undefined") return;
+      // The rows are what change height — a late-loading font, a title that
+      // wraps — while the capped container sits at its ceiling and never
+      // resizes at all.
+      const observer = new ResizeObserver(measureOverflow);
+      observer.observe(node);
+      observerRef.current = observer;
+    },
+    [measureOverflow]
+  );
+
+  // A row expiring out of the list does not resize the capped container, so the
+  // observer alone would never notice the overflow ending.
+  useEffect(() => {
+    if (!isOpen) {
+      setIsScrollable(false);
+      return;
+    }
+    measureOverflow();
+  }, [isOpen, measureOverflow, trashedTerminals.length]);
+
+  const earliestExpiry = useMemo(() => {
+    let earliest = Infinity;
+    for (const { trashedInfo } of trashedTerminals) {
+      if (trashedInfo.expiresAt < earliest) earliest = trashedInfo.expiresAt;
+    }
+    return earliest;
+  }, [trashedTerminals]);
+
+  // Ticks only while the footer is on screen; an unopened popover holds no timer.
+  const nextExpiry = useTrashCountdown(Number.isFinite(earliestExpiry) ? earliestExpiry : 0);
+  const nextExpirySeconds = nextExpiry.seconds;
+
   const trashPreviewTitles = useMemo(() => {
     const titles: string[] = [];
     for (const item of trashedTerminals) {
@@ -255,7 +316,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                 aria-haspopup="dialog"
                 aria-expanded={isOpen}
                 aria-controls={contentId}
-                aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"}`}
+                aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
               >
                 <span
                   className={cn("relative", isTrashPulsing && "animate-trash-pulse")}
@@ -263,7 +324,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                 >
                   <Trash2 className="w-3.5 h-3.5 text-daintree-text/60" aria-hidden="true" />
                   {compact && count > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-daintree-text/40 text-3xs font-bold tabular-nums text-text-inverse">
+                    <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-text-secondary text-3xs font-bold tabular-nums text-text-inverse">
                       {count > 9 ? "9+" : count}
                     </span>
                   )}
@@ -298,24 +359,44 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           }}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-text-secondary">Recently closed</span>
-              {trashedTerminals.length > 0 ? (
-                <Button
-                  variant="ghost-danger"
-                  size="sm"
-                  className="text-2xs h-auto py-0.5 px-1.5"
-                  onClick={() => setEmptyTrashConfirmOpen(true)}
-                  data-testid="empty-trash-button"
-                >
-                  Empty trash
-                </Button>
-              ) : (
-                <span className="text-2xs text-text-secondary">Auto-clears</span>
-              )}
+            <div className="px-3 py-2 border-b border-divider bg-overlay-subtle flex justify-between items-start gap-2">
+              <div className="flex min-w-0 flex-col">
+                <span className="text-xs font-medium text-text-secondary">Recently closed</span>
+                {/* The list is a twenty-second undo buffer, not storage. Saying
+                    so once in the header is what stops the trash-can framing
+                    promising a durability the surface does not have — the
+                    per-row deadline alone never explains the rule. */}
+                <span className="text-3xs text-text-muted">
+                  Gone for good {TRASH_TTL_SECONDS}s after closing
+                </span>
+              </div>
+              <Button
+                variant="ghost-danger"
+                size="sm"
+                className="shrink-0 text-2xs h-auto py-0.5 px-1.5"
+                onClick={() => {
+                  // Hand the surface over to the confirm rather than stacking
+                  // on top of it: this popover is anchored to the toolbar and
+                  // paints above the dialog, where it was clipping the confirm
+                  // button of the very action it launched.
+                  setIsOpen(false);
+                  setEmptyTrashConfirmOpen(true);
+                }}
+                data-testid="empty-trash-button"
+              >
+                Empty trash
+              </Button>
             </div>
 
-            <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
+            <div
+              ref={listRef}
+              // The rows carry `shrink-0`: a flex column compresses its
+              // children to fit before it will scroll, which squashed the
+              // metadata line under the row's own TTL meter and left
+              // scrollHeight === clientHeight, so the overflow footer below
+              // never knew there was anything out of sight.
+              className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto"
+            >
               {displayItems.map((item) => {
                 if (item.type === "group") {
                   const worktreeName = item.groupMetadata.worktreeId
@@ -346,6 +427,21 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                 }
               })}
             </div>
+
+            {/* LIFO puts the freshest pane on top, which is the one most likely
+                to be wanted back — but it also means the rows nearest their
+                deadline are the ones that fall below the fold. Name what is
+                down there and when it goes, rather than reordering the list
+                out from under the pointer. */}
+            {isScrollable && (
+              <div
+                data-testid="trash-overflow-footer"
+                className="flex items-center justify-between gap-2 border-t border-divider px-3 py-1.5 text-3xs text-text-secondary"
+              >
+                <span className="tabular-nums">{count} closed</span>
+                <span className="tabular-nums">Next gone in {nextExpirySeconds}s</span>
+              </div>
+            )}
           </div>
         </PopoverContent>
 
