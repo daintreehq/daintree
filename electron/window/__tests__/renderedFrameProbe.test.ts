@@ -3,9 +3,10 @@ import vm from "node:vm";
 import { waitForRenderedFrame } from "../renderedFrameProbe.js";
 
 function makeWc(opts: { destroyed?: boolean; execute?: () => Promise<unknown> } = {}) {
+  const execute = opts.execute ?? (() => Promise.resolve(true));
   return {
     isDestroyed: vi.fn(() => opts.destroyed ?? false),
-    executeJavaScript: vi.fn(opts.execute ?? (() => Promise.resolve(true))),
+    executeJavaScript: vi.fn((_code: string): Promise<unknown> => execute()),
   };
 }
 

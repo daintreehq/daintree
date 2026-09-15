@@ -1872,7 +1872,7 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     // Window-routed IPC and keyboard focus follow B back, and B itself was
     // never parked along the way.
     const registrations = vi.mocked(registerAppView).mock.calls;
-    expect((registrations.at(-1)?.[1] as { webContents: MockWc }).webContents).toBe(bWc);
+    expect((registrations.at(-1)?.[1] as unknown as { webContents: MockWc }).webContents).toBe(bWc);
     expect(bWc.focus).toHaveBeenCalled();
     expect(bWc.send).not.toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
     // B was never parked, so its ports are intact; the ready hook would only
