@@ -343,9 +343,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     await service.deleteWorktree("req-unapproved", "/test/worktree");
 
     expect(mockSpawn).not.toHaveBeenCalled();
-    expect(mockSimpleGit.raw).toHaveBeenCalledWith(
-      expect.arrayContaining(["worktree", "remove"])
-    );
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith(expect.arrayContaining(["worktree", "remove"]));
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: "delete-worktree-result", success: true })
     );
