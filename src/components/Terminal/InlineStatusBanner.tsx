@@ -486,7 +486,10 @@ export function InlineStatusBanner({
             // lines before it would ever drop the controls.
             // Padding, not margin: a full-basis row with a margin runs past the
             // container, and the flush-right × with it.
-            isStrip && "@max-[52rem]/banner:basis-full @max-[52rem]/banner:pl-6",
+            // The row itself wraps once it is beneath the text: a grid squeezed
+            // by a wide sidebar can be narrower than three actions and a ×.
+            isStrip &&
+              "@max-[52rem]/banner:basis-full @max-[52rem]/banner:pl-6 @max-[52rem]/banner:flex-wrap @max-[52rem]/banner:gap-y-1",
             // `.app-no-drag *` carries the opt-out down to every control in the
             // row, including nested popover triggers.
             isTitleBarSurface && "app-no-drag"

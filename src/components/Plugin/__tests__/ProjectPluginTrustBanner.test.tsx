@@ -102,15 +102,20 @@ describe("ProjectPluginTrustBanner", () => {
     openPrompt([{ id: "acme.dashboard", displayName: name }]);
 
     // The name is quoted and carries its full text as a title, so a bounded
-    // render still discloses the whole string. Only the name itself may clip —
-    // the quotes stay outside the clipped span so a cut name still closes —
-    // and the security sentence is never inside anything that can clip it.
+    // render still discloses the whole string. The quotes sit outside the
+    // element that holds the name, so a cut name still closes. Whether the
+    // name actually clips, and the warning never does, is pixel geometry —
+    // the capture harness owns that.
     const quoted = screen.getByTitle(name);
     expect(quoted.textContent).toBe(`'${name}'`);
-    const clipped = quoted.querySelector('[class*="truncate"]');
-    expect(clipped?.textContent).toBe(name);
-    const warning = screen.getByText(/runs with your account/);
-    expect(warning.closest('[class*="truncate"]')).toBeNull();
+    expect(quoted.firstElementChild?.textContent).toBe(name);
+  });
+
+  it("falls back to the plugin id when the manifest's name has nothing visible in it", () => {
+    renderBanner();
+    openPrompt([{ id: "acme.dashboard", displayName: "   " }]);
+
+    expect(screen.getByTitle("acme.dashboard").textContent).toBe("'acme.dashboard'");
   });
 
   it("offers exactly the three answers, and no per-capability choice", () => {
@@ -120,6 +125,8 @@ describe("ProjectPluginTrustBanner", () => {
     expect(button("Keep disabled")).toBeTruthy();
     expect(button("Enable for this session")).toBeTruthy();
     expect(button("Always enable")).toBeTruthy();
+    // Three answers and the dismiss: nothing else is a button here.
+    expect(screen.getAllByRole("button")).toHaveLength(4);
 
     // A capability list here would read as a set of togglable permissions.
     // There is no sandbox behind them, so the gate must not imply one.

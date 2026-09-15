@@ -6,7 +6,7 @@ import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewS
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GridNotificationBar } from "@/components/Terminal/GridNotificationBar";
 import { ProjectPluginTrustBanner } from "../ProjectPluginTrustBanner";
-import { SHEET_ROWS, requireTrustFixture } from "./trustFixtures";
+import { requireTrustFixture } from "./trustFixtures";
 import "@/index.css";
 
 installPreviewShims();
@@ -23,9 +23,11 @@ installPreviewShims();
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?fixture=single           one state (see trustFixtures.ts)
- *   ?fixture=sheet            every state stacked, one grid each
  *   ?width=1100               window width in CSS px
- *   ?height=420               height of one grid region in CSS px
+ *   ?height=420               height of the grid region in CSS px
+ *
+ * One state per page: the banner reads a singleton store, so a sheet of rows
+ * would show one state five times under five labels.
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -98,17 +100,9 @@ function PanelGrid() {
 }
 
 /** The panel grid region as `ContentGridDefault` lays it out, with the real strips in their real order. */
-function GridRegion({ label }: { label?: string }) {
+function GridRegion() {
   return (
     <div data-grid-host>
-      {label && (
-        <div
-          data-harness-decoration
-          className="px-3 pb-1 pt-3 font-mono text-2xs uppercase tracking-wide text-text-muted"
-        >
-          {label}
-        </div>
-      )}
       <div className="flex flex-col" style={{ height: gridHeight }}>
         <ToolbarStrip />
         <div className="flex flex-1 min-h-0 flex-col" role="region" aria-label="Panels">
@@ -123,36 +117,16 @@ function GridRegion({ label }: { label?: string }) {
   );
 }
 
-function Sheet() {
-  return (
-    <div data-preview-shell className="flex flex-col gap-4 pb-6" style={{ width }}>
-      {SHEET_ROWS.map((name) => (
-        <GridRegion key={name} label={`${name} — ${requireTrustFixture(name).what}`} />
-      ))}
-    </div>
-  );
-}
-
-function Single() {
-  return (
-    <div data-preview-shell className="flex flex-col" style={{ width }}>
-      <GridRegion />
-    </div>
-  );
-}
-
 // Seed before mounting: a store write during render is a cross-component
 // update React rightly complains about, and the banner reads on first render.
-// The sheet shares one store, so every row shows the last fixture seeded; the
-// rows exist to compare the banner against the same grid, not to differ.
-if (fixtureName === "sheet") {
-  requireTrustFixture(SHEET_ROWS[0]).seed();
-} else {
-  requireTrustFixture(fixtureName).seed();
-}
+requireTrustFixture(fixtureName).seed();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <TooltipProvider>{fixtureName === "sheet" ? <Sheet /> : <Single />}</TooltipProvider>
+    <TooltipProvider>
+      <div data-preview-shell className="flex flex-col" style={{ width }}>
+        <GridRegion />
+      </div>
+    </TooltipProvider>
   </StrictMode>
 );

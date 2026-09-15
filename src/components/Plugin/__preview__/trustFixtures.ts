@@ -83,8 +83,6 @@ export const TRUST_FIXTURES: Record<string, TrustFixture> = {
   },
 };
 
-export const SHEET_ROWS = ["single", "multi", "deciding", "error", "spoof-name"] as const;
-
 export function requireTrustFixture(name: string): TrustFixture {
   const fixture = TRUST_FIXTURES[name];
   if (!fixture) {

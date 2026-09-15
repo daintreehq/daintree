@@ -29,16 +29,19 @@ export function ProjectPluginTrustBanner() {
  * with reassurances from crowding the warning off the line — the full string
  * is one hover away, never lost.
  */
-function PluginName({ name }: { name: string }) {
+function PluginName({ id, name }: { id: string; name: string }) {
+  // A manifest may declare a name with nothing visible in it; the id is the
+  // one thing that always identifies the plugin.
+  const shown = name.trim().length > 0 ? name : id;
   // Quoted the way every question in the app names its entity (`Delete 'foo'?`).
   // The quotes sit outside the clipped span so a truncated name still closes:
   // the seam between its words and ours is the whole point of quoting it.
   return (
     <span
       className="inline-flex max-w-64 items-baseline align-bottom font-medium text-text-primary"
-      title={name}
+      title={shown}
     >
-      &apos;<span className="min-w-0 truncate">{name}</span>&apos;
+      &apos;<span className="min-w-0 truncate">{shown}</span>&apos;
     </span>
   );
 }
@@ -90,7 +93,7 @@ function TrustBannerBody() {
             {plugins.map((p, i) => (
               <span key={p.id}>
                 {i > 0 && ", "}
-                <PluginName name={p.displayName} />
+                <PluginName id={p.id} name={p.displayName} />
               </span>
             ))}
           </>

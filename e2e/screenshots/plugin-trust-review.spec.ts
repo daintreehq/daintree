@@ -21,6 +21,7 @@
  *   <fixture>-<theme>-narrow.png   width pressure at 640px
  *   <fixture>-<theme>-wide.png     the line with room to spare, 1600px
  *   <fixture>-<theme>-mid.png      just above the wrap breakpoint, 880px
+ *   <fixture>-<theme>-tiny.png     a grid squeezed by a wide sidebar, 360px
  *
  * Hard rule, inherited from the siblings: never write a PNG that has not been
  * verified. `snap()` asserts the target is attached with a real box before it
@@ -65,6 +66,9 @@ const WIDE_FIXTURES = ["single", "multi"] as const;
  */
 const MID_WIDTH = 880;
 const MID_FIXTURES = ["single", "spoof-name"] as const;
+/** A grid squeezed by a wide sidebar: narrower than three actions and a × in one row. */
+const TINY_WIDTH = 360;
+const TINY_FIXTURES = ["single"] as const;
 
 /**
  * The dev server compiles each page on first request, and under load that can
@@ -220,6 +224,13 @@ test("project plugin trust banner — every state, every theme", async ({ contex
       )
     );
   }
+  for (const name of TINY_FIXTURES) {
+    written.push(
+      await withPage(context, `${name} tiny`, async (page) =>
+        snap(await openFixture(page, name, theme, TINY_WIDTH), `${name}-${theme}-tiny.png`)
+      )
+    );
+  }
 
   // Count the files ourselves. A harness that trusts its own exit code is how a
   // review ends up reasoning about screenshots that were never written.
@@ -229,7 +240,8 @@ test("project plugin trust banner — every state, every theme", async ({ contex
     THEMES.length * FIXTURES.length +
       NARROW_FIXTURES.length +
       WIDE_FIXTURES.length +
-      MID_FIXTURES.length
+      MID_FIXTURES.length +
+      TINY_FIXTURES.length
   );
   console.log(`[plugin-trust-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
