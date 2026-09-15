@@ -77,7 +77,10 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   })();
 
   return (
-    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors group">
+    <div
+      data-trash-row
+      className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors group"
+    >
       <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
         <TerminalIcon
           kind={terminal.kind}

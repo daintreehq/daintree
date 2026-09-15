@@ -105,7 +105,10 @@ export function TrashGroupItem({
     : fallbackName;
 
   return (
-    <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors">
+    <div
+      data-trash-row
+      className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors"
+    >
       <div className="flex items-center gap-2 px-2.5 py-1.5 group">
         <Button
           variant="ghost"
