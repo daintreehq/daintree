@@ -396,11 +396,11 @@ export function setupBrowserWindow(
         crashReload && projectId ? readLastActiveProjectIdentitySync(projectId) : initialProject;
       firstDomReady = false;
       if (!crashReload) {
-        insertSkeletonCss(appWebContents, precomputedSkeletonCss);
+        void insertSkeletonCss(appWebContents, precomputedSkeletonCss);
       } else {
         // Rebuild fresh so the skeleton reflects current theme/sidebar/focus
         // state, keeping the persisted project's accent.
-        injectSkeletonCss(appWebContents, project);
+        void injectSkeletonCss(appWebContents, project);
       }
       // Repaint name/emoji on every parse so crash reloads stay identified.
       injectSkeletonProjectIdentity(appWebContents, project);

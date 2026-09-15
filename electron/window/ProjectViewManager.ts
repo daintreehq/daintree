@@ -599,6 +599,9 @@ export class ProjectViewManager {
       releaseChannel?: "painted" | "warm-painted" | "skeleton-painted";
       softMs?: number;
       hardMs?: number;
+      confirmFrame?: () => Promise<boolean>;
+      deferFrameConfirmation?: boolean;
+      unpaintedHardMs?: number;
     }
   ): Promise<PaintGateOutcome> {
     return PaintGateController.waitForPaint(
@@ -621,6 +624,15 @@ export class ProjectViewManager {
    */
   retimeSkeletonPaintGateHardTimeout(webContentsId: number, hardMs: number): boolean {
     return PaintGateController.retimeSkeletonPaintGateHardTimeout(this, webContentsId, hardMs);
+  }
+
+  /**
+   * Let an open gate armed with deferred frame confirmation start probing for
+   * a drawn frame, once the cold view's load has settled (#12394). A real
+   * instance method for the same reason as `waitForPaint`.
+   */
+  enableFrameConfirmation(webContentsId: number): boolean {
+    return PaintGateController.enableFrameConfirmation(this, webContentsId);
   }
 
   /**
@@ -1340,6 +1352,15 @@ export class ProjectViewManager {
 
     if (this.activeProjectId === projectId) {
       this.activeProjectId = null;
+    }
+
+    // A gate waiting on this view's frame can never be released now — its
+    // renderer is about to close (#12394). Settle it rather than holding the
+    // outgoing view to the hard bound for a view that no longer exists. Read
+    // before cleanupEntry drops the reverse-map entry the match relies on.
+    const gate = this.pendingPaintGate;
+    if (gate && this.webContentsToProject.get(gate.webContentsId) === projectId) {
+      PaintGateController.clearPaintGate(this);
     }
 
     cleanupEntry(this, projectId);

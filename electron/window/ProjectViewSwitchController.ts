@@ -21,6 +21,7 @@ import { AppError } from "../utils/errorTypes.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { unfreezeWebContents } from "../utils/webContentsLifecycle.js";
+import { waitForRenderedFrame } from "./renderedFrameProbe.js";
 import {
   createView,
   isViewLoadCancelled,
@@ -67,6 +68,39 @@ function deliverFocusIntent(view: WebContentsView, intent: ProjectFocusOnActivat
   if (view.webContents.isDestroyed()) return;
   // Targeted send to the specific incoming view — never broadcast (#4641, #5010).
   view.webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, intent);
+}
+
+/**
+ * Undo a warm reactivation whose view never drew a frame (#12394). The
+ * outgoing view is still attached on top, so this parks the cached view again
+ * and hands the window back to what the user is looking at — the warm mirror
+ * of the cold-start rollback. The cached renderer is alive and stays cached, so
+ * the next switch to it retries a warm reactivation rather than recreating a
+ * project that may have running agents.
+ */
+function abandonUnpaintedWarmSwitch(
+  host: ProjectViewManager,
+  cached: ViewEntry,
+  previousProjectId: string | null,
+  previousEntry: ViewEntry | null,
+  unboundOutgoingView: WebContentsView | null
+): void {
+  if (host.disposed || host.win.isDestroyed()) return;
+  if (host.activeProjectId !== cached.projectId) return;
+  deactivateEntry(host, cached);
+  host.activeProjectId = previousProjectId;
+  if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
+    // Never deactivated during this switch, so its ports and renderer state are
+    // intact; only the app-view registration and focus moved to the cached view.
+    activateView(host, previousEntry);
+  } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
+    registerAppView(host.win, unboundOutgoingView);
+  }
+  try {
+    pruneOrphanedChildren(host);
+  } catch (error) {
+    console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
+  }
 }
 
 export async function performSwitch(
@@ -147,6 +181,14 @@ export async function performSwitch(
       // post-repair frame via APP_VIEW_WARM_PAINTED — or the hard timeout fires.
       // notifyViewPainted is one-shot per V8 context, so the warm path needs its
       // own re-fireable channel.
+      //
+      // The wake signal proves the repair ran, not that it was drawn: this
+      // view went through setVisible(false) and may have been frozen or purged,
+      // so it has no tiles until its renderer produces a frame. The gate
+      // confirms one after the signal before detaching (#12394). The hard
+      // bound still falls through for a slow wake, but only once some frame
+      // has been confirmed; a view that draws nothing by the cold paint bound
+      // is rolled back instead of revealed as a blank canvas.
       activateView(host, cached, /* insertBehind */ true);
       cached.switchTrace = switchTrace;
       mark(PERF_MARKS.PROJECT_SWITCH_VIEW_ATTACHED, {
@@ -155,6 +197,12 @@ export async function performSwitch(
       });
       const warmSoftMs = host.warmPaintGateTimeoutMs;
       const warmHardMs = Math.max(host.warmPaintGateHardTimeoutMs, warmSoftMs);
+      const warmUnpaintedMs = Math.max(
+        host.paintGateHardTimeoutMs,
+        host.paintGateTimeoutMs,
+        warmHardMs
+      );
+      const cachedWc = cached.view.webContents;
       const warmGate = host.waitForPaint(
         cached.view.webContents.id,
         outgoingView,
@@ -169,6 +217,8 @@ export async function performSwitch(
           releaseChannel: "warm-painted",
           softMs: warmSoftMs,
           hardMs: warmHardMs,
+          confirmFrame: () => waitForRenderedFrame(cachedWc),
+          unpaintedHardMs: warmUnpaintedMs,
         }
       );
       // Deterministic wake trigger: a detached + setVisible(false) cached
@@ -195,6 +245,26 @@ export async function performSwitch(
           projectId,
           waitedMs: warmHardMs,
         });
+      }
+      if (gateResult === "unpainted") {
+        logWarn("projectview.warmpaintgate.unpainted", {
+          projectId,
+          waitedMs: warmUnpaintedMs,
+          rollbackProjectId: previousProjectId,
+        });
+        abandonUnpaintedWarmSwitch(host, cached, previousProjectId, previousEntry, unboundOutgoingView);
+        // Discard the intent with the switch so a later unrelated one can't
+        // deliver it.
+        consumePendingFocusIntent(host, projectId);
+        const unpaintedError = new AppError({
+          code: "INTERNAL",
+          message: "View never painted: cached project view parked after warm paint gate timeout",
+          context: { phase: "paint", projectId, waitedMs: warmUnpaintedMs },
+        });
+        if (!host.disposed && !host.win.isDestroyed()) {
+          notifyError(unpaintedError, { source: "project-switch" });
+        }
+        throw unpaintedError;
       }
       // Clean frame painted (or grace period exhausted) — detach the outgoing
       // bridge view, revealing the repaired cached view. Guard on the active
@@ -347,14 +417,16 @@ export async function performSwitch(
   const softMs = host.paintGateTimeoutMs;
   const paintHardMs = Math.max(host.paintGateHardTimeoutMs, softMs);
 
-  // Reveal the incoming view as soon as its themed first-paint skeleton
-  // (`#startup-skeleton`, injected in createView) is parsed into the DOM —
-  // signalled early by `public/skeleton-ready.js` via APP_SKELETON_PARSED,
-  // well before React mounts — rather than holding the outgoing project on
-  // screen for the entire React cold boot. The skeleton is an opaque themed
-  // cover over the view's themed canvas background (setBackgroundColor in
-  // createView, #9573), so this preserves the anti-flash guarantee while
-  // cutting perceived cold-switch latency from ~1.5–4s to a few hundred ms.
+  // Reveal the incoming view on its themed first-paint skeleton
+  // (`#startup-skeleton`, parsed early and signalled by
+  // `public/skeleton-ready.js` via APP_SKELETON_PARSED) rather than holding the
+  // outgoing project on screen for the entire React cold boot. The skeleton is
+  // an opaque themed cover over the view's canvas background
+  // (setBackgroundColor in createView, #9573), but only once it is drawn with
+  // the switch skeleton CSS applied: the signal proves parsing, the CSS lands
+  // at dom-ready, and until then the skeleton sits inside its opacity-0 entrance.
+  // So the signal only latches readiness, and the gate releases after the load
+  // settles (loadView waits for the CSS) and a frame is confirmed (#12394).
   //
   // EXCEPTION: when a focus intent is pending we must keep waiting for the
   // real React paint. The focus-intent IPC listener isn't mounted until React
@@ -427,6 +499,9 @@ export async function performSwitch(
       : Math.min(loadHardMs + paintHardMs, MAX_TIMEOUT_MS);
 
   const gateArmedAt = performance.now();
+  // Captured once: `view.webContents` reads back undefined after destroy
+  // (electron#50249), and a probe can outlive the view.
+  const incomingWc = view.webContents;
   const paintGatePromise = host.waitForPaint(
     view.webContents.id,
     outgoingView,
@@ -440,7 +515,14 @@ export async function performSwitch(
         releaseChannel: coldReleaseChannel,
       });
     },
-    { releaseChannel: coldReleaseChannel, softMs, hardMs }
+    {
+      releaseChannel: coldReleaseChannel,
+      softMs,
+      hardMs,
+      confirmFrame: () => waitForRenderedFrame(incomingWc),
+      // Probes wait for the load to settle — see enableFrameConfirmation below.
+      deferFrameConfirmation: true,
+    }
   );
 
   let visibleAt: number;
@@ -467,10 +549,9 @@ export async function performSwitch(
     });
 
     // The skeleton gate's tight paint bound starts HERE, not at arm time — see
-    // the sizing note above. `false` on the common fast path, where the
-    // parse-time skeleton signal already released the gate during the load, and
-    // on a switch a later one has superseded. Runs before the unfreeze below so
-    // the window a slow rAF is measured against is already the right one.
+    // the sizing note above. `false` on a switch a later one has superseded.
+    // Runs before the unfreeze below so the window a slow rAF is measured
+    // against is already the right one.
     const paintGateRetimed =
       coldReleaseChannel === "skeleton-painted" &&
       host.retimeSkeletonPaintGateHardTimeout(view.webContents.id, paintHardMs);
@@ -487,15 +568,22 @@ export async function performSwitch(
     // the CDP session on an uninitialised frame host (Chromium 146).
     void unfreezeWebContents(view.webContents);
 
-    // Wait for the incoming view to signal readiness. On the fast path that
-    // is APP_SKELETON_PARSED (themed skeleton parsed, channel
-    // `"skeleton-painted"`); on the focus-intent path it is APP_VIEW_PAINTED
-    // (React committed its first structural paint after a double-rAF in
-    // `notifyViewPainted`, channel `"painted"`), and `signalViewPainted` is
-    // the fallback for both. Two-phase: the soft timeout above is observable
-    // but never user-visible; the hard timeout below abandons the switch and
-    // rolls back to the outgoing view, which is never detached without a
-    // signal.
+    // Start confirming a drawn frame. Not before now: during the load the
+    // skeleton CSS may not be applied yet (loadView waits for it), so a frame
+    // drawn earlier can still be an opacity-0 skeleton. Not after awaiting the
+    // unfreeze either — the CDP round trip has no bound of its own, and the
+    // probe's animation frames cannot run until the view is live anyway, which
+    // is exactly the ordering the reveal needs.
+    host.enableFrameConfirmation(view.webContents.id);
+
+    // Wait for the incoming view to signal readiness and draw a frame. On the
+    // fast path readiness is APP_SKELETON_PARSED (themed skeleton parsed,
+    // channel `"skeleton-painted"`); on the focus-intent path it is
+    // APP_VIEW_PAINTED (React committed its first structural paint, channel
+    // `"painted"`), and `signalViewPainted` is the fallback for both. Two-phase:
+    // the soft timeout above is observable but never user-visible; the hard
+    // timeout below abandons the switch and rolls back to the outgoing view,
+    // which is never detached without a signal and a confirmed frame.
     const gateResult = await paintGatePromise;
     visibleAt = performance.now();
     entry.visibleAt = visibleAt;
@@ -517,10 +605,10 @@ export async function performSwitch(
         releaseChannel: coldReleaseChannel,
         hardTimeoutOrigin: paintGateRetimed ? "load-finished" : "gate-armed",
       });
-      // Abandon rather than commit. Both release signals are document-owned
+      // Abandon rather than commit. Both readiness signals are document-owned
       // (APP_SKELETON_PARSED from a script tag in index.html, APP_VIEW_PAINTED
-      // from React), so exhausting the budget without either means this view
-      // gave no evidence it can render. Reaching here now means specifically
+      // from React), and the release also needs a frame the view drew, so
+      // exhausting the budget means this view gave no evidence it can render. Reaching here now means specifically
       // that: the load already settled and `verifyProjectBootstrap` already
       // vouched for the document (#11635), so what timed out is a verified
       // application document that produced no frame — not a wrong document, and
@@ -548,7 +636,7 @@ export async function performSwitch(
       });
     }
 
-    // Paint signal received — detach the outgoing view.
+    // Readiness signalled and a frame confirmed — detach the outgoing view.
     if (previousEntry && host.activeProjectId === projectId) {
       deactivateEntry(host, previousEntry);
     } else if (unboundOutgoingView && host.activeProjectId === projectId) {

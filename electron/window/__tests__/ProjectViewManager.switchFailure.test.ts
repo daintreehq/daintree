@@ -552,17 +552,22 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(GATE_HARD_MS);
     expect(bridgeManager.pendingPaintGate).not.toBeNull();
 
-    // The skeleton parses and drops the gate; the load is still in flight.
+    // The skeleton parses. Parsed is not painted, so the signal only latches
+    // readiness and the gate stays open through the load (#12394).
     bridgeManager.signalSkeletonPainted(slowWc.id);
+    expect(bridgeManager.pendingPaintGate).not.toBeNull();
+    expect(bridgeManager.getOutgoingBridgeProjectId()).toBe(whileGateOpen);
+
+    // Whatever clears the gate while the load is still in flight, the answer
+    // must not change across that boundary — the outgoing view is still the
+    // painted frame.
+    bridgeManager.clearPaintGate();
     expect(bridgeManager.pendingPaintGate).toBeNull();
     expect(bridgeManager.pendingColdSwitch?.projectId).toBe("bridge-b");
-
-    // The answer must not change across that boundary — the outgoing view is
-    // still the painted frame.
     expect(bridgeManager.getOutgoingBridgeProjectId()).toBe(whileGateOpen);
 
     // Only once the load settles is the bridge genuinely gone — here via the
-    // commit, since the gate released on its signal rather than expiring.
+    // commit, since the cleared gate settled as cancelled rather than expiring.
     slowWc._fireOnce("did-finish-load");
     await vi.advanceTimersByTimeAsync(1);
     await switchPromise;

@@ -259,13 +259,22 @@ export function loadView(
       );
     }, hardMs);
 
+    // Set by `onDomReady`, which on a successful load always runs before
+    // `onFinish` reads it. Undefined only where dom-ready never fires (unit-test
+    // mocks), which leaves the load neutral on it.
+    let skeletonCssApplied: Promise<void> | undefined;
+
     const onFinish = () => {
       // Flipped synchronously, before the eval's first await, so a timeout
       // landing during the round trip is attributed to the bootstrap phase
       // rather than to navigation. The hard budget deliberately stays
       // end-to-end — restarting it here would double the worst-case cold start.
       phase = "bootstrap";
-      void verifyProjectBootstrap(wc, projectId).then(
+      // The load also waits for the switch skeleton CSS to be inserted: the
+      // paint gate starts confirming the frame it reveals once this resolves,
+      // and a frame drawn before the CSS applies can still be the skeleton's
+      // opacity-0 entrance (#12394). `insertSkeletonCss` never rejects.
+      void Promise.all([verifyProjectBootstrap(wc, projectId), skeletonCssApplied]).then(
         () => settle(() => resolve()),
         // Always re-wrapped, never passed through: `CANCELLED` must be
         // reachable only from `onDestroyed`, which is the invariant
@@ -324,12 +333,12 @@ export function loadView(
     const onDomReady = () => {
       if (wc.isDestroyed()) return;
       const project = projectStore.getProjectById(projectId);
-      // instantReveal drops index.html's 400ms Doherty entry delay: a cold
-      // switch reveals on APP_SKELETON_PARSED (~150ms), which lands inside
-      // that delay, so without this the revealed view shows a blank themed
-      // canvas instead of the skeleton until ~480ms. The gate stays in place
-      // for the initial app launch (createWindow.ts), where it belongs.
-      injectSkeletonCss(wc, project, { instantReveal: true });
+      // instantReveal drops index.html's entrance fades (the 400ms Doherty
+      // delay and the staggered section reveals): a switch reveals the view on
+      // its skeleton, and any fade still running then shows a blank canvas
+      // instead (#12394). The entrance stays for the initial app launch
+      // (createWindow.ts), where it belongs.
+      skeletonCssApplied = injectSkeletonCss(wc, project, { instantReveal: true });
       injectSkeletonProjectIdentity(wc, project);
     };
 

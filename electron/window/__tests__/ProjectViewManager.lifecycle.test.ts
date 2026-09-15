@@ -561,9 +561,11 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       expect(setup.onViewEvicted).toHaveBeenCalledWith(bWc.id);
       expect(setup.ledger.openIds).not.toContain(bWc.id);
       expect(bWc.close).toHaveBeenCalled();
+      // The gate was waiting on B's frame, which can no longer come, so the
+      // destroy settles it instead of holding A to the hard bound (#12394).
+      expect(manager.pendingPaintGate).toBeNull();
 
-      // A late paint signal from the dead renderer settles the gate without
-      // reviving anything.
+      // A late paint signal from the dead renderer is inert and revives nothing.
       manager.signalViewPainted(bWc.id);
       await switchPromise;
       await flushImmediates();
