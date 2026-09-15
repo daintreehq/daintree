@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
-import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 import { actionService } from "@/services/ActionService";
@@ -494,13 +493,24 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               title="Log retention"
               description="Automatically prune log files older than the selected period on startup."
             >
-              <SettingsPresetGroup
-                label="Log retention period"
-                labelHidden
-                options={RETENTION_OPTIONS}
-                value={logRetentionDays}
-                onChange={(v) => void handleRetentionChange(v)}
-              />
+              <div className="flex gap-2">
+                {RETENTION_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => void handleRetentionChange(option.value)}
+                    className={cn(
+                      "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                      logRetentionDays === option.value
+                        ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
+                        : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
               <p className="text-xs text-text-secondary mt-2 select-text">
                 Log pruning happens at startup. Changing this setting takes effect on next launch.
               </p>
@@ -528,13 +538,24 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               title="Session history"
               description="Daintree records resumable agent sessions so you can pick up where you left off. Prune records older than the selected period, or clear them all now."
             >
-              <SettingsPresetGroup
-                label="Session history retention period"
-                labelHidden
-                options={RETENTION_OPTIONS}
-                value={sessionRetentionDays}
-                onChange={(v) => void handleSessionRetentionChange(v)}
-              />
+              <div className="flex gap-2">
+                {RETENTION_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => void handleSessionRetentionChange(option.value)}
+                    className={cn(
+                      "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                      sessionRetentionDays === option.value
+                        ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
+                        : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
               <p className="text-xs text-text-secondary mt-2 select-text">
                 Applies to every project. Shortening the window prunes older records immediately.
               </p>
