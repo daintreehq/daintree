@@ -353,6 +353,19 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(props.isConsoleOpen).toBeUndefined();
   });
 
+  it("offers Open in browser only when the pane has a valid URL (#12395)", () => {
+    const { unmount } = render(<BrowserPane {...baseProps} />);
+    expect(browserToolbarPropsSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canOpenExternal: true })
+    );
+    unmount();
+
+    render(<BrowserPane {...baseProps} initialUrl="" initialHistory={undefined} />);
+    expect(browserToolbarPropsSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canOpenExternal: false })
+    );
+  });
+
   it("ignores window-dispatched console events without throwing (regression #7495)", () => {
     // The optional `onToggleConsole`/`onClearConsole` callbacks are guarded with
     // optional chaining in the action listener. Dispatching the events on a

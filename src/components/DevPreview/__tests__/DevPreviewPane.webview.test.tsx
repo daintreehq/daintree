@@ -2027,6 +2027,87 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   // #11114: the hook now exposes promotion failures; this covers the pane
   // actually rendering them, which is the half the hook's own tests can't see.
+  describe("toolbar action availability (#12395)", () => {
+    const seedHistory = (present: string) => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present, future: [] },
+        browserZoom: 1,
+        devPreviewConsoleOpen: true,
+        devCommand: "npm run dev",
+      }));
+    };
+
+    it("enables both actions while the server is running with a console", () => {
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(true);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("disables both actions before any dev server has been started", () => {
+      seedHistory("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "stopped",
+        url: null,
+        terminalId: null,
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(false);
+      expect(latestToolbarProps().canToggleConsole).toBe(false);
+    });
+
+    it("offers the console but not Open in browser while the server is starting", () => {
+      seedHistory("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "starting",
+        url: null,
+        terminalId: "dev-terminal-1",
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(false);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("keeps Open in browser available for a retained URL while the webview is not ready", () => {
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "starting",
+        url: null,
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().isWebviewReady).toBe(false);
+      expect(latestToolbarProps().canOpenExternal).toBe(true);
+    });
+
+    it("tracks the console terminal going away and coming back", async () => {
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "stopped",
+        terminalId: null,
+      };
+      await act(async () => {
+        rerender(<DevPreviewPane {...baseProps} />);
+      });
+      expect(latestToolbarProps().canToggleConsole).toBe(false);
+
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "running",
+        terminalId: "dev-terminal-2",
+      };
+      await act(async () => {
+        rerender(<DevPreviewPane {...baseProps} />);
+      });
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+  });
+
   describe("promote-to-portal failure banner (#11114)", () => {
     type DispatchResult = Awaited<ReturnType<typeof actionService.dispatch>>;
     const succeeded = (): DispatchResult => ({ ok: true, result: undefined });

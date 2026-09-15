@@ -59,6 +59,10 @@ interface BrowserToolbarProps {
   isLoading: boolean;
   zoomFactor?: number;
   isConsoleOpen?: boolean;
+  // Whether each action can do anything right now. The caller owns the predicate
+  // so it stays next to the handler's own guard (#12395).
+  canOpenExternal: boolean;
+  canToggleConsole?: boolean;
   isWebviewReady?: boolean;
   viewportPreset?: ViewportPresetId;
   viewportRotated?: boolean;
@@ -95,6 +99,8 @@ export function BrowserToolbar({
   isLoading,
   zoomFactor = 1.0,
   isConsoleOpen = false,
+  canOpenExternal,
+  canToggleConsole = false,
   isWebviewReady = false,
   viewportPreset,
   viewportRotated = false,
@@ -534,6 +540,10 @@ export function BrowserToolbar({
 
   const buttonClass =
     "toolbar-icon-button p-1.5 rounded disabled:opacity-30 disabled:cursor-not-allowed";
+
+  // The stored preference survives the dev server stopping, but with no terminal
+  // behind it there is no drawer to show, so the toggle must not read as pressed.
+  const isConsoleShown = canToggleConsole && isConsoleOpen;
 
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
@@ -1044,18 +1054,25 @@ export function BrowserToolbar({
       {onToggleConsole && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={onToggleConsole}
-              className={cn(buttonClass, isConsoleOpen && "text-text-primary")}
-              aria-label="Toggle console"
-              aria-pressed={isConsoleOpen}
-            >
-              <SquareTerminal className="w-4 h-4" />
-            </button>
+            <span className="inline-flex">
+              <button
+                type="button"
+                onClick={onToggleConsole}
+                disabled={!canToggleConsole}
+                className={cn(
+                  buttonClass,
+                  "disabled:pointer-events-none",
+                  isConsoleShown && "text-text-primary"
+                )}
+                aria-label="Toggle console"
+                aria-pressed={isConsoleShown}
+              >
+                <SquareTerminal className="w-4 h-4" />
+              </button>
+            </span>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {isConsoleOpen ? "Hide console" : "Show console"}
+            {isConsoleShown ? "Hide console" : "Show console"}
           </TooltipContent>
         </Tooltip>
       )}
@@ -1099,14 +1116,17 @@ export function BrowserToolbar({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={onOpenExternal}
-            className={buttonClass}
-            aria-label="Open in browser"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </button>
+          <span className="inline-flex">
+            <button
+              type="button"
+              onClick={onOpenExternal}
+              disabled={!canOpenExternal}
+              className={cn(buttonClass, "disabled:pointer-events-none")}
+              aria-label="Open in browser"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </button>
+          </span>
         </TooltipTrigger>
         <TooltipContent side="bottom">Open in browser</TooltipContent>
       </Tooltip>

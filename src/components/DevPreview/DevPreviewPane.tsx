@@ -913,6 +913,8 @@ export function DevPreviewPane({
           zoomFactor={zoomFactor}
           isWebviewReady={isWebviewReady}
           isConsoleOpen={isConsoleOpen}
+          canOpenExternal={Boolean(currentUrl)}
+          canToggleConsole={Boolean(consoleTerminalId)}
           viewportPreset={viewportPreset}
           viewportRotated={viewportRotated}
           viewportDpr={viewportDpr}

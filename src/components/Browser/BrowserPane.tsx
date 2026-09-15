@@ -863,6 +863,7 @@ export function BrowserPane({
       isLoading={showLoadingOverlay}
       zoomFactor={zoomFactor}
       isWebviewReady={isWebviewReady}
+      canOpenExternal={hasValidUrl}
       validateUrl={(url) => normalizeBrowserUrl(url, { allowedHosts })}
       onNavigate={(url) =>
         void actionService.dispatch("browser.navigate", { terminalId: id, url }, { source: "user" })
