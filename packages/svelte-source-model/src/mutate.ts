@@ -23,6 +23,7 @@ import { complementOf, verifyProtectedRanges } from "./mutate/verify.js";
 export type MutationFailureReason =
   | "unsupported-surface"
   | "invalid-class-token"
+  | "token-not-writable-literally"
   | "invalid-attribute-value"
   | "candidate-parse-failed"
   | "protected-range-modified"
@@ -180,6 +181,19 @@ export function planSetClassTokens(
 
   const raw = source.slice(slot.inner.start, slot.inner.end);
   const quote: QuoteStyle = slot.kind === "quoted" ? slot.quote : '"';
+
+  // Tailwind scans source as plain text, so a token that cannot be written
+  // verbatim is a token it will never see: the file would parse, the class
+  // would reach the DOM, and no rule would be generated for it. Refusing beats
+  // writing a class that silently does nothing.
+  const unwritable = change.add.filter((token) => escapeAttributeValue(token, quote) !== token);
+  if (unwritable.length > 0) {
+    return refuse(
+      "token-not-writable-literally",
+      `cannot be written verbatim in this attribute: ${unwritable.join(", ")}`
+    );
+  }
+
   const next = applyClassTokenChange(raw, change, quote);
   if (next === raw) return refuse("no-op");
 
@@ -201,6 +215,18 @@ export function planSetLiteralAttribute(
   return planScalarValue(source, range, value);
 }
 
+/**
+ * The node kinds that carry component props. Must stay identical to the
+ * resolver's `COMPONENT_NODE_TYPES`: the resolver advertises a writable prop
+ * range for each of these, and a narrower set here would refuse an edit the
+ * inspector had already offered.
+ */
+const COMPONENT_NODE_TYPES: ReadonlySet<string> = new Set([
+  "Component",
+  "SvelteComponent",
+  "SvelteSelf",
+]);
+
 /** Set a literal scalar prop at a component invocation. */
 export function planSetLiteralProp(
   source: string,
@@ -208,7 +234,7 @@ export function planSetLiteralProp(
   name: string,
   value: string | number | boolean
 ): MutationPlan {
-  if (element.kind !== "Component") {
+  if (!COMPONENT_NODE_TYPES.has(element.kind)) {
     return refuse("unsupported-surface", "not-a-component");
   }
   const range = directRange(element.props[name], `prop ${name}`);

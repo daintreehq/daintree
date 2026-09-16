@@ -327,8 +327,14 @@ describe("literal ranges are quote interiors", () => {
   it("refuses an unquoted attribute value, which would otherwise gain a boolean attribute", () => {
     const unquoted = "<div class=p-4 title=hello>x</div>";
     const node = resolved(resolveElementAtLocation(unquoted, locationOf(unquoted, "<div"), parse));
-    expect(node.classes).toEqual({ support: "unsupported", reason: "absent" });
-    expect(node.attributes.title).toEqual({ support: "unsupported", reason: "absent" });
+    expect(node.classes).toEqual({
+      support: "unsupported",
+      reason: "not-a-writable-literal",
+    });
+    expect(node.attributes.title).toEqual({
+      support: "unsupported",
+      reason: "not-a-writable-literal",
+    });
   });
 
   it("accepts single quotes and reports the interior", () => {
@@ -358,7 +364,7 @@ describe("class attribute identity", () => {
   it("refuses when two spellings of class are both present", () => {
     const both = '<div class="p-4" CLASS="p-8">x</div>';
     const node = resolved(resolveElementAtLocation(both, locationOf(both, "<div"), parse));
-    expect(node.classes).toEqual({ support: "unsupported", reason: "absent" });
+    expect(node.classes).toEqual({ support: "unsupported", reason: "not-a-writable-literal" });
   });
 
   it("keeps component prop casing distinct, since props are not HTML attributes", () => {
@@ -462,14 +468,21 @@ describe("component invocations", () => {
 
   it("gives a shorthand boolean prop no editable range", () => {
     const node = invocationAt('<Card plan="Pro"');
-    expect(node.props.featured).toEqual({ support: "unsupported", reason: "absent" });
+    expect(node.props.featured).toEqual({
+      support: "unsupported",
+      reason: "not-a-writable-literal",
+    });
   });
 
-  it("refuses a prop whose value is an expression, literal or not", () => {
+  it("offers a braced literal prop but refuses a non-literal expression", () => {
+    // `tier={3}` is an expression node wrapping a plain literal: there is a real
+    // range to write into, and the planner strips the braces and refuses a write
+    // that would change the prop's type.
     expect(invocationAt('<Card plan="Enterprise"').props.tier).toEqual({
-      support: "unsupported",
-      reason: "dynamic-expression",
+      support: "direct",
+      range: expect.objectContaining({ start: expect.any(Number), end: expect.any(Number) }),
     });
+    // `{plan}` is an identifier — a textual edit would destroy the binding.
     expect(invocationAt("<Card {plan}").props.plan).toEqual({
       support: "unsupported",
       reason: "dynamic-expression",

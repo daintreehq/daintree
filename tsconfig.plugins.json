@@ -18,6 +18,7 @@
   },
   "include": [
     "plugins/builtin/*/main/**/*.ts",
+    "plugins/builtin/*/shared/**/*.ts",
     "plugins/sample/*/main/**/*.ts",
     "electron/types/**/*.d.ts"
   ]

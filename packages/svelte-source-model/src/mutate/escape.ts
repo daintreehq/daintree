@@ -61,17 +61,30 @@ export type QuoteStyle = '"' | "'";
  * Only the delimiter in use is escaped, so `class="[&>*]:p-2"` keeps its angle
  * bracket and a `title='it"s'` keeps its double quote — the alternative is a
  * diff full of entities on characters that were never ambiguous.
+ *
+ * `&` is escaped only where it could begin a character reference. Escaping it
+ * unconditionally is HTML-correct but breaks Tailwind: its scanner reads source
+ * as plain text, so `[&amp;>*]:p-2` is not the candidate `[&>*]:p-2` and no rule
+ * is generated for it. A `&` followed by `>` was never ambiguous, so it stays.
  */
 export function escapeAttributeValue(value: string, quote: QuoteStyle): string {
   let out = "";
-  for (const char of value) {
-    if (char === "&") out += "&amp;";
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!;
+    if (char === "&") out += beginsCharacterReference(value, i) ? "&amp;" : "&";
     else if (char === "{") out += "&#123;";
     else if (char === "}") out += "&#125;";
     else if (char === quote) out += quote === '"' ? "&quot;" : "&#39;";
     else out += char;
   }
   return out;
+}
+
+/** A `&` only needs escaping when what follows could be parsed as a reference. */
+function beginsCharacterReference(value: string, ampersandIndex: number): boolean {
+  const next = value[ampersandIndex + 1];
+  if (next === undefined) return false;
+  return next === "#" || /[0-9A-Za-z]/.test(next);
 }
 
 /**

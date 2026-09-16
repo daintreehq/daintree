@@ -34,6 +34,16 @@ const COMPONENT_NODE_TYPES: ReadonlySet<string> = new Set([
   "SvelteSelf",
 ]);
 
+/**
+ * Whether an `ExpressionTag` wraps a plain literal — `{3}`, `{true}`, `{"Basic"}`
+ * — rather than an identifier, a call, a member access or anything else whose
+ * meaning a textual edit would destroy.
+ */
+function holdsPlainLiteral(tag: SvelteAstNode): boolean {
+  const expression = tag["expression"] as { type?: unknown } | undefined;
+  return typeof expression?.type === "string" && expression.type === "Literal";
+}
+
 function isTagNode(node: SvelteAstNode): boolean {
   return TAG_NODE_TYPES.has(node.type) && typeof node.start === "number";
 }
@@ -98,11 +108,15 @@ function unsupported(reason: UnsupportedSurfaceReason): SurfaceSupport {
  *   markup, so no re-parse would catch it.
  * - A value assembled from more than one part.
  *
- * All three land on the frozen reason vocabulary, which has no member for
- * "present but not a writable literal": `absent` is used for "there is no range
- * here an edit may be written into", which is what the caller acts on.
+ * All three report `not-a-writable-literal` — present, but with no range an
+ * edit may be written into. That is deliberately distinct from `absent`, which
+ * means the attribute, prop or text child is not there at all.
  */
-function attributeValueSupport(attribute: SvelteAstNode, source: string): SurfaceSupport {
+function attributeValueSupport(
+  attribute: SvelteAstNode,
+  source: string,
+  allowLiteralExpression: boolean
+): SurfaceSupport {
   // Svelte collapses a value that is one whole expression — `class={x}`,
   // `tier={3}`, the `{plan}` shorthand — to the ExpressionTag node itself
   // rather than a one-element array, which `SvelteAstNode["value"]` does not
@@ -111,17 +125,30 @@ function attributeValueSupport(attribute: SvelteAstNode, source: string): Surfac
 
   // `<div hidden>` / `<Card featured />`: the attribute is present and true,
   // but there is no value range to write into.
-  if (value === true || value === undefined) return unsupported("absent");
+  if (value === true || value === undefined) return unsupported("not-a-writable-literal");
 
   const parts = Array.isArray(value) ? value : [value];
   if (parts.length === 0) return unsupported("absent");
 
   if (parts.length === 1) {
     const only = parts[0]!;
-    if (only.type !== "Text") return unsupported("dynamic-expression");
+    if (only.type !== "Text") {
+      // `tier={3}`, `featured={true}`, `plan={"Basic"}`: the value is an
+      // expression node, but the expression is a plain literal, so there is a
+      // real range an edit can be written into. The range covers the braces;
+      // the planner strips them and judges the type from what the slot holds,
+      // so it can refuse a write that would change a number into a string.
+      //
+      // Deliberately not offered for `class`, whose token algebra only works on
+      // a literal string — see the caller.
+      if (allowLiteralExpression && only.type === "ExpressionTag" && holdsPlainLiteral(only)) {
+        return { support: "direct", range: { start: only.start, end: only.end } };
+      }
+      return unsupported("dynamic-expression");
+    }
     const quote = source[only.start - 1];
     if ((quote !== '"' && quote !== "'") || source[only.end] !== quote) {
-      return unsupported("absent");
+      return unsupported("not-a-writable-literal");
     }
     return { support: "direct", range: { start: only.start, end: only.end } };
   }
@@ -201,7 +228,7 @@ export function describeElement(node: SvelteAstNode, source: string): ResolvedEl
       if (!isComponent) continue;
     }
 
-    const support = attributeValueSupport(attribute, source);
+    const support = attributeValueSupport(attribute, source, true);
     if (isComponent) {
       props.set(attribute.name, support);
     } else {
@@ -222,8 +249,10 @@ export function describeElement(node: SvelteAstNode, source: string): ResolvedEl
     // overwritten by the other. Refuse rather than pick.
     classes:
       classAttributes.length === 1
-        ? attributeValueSupport(classAttributes[0]!, source)
-        : unsupported("absent"),
+        ? attributeValueSupport(classAttributes[0]!, source, false)
+        : classAttributes.length === 0
+          ? unsupported("absent")
+          : unsupported("not-a-writable-literal"),
     // Built through maps so an attribute literally named `__proto__` becomes an
     // own property instead of silently reassigning the record's prototype.
     attributes: Object.fromEntries(attributes),
