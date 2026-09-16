@@ -621,6 +621,11 @@ describe("sessionServer prompt handler", () => {
     // waitingReason discrimination must survive future edits
     expect(text).toContain('"prompt"');
     expect(text).toContain('"question"');
+    // The recipe used to say "send the selection keys, not free text" for an
+    // approval, but sendCommand types text and then presses Enter. It must
+    // point at reading the dialog and at the user's authority instead.
+    expect(text).toMatch(/"approval"[^\n]*within authority the user already gave/);
+    expect(text).not.toMatch(/send the selection keys|keys, not prose/);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {

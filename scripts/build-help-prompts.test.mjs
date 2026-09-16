@@ -40,6 +40,29 @@ describe("help prompt outputs", () => {
       expect(body).toContain("I don't have documentation for that");
     });
 
+    // A help session once answered a launched agent's "Do you trust the
+    // contents of this directory?" dialog by sending `y` through
+    // terminal.sendCommand and never mentioned it; the CLI also showed the `y`
+    // queued as its next prompt. Matched on the policy rather than the
+    // sentence, so rewording stays free while losing the rule does not.
+    it.each(ALL_GENERATED)(
+      "%s answers launched agents' dialogs only within authority",
+      (_name, body) => {
+        expect(body).toContain("## Agents You Launch");
+        expect(body).toMatch(
+          /only inside the authority the user already gave, and always say you did/
+        );
+        expect(body).toMatch(/sendCommand[^\n]*types the text and then presses Enter/);
+        expect(body).toMatch(/never a guessed `y`/);
+        expect(body).not.toMatch(/send the selection keys/i);
+      }
+    );
+
+    it.each(ALL_GENERATED)("%s bounds waiting on a stuck agent and reports it", (_name, body) => {
+      expect(body).toMatch(/After two waits with no change in its recent output, stop waiting/);
+      expect(body).toMatch(/on the user's behalf[^\n]*belongs in your reply/);
+    });
+
     it.each(ALL_GENERATED)("%s lists the canonical topics", (_name, body) => {
       expect(body).toContain("## Topics You Can Help With");
       expect(body).toContain("Getting started and first-run setup");
@@ -186,6 +209,16 @@ describe("help prompt outputs", () => {
   describe("agent-specific framing stays in each head", () => {
     it("AGENTS.md retains the Codex role-override header", () => {
       expect(AGENTS.split("\n")[0]).toBe("# Role Override: Daintree Help Assistant");
+    });
+
+    // These sections were first added to the generated files directly, which
+    // the next `build:help` would have silently erased. They live in the
+    // per-agent partials because each CLI finds its transcript differently.
+    it("each prompt locates its own CLI's session transcript and not the other's", () => {
+      expect(AGENTS).toContain("CODEX_THREAD_ID");
+      expect(AGENTS).not.toContain("CLAUDE_CODE_SESSION_ID");
+      expect(CLAUDE).toContain("CLAUDE_CODE_SESSION_ID");
+      expect(CLAUDE).not.toContain("CODEX_THREAD_ID");
     });
   });
 
