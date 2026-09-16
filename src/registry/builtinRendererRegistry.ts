@@ -1,6 +1,7 @@
-import { createElement, useEffect, type ComponentType } from "react";
+import { createElement, useEffect, useSyncExternalStore, type ComponentType } from "react";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import type { PanelViewProps } from "@shared/types/plugin";
 
 /**
  * Slot registry for renderer-side views contributed by built-in plugins. The
@@ -36,6 +37,11 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
  *
  * {@link useBuiltinView} also wraps what it hands back in a component-variant
  * ErrorBoundary — see {@link guardSlot}.
+ *
+ * Panel views (#11244) are the in-process half of `contributes.views`: a
+ * built-in registers its panel component under the runtime panel kind id
+ * (`{pluginId}.{panelId}`), and `PluginViewContent` resolves it through
+ * {@link useBuiltinPanelView} before falling back to `plugin://`.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- slot props vary per consumer; the cast site at getBuiltinView() preserves type safety
@@ -50,6 +56,22 @@ interface SlotEntry {
 }
 
 const REGISTRY = new Map<string, SlotEntry>();
+
+// Registration is normally complete at module eval, but a panel can mount before
+// a renderer entry evaluates (HMR, test harnesses, a future deferred entry), so
+// panel resolution subscribes to registration rather than reading it once.
+const registryListeners = new Set<() => void>();
+
+function notifyRegistryChanged(): void {
+  for (const listener of registryListeners) listener();
+}
+
+function subscribeRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => {
+    registryListeners.delete(listener);
+  };
+}
 
 /** Slot ids already warned about (dev-mode), so a typo'd ref warns once, not per render. */
 const warnedMissingSlots = new Set<string>();
@@ -98,11 +120,14 @@ export function registerBuiltinView(
     label: opts?.label,
   });
   guarded.delete(slotId);
+  notifyRegistryChanged();
 }
 
 export function unregisterBuiltinView(slotId: string): boolean {
   guarded.delete(slotId);
-  return REGISTRY.delete(slotId);
+  const removed = REGISTRY.delete(slotId);
+  if (removed) notifyRegistryChanged();
+  return removed;
 }
 
 function resolveEntry(slotId: string, disabledPluginIds: ReadonlySet<string>): SlotEntry | null {
@@ -151,6 +176,49 @@ export function useBuiltinView<P>(slotId: string): ComponentType<P> | null {
   useEffect(() => init(), [init]);
   const entry = resolveEntry(slotId, disabledPluginIds);
   return entry ? (guardSlot(slotId, entry) as ComponentType<P>) : null;
+}
+
+export type BuiltinPanelViewResolution =
+  | { status: "none" }
+  | { status: "disabled" }
+  | { status: "ready"; component: ComponentType<PanelViewProps> };
+
+const NONE: BuiltinPanelViewResolution = { status: "none" };
+const DISABLED: BuiltinPanelViewResolution = { status: "disabled" };
+
+/**
+ * Reactive in-process resolution for a plugin panel kind.
+ *
+ * Differs from {@link useBuiltinView} in three deliberate ways. The component is
+ * returned UNGUARDED, because the panel content already owns a boundary with the
+ * diagnostics fallback, failure reporting, and retry — a slot guard inside it
+ * would swallow the throw and make a builtin panel fail differently from an
+ * installed one. A miss is silent, because every installed plugin's kind is
+ * probed here and "no slot" is the normal answer. And a slot only matches when
+ * its owner is the kind's own plugin, so a slot id that happens to equal some
+ * other plugin's kind id can never replace that plugin's view.
+ *
+ * `disabled` is distinct from `none` so a disabled builtin renders nothing
+ * instead of falling through to a `plugin://` import it has no bundle for.
+ */
+export function useBuiltinPanelView(
+  kindId: string,
+  ownerPluginId: string
+): BuiltinPanelViewResolution {
+  // The entry object is the snapshot: it is replaced on every re-registration
+  // and stable otherwise, which is exactly the identity useSyncExternalStore
+  // needs.
+  const readEntry = (): SlotEntry | undefined => REGISTRY.get(kindId);
+  const entry = useSyncExternalStore(subscribeRegistry, readEntry, readEntry);
+  const owned = entry !== undefined && entry.pluginId === ownerPluginId;
+  // Selected as a boolean so an installed plugin's panel never re-renders on an
+  // unrelated plugin's enable toggle.
+  const disabled = usePluginRuntimeStore((s) => owned && s.disabledPluginIds.has(ownerPluginId));
+  const init = usePluginRuntimeStore((s) => s.init);
+  useEffect(() => init(), [init]);
+  if (!owned) return NONE;
+  if (disabled) return DISABLED;
+  return { status: "ready", component: entry.component };
 }
 
 export function __resetBuiltinRendererRegistryForTests(): void {

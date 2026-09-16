@@ -6,6 +6,7 @@ import {
   getBuiltinView,
   registerBuiltinView,
   unregisterBuiltinView,
+  useBuiltinPanelView,
   useBuiltinView,
 } from "../builtinRendererRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -207,6 +208,63 @@ describe("builtinRendererRegistry", () => {
       await waitFor(() => {
         expect(result.current).toBe(resolved);
       });
+    });
+  });
+
+  describe("useBuiltinPanelView", () => {
+    const KIND = "daintree.sveltekit-builder.inspector";
+    const OWNER = "daintree.sveltekit-builder";
+
+    afterEach(() => {
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set<string>() });
+    });
+
+    it("probes an unregistered kind silently, since most kinds are plugin:// views", async () => {
+      const { renderHook } = await import("@testing-library/react");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { result } = renderHook(() => useBuiltinPanelView(KIND, OWNER));
+      expect(result.current.status).toBe("none");
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("ignores a slot owned by a different plugin than the kind's", async () => {
+      const { renderHook } = await import("@testing-library/react");
+      registerBuiltinView(KIND, StubComponent, { pluginId: "daintree.github" });
+      const { result } = renderHook(() => useBuiltinPanelView(KIND, OWNER));
+      expect(result.current.status).toBe("none");
+    });
+
+    it("returns the registered component unguarded", async () => {
+      const { renderHook } = await import("@testing-library/react");
+      registerBuiltinView(KIND, StubComponent, { pluginId: OWNER });
+      const { result } = renderHook(() => useBuiltinPanelView(KIND, OWNER));
+      // The panel content owns the boundary; a slot guard here would swallow
+      // the throw before its diagnostics fallback could see it.
+      expect(result.current).toEqual({ status: "ready", component: StubComponent });
+    });
+
+    it("re-resolves on registration, unregistration, and the owner's enable toggle", async () => {
+      const { renderHook, act } = await import("@testing-library/react");
+      const { result } = renderHook(() => useBuiltinPanelView(KIND, OWNER));
+      expect(result.current.status).toBe("none");
+
+      act(() => registerBuiltinView(KIND, StubComponent, { pluginId: OWNER }));
+      expect(result.current).toEqual({ status: "ready", component: StubComponent });
+
+      act(() => {
+        usePluginRuntimeStore.setState({ disabledPluginIds: new Set([OWNER]) });
+      });
+      expect(result.current.status).toBe("disabled");
+
+      act(() => {
+        usePluginRuntimeStore.setState({ disabledPluginIds: new Set<string>() });
+      });
+      expect(result.current.status).toBe("ready");
+
+      act(() => {
+        unregisterBuiltinView(KIND);
+      });
+      expect(result.current.status).toBe("none");
     });
   });
 });
