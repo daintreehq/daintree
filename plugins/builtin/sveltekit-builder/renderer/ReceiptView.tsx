@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { CircleHelp, Clock, Copy, FileCheck, RefreshCw } from "lucide-react";
+import { CircleHelp, Clock, Copy, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ReceiptState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
@@ -24,6 +24,10 @@ const SURFACE_NOUN: Record<ReceiptState["surface"], string> = {
  * user had to scroll past the whole composer to reach, with Undo at the bottom
  * of it. Now the header names the operation and carries Undo on its own row, and
  * the facts below say only what the header has not.
+ *
+ * The fact list carries only what the headline has not: the headline already
+ * says the write landed and where, so "Source saved on disk" underneath it was
+ * the third statement of one fact.
  *
  * It says which surface was written, never what the new value is: the receipt
  * carries a range and revisions, not the text, and inventing a diff from them
@@ -70,7 +74,6 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
               {`Affects ${plural(receipt.affectedOccurrences, "rendered copy", "rendered copies")}`}
             </Fact>
           ) : null}
-          <Fact icon={FileCheck}>{`Source ${verb} on disk`}</Fact>
         </ul>
         {undo?.status === "superseded" ? (
           <InspectorNotice

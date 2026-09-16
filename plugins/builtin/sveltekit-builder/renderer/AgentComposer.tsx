@@ -113,6 +113,7 @@ export function AgentComposer({
   const availabilityKnown = useCliAvailabilityStore((state) => state.isInitialized);
   const memory = useComposerMemory(memoryKey);
   const { draft, pinned, chosen, delivery } = memory;
+  const deliveryDismissed = memory.deliveryDismissed === true;
   const setDraft = (next: string) => updateComposerMemory(memoryKey, { draft: next });
   const setPinned = (next: Pinned | null) => updateComposerMemory(memoryKey, { pinned: next });
   const setChosen = (next: string | null) => updateComposerMemory(memoryKey, { chosen: next });
@@ -236,7 +237,9 @@ export function AgentComposer({
   const onDraftChange = (next: string) => {
     // Editing the request after a partial delivery is the acknowledgement: the
     // user has been told to check the terminal and has come back to the words.
-    if (blockedByPartial && next !== draft) updateComposerMemory(memoryKey, { delivery: null });
+    if (blockedByPartial && next !== draft) {
+      updateComposerMemory(memoryKey, { delivery: null, deliveryDismissed: false });
+    }
     setDraft(next);
     if (next.trim() && chosen === null && destination) setChosen(keyOf(destination));
     if (next.trim() && !pinned && subject) setPinned({ ...subject, definitions, revisions });
@@ -301,7 +304,16 @@ export function AgentComposer({
   };
 
   const sendAnyway = () => forceAgentRequest(memoryKey);
-  const dismissDelivery = () => updateComposerMemory(memoryKey, { delivery: null });
+  // Dismiss hides the notice; it does not decide that the half-delivered request
+  // is safe to send again. Those were the same act, so closing the warning
+  // rearmed Enter on the unchanged draft — the guard's own escape hatch.
+  const dismissDelivery = () => {
+    if (delivery?.state.status === "failed" && delivery.state.partial === true) {
+      updateComposerMemory(memoryKey, { deliveryDismissed: true });
+      return;
+    }
+    updateComposerMemory(memoryKey, { delivery: null });
+  };
   // What the agent actually changed is the worktree's diff, not its word.
   const reviewChanges = () =>
     void actionService.dispatch("worktree.openChanges", worktreeId ? { worktreeId } : undefined, {
@@ -326,7 +338,7 @@ export function AgentComposer({
     : undefined;
 
   if (!subject) {
-    return delivery ? (
+    return delivery && !deliveryDismissed ? (
       <DeliveryNotice
         delivery={delivery}
         liveTarget={liveTarget}
@@ -470,15 +482,20 @@ export function AgentComposer({
 
       {!draft.trim() ? (
         <div role="group" aria-label="Suggestions" className="flex flex-wrap gap-1">
+          {/* The shared pill variant, not a hand-rolled one: these sat beside the
+              scope chips and the class tokens as a third geometry for the same
+              idea. Prose, so proportional — the class tokens stay monospace
+              because they are code. */}
           {intents.map((intent) => (
-            <button
+            <Button
               key={intent}
-              type="button"
+              variant="pill"
+              size="xs"
+              className="font-normal text-text-secondary"
               onClick={() => applyIntent(intent)}
-              className="rounded-full border border-border-subtle px-2 py-0.5 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             >
               {intent}
-            </button>
+            </Button>
           ))}
         </div>
       ) : null}
@@ -493,11 +510,11 @@ export function AgentComposer({
         </p>
       ) : busy && destination?.kind === "terminal" ? (
         <p className="text-xs text-text-secondary">
-          {destination.target.title} is working — wait for it to finish before sending
+          {`Activity in ${destination.target.title} — check the terminal before sending`}
         </p>
       ) : null}
 
-      {delivery ? (
+      {delivery && !deliveryDismissed ? (
         <DeliveryNotice
           delivery={delivery}
           liveTarget={liveTarget}
@@ -558,7 +575,7 @@ function DeliveryNotice({
         <InspectorNotice
           tone="warning"
           role="status"
-          title={`Can't tell whether ${title} is ready`}
+          title={`No sign yet whether ${title} can take input`}
           action={
             <div className="flex flex-wrap gap-1">
               <Button variant="subtle" size="xs" onClick={onSendAnyway}>
@@ -580,10 +597,11 @@ function DeliveryNotice({
         <InspectorNotice
           tone="warning"
           role="status"
-          title={`${title} is asking you something`}
+          title={`${title} may be waiting for an answer`}
           action={open}
         >
-          Answer it in the terminal; your request goes in as soon as it's ready.
+          A prompt was detected in the terminal. Answer it there; your request goes in once it's
+          ready.
         </InspectorNotice>
       );
     case "sent": {
@@ -597,7 +615,7 @@ function DeliveryNotice({
           title={working ? `Sent to ${title} · working` : `Sent to ${title}`}
           action={open}
         >
-          The page updates as it saves changes.
+          File changes it saves appear in the preview.
         </InspectorNotice>
       );
     }

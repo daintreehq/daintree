@@ -45,6 +45,9 @@ export function TextEditor({
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     // Keys typed into the field belong to the field, not to panel shortcuts.
     event.stopPropagation();
+    // A composing IME sends Enter to accept its own candidate; treating that as
+    // "save" writes the user's source file mid-word.
+    if (event.key === "Enter" && event.nativeEvent.isComposing) return;
     if (event.key === "Enter" && (!multiline || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       if (editable && !saving) save();

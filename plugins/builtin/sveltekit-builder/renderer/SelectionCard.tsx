@@ -111,8 +111,13 @@ export function SelectionIdentity({ selection }: { selection: ReadySelection }) 
         </p>
       )}
 
+      {/* The header above names what is selected, so the trail shows only the
+          route to it — but it still carries that identity as `current`, or the
+          accessibility tree would announce the parent component as the
+          selection. */}
       <SelectionTrail
         crumbs={trailFor(node, { includeSelf: false })}
+        current={component ?? displayLabel(node)}
         className="text-2xs text-text-secondary"
       />
 

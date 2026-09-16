@@ -261,8 +261,8 @@ export const FIXTURES = {
   },
 
   unsupported: {
-    title: "The project cannot be edited directly, and why",
-    settled: "text=Editing isn't supported for this project",
+    title: "Direct editing and class suggestions are unavailable, separately",
+    settled: "text=Direct editing unavailable",
     arrange: (host) => {
       host.handlers.set(CHANNELS.workspaceOpen, () => ({
         status: "ready",
