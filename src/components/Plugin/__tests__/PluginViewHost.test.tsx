@@ -726,4 +726,80 @@ describe("PluginViewHost panel integration (#11228)", () => {
       unregisterPanelKind("acme.dashboard");
     }
   });
+
+  describe("built-in panel views (#11244)", () => {
+    // The registry, host, and plugin runtime store are all resolved from the
+    // post-reset module graph so the host reads the instance the test writes.
+    async function loadBuiltinHost(overrides: Partial<PanelKindConfig> = {}): Promise<{
+      Host: ReturnType<typeof import("../PluginViewHost").makePluginViewHost>;
+      seen: Array<Record<string, unknown>>;
+    }> {
+      const { registerBuiltinView } = await import("@/registry/builtinRendererRegistry");
+      const seen: Array<Record<string, unknown>> = [];
+      registerBuiltinView(
+        "daintree.sveltekit-builder.inspector",
+        (props: Record<string, unknown>) => {
+          seen.push(props);
+          return <div data-testid="builtin-view" />;
+        },
+        { pluginId: "daintree.sveltekit-builder" }
+      );
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(
+        makeConfig({
+          id: "daintree.sveltekit-builder.inspector",
+          name: "Site Inspector",
+          extensionId: "daintree.sveltekit-builder",
+          componentPath: "plugin://daintree.sveltekit-builder/__dtv-1/renderer/index.js",
+          stateVersion: 2,
+          ...overrides,
+        })
+      );
+      return { Host, seen };
+    }
+
+    it("hands a builtin view the decoded state and its version", async () => {
+      const { Host, seen } = await loadBuiltinHost();
+      const extensionState = { previewId: "p-1" };
+
+      render(
+        <Host
+          {...hostProps}
+          id="panel-builtin"
+          onFocus={() => {}}
+          extensionState={extensionState}
+          extensionStateVersion={1}
+        />
+      );
+
+      await waitFor(() => expect(screen.getByTestId("builtin-view")).toBeTruthy());
+      const props = seen[seen.length - 1]!;
+      expect(props.panelId).toBe("panel-builtin");
+      expect(props.pluginId).toBe("daintree.sveltekit-builder");
+      expect(props.initialArgs).toEqual(extensionState);
+      expect(props.stateVersion).toBe(1);
+      expect(props.persistState).toBeTypeOf("function");
+    });
+
+    it("refuses state written by a newer build before a builtin view can read it", async () => {
+      const { Host, seen } = await loadBuiltinHost();
+
+      render(
+        <Host
+          {...hostProps}
+          id="panel-newer"
+          onFocus={() => {}}
+          extensionState={{ previewId: "p-1" }}
+          extensionStateVersion={3}
+        />
+      );
+
+      expect(screen.getByText(/Site Inspector unavailable/i)).toBeTruthy();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByTestId("builtin-view")).toBeNull();
+      expect(seen).toEqual([]);
+    });
+  });
 });
