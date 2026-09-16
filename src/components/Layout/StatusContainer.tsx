@@ -114,7 +114,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+            <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
               <span className="text-xs font-medium text-text-secondary">{config.headerLabel}</span>
             </div>
 

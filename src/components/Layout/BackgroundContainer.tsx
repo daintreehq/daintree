@@ -336,7 +336,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           }}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+            <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
               <span className="text-xs font-medium text-text-secondary">Background panels</span>
               {waitingCount > 0 && (
                 <span className="text-3xs font-medium text-state-waiting tabular-nums">

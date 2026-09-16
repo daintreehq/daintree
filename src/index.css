@@ -893,6 +893,53 @@ body,
   animation: trash-pulse 200ms var(--ease-out-expo) both;
 }
 
+/* Trash TTL meter: the remaining-time bar on a recently-closed row. Its
+ * duration IS the signal — it is the twenty-second destruction window, not a
+ * transition between two UI states — so it is one of the semantic exceptions
+ * the shared motion tiers exempt. One animation drains the whole window, so
+ * the row's 1Hz re-render costs no extra paint.
+ *
+ * Deliberately NOT in the reduced-motion list below: that block also forces
+ * `transform: none`, which would snap every meter to full width and report
+ * twenty seconds left on a row with two. The element's inline `transform`
+ * already holds the current fraction, so `motion-reduce:animate-none` on the
+ * element leaves a correct bar that steps down once a second instead of
+ * sliding. */
+@keyframes trash-meter-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* Fixed duration, positioned by a negative delay.
+ *
+ * The first cut restated the duration as the row's *remaining* time on every
+ * tick, which is wrong: changing `animation-duration` does not restart an
+ * animation, it keeps the elapsed playback time. Ten seconds in, the duration
+ * became 10s against 10s already elapsed, so the bar hit empty while the label
+ * still read 10s left — the bar said "gone" on a pane with half its window to
+ * run. Holding the duration at the full TTL and seeking with
+ * `animation-delay: -elapsed` puts the bar at the right place by construction,
+ * and re-stating the delay each tick re-syncs rather than drifts. */
+.animate-trash-meter {
+  animation: trash-meter-drain var(--trash-meter-ttl) linear forwards;
+  animation-delay: var(--trash-meter-elapsed);
+}
+
+/* Its own override rather than a line in the shared list below, because that
+ * list also forces `transform: none` — which would snap every meter back to
+ * full width and report twenty seconds left on a row with two. Dropping only
+ * the animation leaves the element's inline `transform`, so the bar stays
+ * correct and steps down once a second instead of sliding. */
+@variant reduce-motion {
+  .animate-trash-meter {
+    animation: none;
+  }
+}
+
 /* All-clear flash: subtle full-screen overlay when all agents complete */
 @keyframes all-clear-flash {
   0% {
@@ -2333,6 +2380,21 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .xterm {
+    forced-color-adjust: none;
+  }
+
+  /* The trash TTL meter is a coloured background against a coloured track, and
+   * forced colors replaces both — which leaves a bar whose length carries the
+   * remaining-time signal with no edge to see it against. Give the fill a
+   * system colour and the track a visible outline so length survives; the
+   * numeric label beside it carries the value either way. */
+  [data-trash-meter] {
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
+
+  [data-trash-meter] > * {
+    background-color: CanvasText;
     forced-color-adjust: none;
   }
 
