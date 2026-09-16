@@ -60,7 +60,17 @@ export type SiteGuestEvent =
       url: string;
       viewport: SiteGuestViewport;
     }
-  | { type: "selectionChanged"; nodes: SiteGuestNodeObservation[] }
+  | {
+      type: "selectionChanged";
+      nodes: SiteGuestNodeObservation[];
+      scope?: "component";
+      component?: {
+        file: string;
+        line: number;
+        column: number;
+        name: string;
+      };
+    }
   | { type: "hoverChanged"; node: SiteGuestNodeObservation | null }
   | { type: "mappingRevisionSeen"; revision: string }
   | {

@@ -24,18 +24,27 @@ import {
   WorkspaceCloseResultSchema,
   WorkspaceOpenArgsSchema,
   WorkspaceOpenResultSchema,
-  INSPECTOR_PANEL_KIND,
-  OPEN_INSPECTOR_ACTION_ID,
+  ComponentDefinitionsArgsSchema,
+  SourceRevisionsArgsSchema,
+  SourceRevisionsResultSchema,
+  ComponentDefinitionsResultSchema,
+  DetectAppsArgsSchema,
+  DetectAppsResultSchema,
+  BUILDER_TOOL_ID,
+  TOGGLE_BUILDER_ACTION_ID,
 } from "../shared/protocol.js";
 import type { ProjectFileReader } from "../shared/project/fs.js";
 import { applyEdit, undoEdit } from "./edits.js";
 import { EditJournal, KeyedLock } from "./journal.js";
+import { loadParse, loadSourceModel } from "./engine.js";
 import { resolveSelection } from "./selection.js";
 import {
   containsRealPath,
   isGeneratedPath,
+  MAX_SOURCE_BYTES,
   offsetToLocation,
   readSource,
+  resolveReportedPath,
   resolveWorktreePath,
 } from "./source.js";
 import { completeClasses, tailwindCatalog } from "./tailwind.js";
@@ -90,20 +99,20 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   // handler binds here, on the first dispatch that activates the plugin.
   await host.registerAction(
     {
-      id: OPEN_INSPECTOR_ACTION_ID,
-      title: "Open Site Builder",
+      id: TOGGLE_BUILDER_ACTION_ID,
+      title: "Toggle Site Builder",
       description:
-        "Open the Site Builder beside this worktree's dev preview, starting the dev server if none is running.",
+        "Switch the Site Builder on or off in this worktree's dev preview, opening the preview if none is running.",
       category: "panels",
       kind: "command",
       danger: "safe",
       keywords: ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"],
-      // Opening a panel exercises none of the plugin's capabilities. Without
+      // Toggling a preview tool exercises none of the plugin's capabilities. Without
       // this the host elevates the command to a confirm prompt because the
       // manifest holds fs write — a dialog on every toolbar click.
       requires: [],
     },
-    async () => host.dispatch("panel.openPluginPanel", { kind: INSPECTOR_PANEL_KIND })
+    async () => host.dispatch("devPreview.toggleTool", { toolId: BUILDER_TOOL_ID })
   );
 
   await host.registerHandler(
@@ -163,6 +172,18 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     }
   );
 
+  // Cheap enough to ask for every dev preview: discovery reads manifests, it
+  // does not parse the app or open a workspace.
+  await host.registerHandler(
+    CHANNELS.detectApps,
+    { args: DetectAppsArgsSchema, result: DetectAppsResultSchema, requires: ["fs:project-read"] },
+    async (_ctx, args) => {
+      const { discoverSvelteKitApps } = await import("../shared/project/index.js");
+      const discovery = await discoverSvelteKitApps(reader, path.resolve(args.worktreePath));
+      return { appCount: discovery.apps.length };
+    }
+  );
+
   await host.registerHandler(
     CHANNELS.workspaceClose,
     { args: WorkspaceCloseArgsSchema, result: WorkspaceCloseResultSchema },
@@ -180,6 +201,67 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       const workspace = registry.get(args.workspaceSessionId);
       if (!workspace) throw workspaceClosed();
       return resolveSelection(workspace, args);
+    }
+  );
+
+  await host.registerHandler(
+    CHANNELS.sourceRevisions,
+    {
+      args: SourceRevisionsArgsSchema,
+      result: SourceRevisionsResultSchema,
+      requires: ["fs:project-read"],
+    },
+    async (_ctx, { workspaceSessionId, files }) => {
+      const workspace = registry.get(workspaceSessionId);
+      if (!workspace) throw workspaceClosed();
+      const { isGeneratedSourceFile } = await import("@daintreehq/svelte-source-model");
+      // One read at a time, each file once, and nothing larger than a source
+      // file may be: the list is the renderer's to choose.
+      const byFile = new Map<string, string | null>();
+      for (const file of new Set(files)) {
+        byFile.set(file, await revisionOf(file));
+      }
+      const revisions = files.map((file) => ({ file, revision: byFile.get(file) ?? null }));
+
+      async function revisionOf(file: string): Promise<string | null> {
+        const target = resolveReportedPath(workspace!, file);
+        if (!target.ok || isGeneratedPath(isGeneratedSourceFile, target.appRelative)) return null;
+        if (!(await containsRealPath(workspace!.appRoot, target.absolute))) return null;
+        const size = await workspace!.fs
+          .stat(target.absolute)
+          .then((stat) => (stat.isFile ? stat.size : null))
+          .catch(() => null);
+        if (size === null || size > MAX_SOURCE_BYTES) return null;
+        const read = await readSource(workspace!.fs, target.absolute);
+        return read.status === "ok" || read.status === "not-utf8" ? read.revision : null;
+      }
+      return { revisions };
+    }
+  );
+
+  await host.registerHandler(
+    CHANNELS.componentDefinitions,
+    {
+      args: ComponentDefinitionsArgsSchema,
+      result: ComponentDefinitionsResultSchema,
+      requires: ["fs:project-read"],
+    },
+    async (_ctx, { workspaceSessionId, callSites }) => {
+      const workspace = registry.get(workspaceSessionId);
+      if (!workspace) throw workspaceClosed();
+      const [parse, model, { resolveComponentDefinitions }] = await Promise.all([
+        loadParse(),
+        loadSourceModel(),
+        import("./components.js"),
+      ]);
+      const definitions = await resolveComponentDefinitions(
+        workspace,
+        callSites,
+        parse,
+        model.lineColumnToOffset,
+        model.isGeneratedSourceFile
+      );
+      return { definitions };
     }
   );
 

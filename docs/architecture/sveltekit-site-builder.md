@@ -53,7 +53,7 @@ It also does not survive an HMR update as an object identity. A Vite update **re
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ DEV PREVIEW (core, unchanged)                                      │
+│ DEV PREVIEW (core) · Site Builder toggle, strip and drawer        │
 │   node-pty dev server · proxy origin · viewport · console · CDP     │
 │   ┌──────────────────────────────────────────────────────────────┐ │
 │   │ GUEST: the user's running site, sandboxed, no preload        │ │
@@ -71,7 +71,7 @@ It also does not survive an HMR update as an object identity. A Vite update **re
 │ BUILT-IN PLUGIN  daintree.sveltekit-builder                        │
 │   main/      binding lifecycle, host.fs writes, edit journal, undo │
 │   shared/    protocol + domain model, Tailwind semantics, project  │
-│   renderer/  the Site Builder panel                                │
+│   renderer/  dev preview tool: toggle, strip, drawer               │
 └───────────────────────────────┬────────────────────────────────────┘
                                 │
 ┌───────────────────────────────┴────────────────────────────────────┐
@@ -125,14 +125,42 @@ Edits go through `host.fs.writeFile(path, contents, { expectedRevision })`, whic
 
 Edits are planned before they are applied. A plan is a set of replacements over ranges of the _original_ source, applied in one pass, so unrelated bytes — whitespace, comments, quote style, classes the builder does not recognise — survive verbatim. The candidate is re-parsed and the protected ranges are checked before anything reaches disk; a candidate is never written just to discover whether it compiles.
 
+## Where it lives
+
+The builder is part of the dev preview, not a panel of its own. A built-in registers a **dev preview tool** (`src/registry/devPreviewToolRegistry.ts`):
+
+- **Button** in the preview's browser toolbar. The Site Builder's renders only when the worktree holds a SvelteKit app (`detect-apps`, cached per worktree), so other sites never show it.
+- **Toolbar**, a strip under the browser toolbar while the tool is on: Browse/Select, the selected component chain and `file:line`, and close.
+- **Drawer** beside the page, open only once there is something to show: selection identity, **Ask an agent**, a collapsed **Edit directly**, and the last change with Undo.
+
+Which tool is on is per preview panel (`src/store/devPreviewToolStore.ts`), toggled by the button, by the plugin's **Toggle Site Builder** command and tray entry (`devPreview.toggleTool`, which opens a dev preview when the worktree has none), or closed from the strip. A tool is hidden until its plugin is known to be loaded and enabled, so a default-off built-in never flashes its button. Turning the builder on binds straight to its own preview in Select mode; there is no candidate picker, because the preview hosting the tool is the only one it can mean.
+
+The controller for a preview is created by the effect that holds it, never during render. Unheld, it lives on while the builder is still switched on for a preview that still exists — so hiding the preview keeps Undo and in-flight state — and is disposed once the builder is switched off or the panel is removed. A bind that fails because the preview has no page yet is retried on a backoff of about two minutes, with **Retry** in the strip. A controller created during render can be disposed by an idle check before that render commits, and the builder then renders a dead controller that ignores every update — in the app that was a strip stuck on "Connecting to the page".
+
+## Selecting on the page
+
+The page script draws a Web Inspector-style overlay: a hover box with margin and padding bands, and a label naming the component that drew the element, its tag and its size. Selection works by click (Cmd/Ctrl-click adds) and from the keyboard once something is selected:
+
+- **Arrow keys** walk the rendered tree — up to the parent, down to the first child, left and right across siblings — among elements that carry Svelte source locations.
+- **Option/Alt+Up** selects the _component_ that drew the selection: every root element of that one invocation, not every card drawn by the same line. Pressing it again steps out to the enclosing component, including a wrapper that renders no element of its own. Component identity is the per-invocation frame object on `__svelte_meta.parent`, so two cards from one `{#each}` stay distinct.
+- The selection event carries `scope: "component"` and `component` — the selected invocation's call site (`file`, `line`, `column`) and its tag. The strip, the drawer and the prompt place that call site on the ancestry by location rather than by counting frames, so a dropped or truncated frame can't make them name a different component; a call site that isn't on the chain is still offered as what was picked.
+- **Where a component is written comes from source, never from the chain.** A snippet passed into a component, a wrapper with no element of its own, or a dropped frame all make the parent chain name a plausible wrong file. Once a selection is ready the controller sends every component call site on it to main's `component-definitions` channel (`main/components.ts`), which parses the call site's file, finds the `Component` node at that exact offset, and follows its default import (relative or `$lib`) to a `.svelte` file that exists. It counts as proof only when that default import is the name's one top-level value binding across both script blocks (a `var` hoisted out of a block counts; type-only imports, ambient `declare` and declarations inside functions don't) and nothing in the markup enclosing the call site binds the name — a snippet parameter or sibling snippet, an each item or index in the each body, an await value or error in its own branch, a `let:` binding (renamed or not, including the component's own when it fills a named slot), or a `{@const}`. `$lib` is followed only when no `svelte.config.*` mentions `files` at all (the config is never executed). A dynamic component, a namespace tag or a package import resolves to null. A draft pinned before the answer arrived asks for its own through whichever workspace session is open now, so it never stays pending after the selection moves on or the workspace reopens. A component scope without a proven file is shown but can't be sent: the composer asks the user to choose another scope.
+- Arrow keys aimed at a field, a contenteditable region or a keyboard widget on the page are left to the page, as are other modifier combinations.
+
 ## Asking an agent
 
-The Site Builder's second job — and for most requests its main one — is handing the selected element to an agent terminal. The **Ask an agent** section composes one prompt and submits it to an agent terminal in the panel's own worktree:
+The Site Builder's second job — and for most requests its main one — is handing the selected element to an agent terminal. The **Ask an agent** section composes one prompt and submits it to an agent terminal in the preview's own worktree:
 
-- **Destination is explicit.** Only live agent terminals in the same worktree are offered; one is chosen automatically when it is the only one. A terminal in another worktree is never a target, even with focus, because the prompt's paths would be wrong there.
+- **Bring your own agent.** The destination list is the live agent terminals in the same worktree plus **New Claude**, **New Codex** and **New Gemini** for whichever of those CLIs is installed — the user's own account, no Daintree-hosted model. A terminal in another worktree is never a target, even with focus, because the prompt's paths would be wrong there.
+- **A new session gets the request typed in, not as a launch argument.** `agent.launch` passes an initial prompt through the shell as one argument and flattens its line breaks (fenced source included), so the composer launches without one and submits the request once the agent is observed waiting at its own prompt. A trust or approval question is also "waiting"; the composer shows **… is asking you something** and holds the request until it is answered.
+- **The destination is committed when you start writing.** If that agent goes away the composer says so and blocks sending until another is chosen; it never silently falls back to a different agent.
+- **Readiness before typing, every time.** New or existing session, the request is typed only when the agent is observed at its own prompt; a trust, approval or error prompt holds it and says so.
+- **Show the result, not a claim.** A delivered request offers **Review changes** (the worktree's diff), **Open terminal** and **Dismiss**; the strip can fold the drawer away to give the page its full width.
+- **Drafts survive.** Each preview's draft, pinned subject, destination and last delivery live outside the drawer, keyed by preview _and_ worktree, and delivery runs outside React (`renderer/agentRequest.ts`) — starting an agent re-lays the grid and remounts the builder, which used to cancel the very request that started it. Switching the builder off, removing, trashing or moving the preview to another worktree, or disabling the plugin ends a pending request — the run checks that on every step, whether or not any builder surface is mounted — and the notice says where it stopped: "Stopped before the request was sent", or "Delivery unconfirmed" once the prompt had reached the terminal. Switching off, removal and disabling also forget drafts.
 - **The subject is pinned.** Typing pins the element (or component) the draft is about; clicking something else offers **Use current selection** rather than silently changing the subject.
-- **Element or component.** `taskScopes()` turns the Svelte parent chain into the clicked element plus every component around it, innermost first, each located by the file it is written in and the call site that used it. The outermost user file (a route page or layout rendered by generated code) is always offered.
+- **Element or component.** `taskScopes()` turns the Svelte parent chain into the clicked element plus every component around it, innermost first, each located by the file main resolved for its call site. The element is always scope 0; the outermost user file (a route page or layout rendered by generated code) is always offered, and is the one file taken from the chain, because it holds the outermost call site itself.
 - **Context is resolved, not concluded.** The prompt carries the user's words first, then the page, viewport, element label, `file:line:column` of the defining markup (worktree-relative), the rendered-copy count, the component chain, current classes and text, and a bounded source excerpt from main.
+- **A request names only what is still true.** Every file a request can cite is held to the revision of the exact bytes its claim was read from: each selected element's file to the revision it was resolved against, and every authored component call site (including ones outside a library frame) and component file to the revisions `component-definitions` returns alongside its answer. A file nothing vouched for can't be verified, so it fails. `source-revisions` reads them again at send time. Send is blocked while the subject is stale or those revisions are unknown, and the delivery checks them against disk twice — before building the prompt and again right before typing it in, since an agent can sit at a trust or login prompt for minutes. A mismatch or an unreadable file fails the request with "select it again" and keeps the draft. Right before submission the destination terminal must also still be in the preview's worktree and not trashed.
 - **Delivery is what the host can prove.** It goes through `terminal.sendCommand` and polls `terminal.getStatus` with the submission token: `pty_written` is "Sent", `unknown` is "Delivery unconfirmed", `failed`/`cancelled` say part of the prompt may already be in the agent's input. A busy (`working`/`directing`) agent can't be sent to.
 
 Built-in renderer views dispatch these renderer actions directly as a user action; `terminal.sendCommand` is closed to `host.dispatch` from plugin main, and `host.sendToActiveAgent` picks its own target, which the explicit-destination rule rules out.

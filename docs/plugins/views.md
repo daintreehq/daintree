@@ -201,6 +201,7 @@ A built-in plugin's view is compiled into the host bundle, so some of this page 
 - **Styling is the host's Tailwind.** The per-plugin runtime stylesheet described above does not run for a built-in; you get the host's full design system and must follow its rules — `.claude/rules/design-system.md` in the repo.
 - **Registering a `lazy()` view is fine.** The host wraps every built-in view in its own `lazy()` for activation; it renders yours from a plain component so React never sees a lazy resolving to a lazy (error #306).
 - **Never alias a lowercase component binding to a capitalised name for JSX.** The React Compiler folds `const View = component; return <View />` back into `jsx("component")`, which renders an unknown `<component>` DOM element — no error, just an empty panel. Use `createElement(component, props)`.
+- **Extending the dev preview.** A built-in can add a toolbar toggle, a strip and a drawer to every dev preview with `registerDevPreviewTool` (`src/registry/devPreviewToolRegistry.ts`) instead of contributing a panel. The host mounts them with the preview's panel, project, worktree, URL and readiness; the tool decides whether its button applies to that preview.
 - **React Compiler applies to you.** A bailout is silent at runtime and reddens the compiler budget. Two traps specific to controller-style views: never call a method that reads mutable controller state during render — pass a `useSyncExternalStore` snapshot to a pure function instead — and do not write a `try`/`finally` without a `catch` in a component.
 
 ## What doesn't work inline

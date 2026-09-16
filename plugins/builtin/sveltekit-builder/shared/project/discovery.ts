@@ -23,6 +23,15 @@ export const SKIPPED_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
   ".netlify",
 ]);
 
+/**
+ * Hidden directories (`.tmp`, `.cache`, `.turbo`) hold scratch copies, caches
+ * and tool state, never the app a preview is running — a performance run's
+ * copy of the site made every real app ambiguous.
+ */
+function isSkippedDirectory(name: string): boolean {
+  return name.startsWith(".") || SKIPPED_DIRECTORY_NAMES.has(name);
+}
+
 export const KIT_PACKAGE = "@sveltejs/kit";
 
 /** Depth below the worktree root. `apps/site` is 2; the default leaves room for a nested workspace app. */
@@ -126,13 +135,13 @@ export async function discoverSvelteKitApps(
       const children = await readDirectory(reader, dir);
       if (depth === maxDepth) {
         truncated ||= children.some(
-          (entry) => entry.isDirectory && !SKIPPED_DIRECTORY_NAMES.has(entry.name)
+          (entry) => entry.isDirectory && !isSkippedDirectory(entry.name)
         );
         continue;
       }
       for (const entry of children) {
         if (!entry.isDirectory) continue;
-        if (SKIPPED_DIRECTORY_NAMES.has(entry.name)) continue;
+        if (isSkippedDirectory(entry.name)) continue;
         next.push(joinPath(dir, entry.name));
       }
     }

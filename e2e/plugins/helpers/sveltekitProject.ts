@@ -28,7 +28,34 @@ export const PAGE_FILE = "src/routes/+page.svelte";
 export const PAGE_SOURCE = `<main class="flex flex-col gap-4 p-6">
   <h1 class="text-4xl font-bold">Daintree site builder</h1>
   <p class="text-base">Point at an element to find the source that owns it.</p>
+  <section class="grid grid-cols-3 gap-4">
+    {#each features as feature}
+      <FeatureCard title={feature.title} body={feature.body} />
+    {/each}
+  </section>
 </main>
+
+<script>
+  import FeatureCard from "$lib/FeatureCard.svelte";
+
+  const features = [
+    { title: "Select", body: "Click anything on the page." },
+    { title: "Ask", body: "Describe the change you want." },
+    { title: "Ship", body: "Your agent edits the source." },
+  ];
+</script>
+`;
+
+export const CARD_FILE = "src/lib/FeatureCard.svelte";
+
+const CARD_SOURCE = `<script>
+  let { title, body } = $props();
+</script>
+
+<article class="rounded-xl border border-gray-200 p-5 shadow-sm">
+  <h2 class="text-lg font-semibold">{title}</h2>
+  <p class="mt-1 text-sm text-gray-600">{body}</p>
+</article>
 `;
 
 const FILES: Record<string, string> = {
@@ -64,7 +91,7 @@ export default defineConfig({ plugins: [tailwindcss(), sveltekit()] });
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     %sveltekit.head%
   </head>
-  <body>
+  <body data-daintree-e2e-site>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>
@@ -75,9 +102,12 @@ export default defineConfig({ plugins: [tailwindcss(), sveltekit()] });
   let { children } = $props();
 </script>
 
-{@render children()}
+<div class="min-h-screen bg-white text-gray-900">
+  {@render children()}
+</div>
 `,
   [PAGE_FILE]: PAGE_SOURCE,
+  [CARD_FILE]: CARD_SOURCE,
 };
 
 const INSTALL_TIMEOUT_MS = 5 * 60_000;

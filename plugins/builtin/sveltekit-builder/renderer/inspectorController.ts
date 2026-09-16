@@ -7,12 +7,25 @@ import type {
   SitePreviewMode,
   SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
-import { getPanelStoreSnapshot } from "@/store/storeAccessors";
-import { actionService } from "@/services/ActionService";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
+import { cancelAgentRequests } from "./agentRequest.js";
 import {
+  callSiteKey,
+  citedFiles,
+  componentCallSites,
+  type SourceRevisions,
+  type ComponentDefinitions,
+  type PickedComponent,
+} from "./agentTask.js";
+import { forgetComposerMemories } from "./composerMemory.js";
+import { usePanelStore } from "@/store/panelStore";
+import {
+  BUILDER_TOOL_ID,
   CHANNELS,
   ClassCompleteResultSchema,
+  ComponentDefinitionsResultSchema,
+  SourceRevisionsResultSchema,
   SourceExcerptResultSchema,
   EditApplyResultSchema,
   EditUndoResultSchema,
@@ -34,10 +47,9 @@ import type {
 } from "../shared/model.js";
 
 /**
- * One controller per Site Inspector panel. It outlives the view — a maximised
- * sibling or a cached project view unmounts the React tree while the panel
- * lives on, and the preview binding, the open selection and the last receipt
- * (with its Undo) must survive that. It ends when the panel is removed.
+ * One controller per dev preview with the Site Builder switched on. It holds
+ * the preview binding, the source workspace, the selection and the last receipt
+ * (with its Undo), and ends shortly after the builder's UI is gone.
  *
  * Every piece of preview state is keyed on the document epoch an observation
  * carries, never on arrival order: a reinstalled runtime's `documentReady` can
@@ -61,17 +73,7 @@ export interface InspectorDeps {
   sitePreview: SitePreviewApi;
   invoke(channel: string, args: unknown): Promise<unknown>;
   on(channel: string, callback: (payload: unknown) => void): () => void;
-  /** The worktree a panel belongs to: undefined when unknown, null when it has none. */
-  panelWorktreeId(panelId: string): string | null | undefined;
   runtimeSource(): Promise<string>;
-  /**
-   * Open a dev preview in the current worktree, which starts its dev server
-   * (or offers the detected command when none is configured). Resolves to the
-   * new panel, or null when none was created.
-   */
-  startPreview(): Promise<string | null>;
-  /** Resolves after `ms`; injected so tests needn't wait in real time. */
-  delay(ms: number): Promise<void>;
   newId(): string;
   now(): number;
   /** Calls back when this plugin is disabled; main has already closed every workspace. */
@@ -86,11 +88,6 @@ export interface InspectorContext {
 
 export type BindingState =
   | { status: "idle" }
-  | { status: "listing" }
-  | { status: "no-candidates" }
-  /** A dev preview was opened for this worktree; waiting for its page to exist. */
-  | { status: "starting"; panelId: string | null }
-  | { status: "choosing"; candidates: SitePreviewCandidate[] }
   | { status: "binding"; panelId: string }
   | { status: "bound"; sessionId: string; panelId: string; url: string | null }
   | { status: "detached"; panelId: string; reason: SitePreviewDetachReason }
@@ -125,6 +122,17 @@ export type SelectionState =
       /** Worktree-relative file that owns the primary node's markup, when known. */
       file: string | null;
       stale: StaleReason | null;
+      /** A whole component invocation (its rendered roots) rather than one element. */
+      scope: "element" | "component";
+      /** For a component selection: the selected component's call site. */
+      component: PickedComponent | null;
+      /**
+       * Where each component on the chain is written, read from source by main.
+       * Null until main answers; a component scope without a file can't be sent.
+       */
+      definitions: ComponentDefinitions;
+      /** The revisions every cited file had when its claims were read; null until then. */
+      revisions: SourceRevisions;
     }
   /** The document moved on before the resolve finished. */
   | { status: "lost" }
@@ -185,9 +193,10 @@ export type ClassCompletion =
   | { status: "ok"; candidates: Array<{ candidate: string; css: string }> }
   | { status: "unavailable"; reason: string };
 
-const INITIAL_STATE: InspectorState = {
+export const INITIAL_INSPECTOR_STATE: InspectorState = {
   binding: { status: "idle" },
-  mode: "browse",
+  // Turning the builder on is asking to pick something.
+  mode: "select",
   modePending: false,
   epoch: null,
   page: null,
@@ -201,16 +210,14 @@ const INITIAL_STATE: InspectorState = {
 
 const MAX_BUFFERED_EVENTS = 64;
 
-const START_PREVIEW_POLL_MS = 500;
-/** Long enough for a first `npm install`-less cold Vite start and a command pick. */
-const START_PREVIEW_TIMEOUT_MS = 5 * 60_000;
-
 /** Detaches the host causes on its own, as opposed to the user or another inspector. */
 const REATTACH_REASONS: ReadonlySet<SitePreviewDetachReason> = new Set([
   "guest-destroyed",
   "debugger-detached",
 ]);
-const REATTACH_DELAYS_MS = [300, 1000, 3000];
+const REATTACH_DELAY_MS = 300;
+/** About two minutes in all: long enough for a cold dev server to serve its first page. */
+const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000, 30000, 60000];
 
 // Loaded on first bind, not at module evaluation: the runtime is only needed
 // once a preview is attached, and it serialises its own factory to source text.
@@ -246,23 +253,7 @@ export function defaultInspectorDeps(): InspectorDeps {
     sitePreview: window.electron.sitePreview,
     invoke: (channel, args) => window.electron.plugin.invoke(PLUGIN_ID, channel, args),
     on: (channel, callback) => window.electron.plugin.on(PLUGIN_ID, channel, callback),
-    panelWorktreeId: (panelId) => {
-      const snapshot = getPanelStoreSnapshot();
-      if (!snapshot) return undefined;
-      const panel = snapshot.panelsById[panelId];
-      if (!panel) return undefined;
-      return panel.worktreeId ?? null;
-    },
     runtimeSource: loadGuestRuntimeBody,
-    startPreview: async () => {
-      const result = await actionService.dispatch<{ panelId: string | null }>(
-        "devServer.start",
-        undefined,
-        { source: "user" }
-      );
-      return result.ok ? result.result.panelId : null;
-    },
-    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     newId: () => crypto.randomUUID(),
     now: () => Date.now(),
     onPluginDisabled: (callback) => {
@@ -282,6 +273,30 @@ export function defaultInspectorDeps(): InspectorDeps {
  * relative to the Vite root, which is the app root — not necessarily the
  * worktree root in a monorepo.
  */
+/**
+ * The app a dev preview's server runs: its working directory's own app, or the
+ * nearest app containing it. Null when the preview's directory is above every
+ * app (a monorepo root script), which only the user can resolve.
+ */
+function isWithin(root: string, path: string): boolean {
+  const base = trimSlash(root);
+  const target = trimSlash(path);
+  return target === base || target.startsWith(`${base}/`);
+}
+
+export function appRunningIn(appRoots: readonly string[], panel: unknown): string | null {
+  const cwd = (panel as { kind?: string; cwd?: unknown } | undefined)?.cwd;
+  if (typeof cwd !== "string" || cwd.length === 0) return null;
+  const directory = trimSlash(cwd);
+  let best: string | null = null;
+  for (const appRoot of appRoots) {
+    const root = trimSlash(appRoot);
+    const contains = directory === root || directory.startsWith(`${root}/`);
+    if (contains && (best === null || root.length > trimSlash(best).length)) best = appRoot;
+  }
+  return best;
+}
+
 export function ownerFile(selection: SiteSelection, worktreePath: string | null): string | null {
   const node = selection.nodes[0];
   if (!node?.definition) return null;
@@ -344,7 +359,7 @@ export class InspectorController {
   readonly panelId: string;
   /** Set by the registry: a disabled plugin releases the whole controller. */
   onPluginDisabled: (() => void) | null = null;
-  private state: InspectorState = INITIAL_STATE;
+  private state: InspectorState = INITIAL_INSPECTOR_STATE;
   private readonly listeners = new Set<() => void>();
   private readonly unsubscribers: Array<() => void> = [];
   private context: InspectorContext = { projectId: null, worktreeId: null, worktreePath: null };
@@ -352,6 +367,8 @@ export class InspectorController {
   private workspaceRequest = 0;
   private bindRequest = 0;
   private reattachTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectAttempts = 0;
   private selectionRequest = 0;
   private bufferedEvents: SitePreviewPushPayload[] = [];
   /** Files main reported changed while the current resolve was in flight. */
@@ -360,9 +377,6 @@ export class InspectorController {
   private readonly recentChanges = new Map<string, number>();
   private chosenAppRoot: string | undefined;
   private recoveringWorkspace: string | null = null;
-  private lastCandidates: SitePreviewCandidate[] = [];
-  /** A preview is opened on the user's behalf once per panel, never in a loop. */
-  private autoStarted = false;
   private disposed = false;
 
   constructor(
@@ -402,14 +416,16 @@ export class InspectorController {
     this.context = context;
     const binding = this.state.binding;
     if (binding.status === "idle") {
-      void this.refreshCandidates();
+      void this.connect();
     } else if (worktreeChanged) {
       // A preview belongs to a worktree. Observations from the old one must
       // never resolve against the new worktree's source.
       if (binding.status === "bound") {
         void this.deps.sitePreview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
       }
-      void this.refreshCandidates();
+      // A request still waiting on an agent was about the old worktree's source.
+      cancelAgentRequests(this.panelId);
+      void this.connect();
     }
     const key =
       context.projectId && context.worktreeId && context.worktreePath
@@ -434,6 +450,20 @@ export class InspectorController {
     const { projectId, worktreeId, worktreePath } = this.context;
     if (!projectId || !worktreeId || !worktreePath) return;
     const request = ++this.workspaceRequest;
+    // A preview moved between worktrees keeps running its server from the old
+    // one: the page would show one checkout while edits and agents go to another.
+    const cwd = (usePanelStore.getState().panelsById[this.panelId] as { cwd?: unknown } | undefined)
+      ?.cwd;
+    if (typeof cwd === "string" && cwd.length > 0 && !isWithin(worktreePath, cwd)) {
+      this.update({
+        workspace: {
+          status: "failed",
+          message:
+            "This preview's dev server runs from another worktree. Restart it from this worktree to trace elements.",
+        },
+      });
+      return;
+    }
     this.update({ workspace: { status: "opening" } });
     try {
       const raw = await this.deps.invoke(CHANNELS.workspaceOpen, {
@@ -458,9 +488,19 @@ export class InspectorController {
             },
           });
           return;
-        case "ambiguous":
+        case "ambiguous": {
+          // The dev server runs in one of them: that is the app this preview shows.
+          const running = appRunningIn(
+            result.appRoots,
+            usePanelStore.getState().panelsById[this.panelId]
+          );
+          if (running && appRoot === undefined) {
+            void this.openWorkspace(running);
+            return;
+          }
           this.update({ workspace: { status: "ambiguous", appRoots: result.appRoots } });
           return;
+        }
         case "no-app":
           this.update({ workspace: { status: "no-app" } });
           return;
@@ -525,107 +565,12 @@ export class InspectorController {
   /* Preview binding                                                          */
   /* ------------------------------------------------------------------------ */
 
-  async refreshCandidates(): Promise<void> {
-    const request = ++this.bindRequest;
-    this.update({ binding: { status: "listing" } });
-    let candidates: SitePreviewCandidate[];
-    try {
-      candidates = await this.deps.sitePreview.listCandidates();
-    } catch (error) {
-      if (request !== this.bindRequest) return;
-      this.update({
-        binding: {
-          status: "failed",
-          message: formatErrorMessage(error, "Couldn't list dev previews"),
-        },
-      });
-      return;
-    }
-    if (request !== this.bindRequest) return;
-    const inWorktree = candidates.filter((candidate) => this.inThisWorktree(candidate.panelId));
-    this.lastCandidates = inWorktree;
-    if (inWorktree.length === 0) {
-      if (!this.autoStarted) {
-        this.autoStarted = true;
-        await this.startPreview();
-        return;
-      }
-      this.update({ binding: { status: "no-candidates" } });
-      return;
-    }
-    if (inWorktree.length === 1) {
-      await this.bindTo(inWorktree[0]!.panelId);
-      return;
-    }
-    this.update({ binding: { status: "choosing", candidates: inWorktree } });
-  }
-
   /**
-   * Run the site the way the dev preview does: open a preview for this worktree
-   * and bind as soon as its page exists. An unconfigured project gets the
-   * preview's own "Run `npm run dev`" choice, so the wait covers the user
-   * picking a command too.
+   * Attach to the dev preview this controller lives in. Fails (and says so)
+   * while the preview has no page yet; the host calls again once it does.
    */
-  async startPreview(): Promise<void> {
-    const request = ++this.bindRequest;
-    this.autoStarted = true;
-    this.update({ binding: { status: "starting", panelId: null } });
-    let panelId: string | null;
-    try {
-      panelId = await this.deps.startPreview();
-    } catch (error) {
-      if (request !== this.bindRequest) return;
-      this.update({
-        binding: {
-          status: "failed",
-          message: formatErrorMessage(error, "Couldn't start the dev preview"),
-        },
-      });
-      return;
-    }
-    if (request !== this.bindRequest || this.disposed) return;
-    if (panelId === null) {
-      this.update({ binding: { status: "no-candidates" } });
-      return;
-    }
-    this.update({ binding: { status: "starting", panelId } });
-
-    const deadline = this.deps.now() + START_PREVIEW_TIMEOUT_MS;
-    let panelSeen = false;
-    while (this.deps.now() < deadline) {
-      await this.deps.delay(START_PREVIEW_POLL_MS);
-      if (request !== this.bindRequest || this.disposed) return;
-      // Unknown can mean the panel store isn't reachable, so only a panel that
-      // was there and is now gone counts as the user closing the preview.
-      const present = this.deps.panelWorktreeId(panelId) !== undefined;
-      if (panelSeen && !present) break;
-      panelSeen ||= present;
-      let candidates: SitePreviewCandidate[];
-      try {
-        candidates = await this.deps.sitePreview.listCandidates();
-      } catch {
-        continue;
-      }
-      if (request !== this.bindRequest || this.disposed) return;
-      const inWorktree = candidates.filter((candidate) => this.inThisWorktree(candidate.panelId));
-      const started =
-        inWorktree.find((candidate) => candidate.panelId === panelId) ?? inWorktree[0];
-      if (started) {
-        this.lastCandidates = inWorktree;
-        await this.bindTo(started.panelId);
-        return;
-      }
-    }
-    if (request !== this.bindRequest || this.disposed) return;
-    this.update({ binding: { status: "no-candidates" } });
-  }
-
-  private inThisWorktree(previewPanelId: string): boolean {
-    const own = this.context.worktreeId;
-    if (!own) return true;
-    const theirs = this.deps.panelWorktreeId(previewPanelId);
-    // Unknown means the panel store isn't reachable; don't hide a real preview over it.
-    return theirs === undefined || theirs === own;
+  async connect(): Promise<void> {
+    await this.bindTo(this.panelId);
   }
 
   async bindTo(previewPanelId: string): Promise<void> {
@@ -664,23 +609,36 @@ export class InspectorController {
           message: formatErrorMessage(error, "Couldn't connect to the dev preview"),
         },
       });
+      // Most failures are a preview that has no page yet: it is starting, or
+      // the grid is recreating it. Keep trying for a while rather than leaving
+      // the user to guess when to press Retry.
+      this.scheduleConnectRetry(previewPanelId, request);
       return;
     }
+    this.connectAttempts = 0;
     if (request !== this.bindRequest || this.disposed) {
       // Superseded or disposed while binding: the session we just got is nobody's.
       void this.deps.sitePreview.detach({ sessionId: state.sessionId }).catch(() => undefined);
       return;
     }
 
+    // The page behind a selection that went stale on disconnect is gone; once
+    // we're attached again it's an old warning about nothing on screen.
+    const selection = this.state.selection;
+    const clearedSelection =
+      selection.status === "ready" && selection.stale === "preview-detached"
+        ? { selection: { status: "none" } as const }
+        : {};
     this.update({
       binding: {
         status: "bound",
         sessionId: state.sessionId,
         panelId: state.panelId,
-        url: this.candidateUrl(state.panelId),
+        url: null,
       },
       mode: state.mode,
       epoch: null,
+      ...clearedSelection,
     });
     this.noteEpoch(state.documentEpoch);
     // Pushes for this session can land before `bind` resolves.
@@ -695,38 +653,56 @@ export class InspectorController {
    * the same panel a few times before leaving it to the user; when DevTools
    * really does own the page, every attempt fails fast and the notice stays.
    */
-  private scheduleReattach(
-    panelId: string,
-    reason: SitePreviewDetachReason,
-    attempt: number
-  ): void {
-    if (attempt >= REATTACH_DELAYS_MS.length || this.disposed) return;
+  /**
+   * The grid recreates a preview's page when panels are added or moved, and
+   * that detaches the session exactly as a closed preview would. Reattach to
+   * the same panel shortly after; if the page isn't back yet, the bind failure
+   * hands over to the connection backoff, so there is one retry schedule, not
+   * two cancelling each other. When DevTools really does own the page, every
+   * attempt fails and the strip offers Retry.
+   */
+  private scheduleReattach(panelId: string): void {
+    if (this.disposed) return;
     const request = this.bindRequest;
     this.clearReattach();
+    this.connectAttempts = 0;
     this.reattachTimer = setTimeout(() => {
       this.reattachTimer = null;
       const binding = this.state.binding;
       if (this.disposed || request !== this.bindRequest) return;
       if (binding.status !== "detached" || binding.panelId !== panelId) return;
-      const rebinding = this.bindTo(panelId);
-      // `bindTo` claims the request synchronously; a later bind supersedes it.
-      const attemptRequest = this.bindRequest;
-      void rebinding.then(() => {
-        if (this.disposed || attemptRequest !== this.bindRequest) return;
-        if (this.state.binding.status !== "failed") return;
-        this.update({ binding: { status: "detached", panelId, reason } });
-        this.scheduleReattach(panelId, reason, attempt + 1);
-      });
-    }, REATTACH_DELAYS_MS[attempt]);
+      void this.bindTo(panelId);
+    }, REATTACH_DELAY_MS);
+  }
+
+  private scheduleConnectRetry(previewPanelId: string, request: number): void {
+    if (this.disposed || this.connectAttempts >= CONNECT_RETRY_DELAYS_MS.length) return;
+    const delay = CONNECT_RETRY_DELAYS_MS[this.connectAttempts]!;
+    this.connectAttempts++;
+    this.clearConnectRetry();
+    this.connectRetryTimer = setTimeout(() => {
+      this.connectRetryTimer = null;
+      if (this.disposed || request !== this.bindRequest) return;
+      if (this.state.binding.status !== "failed") return;
+      void this.bindTo(previewPanelId);
+    }, delay);
+  }
+
+  private clearConnectRetry(): void {
+    if (this.connectRetryTimer !== null) clearTimeout(this.connectRetryTimer);
+    this.connectRetryTimer = null;
+  }
+
+  /** Try again now, starting a fresh round of automatic retries. */
+  async retryConnect(): Promise<void> {
+    this.connectAttempts = 0;
+    this.clearConnectRetry();
+    await this.connect();
   }
 
   private clearReattach(): void {
     if (this.reattachTimer !== null) clearTimeout(this.reattachTimer);
     this.reattachTimer = null;
-  }
-
-  private candidateUrl(panelId: string): string | null {
-    return this.lastCandidates.find((candidate) => candidate.panelId === panelId)?.url ?? null;
   }
 
   async detach(): Promise<void> {
@@ -787,8 +763,7 @@ export class InspectorController {
           binding: { status: "detached", panelId: binding.panelId, reason: payload.reason },
           ...this.staleSelectionPatch("preview-detached"),
         });
-        if (REATTACH_REASONS.has(payload.reason))
-          this.scheduleReattach(binding.panelId, payload.reason, 0);
+        if (REATTACH_REASONS.has(payload.reason)) this.scheduleReattach(binding.panelId);
         return;
       case "epoch-advanced":
         this.noteEpoch(payload.documentEpoch);
@@ -853,7 +828,12 @@ export class InspectorController {
         return;
       }
       case "selectionChanged":
-        void this.handleSelection(epoch, event.nodes);
+        void this.handleSelection(
+          epoch,
+          event.nodes,
+          event.scope ?? "element",
+          event.component ?? null
+        );
         return;
       case "runtimeIssue":
         this.update({
@@ -873,7 +853,12 @@ export class InspectorController {
   /* Selection                                                                */
   /* ------------------------------------------------------------------------ */
 
-  private async handleSelection(epoch: number, nodes: SiteGuestNodeObservation[]): Promise<void> {
+  private async handleSelection(
+    epoch: number,
+    nodes: SiteGuestNodeObservation[],
+    scope: "element" | "component" = "element",
+    component: PickedComponent | null = null
+  ): Promise<void> {
     const request = ++this.selectionRequest;
     this.changedDuringResolve.clear();
     const base: Partial<InspectorState> = {
@@ -974,7 +959,145 @@ export class InspectorController {
       this.update({ selection: { status: "settling" } });
       return;
     }
-    this.update({ selection: { status: "ready", selection, file, stale: null } });
+    this.update({
+      selection: {
+        status: "ready",
+        selection,
+        file,
+        stale: null,
+        scope,
+        component,
+        definitions: null,
+        revisions: null,
+      },
+    });
+    void this.resolveDefinitions(selection, component);
+  }
+
+  private async resolveDefinitions(
+    selection: SiteSelection,
+    component: PickedComponent | null
+  ): Promise<void> {
+    // The live selection always settles: unanswerable means unproven, and a
+    // file whose revision couldn't be read can't vouch for anything.
+    const facts = (await this.lookupDefinitions(selection, component)) ?? {
+      definitions: Object.fromEntries(
+        componentCallSites(selection, component).map((site) => [callSiteKey(site), null])
+      ),
+      revisions: {},
+    };
+    const current = this.state.selection;
+    if (current.status !== "ready" || current.selection.selectionId !== selection.selectionId) {
+      return;
+    }
+    this.update({ selection: { ...current, ...facts } });
+  }
+
+  /**
+   * What a request about a selection may claim: where its components are
+   * written, read from source by main, and the revision of every file those
+   * claims come from. Asked through the workspace open now — a draft pinned to
+   * an older selection may carry a session that has since closed. Null when
+   * there is nobody to ask yet (no open workspace for that app, or it closed
+   * mid-request), so the caller can try again.
+   */
+  async lookupDefinitions(
+    selection: SiteSelection,
+    component: PickedComponent | null
+  ): Promise<{
+    definitions: Record<string, string | null>;
+    revisions: Record<string, string | null>;
+  } | null> {
+    const workspace = this.state.workspace;
+    if (workspace.status !== "ready" || workspace.appRoot !== selection.appRoot) return null;
+    const callSites = componentCallSites(selection, component).slice(0, 64);
+    const definitions: Record<string, string | null> = {};
+    // Revisions come from the very reads the answers were drawn from, so a
+    // file edited in between can't lend its newer hash to an older mapping.
+    const revisions: Record<string, string | null> = {};
+    const record = (file: string, revision: string | null) => {
+      // Two reads of one file that disagree prove neither.
+      revisions[file] = file in revisions && revisions[file] !== revision ? null : revision;
+    };
+    if (callSites.length > 0) {
+      try {
+        const parsed = ComponentDefinitionsResultSchema.safeParse(
+          await this.deps.invoke(CHANNELS.componentDefinitions, {
+            workspaceSessionId: workspace.workspaceSessionId,
+            callSites,
+          })
+        );
+        if (parsed.success) {
+          for (const entry of parsed.data.definitions) {
+            definitions[callSiteKey(entry)] = entry.definedIn;
+            record(entry.file, entry.revision);
+            if (entry.definedIn) record(entry.definedIn, entry.definedInRevision);
+          }
+        }
+      } catch (error) {
+        if (isWorkspaceClosed(error)) {
+          this.recoverClosedWorkspace(workspace.workspaceSessionId);
+          return null;
+        }
+        // Anything else: unproven is the answer, and no component scope is sendable.
+      }
+    }
+    for (const site of callSites) {
+      const key = callSiteKey(site);
+      if (!(key in definitions)) definitions[key] = null;
+    }
+    // An element's own file is held to the revision it was resolved against —
+    // and a mapping read from other bytes of that file leaves it unprovable.
+    for (const node of selection.nodes) {
+      if (node.definition) record(node.definition.location.file, node.definition.revision);
+    }
+    // Anything cited that no read vouched for can't be verified, so it fails.
+    for (const file of citedFiles(selection, component, definitions)) {
+      if (!(file in revisions)) revisions[file] = null;
+    }
+    return { definitions, revisions };
+  }
+
+  /**
+   * Whether every file a request cites still has the bytes its claims were
+   * read from. Checked against disk through the workspace open now.
+   */
+  async sourcesUnchanged(selection: SiteSelection, revisions: SourceRevisions): Promise<boolean> {
+    if (revisions === null) return false;
+    const workspace = this.state.workspace;
+    if (workspace.status !== "ready" || workspace.appRoot !== selection.appRoot) return false;
+    const files = Object.keys(revisions);
+    if (files.length === 0) return true;
+    const now = await this.readRevisions(files);
+    return (
+      now !== null &&
+      files.every((file) => revisions[file] !== null && now[file] === revisions[file])
+    );
+  }
+
+  private async readRevisions(files: string[]): Promise<Record<string, string | null> | null> {
+    const workspace = this.state.workspace;
+    if (workspace.status !== "ready") return null;
+    const revisions: Record<string, string | null> = {};
+    if (files.length === 0) return revisions;
+    try {
+      const parsed = SourceRevisionsResultSchema.safeParse(
+        await this.deps.invoke(CHANNELS.sourceRevisions, {
+          workspaceSessionId: workspace.workspaceSessionId,
+          files: files.slice(0, 128),
+        })
+      );
+      if (parsed.success) {
+        for (const entry of parsed.data.revisions) revisions[entry.file] = entry.revision;
+      }
+    } catch (error) {
+      if (isWorkspaceClosed(error)) {
+        this.recoverClosedWorkspace(workspace.workspaceSessionId);
+        return null;
+      }
+    }
+    for (const file of files) if (!(file in revisions)) revisions[file] = null;
+    return revisions;
   }
 
   private changedRecently(file: string): boolean {
@@ -1361,7 +1484,7 @@ export class InspectorController {
   async sourceExcerpt(
     selection: SiteSelection,
     file: string
-  ): Promise<{ text: string; firstLine: number } | null> {
+  ): Promise<{ text: string; firstLine: number; revision: string } | null> {
     const range = selection.nodes[0]?.definition?.range;
     if (!range) return null;
     try {
@@ -1373,7 +1496,11 @@ export class InspectorController {
       });
       const parsed = SourceExcerptResultSchema.safeParse(raw);
       if (!parsed.success || parsed.data.status !== "ok") return null;
-      return { text: parsed.data.text, firstLine: parsed.data.firstLine };
+      return {
+        text: parsed.data.text,
+        firstLine: parsed.data.firstLine,
+        revision: parsed.data.revision,
+      };
     } catch {
       return null;
     }
@@ -1382,6 +1509,7 @@ export class InspectorController {
   dispose(): void {
     if (this.disposed) return;
     this.clearReattach();
+    this.clearConnectRetry();
     this.bindRequest++;
     const binding = this.state.binding;
     if (binding.status === "bound") {
@@ -1443,43 +1571,118 @@ export function isEditableMapping(node: SelectedNode): boolean {
   return node.mapping === "exact" || node.mapping === "definition-only";
 }
 
-const controllers = new Map<string, InspectorController>();
+const controllers = new Map<string, ControllerEntry>();
+const controllerListeners = new Set<() => void>();
 
-/**
- * The controller, not the view, listens for panel removal: the view can be
- * unmounted (a maximised sibling) at the moment the panel is removed, and its
- * listener would be gone with it.
- */
-export function acquireInspectorController(
-  panelId: string,
-  panelRemovedSignal: AbortSignal,
-  deps: () => InspectorDeps = defaultInspectorDeps
-): InspectorController {
-  let controller = controllers.get(panelId);
-  if (!controller) {
-    const created = new InspectorController(panelId, deps());
-    controller = created;
-    controllers.set(panelId, created);
-    const release = () => {
-      panelRemovedSignal.removeEventListener("abort", release);
-      if (controllers.get(panelId) === created) releaseInspectorController(panelId);
-    };
-    if (panelRemovedSignal.aborted) queueMicrotask(release);
-    else panelRemovedSignal.addEventListener("abort", release, { once: true });
-    // Disabling the plugin closes every workspace in main. A cached controller
-    // would come back on re-enable holding a dead session and a live preview
-    // binding, so it goes entirely; the remounted view starts a fresh one.
-    created.onPluginDisabled = release;
-  }
-  return controller;
+function notifyControllers(): void {
+  for (const listener of [...controllerListeners]) listener();
 }
 
-export function releaseInspectorController(panelId: string): void {
-  controllers.get(panelId)?.dispose();
-  controllers.delete(panelId);
+export function subscribeBuilderControllers(listener: () => void): () => void {
+  controllerListeners.add(listener);
+  return () => controllerListeners.delete(listener);
+}
+
+/** The live controller for a preview, if something holds one. Never creates. */
+export function peekBuilderController(previewPanelId: string): InspectorController | null {
+  return controllers.get(previewPanelId)?.controller ?? null;
+}
+
+/**
+ * Hold the builder for one dev preview, creating it on first hold. Shared by
+ * the preview's toolbar strip and drawer; disposed — detaching the preview and
+ * closing the source workspace — a tick after the last holder lets go, so a
+ * remount (or React's development double-mount) keeps the binding.
+ *
+ * Only effects hold. A controller created during render could be disposed by
+ * an idle check before that render committed, and the builder would then keep
+ * rendering a dead controller that ignores every update.
+ */
+export function holdBuilderController(
+  previewPanelId: string,
+  deps: () => InspectorDeps = defaultInspectorDeps
+): () => void {
+  let entry = controllers.get(previewPanelId);
+  if (!entry) {
+    const controller = new InspectorController(previewPanelId, deps());
+    const created: ControllerEntry = { controller, holders: 0, unwatch: null };
+    entry = created;
+    controllers.set(previewPanelId, created);
+    // Disabling the plugin closes every workspace in main; a controller kept
+    // across that would come back holding dead sessions.
+    controller.onPluginDisabled = () => {
+      if (controllers.get(previewPanelId) === created) releaseBuilderController(previewPanelId);
+    };
+    notifyControllers();
+  }
+  const held = entry;
+  held.holders++;
+  held.unwatch?.();
+  held.unwatch = null;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    held.holders--;
+    setTimeout(() => releaseWhenIdle(previewPanelId, held), 0);
+  };
+}
+
+interface ControllerEntry {
+  controller: InspectorController;
+  holders: number;
+  /** Set while an unheld controller waits for its builder to be switched off. */
+  unwatch: (() => void) | null;
+}
+
+/**
+ * The builder's UI unmounts whenever its preview is hidden — another dock tab,
+ * a maximised sibling — and that must not cost the user their Undo or an
+ * in-flight request. So an unheld controller lives on while the builder is
+ * still switched on for a preview that still exists, and goes when either
+ * stops being true.
+ */
+function releaseWhenIdle(previewPanelId: string, entry: ControllerEntry): void {
+  if (entry.holders > 0 || controllers.get(previewPanelId) !== entry) return;
+  const panel = usePanelStore.getState().panelsById[previewPanelId];
+  const panelAlive = panel !== undefined && panel.location !== "trash";
+  const builderOn =
+    useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === BUILDER_TOOL_ID;
+  if (panelAlive && builderOn) {
+    if (entry.unwatch !== null) return;
+    const recheck = () => releaseWhenIdle(previewPanelId, entry);
+    const offTools = useDevPreviewToolStore.subscribe(recheck);
+    const offPanels = usePanelStore.subscribe(recheck);
+    entry.unwatch = () => {
+      offTools();
+      offPanels();
+    };
+    return;
+  }
+  // A removed preview leaves no switched-on tool behind to confuse a later one.
+  if (!panelAlive && builderOn) useDevPreviewToolStore.getState().setActive(previewPanelId, null);
+  releaseBuilderController(previewPanelId);
+}
+
+export function releaseBuilderController(previewPanelId: string): void {
+  const entry = controllers.get(previewPanelId);
+  // The builder is really over for this preview: nothing typed or in flight
+  // for it may outlive it.
+  cancelAgentRequests(previewPanelId);
+  forgetComposerMemories(previewPanelId);
+  if (!entry) return;
+  entry.unwatch?.();
+  entry.unwatch = null;
+  entry.controller.dispose();
+  controllers.delete(previewPanelId);
+  notifyControllers();
 }
 
 export function __resetInspectorControllersForTests(): void {
-  for (const controller of controllers.values()) controller.dispose();
+  for (const entry of controllers.values()) {
+    entry.unwatch?.();
+    entry.controller.dispose();
+  }
   controllers.clear();
+  notifyControllers();
 }

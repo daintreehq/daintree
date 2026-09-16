@@ -70,16 +70,13 @@ async function setUp() {
     },
     invoke: (channel, args) => test.invoke(channel, args),
     on: () => () => {},
-    panelWorktreeId: () => "w1",
     runtimeSource: async () => "",
-    startPreview: async () => null,
-    delay: async () => {},
     newId: () => `id-${++id}`,
     now: () => Date.now(),
     onPluginDisabled: () => () => {},
   };
 
-  const controller = new InspectorController("inspector-1", deps);
+  const controller = new InspectorController(PREVIEW_PANEL, deps);
   controller.updateContext({ projectId: "p1", worktreeId: "w1", worktreePath: sandbox.worktree });
 
   const guest = (event: SiteGuestEvent) =>
@@ -140,7 +137,7 @@ async function selectInPage(
   return { selectionId: selection.selection.selectionId, source };
 }
 
-describe("Site Inspector end to end: view controller → plugin main → disk", () => {
+describe("Site Builder end to end: view controller → plugin main → disk", () => {
   it("adds a class the user asked for and writes exactly that to the component", async () => {
     const env = await setUp();
     const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");

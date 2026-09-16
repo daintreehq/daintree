@@ -39,12 +39,10 @@ import {
  */
 
 export const PLUGIN_ID = "daintree.sveltekit-builder";
-export const INSPECTOR_PANEL_ID = "inspector";
-export const INSPECTOR_VIEW_ID = "inspector";
-/** The runtime panel kind id — also the built-in view's registration slot. */
-export const INSPECTOR_PANEL_KIND = `${PLUGIN_ID}.${INSPECTOR_PANEL_ID}`;
+/** The dev preview tool the renderer registers; the toggle command names it. */
+export const BUILDER_TOOL_ID = `${PLUGIN_ID}.builder`;
 /** Declared in `contributes.commands`; bound by main on first dispatch. */
-export const OPEN_INSPECTOR_ACTION_ID = "open-inspector";
+export const TOGGLE_BUILDER_ACTION_ID = "toggle-builder";
 
 /**
  * Bumped whenever a guest-visible shape changes. The host refuses envelopes
@@ -72,6 +70,11 @@ export const CHANNELS = {
   classComplete: "tailwind-complete",
   /** Detected app roots, versions, package manager and route tree. */
   projectModel: "project-model",
+  /** Whether a worktree holds a SvelteKit app at all, without opening a workspace. */
+  detectApps: "detect-apps",
+  /** Where the components used at these call sites are written, read from source. */
+  componentDefinitions: "component-definitions",
+  sourceRevisions: "source-revisions",
 } as const satisfies Record<string, string>;
 
 /**
@@ -139,6 +142,25 @@ export const GuestEventSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("selectionChanged"),
       nodes: z.array(GuestNodeObservationSchema).max(32),
+      /** Present when the nodes are one component invocation's rendered roots. */
+      scope: z.literal("component").optional(),
+      /**
+       * The call site of the component that was selected, as it appears on the
+       * primary node's parent chain. A location, not a position in the chain: a
+       * dropped or truncated frame must not make it name a different component.
+       * A wrapper with no element of its own shares its roots with the component
+       * inside it, so the roots alone cannot say which one was meant.
+       */
+      component: z
+        .object({
+          file: z.string().min(1).max(1024),
+          line: z.number().int().positive(),
+          column: z.number().int().nonnegative(),
+          /** The tag it was written as at that call site. */
+          name: z.string().min(1).max(128),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   z
@@ -250,6 +272,72 @@ export const WorkspaceCloseArgsSchema = z
   .strict();
 
 export const WorkspaceCloseResultSchema = z.object({ closed: z.boolean() }).strict();
+
+const CallSiteSchema = z
+  .object({
+    file: z.string().min(1).max(1024),
+    line: z.number().int().positive(),
+    column: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const ComponentDefinitionsArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    callSites: z.array(CallSiteSchema).max(64),
+  })
+  .strict();
+
+export const ComponentDefinitionsResultSchema = z
+  .object({
+    definitions: z.array(
+      CallSiteSchema.extend({
+        name: z.string().min(1).max(128).nullable(),
+        definedIn: z.string().min(1).max(1024).nullable(),
+        /** Revision of the call site's file as main read it for this answer. */
+        revision: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .nullable(),
+        /** Revision of `definedIn` as main read it for this answer. */
+        definedInRevision: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .nullable(),
+      }).strict()
+    ),
+  })
+  .strict();
+
+export const SourceRevisionsArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    /** App-relative files. */
+    files: z.array(z.string().min(1).max(1024)).max(128),
+  })
+  .strict();
+
+export const SourceRevisionsResultSchema = z
+  .object({
+    revisions: z.array(
+      z
+        .object({
+          file: z.string().min(1).max(1024),
+          /** Revision of the bytes on disk now; null when the file can't be read here. */
+          revision: z
+            .string()
+            .regex(/^[0-9a-f]{64}$/)
+            .nullable(),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+
+export const DetectAppsArgsSchema = z.object({ worktreePath: z.string().min(1) }).strict();
+export const DetectAppsResultSchema = z
+  .object({ appCount: z.number().int().nonnegative() })
+  .strict();
 
 /** Args for the channels that only need to name their workspace. */
 export const WorkspaceScopedArgsSchema = z

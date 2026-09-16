@@ -194,6 +194,25 @@ export function createFakeHost() {
     receipt: makeReceipt({ transactionId: "tx-2" }),
   }));
   handlers.set(CHANNELS.workspaceClose, () => ({ closed: true }));
+  handlers.set(CHANNELS.componentDefinitions, (args) => ({
+    definitions: (args.callSites as Array<{ file: string; line: number; column: number }>).map(
+      (site) => ({
+        ...site,
+        name: null,
+        definedIn: null,
+        revision: REVISION,
+        definedInRevision: null,
+      })
+    ),
+  }));
+  /** What main would hash on disk now; a file absent here reads as the fixture source. */
+  const diskRevisions = new Map<string, string | null>();
+  handlers.set(CHANNELS.sourceRevisions, (args) => ({
+    revisions: (args.files as string[]).map((file) => ({
+      file,
+      revision: diskRevisions.has(file) ? diskRevisions.get(file)! : REVISION,
+    })),
+  }));
 
   const invoke = vi.fn(async (pluginId: string, channel: string, args: unknown) => {
     if (pluginId !== PLUGIN_ID) throw new Error(`unexpected plugin ${pluginId}`);
@@ -213,6 +232,7 @@ export function createFakeHost() {
 
   const host = {
     sitePreview,
+    diskRevisions,
     invoke,
     handlers,
     listenerCounts() {

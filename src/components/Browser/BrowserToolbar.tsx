@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo, useId } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, useId, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -85,6 +85,8 @@ interface BrowserToolbarProps {
   onViewportRotateToggle?: () => void;
   onViewportDprChange?: (dpr: 1 | 2 | 3) => void;
   onViewportFitToggle?: () => void;
+  /** Buttons the host adds after the address bar, before the page actions (dev preview tools). */
+  extraActions?: ReactNode;
 }
 
 export function BrowserToolbar({
@@ -106,6 +108,7 @@ export function BrowserToolbar({
   viewportRotated = false,
   viewportDpr = 1,
   viewportFit = false,
+  extraActions,
   validateUrl,
   onNavigate,
   onBack,
@@ -1045,6 +1048,7 @@ export function BrowserToolbar({
 
       {/* Action buttons */}
       <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
+      {extraActions}
       <Tooltip>
         <TooltipTrigger asChild>
           <button type="button" onClick={handleCopy} className={buttonClass} aria-label="Copy URL">

@@ -20,6 +20,11 @@ import { useDevPreviewViewport } from "./useDevPreviewViewport";
 import { DevPreviewWebviewOverlays } from "./DevPreviewWebviewOverlays";
 import { useDevPreviewNavigation } from "./useDevPreviewNavigation";
 import { DevPreviewEmptyStates } from "./DevPreviewEmptyStates";
+import {
+  DevPreviewToolButtons,
+  DevPreviewToolDrawer,
+  DevPreviewToolToolbar,
+} from "./DevPreviewTools";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
@@ -935,6 +940,23 @@ export function DevPreviewPane({
           onViewportRotateToggle={handleViewportRotateToggle}
           onViewportDprChange={handleViewportDprChange}
           onViewportFitToggle={handleViewportFitToggle}
+          extraActions={
+            <DevPreviewToolButtons
+              panelId={id}
+              projectId={currentProjectId}
+              worktreeId={worktreeId}
+              url={currentUrl}
+              isWebviewReady={isWebviewReady}
+            />
+          }
+        />
+
+        <DevPreviewToolToolbar
+          panelId={id}
+          projectId={currentProjectId}
+          worktreeId={worktreeId}
+          url={currentUrl}
+          isWebviewReady={isWebviewReady}
         />
 
         {promoteToPortalError && (
@@ -970,155 +992,164 @@ export function DevPreviewPane({
 
         {status === "running" && hmrDead && <DevPreviewHmrDeadBanner onReload={handleReload} />}
 
-        <div
-          className={cn(
-            "relative flex-1 min-h-0 bg-surface-canvas",
-            viewportPreset && viewportFit ? "overflow-hidden" : "overflow-auto"
-          )}
-        >
-          {viewportPreset && effectiveViewport && (
-            <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-3xs font-medium bg-surface/90 text-text-secondary border border-overlay/50">
-              {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
-              {effectiveViewport.height}
-              {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
-            </div>
-          )}
-          {showEmptyState ? (
-            <DevPreviewEmptyStates
-              isRestarting={isRestarting}
-              status={status}
-              isProxyUrlPending={isProxyUrlPending}
-              phaseLabel={phaseLabel}
-              error={error}
-              handleRetry={handleRetry}
-              setDevPreviewConsoleOpen={setDevPreviewConsoleOpen}
-              id={id}
-              currentUrl={currentUrl}
-              handleOpenExternal={handleOpenExternal}
-              isUnconfigured={isUnconfigured}
-              primaryCandidate={primaryCandidate}
-              isAutoDetecting={isAutoDetecting}
-              isSettingsLoading={isSettingsLoading}
-              handleAutoDetect={handleAutoDetect}
-              autoDetectFailedCommand={autoDetectFailedCommand}
-              candidates={candidates}
-              pickerOpen={pickerOpen}
-              setPickerOpen={setPickerOpen}
-              handlePickCandidate={handlePickCandidate}
-              handleOpenSettings={handleOpenSettings}
-              commandInput={commandInput}
-              setCommandInput={setCommandInput}
-              handleSaveCommand={handleSaveCommand}
-              commandInputError={commandInputError}
-              devCommand={devCommand}
-              handleStartFromRestored={handleStartFromRestored}
-              hasBeenVisible={hasBeenVisible}
-              isEvicted={isEvicted}
-            />
-          ) : (
-            <div
-              ref={setFitContainerEl}
-              className={cn(
-                "h-full",
-                viewportPreset &&
-                  (viewportFit
-                    ? "flex items-center justify-center"
-                    : "flex items-start justify-center pt-5")
-              )}
-            >
+        <div className="flex flex-1 min-h-0">
+          <div
+            className={cn(
+              "relative flex-1 min-w-0 min-h-0 bg-surface-canvas",
+              viewportPreset && viewportFit ? "overflow-hidden" : "overflow-auto"
+            )}
+          >
+            {viewportPreset && effectiveViewport && (
+              <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-3xs font-medium bg-surface/90 text-text-secondary border border-overlay/50">
+                {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
+                {effectiveViewport.height}
+                {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
+              </div>
+            )}
+            {showEmptyState ? (
+              <DevPreviewEmptyStates
+                isRestarting={isRestarting}
+                status={status}
+                isProxyUrlPending={isProxyUrlPending}
+                phaseLabel={phaseLabel}
+                error={error}
+                handleRetry={handleRetry}
+                setDevPreviewConsoleOpen={setDevPreviewConsoleOpen}
+                id={id}
+                currentUrl={currentUrl}
+                handleOpenExternal={handleOpenExternal}
+                isUnconfigured={isUnconfigured}
+                primaryCandidate={primaryCandidate}
+                isAutoDetecting={isAutoDetecting}
+                isSettingsLoading={isSettingsLoading}
+                handleAutoDetect={handleAutoDetect}
+                autoDetectFailedCommand={autoDetectFailedCommand}
+                candidates={candidates}
+                pickerOpen={pickerOpen}
+                setPickerOpen={setPickerOpen}
+                handlePickCandidate={handlePickCandidate}
+                handleOpenSettings={handleOpenSettings}
+                commandInput={commandInput}
+                setCommandInput={setCommandInput}
+                handleSaveCommand={handleSaveCommand}
+                commandInputError={commandInputError}
+                devCommand={devCommand}
+                handleStartFromRestored={handleStartFromRestored}
+                hasBeenVisible={hasBeenVisible}
+                isEvicted={isEvicted}
+              />
+            ) : (
               <div
+                ref={setFitContainerEl}
                 className={cn(
-                  "relative",
-                  viewportPreset
-                    ? // Outline, not border: this element carries the preset's
-                      // exact width/height and box-sizing is border-box, so a
-                      // 1px border would shave 2px off the content box the
-                      // guest is emulated at (#12298).
-                      "rounded-lg outline outline-1 -outline-offset-1 outline-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
-                    : "h-full"
+                  "h-full",
+                  viewportPreset &&
+                    (viewportFit
+                      ? "flex items-center justify-center"
+                      : "flex items-start justify-center pt-5")
                 )}
-                style={
-                  viewportPreset && effectiveViewport
-                    ? viewportFit
-                      ? {
-                          width: effectiveViewport.width * fitScale,
-                          height: effectiveViewport.height * fitScale,
-                        }
-                      : {
-                          maxWidth: effectiveViewport.width,
-                          width: "100%",
-                          aspectRatio: `${effectiveViewport.width} / ${effectiveViewport.height}`,
-                        }
-                    : undefined
-                }
               >
-                <DevPreviewWebviewOverlays
-                  reconnectAttempt={reconnectAttempt}
-                  webviewLoadError={webviewLoadError}
-                  certCopied={certCopied}
-                  onCopyMkcert={handleCopyMkcert}
-                  isRestarting={isRestarting}
-                  onRestartDevServer={handleRestartDevServer}
-                  onHardReload={handleHardReload}
-                  onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
-                  onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
-                  onRetryWebviewLoad={handleRetryWebviewLoad}
-                  currentUrl={currentUrl}
-                  onOpenExternal={handleOpenExternal}
-                  blockedNav={blockedNav}
-                  panelId={id}
-                  webviewElement={webviewElement}
-                  onDispatchBlockedNav={dispatchBlockedNav}
-                  crashState={crashState}
-                  crashDetails={crashDetails}
-                  onCloseCrash={resetCrashHistory}
-                  onCloseUnresponsive={clearUnresponsiveState}
-                  isLoading={isLoading}
-                  onCancelLoad={handleCancelLoad}
-                  showRecoverySpinner={showRecoverySpinner}
-                  isRecoveringFromEviction={isRecoveringFromEviction}
-                  isDragging={isDragging}
-                  findInPage={findInPage}
-                  currentDialog={currentDialog}
-                  onDialogRespond={handleDialogRespond}
+                <div
+                  className={cn(
+                    "relative",
+                    viewportPreset
+                      ? // Outline, not border: this element carries the preset's
+                        // exact width/height and box-sizing is border-box, so a
+                        // 1px border would shave 2px off the content box the
+                        // guest is emulated at (#12298).
+                        "rounded-lg outline outline-1 -outline-offset-1 outline-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
+                      : "h-full"
+                  )}
+                  style={
+                    viewportPreset && effectiveViewport
+                      ? viewportFit
+                        ? {
+                            width: effectiveViewport.width * fitScale,
+                            height: effectiveViewport.height * fitScale,
+                          }
+                        : {
+                            maxWidth: effectiveViewport.width,
+                            width: "100%",
+                            aspectRatio: `${effectiveViewport.width} / ${effectiveViewport.height}`,
+                          }
+                      : undefined
+                  }
                 >
-                  {/* Only the webview is scaled by zoom-to-fit; overlays above
+                  <DevPreviewWebviewOverlays
+                    reconnectAttempt={reconnectAttempt}
+                    webviewLoadError={webviewLoadError}
+                    certCopied={certCopied}
+                    onCopyMkcert={handleCopyMkcert}
+                    isRestarting={isRestarting}
+                    onRestartDevServer={handleRestartDevServer}
+                    onHardReload={handleHardReload}
+                    onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
+                    onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
+                    onRetryWebviewLoad={handleRetryWebviewLoad}
+                    currentUrl={currentUrl}
+                    onOpenExternal={handleOpenExternal}
+                    blockedNav={blockedNav}
+                    panelId={id}
+                    webviewElement={webviewElement}
+                    onDispatchBlockedNav={dispatchBlockedNav}
+                    crashState={crashState}
+                    crashDetails={crashDetails}
+                    onCloseCrash={resetCrashHistory}
+                    onCloseUnresponsive={clearUnresponsiveState}
+                    isLoading={isLoading}
+                    onCancelLoad={handleCancelLoad}
+                    showRecoverySpinner={showRecoverySpinner}
+                    isRecoveringFromEviction={isRecoveringFromEviction}
+                    isDragging={isDragging}
+                    findInPage={findInPage}
+                    currentDialog={currentDialog}
+                    onDialogRespond={handleDialogRespond}
+                  >
+                    {/* Only the webview is scaled by zoom-to-fit; overlays above
                         stay at full size relative to the outer container so
                         their action buttons remain readable and clickable. */}
-                  <div
-                    className={
-                      viewportPreset && viewportFit
-                        ? "absolute top-0 left-0 origin-top-left"
-                        : "w-full h-full"
-                    }
-                    style={
-                      viewportPreset && viewportFit && effectiveViewport
-                        ? {
-                            width: effectiveViewport.width,
-                            height: effectiveViewport.height,
-                            transform: `scale(${fitScale})`,
-                          }
-                        : undefined
-                    }
-                  >
-                    <webview
-                      key={webviewInstanceKey}
-                      ref={setWebviewNode}
-                      // Seed-only: never re-bind to navigation state (#9940).
-                      src={webviewSeedUrlRef.current}
-                      partition={webviewPartition}
-                      // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
-                      allowpopups=""
-                      className={cn(
-                        "w-full h-full border-0",
-                        isDragging && "invisible pointer-events-none"
-                      )}
-                    />
-                  </div>
-                </DevPreviewWebviewOverlays>
+                    <div
+                      className={
+                        viewportPreset && viewportFit
+                          ? "absolute top-0 left-0 origin-top-left"
+                          : "w-full h-full"
+                      }
+                      style={
+                        viewportPreset && viewportFit && effectiveViewport
+                          ? {
+                              width: effectiveViewport.width,
+                              height: effectiveViewport.height,
+                              transform: `scale(${fitScale})`,
+                            }
+                          : undefined
+                      }
+                    >
+                      <webview
+                        key={webviewInstanceKey}
+                        ref={setWebviewNode}
+                        // Seed-only: never re-bind to navigation state (#9940).
+                        src={webviewSeedUrlRef.current}
+                        partition={webviewPartition}
+                        // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                        allowpopups=""
+                        className={cn(
+                          "w-full h-full border-0",
+                          isDragging && "invisible pointer-events-none"
+                        )}
+                      />
+                    </div>
+                  </DevPreviewWebviewOverlays>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+          <DevPreviewToolDrawer
+            panelId={id}
+            projectId={currentProjectId}
+            worktreeId={worktreeId}
+            url={currentUrl}
+            isWebviewReady={isWebviewReady}
+          />
         </div>
 
         {forceKilled && status === "stopped" && !forceKillBannerDismissed && (

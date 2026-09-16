@@ -11,6 +11,7 @@ import {
   type SelectionState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
+import { scopesFor } from "./agentTask.js";
 import { TextEditor } from "./TextEditor.js";
 import { ClassEditor } from "./ClassEditor.js";
 import { STALE_COPY, SUPPORT_LABEL, UNSUPPORTED_REASON_COPY, basename, plural } from "./copy.js";
@@ -33,27 +34,60 @@ export function SelectionCard({
   selection: ReadySelection;
   actions: SelectionActions;
 }) {
+  return (
+    <>
+      <SelectionIdentity selection={selection} />
+      <SelectionEdits state={state} selection={selection} actions={actions} />
+    </>
+  );
+}
+
+/** What was selected and where it comes from, with the warnings that qualify it. */
+export function SelectionIdentity({ selection }: { selection: ReadySelection }) {
   const nodes = selection.selection.nodes;
   const node = nodes[0];
   if (!node) return null;
   const definition = node.definition;
-  const occurrences = definition?.renderedOccurrences ?? 1;
   const stale = selection.stale ? STALE_COPY[selection.stale] : null;
+  // A component picked on the page is named as the component, with the
+  // element it was reached through as detail.
+  const picked =
+    selection.scope === "component"
+      ? scopesFor(selection.selection, selection.component, selection.definitions)
+      : null;
+  const pickedScope = picked ? picked.scopes[picked.pickedIndex] : null;
+  const component = pickedScope?.kind === "component" ? pickedScope.label : null;
 
   return (
     <section aria-label="Selected element" className="flex flex-col gap-3">
       <header className="flex flex-col gap-1">
         <div className="flex min-w-0 items-center gap-2">
-          <Badge size="sm" tone="neutral" className="font-mono">
-            {definition?.tagName ?? tagFromLabel(node)}
+          <Badge size="sm" tone="neutral" className={component ? undefined : "font-mono"}>
+            {component ? "Component" : (definition?.tagName ?? tagFromLabel(node))}
           </Badge>
-          {node.label ? (
+          {component ? (
+            <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+              {component}
+            </span>
+          ) : node.label ? (
             <span className="min-w-0 truncate text-sm text-text-primary" title={node.label}>
               {node.label}
             </span>
           ) : null}
         </div>
-        {definition ? (
+        {pickedScope?.kind === "component" ? (
+          pickedScope.file ? (
+            <p className="truncate font-mono text-xs text-text-secondary" title={pickedScope.file}>
+              {pickedScope.file}
+            </p>
+          ) : (
+            <p className="text-xs text-text-secondary">
+              {selection.definitions === null
+                ? "Finding where it's written"
+                : "Couldn't find where it's written"}
+            </p>
+          )
+        ) : definition ? (
           <p
             className="truncate font-mono text-xs text-text-secondary"
             title={`${selection.file ?? definition.location.file}:${definition.location.line}`}
@@ -72,6 +106,26 @@ export function SelectionCard({
         </InspectorNotice>
       ) : null}
 
+      <MappingNotice node={node} nodeCount={nodes.length} scope={selection.scope} />
+    </section>
+  );
+}
+
+/** Direct source edits for the selected element's literal text and classes. */
+export function SelectionEdits({
+  state,
+  selection,
+  actions,
+}: {
+  state: InspectorState;
+  selection: ReadySelection;
+  actions: SelectionActions;
+}) {
+  const node = selection.selection.nodes[0];
+  if (!node) return null;
+  const occurrences = node.definition?.renderedOccurrences ?? 1;
+  return (
+    <section aria-label="Edit directly" className="flex flex-col gap-3">
       {occurrences > 1 ? (
         <InspectorNotice
           tone="warning"
@@ -80,9 +134,6 @@ export function SelectionCard({
           {`This markup draws ${occurrences} elements on the page. A change here changes all of them, not just the one you clicked.`}
         </InspectorNotice>
       ) : null}
-
-      <MappingNotice node={node} nodeCount={nodes.length} />
-
       <Surface title="Text" capability={capabilityFor(node, "text")}>
         <TextSurface state={state} selection={selection} actions={actions} />
       </Surface>
@@ -97,8 +148,17 @@ function tagFromLabel(node: SelectedNode): string {
   return node.label.split(/\s/)[0] || "element";
 }
 
-function MappingNotice({ node, nodeCount }: { node: SelectedNode; nodeCount: number }) {
-  if (nodeCount > 1) {
+function MappingNotice({
+  node,
+  nodeCount,
+  scope,
+}: {
+  node: SelectedNode;
+  nodeCount: number;
+  scope: "element" | "component";
+}) {
+  // A component with several root elements is one thing, not a multi-selection.
+  if (nodeCount > 1 && scope !== "component") {
     return (
       <InspectorNotice tone="info" title={`${nodeCount} elements selected`}>
         Editing works on one element at a time. Select a single element to change it.
