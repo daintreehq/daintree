@@ -186,18 +186,36 @@ describe("useSendToAgentPalette worktree identity", () => {
     expect(result.current.results[1]!.subtitle).toContain("fix-auth");
   });
 
-  it("matches a long worktree name by its distinctive tail", async () => {
-    // Branch-derived names run long, and the part that tells two of them apart
-    // is at the end — past the window Fuse scores by position.
-    seedWorktrees([["/repo", "feature-issue-12420-send-agent-palette-worktree"]]);
+  it("matches a worktree name by a token inside it, not only its start", async () => {
+    // Branch-derived names run long, so the token a user reaches for is rarely
+    // the first one.
+    seedWorktrees([["/repo", "feature-issue-12420-send-agent-palette"]]);
     seedPanels([panel("a", { worktreeId: "/repo" }), panel("b")]);
 
     const { result } = renderHook(() => useSendToAgentPalette());
     await act(async () => {
-      result.current.setQuery("worktree");
+      result.current.setQuery("palette");
     });
 
     expect(result.current.results.map((item) => item.id)).toEqual(["a"]);
+  });
+
+  it("still ranks a whole-word title match above an incidental substring", async () => {
+    // Guards the Fuse options: dropping location scoring makes worktree tokens
+    // reachable anywhere in a long name, but it also lets the "fix" inside
+    // "prefixes" outrank the real word. The title is the primary field.
+    seedWorktrees([["/repo", "main"]]);
+    seedPanels([
+      panel("incidental", { worktreeId: "/repo", title: "Claude: document prefixes" }),
+      panel("exact", { worktreeId: "/repo", title: "Claude: fix auth tests" }),
+    ]);
+
+    const { result } = renderHook(() => useSendToAgentPalette());
+    await act(async () => {
+      result.current.setQuery("fix");
+    });
+
+    expect(result.current.results[0]!.id).toBe("exact");
   });
 
   it("ignores ineligible panels when deciding whether the targets spread", () => {

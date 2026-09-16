@@ -79,14 +79,15 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
   keys: [
     { name: "title", weight: 2 },
     { name: "subtitle", weight: 1 },
+    // Branch-derived worktree names run long, and Fuse scores by position, so a
+    // token past roughly the first 40 characters of one will not match. Turning
+    // location scoring off repairs that but reranks the primary field, where an
+    // incidental substring ("pre-fix-es") then beats the whole word — too high a
+    // price, and out of scope here. useFleetPicker pays for it with a matching
+    // threshold and minimum match length; this palette has neither.
     { name: "worktreeName", weight: 0.5 },
   ],
   threshold: 0.4,
-  // Worktree names are branch-derived and long, so the distinctive part of one
-  // sits well past Fuse's default location window and the positional penalty
-  // alone pushes an exact match over the threshold. Every sibling picker that
-  // searches a branch name turns this off (useFleetPicker, branchPickerUtils).
-  ignoreLocation: true,
   includeScore: true,
 };
 
