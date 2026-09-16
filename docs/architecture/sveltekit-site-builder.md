@@ -129,6 +129,59 @@ A rendered element, the markup that defines it, and the invocation that produced
 
 What the builder can enforce: the operation, the node, the file, the expected revision, and the scope containment on the path. What it cannot: that a shared component change has no effect elsewhere in arbitrary application logic. The copy says the first and never implies the second.
 
+## Traps found building it
+
+Each of these cost a debugging cycle, a failed merge, or a reproduced bug.
+
+### Svelte compiler
+
+- A whole-expression attribute value (`class={x}`, `tier={3}`, the `{plan}` shorthand) is a **bare `ExpressionTag`** on `Attribute.value`; only a quoted literal is a one-element `[Text]` array. Reading the field as an array only marks every literal prop dynamic.
+- An `ExpressionTag` range covers the braces (`{3}`); its inner `Literal` covers `3`. Say which one a range means.
+- Attribute value ranges are quote interiors, and the parser accepts unquoted values. Writing `p-4 flex` into `class=p-4` produces `class=p-4 flex` — a second boolean attribute, still valid markup, so re-parsing cannot catch it. Only quoted literals are writable.
+- `CLASS="x"` compiles to `class="x"`: HTML attribute names are case-insensitive, component props are not. Two spellings at once is two controls over one value; refuse.
+- A spread and the attributes around it compile into one object in source order, so a later `{...rest}` overrides an earlier literal `class`.
+- `parse()` and `compile()` **strip a byte-order mark**, so AST offsets are one code unit behind the raw bytes of a BOM file. Run model operations on BOM-stripped text and restore the BOM on write.
+- Component call sites are emitted through `add_svelte_meta(…, 'component', …, { componentTag })`, dynamic elements through a trailing location on `$.element`, everything else through the `add_locations` table. A test that only reads `add_locations` misses every invocation.
+
+### Class tokens and Tailwind
+
+- HTML splits a class list on **ASCII** whitespace. JavaScript's `\s` and `.trim()` also match NBSP, so `a&nbsp;b` reads as two classes and a removal deletes half a class name.
+- Entity names are case-sensitive: `&AMP;` is an ampersand, `&Amp;` is five characters.
+- Escaping `&` unconditionally is HTML-correct and breaks Tailwind: its scanner reads source as plain text, so `[&amp;>*]:p-2` is not the candidate `[&>*]:p-2` and no rule is generated. Escape `&` only where it could begin a reference, and refuse a token that cannot be written verbatim — `before:content-['{x}']` must escape its brace for Svelte, and then Tailwind will never see it.
+- `candidatesToCss` returning `null` is the only validity oracle in the design-system API. `candidatesToAst` answers `[]` for invalid and for "generated nothing" alike.
+- A utility's `@property` blocks are shared machinery, not its output; their `initial-value` is what tells `space-x-4` initialising a register apart from `space-x-reverse` flipping it.
+- Under `prefix(tw)` theme variables are emitted as `--tw-*` too, and the prefix leads the whole chain (`tw:md:max-lg:px-8`).
+- CSS-only packages such as `tw-animate-css` resolve only through the `style` export condition and don't export `./package.json`, so `require.resolve` reaches neither.
+
+### SvelteKit routing
+
+- `+page.server.ts` or `+page.ts` with no `+page.svelte` is still a navigable page (a redirect route), not an endpoint.
+- Never split a route filename on `.`: layout reset targets can contain dots and brackets (`+layout@(app.v2).svelte`).
+- Module extensions default to `.js`/`.ts` and match case-sensitively — `+server.mjs` is not an endpoint.
+- `src/routes/build/` and `src/routes/dist/` are ordinary routes. A build-output exclusion list is right for app discovery and wrong inside the routes tree.
+
+### CDP and the guest
+
+- **Send `Page.enable` before `Page.addScriptToEvaluateOnNewDocument`.** Without it the call succeeds, returns an identifier, and the script silently never installs.
+- `Runtime.addBinding` reaches every execution context, iframes included. Filter `bindingCalled` by `executionContextId` against the main frame's default world.
+- `Runtime.enable` replays existing contexts only the first time it is enabled on a debugger session. The webview console capture shares that session, so a second enable replays nothing; a disable/enable cycle forces it. Its `Runtime.disable` can also silently stop `bindingCalled` delivery.
+- The guest's sequence restarts at 0 on every document, and a hot update that does not navigate does not advance the epoch. The host reinstalls per document with the epoch baked in, skips a second install for an epoch it already served (both would start at 0 and the second would read as a replay), and re-applies a mode that changed while an install was awaiting CDP.
+- Give every guest `Runtime.evaluate` a timeout: a hostile page can make an expression never return.
+- Style the overlay through the CSSOM, not a `<style>` element — a strict `style-src` blocks the element and the attribute, never `style.setProperty`. Use a closed shadow root so the page cannot reach it.
+- An element with no `__svelte_meta` whose ancestor has one is the reliable signal for `{@html}` or third-party DOM: every compiled element is marked.
+- `Function.prototype.toString()` survives this repo's minification, but `keepNames` or coverage instrumentation injects a module-scope helper and the serialised runtime dies with a `ReferenceError` in the page. Check for injected helpers when building the source string.
+- `Number.isInteger(2 ** 53)` is true and zod's `.int()` rejects it; one unsafe number drops the whole envelope. Use `Number.isSafeInteger`.
+
+### Freshness
+
+A guest observation carries no source revision, so main can only resolve it against the bytes on disk _now_. If an agent rewrites the file and the preview has not caught up, a click on the old DOM resolves to whatever element occupies that position in the new bytes — and a same-tag element there resolves cleanly and passes the revision check. The view narrows this window by refusing observations for a file shortly after it changes; closing it fully needs the page to report which revision it is showing, which the dev runtime does not expose.
+
+### Parallel build
+
+- Freezing the wire messages between two halves is not enough. The host bridge and the page runtime were built against the same message schema and still disagreed about who owned the envelope; the plugin's main and view later agreed on messages but not on who derived an editable range. Freeze the ownership split alongside the shapes.
+- A mock host that enforces fewer rules than the real one lets a whole phase pass against a contract the app rejects — here, colons in channel names.
+- Code built against a mock of its neighbour needs one test that runs both real halves together. Every cross-phase defect in this feature was found by such a test or by review of the combined change, never by a phase's own suite.
+
 ## Related
 
 - `docs/plugins/` — the plugin system this is built on.
