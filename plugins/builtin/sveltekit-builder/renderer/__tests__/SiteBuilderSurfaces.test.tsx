@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const context = vi.hoisted(() => ({
@@ -722,6 +722,39 @@ describe("stale selections", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("Couldn't send to the agent")).toBeNull();
     expect(sendButton().disabled).toBe(true);
+  });
+
+  it("activates the first suggestion when Down reopens a dismissed list", async () => {
+    // The rule: Down both opens the list and moves within it, so one press must
+    // leave something highlighted. Reading the pre-keystroke `open` made the
+    // first Down after an Escape a no-op, and Enter then wrote the raw query
+    // instead of the suggestion the user believed was selected.
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "shadow" } });
+    await screen.findByRole("listbox", { name: "Class suggestions" });
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("listbox", { name: "Class suggestions" })).toBeNull()
+    );
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const listbox = await screen.findByRole("listbox", { name: "Class suggestions" });
+    const options = within(listbox).getAllByRole("option");
+    expect(options[0]!.getAttribute("aria-selected")).toBe("true");
+    expect(input.getAttribute("aria-activedescendant")).toBe(options[0]!.id);
+  });
+
+  it("sends an empty-buffer Backspace to the previous class token", async () => {
+    // The rule: the step reaches the CHIPS, which are a sibling of the input.
+    // A search root that contained only the input found nothing at all.
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.keyDown(input, { key: "Backspace" });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Remove rounded-lg" }))
+    );
   });
 
   it("names the selection as current in the trail, never an ancestor", async () => {

@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import type { ReceiptState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { SectionHeader } from "./InspectorSection.js";
-import { basename, middleTruncate, plural } from "./copy.js";
+import { basename, plural } from "./copy.js";
+import { middleTruncatePath } from "@/utils/textParsing";
 
 const SURFACE_NOUN: Record<ReceiptState["surface"], string> = {
   text: "Text",
@@ -55,7 +56,7 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
         <div role="status" aria-live="polite" className="flex flex-col gap-0.5">
           <p className="text-xs font-medium text-text-primary">{headline}</p>
           <p className="truncate font-mono text-3xs text-text-secondary" title={receipt.file}>
-            {middleTruncate(receipt.file)}
+            {middleTruncatePath(receipt.file)}
           </p>
         </div>
         <ul className="flex flex-col gap-1 text-xs text-text-secondary">

@@ -37,7 +37,9 @@ export function ClassEditor({
   complete: (query: string) => Promise<ClassCompletion>;
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    // The marker spans BOTH halves: the Backspace step walks from the input to
+    // the chips, and a root that contains only the input finds nothing.
+    <div data-class-editor className="flex flex-col gap-2">
       {tokens.length === 0 ? (
         <p className="text-xs text-text-secondary">No classes yet</p>
       ) : (
@@ -170,17 +172,21 @@ function ClassAddField({
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     event.stopPropagation();
-    const visible = open ? candidates.length : 0;
+    // How many options this keystroke will be acting on. Deliberately NOT
+    // `open ? candidates.length : 0`: Down both opens the list and moves within
+    // it, so reading the pre-keystroke `open` made the first Down after an
+    // Escape a no-op that left `active` at -1 — and Enter then submitted the
+    // raw query instead of the suggestion the user thought was highlighted.
+    const visible = candidates.length;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
         setOpen(true);
-        // Reopening a closed list left `active` at -1, so the first Down only
-        // revealed the options and a second was needed before Enter chose one.
         if (visible > 0) setActive((index) => (index < 0 ? 0 : (index + 1) % visible));
         return;
       case "ArrowUp":
         event.preventDefault();
+        setOpen(true);
         if (visible > 0) setActive((index) => (index <= 0 ? visible - 1 : index - 1));
         return;
       case "Enter": {
@@ -231,7 +237,7 @@ function ClassAddField({
   }, [activeId]);
 
   return (
-    <div data-class-editor className="relative flex flex-col gap-1">
+    <div className="relative flex flex-col gap-1">
       <Popover open={showList}>
         <PopoverAnchor asChild>
           <Input

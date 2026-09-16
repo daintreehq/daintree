@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { middleTruncate, wireFailureMessage } from "../copy.js";
+import { wireFailureMessage } from "../copy.js";
 
 describe("wireFailureMessage", () => {
   /**
@@ -48,31 +48,5 @@ describe("wireFailureMessage", () => {
       "Couldn't open the site source"
     );
     expect(message).toContain("EACCES");
-  });
-});
-
-describe("middleTruncate", () => {
-  /**
-   * The rule: whatever gets dropped, the end survives. CSS `truncate` cuts the
-   * right-hand side, which is where the filename and line number live — the
-   * part the user came for.
-   */
-  it("keeps the filename and line when a path is too long", () => {
-    const path = "src/routes/marketing/campaigns/spring/pricing/+page.svelte:126";
-    const short = middleTruncate(path, 40);
-    expect(short.length).toBeLessThanOrEqual(41);
-    expect(short.endsWith("+page.svelte:126")).toBe(true);
-    expect(short).toContain("…");
-  });
-
-  it("leaves a path that already fits completely alone", () => {
-    const path = "src/routes/+page.svelte:6";
-    expect(middleTruncate(path, 40)).toBe(path);
-  });
-
-  it("keeps the end even when the filename alone exceeds the budget", () => {
-    const path = "src/AbsurdlyLongComponentNameThatGoesOnForever.svelte:12";
-    const short = middleTruncate(path, 20);
-    expect(short.endsWith("Forever.svelte:12")).toBe(true);
   });
 });

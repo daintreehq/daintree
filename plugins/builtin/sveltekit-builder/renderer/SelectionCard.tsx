@@ -14,13 +14,8 @@ import { InspectorNotice } from "./InspectorNotice.js";
 import { scopesFor } from "./agentTask.js";
 import { TextEditor } from "./TextEditor.js";
 import { ClassEditor } from "./ClassEditor.js";
-import {
-  STALE_COPY,
-  SUPPORT_LABEL,
-  UNSUPPORTED_REASON_COPY,
-  middleTruncate,
-  plural,
-} from "./copy.js";
+import { STALE_COPY, SUPPORT_LABEL, UNSUPPORTED_REASON_COPY, plural } from "./copy.js";
+import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
 import { SectionHeader } from "./InspectorSection.js";
 
@@ -99,7 +94,7 @@ export function SelectionIdentity({ selection }: { selection: ReadySelection }) 
 
       {source ? (
         <p className="truncate font-mono text-2xs text-text-secondary" title={source}>
-          {middleTruncate(source)}
+          {middleTruncatePath(source)}
         </p>
       ) : (
         <p className="text-2xs text-text-secondary">

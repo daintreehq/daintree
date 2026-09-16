@@ -77,13 +77,15 @@ export function SelectionTrail({
   className?: string;
   itemClassName?: string;
 }) {
-  const shown = crumbs.some((crumb) => crumb.label === current);
+  // By index, not by label: two nested components can share a name, and
+  // matching on the string gave `aria-current` to both of them.
+  const currentIndex = crumbs.findIndex((crumb) => crumb.label === current);
   if (crumbs.length === 0) return null;
   return (
     <nav aria-label="Selection" className={cn("min-w-0", className)}>
       <ol className="flex min-w-0 items-center gap-1">
         {crumbs.map((crumb, index) => {
-          const last = shown && crumb.label === current;
+          const last = index === currentIndex;
           return (
             <li
               key={`${crumb.label}-${index}`}
@@ -102,11 +104,11 @@ export function SelectionTrail({
             </li>
           );
         })}
-        {shown ? null : (
+        {currentIndex === -1 ? (
           <li className="sr-only" aria-current="true">
             {current}
           </li>
-        )}
+        ) : null}
       </ol>
     </nav>
   );
