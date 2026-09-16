@@ -189,18 +189,11 @@ const INITIAL_STATE: InspectorState = {
 
 const MAX_BUFFERED_EVENTS = 64;
 
-// Loaded through a glob rather than a static import on purpose: a static import
-// pulls `guest/runtime.ts` into the renderer's type program, whose
-// `noUncheckedIndexedAccess` that file was not written against. The glob is
-// still bundled into this lazy chunk; only the type checker stops following it.
-const guestSourceModules = import.meta.glob<{ buildGuestRuntimeBody: () => string }>(
-  "../guest/source.ts"
-);
-
+// Loaded on first bind, not at module evaluation: the runtime is only needed
+// once a preview is attached, and it serialises its own factory to source text.
 export async function loadGuestRuntimeBody(): Promise<string> {
-  const load = guestSourceModules["../guest/source.ts"];
-  if (!load) throw new Error("The site inspector's page runtime is missing from this build");
-  return (await load()).buildGuestRuntimeBody();
+  const { buildGuestRuntimeBody } = await import("./guest/source.js");
+  return buildGuestRuntimeBody();
 }
 
 const RUNTIME_ISSUE_COPY: Record<string, string> = {

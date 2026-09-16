@@ -92,6 +92,8 @@ The workspace package is the repo's own established mechanism, already used by f
 
 The package is `external`-ised in its own bundle and `await import()`ed by the plugin, so the compiler never sits on the eager main-process path.
 
+The same rule applies to Tailwind, and was nearly missed. The design system is compiled by **Daintree's own bundled `tailwindcss`**, never the project's copy: the project's package is read only as data — its version for the support verdict, its stylesheets for the theme. Modules a project's CSS names through `@plugin` or `@config` are **not loaded**; they resolve to inert stand-ins and are listed in the load result's `skippedModules`. The cost is that utilities a project adds through a JavaScript plugin are missing from completion. The alternative was executing any opened repository's JavaScript inside Electron main the moment the inspector read its CSS.
+
 ## The guest boundary
 
 The dev-preview guest has **no preload** — `electron/window/createWindow.ts` deletes it and forces `sandbox`, `contextIsolation` and `nodeIntegration: false`. Script therefore reaches the page over CDP (`Page.addScriptToEvaluateOnNewDocument`) or `executeJavaScript`, both of which run in the page's main world. The main world is required regardless: `__svelte_meta` is an expando on the DOM node, and expandos are per-world.

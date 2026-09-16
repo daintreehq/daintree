@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import type { GuestEvent, GuestNodeObservation } from "../shared/protocol.js";
+import type { GuestEvent, GuestNodeObservation } from "../../shared/protocol.js";
 import type {
   GuestBootstrapConfig,
   GuestMode,
@@ -269,7 +269,9 @@ export function createSiteBuilderGuest(
     let count = 0;
     const all = document.getElementsByTagName("*");
     for (let index = 0; index < all.length; index += 1) {
-      const other = readLoc(all[index]);
+      const element = all[index];
+      if (element === undefined) continue;
+      const other = readLoc(element);
       if (
         other !== null &&
         other.file === loc.file &&
@@ -311,6 +313,7 @@ export function createSiteBuilderGuest(
     const out: GuestNodeObservation["bounds"] = [];
     for (let index = 0; index < rects.length && out.length < MAX_BOUNDS; index += 1) {
       const rect = rects[index];
+      if (rect === undefined) continue;
       out.push({
         x: rect.left,
         y: rect.top,
@@ -518,7 +521,9 @@ export function createSiteBuilderGuest(
     const rects = node.getClientRects();
     let drawn = 0;
     for (let index = 0; index < rects.length && drawn < MAX_BOUNDS; index += 1) {
-      drawBox(layer, rects[index], kind, transform);
+      const rect = rects[index];
+      if (rect === undefined) continue;
+      drawBox(layer, rect, kind, transform);
       drawn += 1;
     }
     if (drawn === 0) drawBox(layer, node.getBoundingClientRect(), kind, transform);
@@ -791,7 +796,9 @@ export function createSiteBuilderGuest(
     const all = document.getElementsByTagName("*");
     const limit = Math.min(all.length, AUDIT_SCAN_LIMIT);
     for (let index = 0; index < limit; index += 1) {
-      if (readLoc(all[index]) !== null) return { found: true, complete: true };
+      const element = all[index];
+      if (element !== undefined && readLoc(element) !== null)
+        return { found: true, complete: true };
     }
     return { found: false, complete: all.length <= AUDIT_SCAN_LIMIT };
   }

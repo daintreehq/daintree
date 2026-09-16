@@ -1,9 +1,9 @@
+import bundledTailwindPackage from "tailwindcss/package.json" with { type: "json" };
 import { majorVersion } from "../project/versions.js";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 import { SUPPORTED_BASELINE } from "../model.js";
 
 /**
@@ -95,7 +95,17 @@ export interface TailwindProjectRef {
 }
 
 export type TailwindLoadResult =
-  { status: "ok"; system: TailwindDesignSystem } | { status: "unavailable"; reason: string };
+  | {
+      status: "ok";
+      system: TailwindDesignSystem;
+      /**
+       * `@plugin` / `@config` modules the project's CSS names that were not
+       * loaded, because loading them would run project code in Electron main.
+       * Utilities they add are absent from this system.
+       */
+      skippedModules: string[];
+    }
+  | { status: "unavailable"; reason: string };
 
 interface RawDesignSystem {
   theme: { values: Map<string, { value: string } | string>; prefix: string | null };
@@ -123,8 +133,23 @@ function messageOf(error: unknown): string {
   return String(error);
 }
 
+/**
+ * Supplies the Tailwind engine and the version it is. Injectable so the shape
+ * guards can be tested; always Daintree's own bundled copy in production.
+ */
+export type TailwindEngineLoader = () => Promise<{
+  version: string;
+  exports: Record<string, unknown>;
+}>;
+
+const bundledEngine: TailwindEngineLoader = async () => ({
+  version: bundledTailwindPackage.version,
+  exports: (await import("tailwindcss")) as Record<string, unknown>,
+});
+
 export async function loadTailwindDesignSystem(
-  ref: TailwindProjectRef
+  ref: TailwindProjectRef,
+  loadEngine: TailwindEngineLoader = bundledEngine
 ): Promise<TailwindLoadResult> {
   if (!path.isAbsolute(ref.appRoot) || !path.isAbsolute(ref.cssEntry)) {
     return unavailable("appRoot and cssEntry must be absolute paths");
@@ -165,30 +190,44 @@ export async function loadTailwindDesignSystem(
     );
   }
 
-  const packageDir = path.dirname(packageJsonPath);
+  // The engine is Daintree's own bundled Tailwind, never the project's copy.
+  // This code runs inside Electron main, and importing a package from the
+  // project's `node_modules` would execute whatever that repository ships there
+  // in the trusted process. The project's package is still read — as data — for
+  // its version above and for its stylesheets below.
   let moduleExports: Record<string, unknown>;
+  let engineVersion: string;
   try {
-    moduleExports = (await import(
-      pathToFileURL(entryPointOf(manifest, packageDir)).href
-    )) as Record<string, unknown>;
+    ({ exports: moduleExports, version: engineVersion } = await loadEngine());
   } catch (error) {
-    return unavailable(`could not load tailwindcss ${version}: ${messageOf(error)}`);
+    return unavailable(`could not load the bundled tailwindcss engine: ${messageOf(error)}`);
+  }
+
+  // The engine supplies the utility implementations and reading the project's
+  // CSS supplies only its theme, so an engine one minor ahead would call a
+  // utility that minor added valid in a project that cannot generate it. Refuse
+  // rather than answer confidently for a compiler we are not running.
+  if (minorOf(engineVersion) !== minorOf(version)) {
+    return unavailable(
+      `class awareness is built on tailwindcss ${engineVersion}, and this project uses ${version}; its utilities could differ, so completion is off rather than misleading`
+    );
   }
 
   const loadDesignSystem = pickLoader(moduleExports);
   if (!loadDesignSystem) {
     return unavailable(
-      `tailwindcss ${version} does not expose __unstable__loadDesignSystem; class awareness is off`
+      "the bundled tailwindcss does not expose __unstable__loadDesignSystem; class awareness is off"
     );
   }
 
+  const skipped: string[] = [];
   let raw: RawDesignSystem;
   try {
     const css = await fs.readFile(ref.cssEntry, "utf8");
     raw = (await loadDesignSystem(css, {
       base: path.dirname(ref.cssEntry),
       loadStylesheet: (id: string, base: string) => resolveStylesheet(require, id, base),
-      loadModule: (id: string, base: string) => resolveModule(require, id, base),
+      loadModule: (id: string, base: string, hint?: string) => inertModule(id, base, hint, skipped),
     })) as RawDesignSystem;
   } catch (error) {
     return unavailable(`could not compile ${ref.cssEntry}: ${messageOf(error)}`);
@@ -220,7 +259,7 @@ export async function loadTailwindDesignSystem(
     );
   }
 
-  return { status: "ok", system };
+  return { status: "ok", system, skippedModules: skipped };
 }
 
 /**
@@ -230,11 +269,6 @@ export async function loadTailwindDesignSystem(
  */
 /** Utilities every Tailwind 4 theme generates, used to prove the AST path. */
 const CAPABILITY_PROBES = ["block", "flex", "underline", "italic"];
-
-function entryPointOf(manifest: { exports?: Record<string, unknown> }, packageDir: string): string {
-  const specifier = pickCondition(manifest.exports?.["."], 0);
-  return path.resolve(packageDir, specifier ?? "./dist/lib.mjs");
-}
 
 const IMPORT_CONDITIONS = ["node", "import", "module", "default", "require"];
 
@@ -362,14 +396,36 @@ function resolveCssSubpath(require: ProjectRequire, id: string, base: string): s
   throw new Error(`cannot resolve stylesheet ${JSON.stringify(id)} from ${base}`);
 }
 
-async function resolveModule(
-  require: ProjectRequire,
+/**
+ * Stands in for a module named by `@plugin` or `@config`. Loading it would mean
+ * running the project's JavaScript inside Electron main, so it is never loaded:
+ * a plugin becomes a plugin that registers nothing, and a config becomes an
+ * empty one. The design system still compiles; it simply lacks what those
+ * modules would have added, and `skipped` records which ones.
+ */
+async function inertModule(
   id: string,
-  base: string
+  base: string,
+  hint: string | undefined,
+  skipped: string[]
 ): Promise<{ base: string; module: unknown; path: string }> {
-  const file = id.startsWith(".") ? path.resolve(base, id) : require.resolve(id, { paths: [base] });
-  const loaded = (await import(pathToFileURL(file).href)) as { default?: unknown };
-  return { base: path.dirname(file), module: loaded.default ?? loaded, path: file };
+  skipped.push(id);
+  return { base, module: hint === "config" ? {} : inertPlugin(), path: path.resolve(base, id) };
+}
+
+/**
+ * A plugin that registers nothing, in the `plugin.withOptions` shape. A bare
+ * function works for `@plugin "x";` but Tailwind throws "does not accept
+ * options" for `@plugin "x" { … }`, which would take the whole design system
+ * down for a project that merely configures a plugin.
+ */
+function inertPlugin(): unknown {
+  return Object.assign(() => ({ handler: () => {}, config: {} }), { __isOptionsFunction: true });
+}
+
+function minorOf(version: string): string | null {
+  const match = /^v?(\d+)\.(\d+)/.exec(version.trim());
+  return match ? `${match[1]}.${match[2]}` : null;
 }
 
 function createFacade(raw: RawDesignSystem, version: string): TailwindDesignSystem {

@@ -37,7 +37,7 @@ function readPluginProtocol(): string {
  */
 const GUEST_RUNTIME = path.resolve(
   HERE,
-  "../../../plugins/builtin/sveltekit-builder/guest/runtime.ts"
+  "../../../plugins/builtin/sveltekit-builder/renderer/guest/runtime.ts"
 );
 
 function readNumericConstant(source: string, name: string): number {

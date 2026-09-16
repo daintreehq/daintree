@@ -27,7 +27,7 @@ import type { QuoteStyle } from "./escape.js";
  * never re-encoded.
  */
 
-interface Segment {
+export interface Segment {
   kind: "gap" | "token";
   raw: string;
 }

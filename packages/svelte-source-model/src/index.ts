@@ -13,3 +13,12 @@ export * from "./types.js";
 export * from "./splice.js";
 export * from "./resolve.js";
 export * from "./mutate.js";
+// Token and entity semantics, exported so a consumer that shows class tokens or
+// text uses the exact rules the planner edits by, rather than a second copy.
+export {
+  splitClassValue,
+  validateToken,
+  type ClassTokenError,
+  type Segment as ClassValueSegment,
+} from "./mutate/classTokens.js";
+export { decodeEntities } from "./mutate/escape.js";

@@ -4,8 +4,8 @@ import {
   GUEST_BINDING_NAME,
   GUEST_HANDLE_NAME,
   buildStandaloneGuestSource,
-} from "../../guest/source.js";
-import type { GuestBootstrapConfig, GuestRuntimeHandle } from "../../guest/types.js";
+} from "../../renderer/guest/source.js";
+import type { GuestBootstrapConfig, GuestRuntimeHandle } from "../../renderer/guest/types.js";
 import { GUEST_PROTOCOL_VERSION, GuestEnvelopeSchema, type GuestEnvelope } from "../protocol.js";
 
 const scope = globalThis as unknown as Record<string, unknown>;

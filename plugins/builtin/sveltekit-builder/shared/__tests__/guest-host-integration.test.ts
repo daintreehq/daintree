@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { buildGuestRuntimeBody } from "../../guest/source.js";
+import { buildGuestRuntimeBody } from "../../renderer/guest/source.js";
 import {
   GUEST_RUNTIME_GLOBAL,
   buildDisposeSource,
