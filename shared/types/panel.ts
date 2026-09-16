@@ -190,7 +190,16 @@ export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exit
  * arbitrary external client. Collapsing them left a terminal the user never
  * started looking identical to one they did.
  */
-export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp" | "assistant";
+export const TERMINAL_SPAWN_SOURCES = [
+  "quickrun",
+  "recipe",
+  "agent",
+  "palette",
+  "mcp",
+  "assistant",
+] as const;
+
+export type TerminalSpawnSource = (typeof TERMINAL_SPAWN_SOURCES)[number];
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";

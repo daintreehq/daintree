@@ -734,6 +734,10 @@ export const createAddPanelActions = (
                     : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty?.everDetectedAgent,
+                // Stamped once at creation and never re-derivable: an orphan or
+                // partial reconnect payload carries none, so keep what we have
+                // rather than letting the spread blank it (#12419).
+                spawnedBy: ptyTerminal.spawnedBy ?? existingPty?.spawnedBy,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty?.detectedAgentId,
@@ -796,6 +800,10 @@ export const createAddPanelActions = (
                     : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty2?.everDetectedAgent,
+                // Stamped once at creation and never re-derivable: an orphan or
+                // partial reconnect payload carries none, so keep what we have
+                // rather than letting the spread blank it (#12419).
+                spawnedBy: ptyTerminal.spawnedBy ?? existingPty2?.spawnedBy,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty2?.detectedAgentId,

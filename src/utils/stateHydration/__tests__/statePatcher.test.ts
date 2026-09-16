@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { serializePtyPanel } from "@/panels/terminal/serializer";
+import { TERMINAL_SPAWN_SOURCES, type PtyPanelData } from "@shared/types/panel";
+
+type SavedSnapshot = Parameters<typeof buildArgsForRespawn>[0];
 
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
@@ -1587,6 +1591,147 @@ describe("agentModelId propagation", () => {
       "/p"
     );
     expect(result.agentModelId).toBe("gemini-2.5-pro");
+  });
+});
+
+// Regression for #12419: the spawn source is stamped once at creation and can
+// never be re-derived, so every builder that reads a saved snapshot has to carry
+// it forward. Missing it in any one of them half-fixes the bug — cold boot works
+// while a renderer reload against a live PTY (or vice versa) still shows
+// "Spawn source: Unknown" and drops QuickRun panes out of Running Tasks.
+describe("spawnedBy propagation", () => {
+  const savedQuickRun = {
+    id: "t1",
+    kind: "terminal" as const,
+    cwd: "/p",
+    location: "grid",
+    spawnedBy: "quickrun" as const,
+  };
+
+  it("buildArgsForBackendTerminal carries the saved spawn source", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
+      savedQuickRun,
+      "/p"
+    );
+    expect(result.spawnedBy).toBe("quickrun");
+  });
+
+  it("buildArgsForReconnectedFallback carries the saved spawn source", () => {
+    const result = buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, savedQuickRun, "/p");
+    expect(result.spawnedBy).toBe("quickrun");
+  });
+
+  it.each([true, false])(
+    "buildArgsForRespawn carries the saved spawn source (fresh id: %s)",
+    (mintFreshTerminalId) => {
+      const result = buildArgsForRespawn(
+        { ...savedQuickRun, agentId: "claude" },
+        "agent",
+        "/p",
+        { agents: { claude: {} } },
+        mintFreshTerminalId,
+        undefined
+      );
+      expect(result.spawnedBy).toBe("quickrun");
+    }
+  );
+
+  it.each(TERMINAL_SPAWN_SOURCES)("respawn carries every spawn source (%s)", (source) => {
+    const result = buildArgsForRespawn(
+      { ...savedQuickRun, spawnedBy: source },
+      "terminal",
+      "/p",
+      {},
+      false,
+      undefined
+    );
+    expect(result.spawnedBy).toBe(source);
+  });
+
+  // A pre-#12419 snapshot has no spawn source and there is nothing to infer one
+  // from, so restore must leave it unset rather than guessing a plausible origin.
+  it("leaves the spawn source unset for a legacy snapshot", () => {
+    const legacy = { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid" };
+    expect(
+      buildArgsForBackendTerminal({ id: "t1", cwd: "/p", kind: "terminal" }, legacy, "/p").spawnedBy
+    ).toBeUndefined();
+    expect(
+      buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, legacy, "/p").spawnedBy
+    ).toBeUndefined();
+    expect(
+      buildArgsForRespawn(legacy, "terminal", "/p", {}, false, undefined).spawnedBy
+    ).toBeUndefined();
+  });
+
+  // The two builders that deliberately do NOT carry a source: an orphan has no
+  // saved snapshot to read one from, and a non-PTY recreation is a kind the field
+  // does not exist on. Pinned so neither grows a guessed attribution later.
+  it("does not invent a spawn source for an orphaned backend terminal", () => {
+    const result = buildArgsForOrphanedTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
+      "/p"
+    );
+    expect(result.spawnedBy).toBeUndefined();
+  });
+
+  it("does not carry a spawn source onto a non-PTY recreation", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { ...savedQuickRun, kind: "browser" as const },
+      "browser",
+      "/p"
+    );
+    expect(result.spawnedBy).toBeUndefined();
+  });
+
+  // The write side is what closes the cycle: a builder that forgot the field
+  // would produce a live panel whose very next save strips it again, so the
+  // second serialize is the assertion that matters. The restored panel is built
+  // from the builder's own output rather than by spreading the original, so a
+  // missing assignment cannot be masked.
+  it.each([
+    [
+      "backend match",
+      (saved: SavedSnapshot) =>
+        buildArgsForBackendTerminal({ id: "t1", cwd: "/p", kind: "terminal" }, saved, "/p"),
+    ],
+    [
+      "reconnect fallback",
+      (saved: SavedSnapshot) =>
+        buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, saved, "/p"),
+    ],
+    [
+      "respawn",
+      (saved: SavedSnapshot) => buildArgsForRespawn(saved, "terminal", "/p", {}, false, undefined),
+    ],
+  ])("survives save -> disk -> %s -> save", (_label, build) => {
+    const snapshot = serializePtyPanel({
+      id: "t1",
+      title: "Task",
+      kind: "terminal",
+      cwd: "/p",
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: "quickrun",
+    } as PtyPanelData);
+    expect(snapshot.spawnedBy).toBe("quickrun");
+
+    const onDisk = JSON.parse(JSON.stringify({ ...snapshot, id: "t1", location: "grid" }));
+    const args = build(onDisk);
+
+    const restored = {
+      id: "t1",
+      title: args.title ?? "Task",
+      kind: "terminal",
+      cwd: args.cwd,
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: args.spawnedBy,
+    } as PtyPanelData;
+
+    expect(serializePtyPanel(restored).spawnedBy).toBe("quickrun");
   });
 });
 

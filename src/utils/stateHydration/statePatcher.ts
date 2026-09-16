@@ -10,6 +10,7 @@ import type {
   PanelExitBehavior,
   PanelTitleMode,
   SessionLostReason,
+  TerminalSpawnSource,
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -167,6 +168,14 @@ export interface SavedTerminalData {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalPresetId?: string;
+  /**
+   * Surface that spawned this terminal, stamped once at creation (#12419).
+   * Both hydration ingresses normalize it against the union before it reaches
+   * the renderer — `TerminalSnapshotSchema` for per-project state and
+   * `AppStateTerminalEntrySchema` for the legacy global migration/fallback —
+   * so it is trusted here the same way `titleMode` is.
+   */
+  spawnedBy?: TerminalSpawnSource;
   /**
    * Caller-resolved launch env captured at launch time (#10922). Preferred over
    * live preset re-resolution on respawn so a restored session replays the same
@@ -362,6 +371,9 @@ export function buildArgsForBackendTerminal(
     agentSessionId: backendTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
+    // Snapshot-only: Main never tracks provenance, so there is no live value
+    // to prefer here the way `agentModelId` does (#12419).
+    spawnedBy: saved.spawnedBy,
     everDetectedAgent: backendTerminal.everDetectedAgent,
     detectedAgentId: backendTerminal.detectedAgentId,
     detectedProcessId: backendTerminal.detectedProcessId,
@@ -439,6 +451,9 @@ export function buildArgsForReconnectedFallback(
     agentSessionId: reconnectedTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
+    // Snapshot-only: Main never tracks provenance, so there is no live value
+    // to prefer here the way `agentModelId` does (#12419).
+    spawnedBy: saved.spawnedBy,
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
     detectedProcessId: reconnectedTerminal.detectedProcessId,
@@ -773,6 +788,7 @@ export function buildArgsForRespawn(
       ? undefined
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
+    spawnedBy: saved.spawnedBy,
     agentSessionId: respawnSessionId,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,

@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { BUILT_IN_PANEL_KINDS, panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
+import { TERMINAL_SPAWN_SOURCES } from "../../shared/types/panel.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import {
@@ -24,6 +25,15 @@ import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/rec
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
 const TitleModeSchema = z.enum(["default", "custom", "user"]);
+/**
+ * Provenance tag, not identity — nothing about restoring the pane depends on
+ * it. `.catch` is what makes declaring it safe: an unrecognized value (a
+ * snapshot written by a newer build that added a source, then opened on an
+ * older one) degrades to no tag instead of failing the entry and costing the
+ * user the terminal, which is the same hazard `kindRef` avoids below by
+ * staying undeclared.
+ */
+const SpawnSourceSchema = z.enum(TERMINAL_SPAWN_SOURCES).optional().catch(undefined);
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -99,6 +109,7 @@ export const AppStateTerminalEntrySchema = z
     devServerTerminalId: z.string().optional(),
     browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
+    spawnedBy: SpawnSourceSchema,
     pluginId: z.string().optional(),
   })
   .passthrough()
@@ -172,6 +183,7 @@ export const TerminalSnapshotSchema = z
     agentSessionId: z.string().optional(),
     agentLaunchFlags: z.array(z.string()).optional(),
     agentModelId: z.string().optional(),
+    spawnedBy: SpawnSourceSchema,
     agentPresetId: z.string().optional(),
     agentPresetColor: z.string().optional(),
     originalPresetId: z.string().optional(),

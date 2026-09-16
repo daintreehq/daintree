@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
 import { serializePtyPanel } from "../serializer";
-import type { PtyPanelData } from "@shared/types/panel";
+import { TERMINAL_SPAWN_SOURCES, type PtyPanelData } from "@shared/types/panel";
 
 function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -109,6 +109,35 @@ describe("serializePtyPanel — agentPresetColor (Bug: not serialized)", () => {
     const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
     expect("agentFlavorId" in snapshot).toBe(false);
     expect("agentFlavorColor" in snapshot).toBe(false);
+  });
+});
+
+// ── spawnedBy must survive the serialise/restore round-trip (#12419) ──────────
+// The spawn source is stamped once at creation and never re-derivable. Dropping
+// it on write left Terminal Info showing "Spawn source: Unknown" for every
+// restored pane, and QuickRun panes — which Running Tasks selects by
+// `spawnedBy === "quickrun"` — vanished from that list after a restart.
+
+describe("serializePtyPanel — spawnedBy", () => {
+  const sources = TERMINAL_SPAWN_SOURCES;
+
+  it.each(sources)("includes spawnedBy %s in the snapshot", (source) => {
+    const snapshot = serializePtyPanel(makePanel({ spawnedBy: source }));
+    expect(snapshot.spawnedBy).toBe(source);
+  });
+
+  it("omits spawnedBy when it is undefined", () => {
+    const snapshot = serializePtyPanel(makePanel({ spawnedBy: undefined }));
+    expect("spawnedBy" in snapshot).toBe(false);
+  });
+
+  it("keeps spawnedBy independent of the agent launch metadata", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({ spawnedBy: "quickrun", agentPresetId: "user-abc", agentModelId: "opus" })
+    );
+    expect(snapshot.spawnedBy).toBe("quickrun");
+    expect(snapshot.agentPresetId).toBe("user-abc");
+    expect(snapshot.agentModelId).toBe("opus");
   });
 });
 

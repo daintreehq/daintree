@@ -25,6 +25,7 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
     ...(env && { env }),
     ...(t.agentModelId && { agentModelId: t.agentModelId }),
+    ...(t.spawnedBy && { spawnedBy: t.spawnedBy }),
     ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
     ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),

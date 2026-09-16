@@ -252,6 +252,27 @@ describe("hydration batch (#5196)", () => {
     expect(usePanelStore.getState().panelsById["browser-1"]?.title).toBe("updated title");
   });
 
+  function seedTerminal(id: string, overrides: Partial<PtyPanelData> = {}): void {
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        [id]: {
+          id,
+          kind: "terminal",
+          title: "Agent",
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid" as const,
+          isVisible: true,
+          runtimeStatus: "running" as const,
+          ...overrides,
+        } as unknown as PtyPanelData,
+      },
+      panelIds: [...state.panelIds, id],
+    }));
+  }
+
   it("preserves runtime fields on PTY reconnect when the snapshot has them unset", async () => {
     const { beginHydrationBatch, flushHydrationBatch, addPanel } = usePanelStore.getState();
 
@@ -296,6 +317,36 @@ describe("hydration batch (#5196)", () => {
     expect(result?.lastStateChange).toBe(1234);
     expect(result?.exitBehavior).toBe("restart");
     expect(result?.extensionState).toEqual({ foo: "bar" });
+  });
+
+  // An orphan or partial reconnect payload carries no spawn source, so the merge
+  // has to keep the one the store already had rather than letting the spread
+  // blank it and drop the pane out of Running Tasks (#12419).
+  it("preserves the spawn source on a reconnect outside a hydration batch", async () => {
+    const { addPanel } = usePanelStore.getState();
+
+    seedTerminal("term-3", { spawnedBy: "quickrun" });
+
+    await addPanel({
+      kind: "terminal",
+      existingId: "term-3",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    const result = usePanelStore.getState().panelsById["term-3"] as PtyPanelData | undefined;
+    expect(result?.spawnedBy).toBe("quickrun");
+  });
+
+  it("leaves an unattributed panel unattributed across reconnect", async () => {
+    const { addPanel } = usePanelStore.getState();
+
+    seedTerminal("term-4");
+
+    await addPanel({ kind: "terminal", existingId: "term-4", cwd: "/", bypassLimits: true });
+
+    const result = usePanelStore.getState().panelsById["term-4"] as PtyPanelData | undefined;
+    expect(result?.spawnedBy).toBeUndefined();
   });
 
   it("lets store updaters find a panel by id before flush (event-handler invariant)", async () => {
