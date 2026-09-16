@@ -106,6 +106,28 @@ describe("ProjectStateManager clone isolation", () => {
     expect(result!.mruList).toEqual(["terminal:t1", "worktree:wt-2"]);
   });
 
+  // #12419: the spawn source is stamped once at creation and cannot be re-derived,
+  // so the disk layer has to carry it through untouched — including on the next
+  // partial save, which is where a field-by-field rebuild would silently drop it.
+  it("round-trips a terminal's spawn source through disk", async () => {
+    const state = makeState();
+    state.terminals[0].spawnedBy = "quickrun";
+    await manager.saveProjectState(projectId, state);
+
+    const freshManager = new ProjectStateManager(tempDir);
+    const loaded = await freshManager.getProjectState(projectId);
+    expect(loaded!.terminals[0].spawnedBy).toBe("quickrun");
+    // A pane that predates the field stays unattributed rather than inheriting one.
+    expect(loaded!.terminals[1].spawnedBy).toBeUndefined();
+
+    // An unrelated later save (the shape the session journal and layout handlers
+    // write) must not strip it back off.
+    loaded!.sidebarWidth = 400;
+    await manager.saveProjectState(projectId, loaded!);
+    const reloaded = await new ProjectStateManager(tempDir).getProjectState(projectId);
+    expect(reloaded!.terminals[0].spawnedBy).toBe("quickrun");
+  });
+
   it("drops non-string mruList entries on read", async () => {
     const state = makeState();
     // Write a payload with a polluted mruList directly to disk.

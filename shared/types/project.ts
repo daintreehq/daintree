@@ -12,6 +12,7 @@ import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
+  TerminalSpawnSource,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
@@ -286,6 +287,13 @@ export interface PanelSnapshot {
   env?: Record<string, string>;
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /**
+   * Which surface spawned this terminal, captured once at creation. Persisted
+   * so Terminal Info can still name the origin after a restart and QuickRun
+   * panes stay in Running Tasks (#12419). Absent on legacy snapshots — there
+   * is no way to infer it after the fact, so those stay unattributed.
+   */
+  spawnedBy?: TerminalSpawnSource;
   /** Preset ID active at launch time, used to restore colored icon on reload */
   agentPresetId?: string;
   /** Preset hex color captured at launch time; fallback when preset is later deleted */

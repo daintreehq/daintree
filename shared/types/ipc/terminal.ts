@@ -1,4 +1,4 @@
-import type { PanelKind, PanelLocation, PanelTitleMode } from "../panel.js";
+import type { PanelKind, PanelLocation, PanelTitleMode, TerminalSpawnSource } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState, WaitingReason } from "../agent.js";
 import type { BuiltInAgentId } from "../../config/agentIds.js";
@@ -133,6 +133,8 @@ export interface TerminalState {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Surface that spawned this terminal, captured at creation (#12419). */
+  spawnedBy?: TerminalSpawnSource;
   /** Preset ID selected at launch time */
   agentPresetId?: string;
   /** Preset brand color captured at launch time */
