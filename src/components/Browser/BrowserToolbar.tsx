@@ -59,6 +59,10 @@ interface BrowserToolbarProps {
   isLoading: boolean;
   zoomFactor?: number;
   isConsoleOpen?: boolean;
+  // Whether each action can do anything right now. The caller owns the predicate
+  // so it stays next to the handler's own guard (#12395).
+  canOpenExternal: boolean;
+  canToggleConsole?: boolean;
   isWebviewReady?: boolean;
   viewportPreset?: ViewportPresetId;
   viewportRotated?: boolean;
@@ -95,6 +99,8 @@ export function BrowserToolbar({
   isLoading,
   zoomFactor = 1.0,
   isConsoleOpen = false,
+  canOpenExternal,
+  canToggleConsole = false,
   isWebviewReady = false,
   viewportPreset,
   viewportRotated = false,
@@ -534,6 +540,41 @@ export function BrowserToolbar({
 
   const buttonClass =
     "toolbar-icon-button p-1.5 rounded disabled:opacity-30 disabled:cursor-not-allowed";
+
+  // The stored preference survives the dev server stopping, but with no terminal
+  // behind it there is no drawer to show, so the toggle must not read as pressed.
+  const isConsoleShown = canToggleConsole && isConsoleOpen;
+
+  // A disabled button receives no pointer events, so its tooltip needs a wrapper to
+  // hover. Only while disabled: focus-restore suppression marks the focused element,
+  // and an enabled button wrapped in a span would never match its own trigger.
+  const consoleButton = (
+    <button
+      type="button"
+      onClick={onToggleConsole}
+      disabled={!canToggleConsole}
+      className={cn(
+        buttonClass,
+        "disabled:pointer-events-none",
+        isConsoleShown && "text-text-primary"
+      )}
+      aria-label="Toggle console"
+      aria-pressed={isConsoleShown}
+    >
+      <SquareTerminal className="w-4 h-4" />
+    </button>
+  );
+  const openExternalButton = (
+    <button
+      type="button"
+      onClick={onOpenExternal}
+      disabled={!canOpenExternal}
+      className={cn(buttonClass, "disabled:pointer-events-none")}
+      aria-label="Open in browser"
+    >
+      <ExternalLink className="w-4 h-4" />
+    </button>
+  );
 
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
@@ -1044,18 +1085,14 @@ export function BrowserToolbar({
       {onToggleConsole && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={onToggleConsole}
-              className={cn(buttonClass, isConsoleOpen && "text-text-primary")}
-              aria-label="Toggle console"
-              aria-pressed={isConsoleOpen}
-            >
-              <SquareTerminal className="w-4 h-4" />
-            </button>
+            {canToggleConsole ? (
+              consoleButton
+            ) : (
+              <span className="inline-flex">{consoleButton}</span>
+            )}
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {isConsoleOpen ? "Hide console" : "Show console"}
+            {isConsoleShown ? "Hide console" : "Show console"}
           </TooltipContent>
         </Tooltip>
       )}
@@ -1099,14 +1136,11 @@ export function BrowserToolbar({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={onOpenExternal}
-            className={buttonClass}
-            aria-label="Open in browser"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </button>
+          {canOpenExternal ? (
+            openExternalButton
+          ) : (
+            <span className="inline-flex">{openExternalButton}</span>
+          )}
         </TooltipTrigger>
         <TooltipContent side="bottom">Open in browser</TooltipContent>
       </Tooltip>

@@ -52,6 +52,7 @@ const defaultProps = {
   onForward: vi.fn(),
   onReload: vi.fn(),
   onOpenExternal: vi.fn(),
+  canOpenExternal: true,
 };
 
 function renderToolbar(overrides = {}) {
@@ -540,7 +541,7 @@ describe("BrowserToolbar console button capability gate (#7495)", () => {
 
   it("renders the console toggle when onToggleConsole is provided", () => {
     const onToggleConsole = vi.fn();
-    const { getByLabelText } = renderToolbar({ onToggleConsole });
+    const { getByLabelText } = renderToolbar({ onToggleConsole, canToggleConsole: true });
     const button = getByLabelText("Toggle console");
     expect(button).toBeTruthy();
     fireEvent.click(button);
@@ -550,9 +551,156 @@ describe("BrowserToolbar console button capability gate (#7495)", () => {
   it("reflects isConsoleOpen state via aria-pressed when toggle is provided", () => {
     const { getByLabelText } = renderToolbar({
       onToggleConsole: vi.fn(),
+      canToggleConsole: true,
       isConsoleOpen: true,
     });
     expect(getByLabelText("Toggle console").getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("disables Open in browser when there is no URL to open", () => {
+    const onOpenExternal = vi.fn();
+    const { getByRole } = renderToolbar({ url: "", onOpenExternal, canOpenExternal: false });
+    const button = getByRole("button", { name: "Open in browser" });
+    expect(button).toHaveProperty("disabled", true);
+    fireEvent.click(button);
+    expect(onOpenExternal).not.toHaveBeenCalled();
+  });
+
+  it("follows canOpenExternal rather than the URL or address-bar draft", () => {
+    const onOpenExternal = vi.fn();
+    const { getByRole, getByTestId } = renderToolbar({
+      url: "http://localhost:5173/",
+      onOpenExternal,
+      canOpenExternal: false,
+    });
+    fireEvent.change(getByTestId("browser-address-bar"), {
+      target: { value: "http://localhost:5173/" },
+    });
+    expect(getByRole("button", { name: "Open in browser" })).toHaveProperty("disabled", true);
+  });
+
+  it("does not tie Open in browser to webview readiness or loading", () => {
+    const onOpenExternal = vi.fn();
+    const { getByRole } = renderToolbar({
+      onOpenExternal,
+      canOpenExternal: true,
+      isWebviewReady: false,
+      isLoading: true,
+    });
+    const button = getByRole("button", { name: "Open in browser" });
+    expect(button).toHaveProperty("disabled", false);
+    fireEvent.click(button);
+    expect(onOpenExternal).toHaveBeenCalledOnce();
+  });
+
+  it("enables Open in browser once a URL arrives", () => {
+    const onOpenExternal = vi.fn();
+    const { getByRole, rerender } = render(
+      <BrowserToolbar
+        {...defaultProps}
+        url=""
+        onOpenExternal={onOpenExternal}
+        canOpenExternal={false}
+      />
+    );
+    expect(getByRole("button", { name: "Open in browser" })).toHaveProperty("disabled", true);
+
+    rerender(
+      <BrowserToolbar
+        {...defaultProps}
+        url="http://localhost:5173/"
+        onOpenExternal={onOpenExternal}
+        canOpenExternal={true}
+      />
+    );
+    const button = getByRole("button", { name: "Open in browser" });
+    expect(button).toHaveProperty("disabled", false);
+    fireEvent.click(button);
+    expect(onOpenExternal).toHaveBeenCalledOnce();
+  });
+
+  it("disables the console toggle when there is no console terminal", () => {
+    const onToggleConsole = vi.fn();
+    const { getByLabelText } = renderToolbar({ onToggleConsole, canToggleConsole: false });
+    const button = getByLabelText("Toggle console");
+    expect(button).toHaveProperty("disabled", true);
+    fireEvent.click(button);
+    expect(onToggleConsole).not.toHaveBeenCalled();
+  });
+
+  it("treats a console toggle without canToggleConsole as unavailable", () => {
+    const { getByLabelText } = renderToolbar({ onToggleConsole: vi.fn() });
+    expect(getByLabelText("Toggle console")).toHaveProperty("disabled", true);
+  });
+
+  it("does not show the console as pressed when there is no drawer to show", () => {
+    const { getByLabelText, container } = renderToolbar({
+      onToggleConsole: vi.fn(),
+      canToggleConsole: false,
+      isConsoleOpen: true,
+    });
+    expect(getByLabelText("Toggle console").getAttribute("aria-pressed")).toBe("false");
+    expect(container.textContent).toContain("Show console");
+    expect(container.textContent).not.toContain("Hide console");
+  });
+
+  it("wraps each button in a hover target only while it is disabled", () => {
+    const { getByRole, getByLabelText, rerender } = render(
+      <BrowserToolbar
+        {...defaultProps}
+        onToggleConsole={vi.fn()}
+        canOpenExternal={false}
+        canToggleConsole={false}
+      />
+    );
+    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).toBe("SPAN");
+    expect(getByLabelText("Toggle console").parentElement?.tagName).toBe("SPAN");
+
+    rerender(
+      <BrowserToolbar
+        {...defaultProps}
+        onToggleConsole={vi.fn()}
+        canOpenExternal={true}
+        canToggleConsole={true}
+      />
+    );
+    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).not.toBe(
+      "SPAN"
+    );
+    expect(getByLabelText("Toggle console").parentElement?.tagName).not.toBe("SPAN");
+  });
+
+  it("restores the pressed console once a terminal returns", () => {
+    const onToggleConsole = vi.fn();
+    const { getByLabelText, rerender } = render(
+      <BrowserToolbar
+        {...defaultProps}
+        onToggleConsole={onToggleConsole}
+        canToggleConsole={false}
+        isConsoleOpen={true}
+      />
+    );
+    expect(getByLabelText("Toggle console").getAttribute("aria-pressed")).toBe("false");
+
+    rerender(
+      <BrowserToolbar
+        {...defaultProps}
+        onToggleConsole={onToggleConsole}
+        canToggleConsole={true}
+        isConsoleOpen={true}
+      />
+    );
+    const button = getByLabelText("Toggle console");
+    expect(button).toHaveProperty("disabled", false);
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(button);
+    expect(onToggleConsole).toHaveBeenCalledOnce();
   });
 });
 
