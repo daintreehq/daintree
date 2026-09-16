@@ -4293,13 +4293,6 @@ export class WorkspaceService {
               `Worktree removed. Branch '${branchToDelete}' was kept because Git reports it isn't fully merged.`,
               { cause: branchError }
             );
-          } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
-            throw new Error(
-              `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg}`,
-              {
-                cause: branchError,
-              }
-            );
           } else {
             throw new Error(
               `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg}`,

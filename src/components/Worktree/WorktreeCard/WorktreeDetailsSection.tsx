@@ -758,7 +758,10 @@ export function WorktreeDeleteErrorBanner({
               ones that say how to recover, so the breaks have to survive. The
               height cap keeps an unbounded message from pushing Retry and
               Dismiss off a compact card — it scrolls, nothing is cut. */}
-          <span className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-text-secondary select-text">
+          <span
+            tabIndex={0}
+            className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-text-secondary select-text"
+          >
             {message}
           </span>
         </div>
