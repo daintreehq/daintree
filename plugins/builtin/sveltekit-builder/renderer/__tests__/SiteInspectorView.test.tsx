@@ -9,12 +9,12 @@ vi.mock("../useInspectorContext.js", () => ({ useInspectorContext: () => context
 
 import { SiteInspectorView } from "../SiteInspectorView";
 import { __resetInspectorControllersForTests, loadGuestRuntimeBody } from "../inspectorController";
-import { CHANNELS, PUSH_CHANNELS } from "../../shared/protocol";
+import { CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import {
-  CLASS_VALUE,
+  BUTTON_RANGE,
   FILE,
   REVISION,
-  TEXT_RANGE,
   createFakeHost,
   makeReceipt,
   makeSelection,
@@ -74,6 +74,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  _resetPluginRuntimeStoreForTest();
   cleanup();
   __resetInspectorControllersForTests();
   uninstall();
@@ -224,8 +226,6 @@ describe("selection identity", () => {
     expect(screen.queryByRole("button", { name: "Edit text" })).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
-    // Nothing to read either: an unsupported selection never asks for source.
-    expect(host.calls(CHANNELS.sourceExcerpt)).toHaveLength(0);
   });
 });
 
@@ -246,7 +246,7 @@ describe("editing", () => {
       operations: [
         {
           kind: "set_class_tokens",
-          range: CLASS_VALUE,
+          range: BUTTON_RANGE,
           add: ["shadow-md"],
           remove: [],
           responsive: { kind: "base" },
@@ -274,7 +274,7 @@ describe("editing", () => {
     await mountSelected();
     const input = screen.getByRole("combobox", { name: "Add a class" });
     fireEvent.change(input, { target: { value: "shadow-huge" } });
-    await screen.findByText("Not in this project's class list — it's checked when you add it");
+    await screen.findByText("Not in the suggestion list — it'll be written as typed");
     fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByText("Not saved — that class isn't valid here");
     expect(text()).not.toMatch(/Saved —/);
@@ -297,7 +297,6 @@ describe("editing", () => {
     }));
     await act(async () => host.select(0));
     await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
-    await waitFor(() => expect(host.calls(CHANNELS.sourceExcerpt)).toHaveLength(2));
     expect(removeButton().disabled).toBe(true);
     fireEvent.click(removeButton());
     expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
@@ -309,6 +308,77 @@ describe("editing", () => {
     expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
   });
 
+  it("leaves class validity to main, so valid variants aren't refused here", async () => {
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "[&>*]:p-2 before:content-['x']" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    expect(host.calls(CHANNELS.editApply)[0]!.operations).toMatchObject([
+      { add: ["[&>*]:p-2", "before:content-['x']"], range: BUTTON_RANGE },
+    ]);
+  });
+
+  it("keeps a non-breaking space inside one token, as main does", async () => {
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "after:content-['a\u00a0b']" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    expect(host.calls(CHANNELS.editApply)[0]!.operations).toMatchObject([
+      { add: ["after:content-['a\u00a0b']"] },
+    ]);
+  });
+
+  it("writes text verbatim, whitespace included", async () => {
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: makeSelection({
+        documentEpoch: args.documentEpoch as number,
+        surfaces: { classes: { tokens: ["px-6"] }, text: { text: " Start Pro " } },
+      }),
+    }));
+    await mountSelected();
+    fireEvent.click(screen.getByRole("button", { name: "Edit text" }));
+    const field = screen.getByRole("textbox", { name: "Text" });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Edit text" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+      target: { value: " Go Pro " },
+    });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Text" }), { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    expect(host.calls(CHANNELS.editApply)[0]!.operations).toMatchObject([{ text: " Go Pro " }]);
+  });
+
+  it("invalidates a resolve that is out when our own write to that file lands", async () => {
+    await mountSelected();
+    let finishWrite: (value: unknown) => void = () => {};
+    host.handlers.set(CHANNELS.editApply, () => new Promise((resolve) => (finishWrite = resolve)));
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+
+    let finishResolve: (value: unknown) => void = () => {};
+    host.handlers.set(
+      CHANNELS.selectionResolve,
+      () => new Promise((resolve) => (finishResolve = resolve))
+    );
+    await act(async () => host.select(0));
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
+    await act(async () => finishWrite({ status: "applied", receipt: makeReceipt() }));
+    // Long after the settle window: elapsed time alone must not rescue it.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    await act(async () =>
+      finishResolve({
+        status: "ok",
+        selection: makeSelection({ documentEpoch: 0, selectionId: "sel-2" }),
+      })
+    );
+    await screen.findByText("Selection changed — select again");
+    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
+  });
+
   it("removes a class through a token operation", async () => {
     await mountSelected();
     fireEvent.click(removeButton());
@@ -316,7 +386,7 @@ describe("editing", () => {
     expect(host.calls(CHANNELS.editApply)[0]!.operations).toEqual([
       {
         kind: "set_class_tokens",
-        range: CLASS_VALUE,
+        range: BUTTON_RANGE,
         add: [],
         remove: ["px-6"],
         responsive: { kind: "base" },
@@ -339,7 +409,7 @@ describe("editing", () => {
     fireEvent.keyDown(field, { key: "Enter" });
     await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
     expect(host.calls(CHANNELS.editApply)[0]!.operations).toEqual([
-      { kind: "set_literal_text", range: TEXT_RANGE, text: "Go Pro" },
+      { kind: "set_literal_text", range: BUTTON_RANGE, text: "Go Pro" },
     ]);
     await screen.findByText("Saved — preview not yet refreshed");
     expect(text()).not.toContain("Styles not verified");
@@ -462,6 +532,28 @@ describe("stale selections", () => {
     expect(removeButton().disabled).toBe(true);
   });
 
+  it("refuses to resolve a click on a file that changed moments ago, until HMR can land", async () => {
+    await mountBound();
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    await act(async () =>
+      host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
+        workspaceSessionId: "ws-1",
+        file: FILE,
+        revision: null,
+      })
+    );
+    clock.mockReturnValue(start + 400);
+    await act(async () => host.select(0));
+    await screen.findByText("This file just changed — select again");
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(0);
+
+    clock.mockReturnValue(start + 1500);
+    await act(async () => host.select(0));
+    await screen.findByRole("button", { name: "Remove px-6" });
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
+  });
+
   it("drops a resolve that finishes after the document moved on", async () => {
     let finish: (value: unknown) => void = () => {};
     host.handlers.set(
@@ -521,6 +613,116 @@ describe("truthful failures and undo", () => {
 });
 
 describe("lifetime", () => {
+  it("reopens the workspace when main reports it closed", async () => {
+    await mountSelected();
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ready",
+      workspaceSessionId: "ws-2",
+      appRoot: "/repo",
+      support: { level: "full" },
+    }));
+    host.handlers.set(CHANNELS.selectionResolve, () => {
+      throw new Error("WORKSPACE_CLOSED: that source workspace is not open; open it again");
+    });
+    await act(async () => host.select(0));
+    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
+    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
+
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: {
+        ...makeSelection({ documentEpoch: 0 }),
+        workspaceSessionId: args.workspaceSessionId as string,
+      },
+    }));
+    await act(async () => host.select(0));
+    await screen.findByRole("button", { name: "Remove px-6" });
+    expect(host.calls(CHANNELS.selectionResolve).at(-1)).toMatchObject({
+      workspaceSessionId: "ws-2",
+    });
+  });
+
+  it("tears down on plugin disable and starts fresh when re-enabled", async () => {
+    // What the host does: the slot resolves to nothing while the plugin is disabled.
+    function Gated() {
+      const disabled = usePluginRuntimeStore((state) => state.disabledPluginIds.has(PLUGIN_ID));
+      return disabled ? null : (
+        <SiteInspectorView
+          panelId="inspector-1"
+          pluginId="daintree.sveltekit-builder"
+          disposeSignal={new AbortController().signal}
+          panelRemovedSignal={removed.signal}
+          initialArgs={{}}
+          stateVersion={1}
+          persistState={() => true}
+          styleRootAttributes={{}}
+        />
+      );
+    }
+    removed = new AbortController();
+    render(<Gated />);
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(1));
+
+    await act(async () =>
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set([PLUGIN_ID]) })
+    );
+    expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" });
+    expect(host.listenerCounts()).toEqual({ preview: 0, plugin: 0 });
+    await act(async () => {});
+    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
+    expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(1);
+
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ready",
+      workspaceSessionId: "ws-2",
+      appRoot: "/repo",
+      support: { level: "full" },
+    }));
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: {
+        ...makeSelection({ documentEpoch: 0 }),
+        workspaceSessionId: args.workspaceSessionId as string,
+      },
+    }));
+    await act(async () => usePluginRuntimeStore.setState({ disabledPluginIds: new Set() }));
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
+    await screen.findByRole("button", { name: "Browse" });
+    await act(async () => host.documentReady(0));
+    await act(async () => host.select(0));
+    await screen.findByRole("button", { name: "Remove px-6" });
+    expect(host.calls(CHANNELS.selectionResolve).at(-1)).toMatchObject({
+      workspaceSessionId: "ws-2",
+    });
+  });
+
+  it("discards an edit reply that lands after the panel moved to another worktree", async () => {
+    await mountSelected();
+    let finish: (value: unknown) => void = () => {};
+    host.handlers.set(CHANNELS.editApply, () => new Promise((resolve) => (finish = resolve)));
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+
+    cleanup();
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ready",
+      workspaceSessionId: "ws-2",
+      appRoot: "/repo-2",
+      support: { level: "full" },
+    }));
+    context.current = { projectId: "p1", worktreeId: "wt-2", worktreePath: "/repo-2" };
+    mount({ reuseSignal: true });
+    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
+
+    await act(async () => finish({ status: "applied", receipt: makeReceipt() }));
+    await act(async () => {});
+    expect(text()).not.toMatch(/Saved —/);
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
   it("keeps the binding across a remount", async () => {
     await mountSelected();
     cleanup();

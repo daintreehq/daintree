@@ -27,14 +27,7 @@ export const SOURCE = [
 export const REVISION = sha(SOURCE);
 export const BUTTON_START = SOURCE.indexOf("<button");
 export const BUTTON_END = SOURCE.indexOf("</button>") + "</button>".length;
-export const CLASS_VALUE = {
-  start: SOURCE.indexOf("px-6"),
-  end: SOURCE.indexOf("rounded-lg") + "rounded-lg".length,
-};
-export const TEXT_RANGE = {
-  start: SOURCE.indexOf("Start Pro"),
-  end: SOURCE.indexOf("Start Pro") + "Start Pro".length,
-};
+export const BUTTON_RANGE = { start: BUTTON_START, end: BUTTON_END };
 
 export const OBSERVATION: SiteGuestNodeObservation = {
   runtimeOccurrenceId: "occ-1",
@@ -57,6 +50,7 @@ export function makeSelection(
     documentEpoch?: number;
     renderedOccurrences?: number;
     capabilities?: EditCapability[];
+    surfaces?: SelectedNode["surfaces"];
     selectionId?: string;
     node?: Partial<SelectedNode>;
   } = {}
@@ -106,6 +100,10 @@ export function makeSelection(
         label: 'button "Start Pro"',
         bounds: [],
         capabilities: overrides.capabilities ?? DIRECT,
+        surfaces: overrides.surfaces ?? {
+          classes: { tokens: ["px-6", "py-3", "rounded-lg"] },
+          text: { text: "Start Pro" },
+        },
         ...overrides.node,
       },
     ],
@@ -118,7 +116,7 @@ export function makeReceipt(overrides: Partial<EditReceipt> = {}): EditReceipt {
     file: FILE,
     beforeRevision: REVISION,
     afterRevision: sha(SOURCE + "changed"),
-    appliedRange: CLASS_VALUE,
+    appliedRange: BUTTON_RANGE,
     sourceSaved: true,
     previewRefreshed: null,
     stylesGenerated: null,
@@ -180,16 +178,6 @@ export function createFakeHost() {
     status: "ok",
     selection: makeSelection({ documentEpoch: args.documentEpoch as number }),
   }));
-  handlers.set(CHANNELS.sourceExcerpt, () => {
-    const lineStart = SOURCE.lastIndexOf("\n", BUTTON_START) + 1;
-    const lineEnd = SOURCE.indexOf("\n", BUTTON_END);
-    return {
-      status: "ok",
-      text: SOURCE.slice(lineStart, lineEnd),
-      firstLine: 6,
-      revision: REVISION,
-    };
-  });
   handlers.set(CHANNELS.classComplete, (args) => {
     const query = String(args.query);
     const known = ["shadow-md", "shadow-lg", "px-8"];
@@ -227,6 +215,11 @@ export function createFakeHost() {
     sitePreview,
     invoke,
     handlers,
+    listenerCounts() {
+      let plugin = 0;
+      for (const set of pluginListeners.values()) plugin += set.size;
+      return { preview: previewListeners.size, plugin };
+    },
     setCandidates(next: SitePreviewCandidate[]) {
       candidates = next;
     },

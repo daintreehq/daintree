@@ -73,6 +73,8 @@ async function setUp() {
     panelWorktreeId: () => "w1",
     runtimeSource: async () => "",
     newId: () => `id-${++id}`,
+    now: () => Date.now(),
+    onPluginDisabled: () => () => {},
   };
 
   const controller = new InspectorController("inspector-1", deps);
@@ -89,7 +91,7 @@ async function setUp() {
       event,
     });
 
-  return { controller, guest, sandbox };
+  return { controller, guest, sandbox, invoke: test.invoke };
 }
 
 function observation(file: string, source: string, marker: string): SiteGuestNodeObservation {
@@ -130,7 +132,6 @@ async function selectInPage(
   await vi.waitFor(() => {
     const snapshot = controller.getSnapshot();
     expect(snapshot.selection.status).toBe("ready");
-    expect(snapshot.source.status).toBe("ok");
   });
   const selection = controller.getSnapshot().selection;
   if (selection.status !== "ready") throw new Error("selection did not resolve");
@@ -178,13 +179,13 @@ describe("Site Inspector end to end: view controller → plugin main → disk", 
   it("undoes the edit, restoring the original bytes", async () => {
     const env = await setUp();
     const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");
-    await env.controller.addClasses(selectionId, ["gap-8"]);
+    await expect(env.controller.addClasses(selectionId, ["gap-8"])).resolves.toBe(true);
+    expect(await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8")).not.toBe(source);
 
     await env.controller.undo();
 
-    await vi.waitFor(async () => {
-      expect(await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8")).toBe(source);
-    });
+    expect(env.controller.getSnapshot().receipt?.kind).toBe("undo");
+    expect(await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8")).toBe(source);
   });
 
   it("refuses a class edit on an expression-driven class and never touches the file", async () => {
@@ -200,5 +201,29 @@ describe("Site Inspector end to end: view controller → plugin main → disk", 
     expect(await fs.readFile(env.sandbox.file("src/lib/dynamic-classes.svelte"), "utf8")).toBe(
       source
     );
+  });
+
+  it("reopens its workspace after main closed it, and edits again", async () => {
+    const env = await setUp();
+    await selectInPage(env, "src/lib/native.svelte", "<section");
+    const before = env.controller.getSnapshot().workspace;
+    if (before.status !== "ready") throw new Error("workspace not ready");
+    await env.invoke("workspace-close", { workspaceSessionId: before.workspaceSessionId });
+
+    const source = await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8");
+    env.guest({
+      type: "selectionChanged",
+      nodes: [observation("src/lib/native.svelte", source, "<section")],
+    });
+    await vi.waitFor(() => {
+      const workspace = env.controller.getSnapshot().workspace;
+      expect(workspace.status).toBe("ready");
+      if (workspace.status === "ready") {
+        expect(workspace.workspaceSessionId).not.toBe(before.workspaceSessionId);
+      }
+    });
+
+    const { selectionId } = await selectInPage(env, "src/lib/native.svelte", "<section");
+    await expect(env.controller.addClasses(selectionId, ["gap-8"])).resolves.toBe(true);
   });
 });

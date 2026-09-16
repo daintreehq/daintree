@@ -11,17 +11,9 @@ import {
   type SelectionState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { WaitingRow } from "./WaitingRow.js";
 import { TextEditor } from "./TextEditor.js";
 import { ClassEditor } from "./ClassEditor.js";
-import {
-  STALE_COPY,
-  SUPPORT_LABEL,
-  TEXT_SHAPE_COPY,
-  UNSUPPORTED_REASON_COPY,
-  basename,
-  plural,
-} from "./copy.js";
+import { STALE_COPY, SUPPORT_LABEL, UNSUPPORTED_REASON_COPY, basename, plural } from "./copy.js";
 
 export interface SelectionActions {
   setText: (selectionId: string, text: string) => void;
@@ -197,31 +189,6 @@ function Surface({
   );
 }
 
-function SourceGate({
-  state,
-  selection,
-  children,
-}: {
-  state: InspectorState;
-  selection: ReadySelection;
-  children: ReactNode;
-}) {
-  const node = selection.selection.nodes[0];
-  if (!node || !node.definition || !isEditableMapping(node)) {
-    return <p className="text-xs text-text-secondary">No source location to edit</p>;
-  }
-  const source = state.source;
-  const current =
-    source.status !== "idle" && source.selectionId === selection.selection.selectionId;
-  if (!current || source.status === "loading") {
-    return <WaitingRow label="Reading the source" />;
-  }
-  if (source.status === "unavailable") {
-    return <p className="text-xs text-text-secondary">Couldn't read this element's source</p>;
-  }
-  return children;
-}
-
 function EditOutcome({ state, surface }: { state: InspectorState; surface: EditSurface }) {
   const edit = state.edit;
   if (edit.status === "failed" && edit.surface === surface) {
@@ -237,6 +204,21 @@ function EditOutcome({ state, surface }: { state: InspectorState; surface: EditS
   return null;
 }
 
+/**
+ * The current value comes from main, decoded from the compiler's AST — never
+ * re-read here. A direct surface without one has nothing trustworthy to edit.
+ */
+function NoDecodedValue({ node }: { node: SelectedNode }) {
+  if (!node.definition || !isEditableMapping(node)) {
+    return <p className="text-xs text-text-secondary">No source location to edit</p>;
+  }
+  return (
+    <p className="text-xs text-text-secondary">
+      No literal value here to edit — change it in source
+    </p>
+  );
+}
+
 function TextSurface({
   state,
   selection,
@@ -246,27 +228,27 @@ function TextSurface({
   selection: ReadySelection;
   actions: SelectionActions;
 }) {
-  const source = state.source;
-  const shape = source.status === "ok" ? source.shape.text : null;
+  const node = selection.selection.nodes[0]!;
+  const text = node.surfaces.text;
   const selectionId = selection.selection.selectionId;
   const editable = editTargetOf(state, "text", selectionId) !== null;
   const saving = state.edit.status === "applying" && state.edit.surface === "text";
   return (
-    <SourceGate state={state} selection={selection}>
-      {shape?.kind === "literal" ? (
+    <>
+      {text ? (
         <TextEditor
           // A successful save spends the selection; start the next edit clean.
-          key={`${selection.selection.selectionId}:${selection.stale === "edited" ? "saved" : "open"}`}
-          text={shape.text}
+          key={`${selectionId}:${selection.stale === "edited" ? "saved" : "open"}`}
+          text={text.text}
           editable={editable}
           saving={saving}
           onSave={(next) => actions.setText(selectionId, next)}
         />
-      ) : shape ? (
-        <p className="text-xs text-text-secondary">{TEXT_SHAPE_COPY[shape.reason]}</p>
-      ) : null}
+      ) : (
+        <NoDecodedValue node={node} />
+      )}
       <EditOutcome state={state} surface="text" />
-    </SourceGate>
+    </>
   );
 }
 
@@ -279,31 +261,27 @@ function ClassSurface({
   selection: ReadySelection;
   actions: SelectionActions;
 }) {
-  const source = state.source;
-  const shape = source.status === "ok" ? source.shape.classes : null;
+  const node = selection.selection.nodes[0]!;
+  const classes = node.surfaces.classes;
   const selectionId = selection.selection.selectionId;
   const editable = editTargetOf(state, "classes", selectionId) !== null;
   const saving = state.edit.status === "applying" && state.edit.surface === "classes";
   return (
-    <SourceGate state={state} selection={selection}>
-      {shape?.kind === "static" ? (
+    <>
+      {classes ? (
         <ClassEditor
-          key={selection.selection.selectionId}
-          tokens={shape.tokens}
+          key={selectionId}
+          tokens={classes.tokens}
           editable={editable}
           saving={saving}
           onAdd={(tokens) => actions.addClasses(selectionId, tokens)}
           onRemove={(token) => actions.removeClass(selectionId, token)}
           complete={actions.completeClasses}
         />
-      ) : shape?.kind === "dynamic" ? (
-        <p className="text-xs text-text-secondary">
-          The class value includes an expression — edit it in source
-        </p>
-      ) : shape?.kind === "absent" ? (
-        <p className="text-xs text-text-secondary">This element has no class attribute to edit</p>
-      ) : null}
+      ) : (
+        <NoDecodedValue node={node} />
+      )}
       <EditOutcome state={state} surface="classes" />
-    </SourceGate>
+    </>
   );
 }

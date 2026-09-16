@@ -8,6 +8,7 @@ import type {
   SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
 import { getPanelStoreSnapshot } from "@/store/storeAccessors";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import {
   CHANNELS,
   ClassCompleteResultSchema,
@@ -18,7 +19,6 @@ import {
   PUSH_CHANNELS,
   SelectionResolveResultSchema,
   SourceChangedPushSchema,
-  SourceExcerptResultSchema,
   WorkspaceOpenResultSchema,
   type SupportVerdict,
 } from "../shared/protocol.js";
@@ -30,7 +30,6 @@ import type {
   SiteSelection,
   Viewport,
 } from "../shared/model.js";
-import { locateElementSource, type ElementShape } from "./sourceShape.js";
 
 /**
  * One controller per Site Inspector panel. It outlives the view — a maximised
@@ -64,6 +63,9 @@ export interface InspectorDeps {
   panelWorktreeId(panelId: string): string | null | undefined;
   runtimeSource(): Promise<string>;
   newId(): string;
+  now(): number;
+  /** Calls back when this plugin is disabled; main has already closed every workspace. */
+  onPluginDisabled(callback: () => void): () => void;
 }
 
 export interface InspectorContext {
@@ -114,13 +116,9 @@ export type SelectionState =
     }
   /** The document moved on before the resolve finished. */
   | { status: "lost" }
+  /** The owning file changed moments ago; the page may still show the old markup. */
+  | { status: "settling" }
   | { status: "failed"; message: string };
-
-export type SourceState =
-  | { status: "idle" }
-  | { status: "loading"; selectionId: string }
-  | { status: "ok"; selectionId: string; shape: ElementShape }
-  | { status: "unavailable"; selectionId: string };
 
 export type EditSurface = "text" | "classes";
 
@@ -164,7 +162,6 @@ export interface InspectorState {
   page: PageState | null;
   workspace: WorkspaceState;
   selection: SelectionState;
-  source: SourceState;
   edit: EditState;
   receipt: ReceiptState | null;
   issue: InspectorIssue | null;
@@ -184,7 +181,6 @@ const INITIAL_STATE: InspectorState = {
   page: null,
   workspace: { status: "idle" },
   selection: { status: "none" },
-  source: { status: "idle" },
   edit: { status: "idle" },
   receipt: null,
   issue: null,
@@ -243,6 +239,16 @@ export function defaultInspectorDeps(): InspectorDeps {
     },
     runtimeSource: loadGuestRuntimeBody,
     newId: () => crypto.randomUUID(),
+    now: () => Date.now(),
+    onPluginDisabled: (callback) => {
+      const store = usePluginRuntimeStore;
+      store.getState().init();
+      return store.subscribe((state, previous) => {
+        if (state.disabledPluginIds.has(PLUGIN_ID) && !previous.disabledPluginIds.has(PLUGIN_ID)) {
+          callback();
+        }
+      });
+    },
   };
 }
 
@@ -254,25 +260,65 @@ export function defaultInspectorDeps(): InspectorDeps {
 export function ownerFile(selection: SiteSelection, worktreePath: string | null): string | null {
   const node = selection.nodes[0];
   if (!node?.definition) return null;
-  const file = node.definition.location.file;
-  if (!worktreePath) return file;
+  return worktreeRelative(selection.appRoot, worktreePath, node.definition.location.file);
+}
+
+export function worktreeRelative(
+  appRoot: string,
+  worktreePath: string | null,
+  appRelativeFile: string
+): string | null {
+  if (!worktreePath) return appRelativeFile;
   const root = trimSlash(worktreePath);
-  const app = trimSlash(selection.appRoot);
-  if (app === root) return file;
+  const app = trimSlash(appRoot);
+  if (app === root) return appRelativeFile;
   if (!app.startsWith(root + "/")) return null;
-  return `${app.slice(root.length + 1)}/${file}`;
+  return `${app.slice(root.length + 1)}/${appRelativeFile}`;
+}
+
+/**
+ * Main reports a workspace it no longer holds — after the plugin was disabled
+ * or its worker restarted — as a thrown `WORKSPACE_CLOSED`, or as an
+ * `OUT_OF_SCOPE`/unavailable result naming the closed workspace.
+ */
+export function isWorkspaceClosed(value: unknown): boolean {
+  let text: string;
+  if (typeof value === "object" && value !== null && !(value instanceof Error)) {
+    const record = value as { message?: unknown; reason?: unknown };
+    text = String(record.message ?? record.reason ?? "");
+  } else {
+    text = formatErrorMessage(value, "");
+  }
+  return text.includes("WORKSPACE_CLOSED") || text.includes("source workspace is not open");
 }
 
 function trimSlash(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
-export function isValidClassToken(token: string): boolean {
-  return token.length > 0 && token.length <= 128 && !/[\s"'`{}<>\\]/.test(token);
+/**
+ * Only what can't be a single token at all. Whether a token is a class the
+ * project can use is main's call — the renderer's guess rejected valid
+ * variants like `[&>*]:p-2`.
+ */
+export function isClassTokenShape(token: string): boolean {
+  return token.length > 0 && !ASCII_WHITESPACE.test(token);
 }
+
+/** Main's token separators: ASCII whitespace only, so U+00A0 stays inside a token. */
+const ASCII_WHITESPACE = /[ \t\n\f\r]/;
+
+export function splitClassTokens(value: string): string[] {
+  return value.split(/[ \t\n\f\r]+/).filter((token) => token.length > 0);
+}
+
+/** How long after a source change a click may still land on the pre-HMR DOM. */
+export const HMR_SETTLE_MS = 1000;
 
 export class InspectorController {
   readonly panelId: string;
+  /** Set by the registry: a disabled plugin releases the whole controller. */
+  onPluginDisabled: (() => void) | null = null;
   private state: InspectorState = INITIAL_STATE;
   private readonly listeners = new Set<() => void>();
   private readonly unsubscribers: Array<() => void> = [];
@@ -284,6 +330,10 @@ export class InspectorController {
   private bufferedEvents: SitePreviewPushPayload[] = [];
   /** Files main reported changed while the current resolve was in flight. */
   private readonly changedDuringResolve = new Set<string>();
+  /** Worktree-relative file → when it last changed, for the HMR settle window. */
+  private readonly recentChanges = new Map<string, number>();
+  private chosenAppRoot: string | undefined;
+  private recoveringWorkspace: string | null = null;
   private lastCandidates: SitePreviewCandidate[] = [];
   private disposed = false;
 
@@ -295,7 +345,8 @@ export class InspectorController {
     this.unsubscribers.push(
       deps.sitePreview.onEvent((payload) => this.handlePreviewPush(payload)),
       deps.on(PUSH_CHANNELS.sourceChanged, (payload) => this.handleSourceChanged(payload)),
-      deps.on(PUSH_CHANNELS.issue, (payload) => this.handleIssue(payload))
+      deps.on(PUSH_CHANNELS.issue, (payload) => this.handleIssue(payload)),
+      deps.onPluginDisabled(() => this.onPluginDisabled?.())
     );
   }
 
@@ -336,7 +387,11 @@ export class InspectorController {
       context.projectId && context.worktreeId && context.worktreePath
         ? `${context.projectId}\n${context.worktreeId}\n${context.worktreePath}`
         : null;
-    if (key === this.workspaceKey) return;
+    if (key === this.workspaceKey) {
+      if (key !== null && this.state.workspace.status === "idle") void this.openWorkspace();
+      return;
+    }
+    this.chosenAppRoot = undefined;
     this.closeWorkspace();
     this.workspaceKey = key;
     if (key === null) {
@@ -346,7 +401,8 @@ export class InspectorController {
     void this.openWorkspace();
   }
 
-  async openWorkspace(appRoot?: string): Promise<void> {
+  async openWorkspace(appRoot: string | undefined = this.chosenAppRoot): Promise<void> {
+    this.chosenAppRoot = appRoot;
     const { projectId, worktreeId, worktreePath } = this.context;
     if (!projectId || !worktreeId || !worktreePath) return;
     const request = ++this.workspaceRequest;
@@ -404,10 +460,37 @@ export class InspectorController {
     this.update({
       workspace: { status: "idle" },
       selection: this.state.selection.status === "none" ? this.state.selection : { status: "none" },
-      source: { status: "idle" },
       edit: { status: "idle" },
       receipt: null,
+      // A write still out belongs to the workspace being left; its reply is
+      // discarded on arrival, so it mustn't hold the next workspace's edits.
+      mutating: false,
     });
+  }
+
+  private currentWorkspaceId(): string | null {
+    const workspace = this.state.workspace;
+    return workspace.status === "ready" ? workspace.workspaceSessionId : null;
+  }
+
+  /**
+   * Main no longer holds our workspace (plugin disabled and re-enabled, or its
+   * worker restarted), so its selection and undo journal are gone too. Reopen
+   * once per lost session; a second failure is reported, not looped on.
+   */
+  private recoverClosedWorkspace(workspaceSessionId: string): void {
+    if (this.currentWorkspaceId() !== workspaceSessionId) return;
+    if (this.recoveringWorkspace === workspaceSessionId) return;
+    this.recoveringWorkspace = workspaceSessionId;
+    this.selectionRequest++;
+    this.update({
+      workspace: { status: "idle" },
+      selection: { status: "none" },
+      edit: { status: "idle" },
+      receipt: null,
+      mutating: false,
+    });
+    void this.openWorkspace();
   }
 
   /* ------------------------------------------------------------------------ */
@@ -663,7 +746,6 @@ export class InspectorController {
     const request = ++this.selectionRequest;
     this.changedDuringResolve.clear();
     const base: Partial<InspectorState> = {
-      source: { status: "idle" },
       edit: this.state.edit.status === "applying" ? this.state.edit : { status: "idle" },
     };
     if (nodes.length === 0) {
@@ -692,6 +774,19 @@ export class InspectorController {
       return;
     }
 
+    // HMR doesn't advance the epoch, so right after a write the page can still
+    // show the old markup while main resolves the click against the new bytes —
+    // and lands on a different element of the same tag.
+    const clickedFiles = nodes.flatMap((node) =>
+      node.loc
+        ? [worktreeRelative(workspace.appRoot, this.context.worktreePath, node.loc.file)]
+        : []
+    );
+    if (clickedFiles.some((file) => file !== null && this.changedRecently(file))) {
+      this.update({ ...base, selection: { status: "settling" } });
+      return;
+    }
+
     this.update({ ...base, selection: { status: "resolving", epoch, requestId: request } });
     let raw: unknown;
     try {
@@ -706,6 +801,10 @@ export class InspectorController {
       });
     } catch (error) {
       if (!this.isCurrentResolve(request)) return;
+      if (isWorkspaceClosed(error)) {
+        this.recoverClosedWorkspace(workspace.workspaceSessionId);
+        return;
+      }
       this.update({
         selection: {
           status: "failed",
@@ -740,8 +839,23 @@ export class InspectorController {
       this.update({ selection: { status: "lost" } });
       return;
     }
+    if (file !== null && this.changedRecently(file)) {
+      this.update({ selection: { status: "settling" } });
+      return;
+    }
     this.update({ selection: { status: "ready", selection, file, stale: null } });
-    void this.loadSource(selection);
+  }
+
+  private changedRecently(file: string): boolean {
+    const at = this.recentChanges.get(file);
+    return at !== undefined && this.deps.now() - at < HMR_SETTLE_MS;
+  }
+
+  private noteChanged(file: string): void {
+    this.recentChanges.set(file, this.deps.now());
+    // Our own writes aren't pushed back as sourceChanged, so a resolve that is
+    // out when one lands must be invalidated here, however long it then takes.
+    if (this.state.selection.status === "resolving") this.changedDuringResolve.add(file);
   }
 
   private isCurrentResolve(request: number): boolean {
@@ -751,49 +865,6 @@ export class InspectorController {
       selection.status === "resolving" &&
       selection.requestId === request
     );
-  }
-
-  private async loadSource(selection: SiteSelection): Promise<void> {
-    const node = selection.nodes[0];
-    const definition = node?.definition;
-    const current = this.state.selection;
-    if (!definition || current.status !== "ready" || !current.file) return;
-    if (!hasDirectSurface(node)) return;
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready") return;
-
-    const selectionId = selection.selectionId;
-    this.update({ source: { status: "loading", selectionId } });
-    let raw: unknown;
-    try {
-      raw = await this.deps.invoke(CHANNELS.sourceExcerpt, {
-        workspaceSessionId: workspace.workspaceSessionId,
-        file: current.file,
-        range: definition.range,
-        contextLines: 0,
-      });
-    } catch {
-      raw = null;
-    }
-    if (!this.isSelection(selectionId)) return;
-    const parsed = SourceExcerptResultSchema.safeParse(raw);
-    if (!parsed.success || parsed.data.status !== "ok") {
-      this.update({ source: { status: "unavailable", selectionId } });
-      return;
-    }
-    const located = locateElementSource(parsed.data, definition);
-    if (located.status === "revision-mismatch") {
-      this.update({
-        source: { status: "unavailable", selectionId },
-        ...this.staleSelectionPatch("source-changed"),
-      });
-      return;
-    }
-    if (located.status === "unreadable") {
-      this.update({ source: { status: "unavailable", selectionId } });
-      return;
-    }
-    this.update({ source: { status: "ok", selectionId, shape: located.shape } });
   }
 
   private selectionFile(): string | null {
@@ -835,8 +906,8 @@ export class InspectorController {
     if (workspace.status !== "ready" || push.workspaceSessionId !== workspace.workspaceSessionId) {
       return;
     }
+    this.noteChanged(push.file);
     const selection = this.state.selection;
-    if (selection.status === "resolving") this.changedDuringResolve.add(push.file);
     if (selection.status === "ready" && selection.file === push.file) {
       this.update(this.staleSelectionPatch("source-changed"));
     }
@@ -858,14 +929,17 @@ export class InspectorController {
 
   addClasses(selectionId: string, tokens: string[]): Promise<boolean> {
     const target = editTargetOf(this.state, "classes", selectionId);
-    if (!target || target.shape.classes.kind !== "static") return Promise.resolve(false);
-    const existing = new Set(target.shape.classes.tokens);
-    const add = tokens.filter((token) => isValidClassToken(token) && !existing.has(token));
+    const classes = target?.node.surfaces.classes;
+    if (!target || !classes) return Promise.resolve(false);
+    const existing = new Set(classes.tokens);
+    const add = [...new Set(tokens)].filter(
+      (token) => isClassTokenShape(token) && !existing.has(token)
+    );
     if (add.length === 0) return Promise.resolve(false);
     return this.apply("classes", selectionId, [
       {
         kind: "set_class_tokens",
-        range: target.shape.classes.range,
+        range: target.node.definition!.range,
         add,
         remove: [],
         responsive: { kind: "base" },
@@ -875,12 +949,12 @@ export class InspectorController {
 
   removeClass(selectionId: string, token: string): Promise<boolean> {
     const target = editTargetOf(this.state, "classes", selectionId);
-    if (!target || target.shape.classes.kind !== "static") return Promise.resolve(false);
-    if (!target.shape.classes.tokens.includes(token)) return Promise.resolve(false);
+    const classes = target?.node.surfaces.classes;
+    if (!target || !classes || !classes.tokens.includes(token)) return Promise.resolve(false);
     return this.apply("classes", selectionId, [
       {
         kind: "set_class_tokens",
-        range: target.shape.classes.range,
+        range: target.node.definition!.range,
         add: [],
         remove: [token],
         responsive: { kind: "base" },
@@ -890,16 +964,11 @@ export class InspectorController {
 
   setText(selectionId: string, text: string): Promise<boolean> {
     const target = editTargetOf(this.state, "text", selectionId);
-    if (!target || target.shape.text.kind !== "literal") return Promise.resolve(false);
-    const next = text.trim();
-    if (next.length === 0 || next === target.shape.text.text) return Promise.resolve(false);
-    const literal = target.shape.text;
+    const current = target?.node.surfaces.text;
+    if (!target || !current) return Promise.resolve(false);
+    if (text.trim().length === 0 || text === current.text) return Promise.resolve(false);
     return this.apply("text", selectionId, [
-      {
-        kind: "set_literal_text",
-        range: literal.range,
-        text: literal.leading + next + literal.trailing,
-      },
+      { kind: "set_literal_text", range: target.node.definition!.range, text },
     ]);
   }
 
@@ -911,9 +980,12 @@ export class InspectorController {
     const target = editTargetOf(this.state, surface, selectionId);
     if (!target) return false;
     const definition = target.node.definition!;
+    // Witness and workspace are fixed now, not when the reply lands: by then the
+    // panel may show another worktree and another preview.
+    const previewSessionId = this.boundSessionId();
     this.update({ edit: { status: "applying", surface }, mutating: true });
     const done = await this.write(target, definition, operations);
-    return this.settle(surface, selectionId, target, done);
+    return this.settle(surface, selectionId, target, previewSessionId, done);
   }
 
   private async write(
@@ -941,9 +1013,19 @@ export class InspectorController {
     surface: EditSurface,
     selectionId: string,
     target: EditTarget,
+    previewSessionId: string | null,
     done: { raw: unknown } | { error: unknown }
   ): boolean {
+    if (this.currentWorkspaceId() !== target.workspaceSessionId) {
+      // The reply belongs to a workspace this panel has left; its receipt and
+      // Undo would point at a journal the current workspace doesn't hold.
+      return false;
+    }
     this.update({ mutating: false });
+    if ("error" in done && isWorkspaceClosed(done.error)) {
+      this.recoverClosedWorkspace(target.workspaceSessionId);
+      return false;
+    }
     if ("error" in done) {
       this.update({
         edit: this.isSelection(selectionId)
@@ -973,9 +1055,14 @@ export class InspectorController {
       return false;
     }
     const result = parsed.data;
+    if (result.status === "error" && isWorkspaceClosed(result)) {
+      this.recoverClosedWorkspace(target.workspaceSessionId);
+      return false;
+    }
     const stillSelected = this.isSelection(selectionId);
     switch (result.status) {
       case "applied":
+        this.noteChanged(result.receipt.file);
         this.update({
           edit: { status: "idle" },
           receipt: {
@@ -983,7 +1070,7 @@ export class InspectorController {
             surface,
             receipt: result.receipt,
             workspaceSessionId: target.workspaceSessionId,
-            previewSessionId: this.boundSessionId(),
+            previewSessionId,
             epochAtWrite: this.state.epoch,
             previewRefreshed: false,
             undo: { status: "available" },
@@ -1042,6 +1129,8 @@ export class InspectorController {
       return;
     }
     const transactionId = receipt.receipt.transactionId;
+    const workspaceSessionId = receipt.workspaceSessionId;
+    const previewSessionId = this.boundSessionId();
     this.update({ receipt: { ...receipt, undo: { status: "pending" } }, mutating: true });
 
     let raw: unknown;
@@ -1051,13 +1140,16 @@ export class InspectorController {
         transactionId,
       });
     } catch (error) {
+      if (this.currentWorkspaceId() !== workspaceSessionId) return;
       this.update({ mutating: false });
+      if (isWorkspaceClosed(error)) return this.recoverClosedWorkspace(workspaceSessionId);
       this.patchUndo(transactionId, {
         status: "failed",
         message: formatErrorMessage(error, "The edit couldn't be undone"),
       });
       return;
     }
+    if (this.currentWorkspaceId() !== workspaceSessionId) return;
     this.update({ mutating: false });
     const parsed = EditUndoResultSchema.safeParse(raw);
     if (!parsed.success) {
@@ -1072,19 +1164,23 @@ export class InspectorController {
       this.patchUndo(transactionId, { status: "superseded" });
       return;
     }
+    if (result.status === "error" && isWorkspaceClosed(result)) {
+      return this.recoverClosedWorkspace(workspaceSessionId);
+    }
     if (result.status === "error") {
       this.patchUndo(transactionId, { status: "failed", message: result.message });
       return;
     }
     const current = this.state.receipt;
     if (current?.receipt.transactionId !== transactionId) return;
+    this.noteChanged(result.receipt.file);
     this.update({
       receipt: {
         kind: "undo",
         surface: current.surface,
         receipt: result.receipt,
         workspaceSessionId: current.workspaceSessionId,
-        previewSessionId: this.boundSessionId(),
+        previewSessionId,
         epochAtWrite: this.state.epoch,
         previewRefreshed: false,
         undo: null,
@@ -1114,6 +1210,9 @@ export class InspectorController {
       });
       const parsed = ClassCompleteResultSchema.safeParse(raw);
       if (!parsed.success) return { status: "unavailable", reason: "Class list unavailable" };
+      if (parsed.data.status === "unavailable" && isWorkspaceClosed(parsed.data)) {
+        this.recoverClosedWorkspace(workspace.workspaceSessionId);
+      }
       return parsed.data;
     } catch (error) {
       return {
@@ -1143,7 +1242,6 @@ export interface EditTarget {
   file: string;
   selection: SiteSelection;
   node: SelectedNode;
-  shape: ElementShape;
 }
 
 /**
@@ -1157,7 +1255,7 @@ export function editTargetOf(
   /** The selection the user was looking at when they acted; a newer one never inherits the edit. */
   selectionId?: string
 ): EditTarget | null {
-  const { workspace, selection, source, binding, edit, epoch } = state;
+  const { workspace, selection, binding, edit, epoch } = state;
   if (binding.status !== "bound" || workspace.status !== "ready") return null;
   if (workspace.support.level !== "full") return null;
   if (selection.status !== "ready" || selection.stale !== null || !selection.file) return null;
@@ -1168,15 +1266,14 @@ export function editTargetOf(
   const node = selection.selection.nodes[0]!;
   if (!node.definition || !isEditableMapping(node)) return null;
   if (capabilityFor(node, surface)?.support !== "direct") return null;
-  if (source.status !== "ok" || source.selectionId !== selection.selection.selectionId) {
-    return null;
-  }
+  // Main decodes the value from the real AST; without it there is nothing to show
+  // as the current value, so nothing to edit against.
+  if (node.surfaces[surface] === null) return null;
   return {
     workspaceSessionId: workspace.workspaceSessionId,
     file: selection.file,
     selection: selection.selection,
     node,
-    shape: source.shape,
   };
 }
 
@@ -1186,14 +1283,6 @@ export function capabilityFor(node: SelectedNode, surface: EditSurface) {
 
 export function isEditableMapping(node: SelectedNode): boolean {
   return node.mapping === "exact" || node.mapping === "definition-only";
-}
-
-function hasDirectSurface(node: SelectedNode): boolean {
-  return (
-    isEditableMapping(node) &&
-    (capabilityFor(node, "text")?.support === "direct" ||
-      capabilityFor(node, "classes")?.support === "direct")
-  );
 }
 
 const controllers = new Map<string, InspectorController>();
@@ -1214,10 +1303,15 @@ export function acquireInspectorController(
     controller = created;
     controllers.set(panelId, created);
     const release = () => {
+      panelRemovedSignal.removeEventListener("abort", release);
       if (controllers.get(panelId) === created) releaseInspectorController(panelId);
     };
     if (panelRemovedSignal.aborted) queueMicrotask(release);
     else panelRemovedSignal.addEventListener("abort", release, { once: true });
+    // Disabling the plugin closes every workspace in main. A cached controller
+    // would come back on re-enable holding a dead session and a live preview
+    // binding, so it goes entirely; the remounted view starts a fresh one.
+    created.onPluginDisabled = release;
   }
   return controller;
 }
