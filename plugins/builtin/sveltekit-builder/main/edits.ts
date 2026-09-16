@@ -20,7 +20,8 @@ import type {
 import { loadParse, loadSourceModel, type SourceModel } from "./engine.js";
 import { changedRange, type KeyedLock } from "./journal.js";
 import {
-  containsRealPath,
+  realPathWithin,
+  withBom,
   isGeneratedPath,
   MAX_SOURCE_BYTES,
   offsetToLocation,
@@ -90,10 +91,12 @@ async function writeChecked(
   absolutePath: string,
   worktreeRelative: string,
   contents: string,
-  expectedRevision: string
+  expectedRevision: string,
+  /** The tracker's key for this file, when the write goes through a different spelling. */
+  trackedPath: string = absolutePath
 ): Promise<WriteOutcome> {
   const planned = sha256Hex(contents);
-  workspace.tracker.beginWrite(absolutePath, worktreeRelative, planned);
+  workspace.tracker.beginWrite(trackedPath, worktreeRelative, planned);
   let written: string | null = null;
   try {
     const result = await workspace.fs.writeFile(absolutePath, contents, { expectedRevision });
@@ -116,7 +119,7 @@ async function writeChecked(
     // nothing. The tracker's recheck reports whatever is on disk now.
     return writeFailure(error);
   } finally {
-    workspace.tracker.endWrite(absolutePath, planned, written);
+    workspace.tracker.endWrite(trackedPath, planned, written);
   }
 }
 
@@ -416,7 +419,8 @@ async function performEdit(
     return fail("UNSUPPORTED_EXPRESSION", "this app's installed toolchain is preview-only");
   }
   const target = resolveWorktreePath(workspace, args.file);
-  if (!target.ok || !(await containsRealPath(workspace.appRoot, target.absolute))) {
+  const realPath = target.ok ? await realPathWithin(workspace.appRoot, target.absolute) : null;
+  if (!target.ok || realPath === null) {
     return fail("OUT_OF_SCOPE", `${args.file} is not inside the app`);
   }
   const model = await loadSourceModel();
@@ -443,7 +447,8 @@ async function performEdit(
     if (candidate.status !== "planned") return candidate;
     // Every read refuses files over the cap, so an edit that crosses it would
     // be saved and then impossible to undo or edit again.
-    if (Buffer.byteLength(candidate.after, "utf8") > MAX_SOURCE_BYTES) {
+    const contents = withBom(candidate.after, read.bom);
+    if (Buffer.byteLength(contents, "utf8") > MAX_SOURCE_BYTES) {
       return fail("OUT_OF_SCOPE", `the edit would grow ${args.file} past the editable size`);
     }
 
@@ -451,7 +456,7 @@ async function performEdit(
       workspace,
       target.absolute,
       target.worktreeRelative,
-      candidate.after,
+      contents,
       read.revision
     );
     if (write.status === "error") return write;
@@ -466,6 +471,8 @@ async function performEdit(
       transactionId,
       absolutePath: target.absolute,
       worktreeRelative: target.worktreeRelative,
+      realPath,
+      bom: read.bom,
       before: read.text,
       after: candidate.after,
       beforeRevision: read.revision,
@@ -576,7 +583,18 @@ export async function undoEdit(
     const entry = workspace.journal.get(transactionId);
     if (!entry) return fail("NODE_NOT_FOUND", "that edit is no longer in the undo history");
 
-    const current = await readSource(workspace.fs, entry.absolutePath);
+    // The path is re-contained on every undo, not trusted from apply time: the
+    // file must still be inside the app and still be the same file on disk.
+    const stillTheFile = async () =>
+      (await realPathWithin(workspace.appRoot, entry.absolutePath)) === entry.realPath;
+    const moved = () =>
+      fail("OUT_OF_SCOPE", `${entry.worktreeRelative} no longer resolves to the edited file`);
+    if (!(await stillTheFile())) return moved();
+
+    // Read and write through the real path recorded at apply, so a symlink
+    // swapped into the lexical path between the check and the host's own
+    // resolution cannot redirect the reversal.
+    const current = await readSource(workspace.fs, entry.realPath);
     if (current.status === "missing") {
       return fail("STALE_SOURCE", `${entry.worktreeRelative} is unavailable`);
     }
@@ -587,12 +605,14 @@ export async function undoEdit(
       return { status: "superseded", currentRevision: current.revision };
     }
 
+    if (!(await stillTheFile())) return moved();
     const write = await writeChecked(
       workspace,
-      entry.absolutePath,
+      entry.realPath,
       entry.worktreeRelative,
-      entry.before,
-      entry.afterRevision
+      withBom(entry.before, entry.bom),
+      entry.afterRevision,
+      entry.absolutePath
     );
     if (write.status === "error") return write;
     if (write.status === "mismatch") {
@@ -610,6 +630,8 @@ export async function undoEdit(
       transactionId: inverseId,
       absolutePath: entry.absolutePath,
       worktreeRelative: entry.worktreeRelative,
+      realPath: entry.realPath,
+      bom: entry.bom,
       before: entry.after,
       after: entry.before,
       beforeRevision: entry.afterRevision,

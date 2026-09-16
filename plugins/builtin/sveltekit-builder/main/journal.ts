@@ -24,6 +24,14 @@ export interface JournalEntry {
   transactionId: string;
   absolutePath: string;
   worktreeRelative: string;
+  /**
+   * Where `absolutePath` resolved on disk when the edit was applied. Undo
+   * refuses unless it still resolves there: a directory swapped for a symlink
+   * would otherwise redirect the reversal to a different file.
+   */
+  realPath: string;
+  /** `before`/`after` are BOM-free model text; the file's bytes carry a BOM when set. */
+  bom: boolean;
   before: string;
   after: string;
   beforeRevision: string;

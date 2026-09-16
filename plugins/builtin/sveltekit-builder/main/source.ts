@@ -29,10 +29,20 @@ export function sha256Hex(data: Uint8Array | string): string {
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export type SourceRead =
-  | { status: "ok"; text: string; revision: string }
+  /**
+   * `text` never carries a leading BOM. Svelte's `parse` and `compile` strip
+   * one before assigning offsets, so every AST range and every
+   * `__svelte_meta` location is measured without it; `bom` says whether the
+   * file's bytes have one, and `withBom` puts it back for a write.
+   */
+  | { status: "ok"; text: string; bom: boolean; revision: string }
   | { status: "missing" }
   | { status: "too-large" }
   | { status: "not-utf8"; revision: string };
+
+export function withBom(text: string, bom: boolean): string {
+  return bom ? `\uFEFF${text}` : text;
+}
 
 export async function readSource(fs: PluginFsApi, absolutePath: string): Promise<SourceRead> {
   let bytes: Uint8Array;
@@ -45,7 +55,9 @@ export async function readSource(fs: PluginFsApi, absolutePath: string): Promise
   if (bytes.byteLength > MAX_SOURCE_BYTES) return { status: "too-large" };
   const revision = sha256Hex(bytes);
   try {
-    return { status: "ok", text: decoder.decode(bytes), revision };
+    const decoded = decoder.decode(bytes);
+    const bom = decoded.charCodeAt(0) === 0xfeff;
+    return { status: "ok", text: bom ? decoded.slice(1) : decoded, bom, revision };
   } catch {
     return { status: "not-utf8", revision };
   }
@@ -134,14 +146,20 @@ export function offsetToLocation(source: string, offset: number): { line: number
  * worktree. Both ends are resolved on disk before anything is read or written.
  * Only paths are resolved here; content still goes through `host.fs`.
  */
-export async function containsRealPath(appRoot: string, absolute: string): Promise<boolean> {
+export async function realPathWithin(appRoot: string, absolute: string): Promise<string | null> {
   try {
     const [root, target] = await Promise.all([realpath(appRoot), realpath(absolute)]);
     const relative = path.relative(root, target);
-    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+      ? target
+      : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function containsRealPath(appRoot: string, absolute: string): Promise<boolean> {
+  return (await realPathWithin(appRoot, absolute)) !== null;
 }
 
 /**
