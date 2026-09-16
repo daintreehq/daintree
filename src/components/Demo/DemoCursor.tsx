@@ -571,9 +571,13 @@ export function DemoCursor() {
               isPrimary: true,
               button: 0,
             };
-            clickTarget.dispatchEvent(new PointerEvent("pointerdown", { ...pointerOpts, buttons: 1 }));
+            clickTarget.dispatchEvent(
+              new PointerEvent("pointerdown", { ...pointerOpts, buttons: 1 })
+            );
             clickTarget.dispatchEvent(new MouseEvent("mousedown", { ...opts, buttons: 1 }));
-            clickTarget.dispatchEvent(new PointerEvent("pointerup", { ...pointerOpts, buttons: 0 }));
+            clickTarget.dispatchEvent(
+              new PointerEvent("pointerup", { ...pointerOpts, buttons: 0 })
+            );
             clickTarget.dispatchEvent(new MouseEvent("mouseup", { ...opts, buttons: 0 }));
             clickTarget.dispatchEvent(new MouseEvent("click", { ...opts, buttons: 0 }));
           }
@@ -917,7 +921,12 @@ export function DemoCursor() {
                   })
                 );
                 moveTarget.dispatchEvent(
-                  new MouseEvent("mousemove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
+                  new MouseEvent("mousemove", {
+                    ...eventOpts,
+                    clientX: cx,
+                    clientY: cy,
+                    buttons: 1,
+                  })
                 );
 
                 if (t >= 1) {

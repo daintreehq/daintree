@@ -343,7 +343,13 @@ export function resolveAnnotationPlacement(
   // edge still bleeds half its width off-screen. Estimate the rendered box size
   // (real glyph advance + wrapped line count), derive its span from the
   // translate anchors, and shift it back inside the margins.
-  const { estW, estH } = estimateCaptionBox(payload.text, normalizeSize(payload.size), screenWide, fw, fh);
+  const { estW, estH } = estimateCaptionBox(
+    payload.text,
+    normalizeSize(payload.size),
+    screenWide,
+    fw,
+    fh
+  );
 
   // Independent (not else-if) per-edge clamps: a box larger than the safe area on
   // an axis can violate both edges, and applying both shifts leaves it centered/
