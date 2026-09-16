@@ -168,6 +168,23 @@ export const SelectedNodeSchema = z
     label: z.string(),
     bounds: z.array(RectSchema),
     capabilities: z.array(EditCapabilitySchema),
+    /**
+     * The editable values, decoded by main from the real AST. The view shows and
+     * edits these and addresses operations by `definition.range`; it never
+     * re-derives tokens or text from source itself. A second parser in the view
+     * disagreed with the compiler on entities, whitespace and expressions, and
+     * one disagreement removed a different class token than the one clicked.
+     * Null for a surface that is not directly editable.
+     */
+    surfaces: z
+      .object({
+        classes: z
+          .object({ tokens: z.array(z.string()) })
+          .strict()
+          .nullable(),
+        text: z.object({ text: z.string() }).strict().nullable(),
+      })
+      .strict(),
   })
   .strict();
 export type SelectedNode = z.infer<typeof SelectedNodeSchema>;
