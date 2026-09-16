@@ -7,7 +7,9 @@ import { primeRadix } from "@/components/ui/radix-loader";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 
 const getChecksMock = vi.fn();
-const openSendToAgentMock = vi.fn();
+// Typed rather than bare `vi.fn()`: an untyped mock returns `any`, and the cast
+// back at the call site is exactly what `no-unsafe-type-assertion` flags.
+const openSendToAgentMock = vi.fn<(text: string, sourceTerminalId?: string) => boolean>();
 
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: { getChecks: (cwd: string, prNumber: number) => getChecksMock(cwd, prNumber) },
@@ -15,7 +17,7 @@ vi.mock("@/clients/forgeClient", () => ({
 
 vi.mock("@/hooks/useSendToAgentPalette", () => ({
   openSendToAgentPaletteWithText: (text: string, sourceTerminalId?: string) =>
-    openSendToAgentMock(text, sourceTerminalId) as boolean,
+    openSendToAgentMock(text, sourceTerminalId),
 }));
 
 import { PrChecksPopover } from "../PrChecksPopover";
@@ -125,7 +127,7 @@ describe("PrChecksPopover", () => {
     expect(rows[1]!.textContent).toContain("Running");
     // Known-optional and unknown-requiredness must not read alike.
     expect(rows[2]!.textContent).toContain("Passed · Not required");
-    expect(rows[1]!.textContent).not.toContain("required");
+    expect(rows[1]!.textContent).not.toMatch(/required/i);
   });
 
   it("routes a validated details link through the external opener", async () => {
@@ -283,6 +285,8 @@ describe("PrChecksPopover", () => {
         pending.resolve({ checks: [check()] });
       });
       expect(screen.getByTestId("pr-checks-skeleton")).toBeTruthy();
+      // The floor means holding the placeholder, not stacking it on the results.
+      expect(screen.queryByTestId("pr-checks-list")).toBeNull();
 
       await act(async () => {
         vi.advanceTimersByTime(400);

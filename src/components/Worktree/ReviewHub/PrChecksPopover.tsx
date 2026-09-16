@@ -97,6 +97,8 @@ export function PrChecksPopover({
   // a consumer that preventDefaults close-autofocus owns the outcome, which is what
   // stops Radix's deferred restoration yanking focus back off the palette.
   const suppressCloseFocusRef = useRef(false);
+  // Null until the lazily-loaded Radix layer actually mounts its content.
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   // A read outliving the component must not resolve into a dead setState.
   useEffect(() => () => void (requestIdRef.current += 1), []);
@@ -143,15 +145,23 @@ export function PrChecksPopover({
     [runFetch]
   );
 
-  // Escape belongs to the disclosure while it is open, and neither the hub nor
-  // Radix can be relied on to give it up: the hub's own handler is a
-  // document-capture listener that closes the whole hub, and Radix is not
-  // listening at all until its lazy bundle has landed. Window capture runs
-  // ahead of both, so this is the one place the claim is unconditional.
+  // Escape has to reach the disclosure, and between the hub and Radix there is a
+  // window where it would not. The hub's own handler is a document-capture
+  // listener that closes the whole hub; Radix's is registered only once its lazy
+  // bundle has landed and the layer is mounted. Window capture runs ahead of
+  // both, so this closes the gap — and only the gap.
+  //
+  // Once the content is mounted this stands down rather than claiming the key.
+  // Radix owns Escape properly: stopping propagation here would skip
+  // `PopoverContent`'s `onKeyDown`, which is what clears the pointer-selection
+  // flags in `overlay-focus-restore.ts`. A pointer click on Refresh followed by
+  // Escape would then be restored as a pointer close and lose the focus ring a
+  // keyboard user is owed. The hub's `PR_CHECKS_OPEN_ATTR` backstop is what
+  // keeps the hub out of the way for that path.
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || contentRef.current) return;
       event.preventDefault();
       event.stopPropagation();
       handleOpenChange(false);
@@ -180,141 +190,146 @@ export function PrChecksPopover({
   const reloadLabel = state.kind === "error" || state.kind === "no-pr" ? "Retry" : "Refresh";
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger
-        type="button"
-        data-testid="pr-checks-trigger"
-        aria-label={triggerLabel}
-        {...{ [PR_CHECKS_OPEN_ATTR]: open ? "true" : undefined }}
-        className={cn("inline-flex items-center rounded-sm cursor-pointer", FOCUS_RING)}
-      >
-        {children}
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={8}
-        aria-label={`CI checks for pull request #${prNumber}`}
-        data-testid="pr-checks-popover"
-        className="p-1 min-w-72 max-w-md text-xs"
-        onCloseAutoFocus={(event) => {
-          if (!suppressCloseFocusRef.current) return;
-          suppressCloseFocusRef.current = false;
-          event.preventDefault();
-        }}
-      >
-        {/* One live region, mounted empty before it ever has something to say —
-            a status node inserted already populated is announced unreliably.
-            It carries a summary, never the whole list, which the reader can
-            walk itself. */}
-        <p role="status" aria-live="polite" className="sr-only">
-          {describeState(state, prNumber, showSkeleton, sendHint)}
-        </p>
-
-        {showSkeleton ? (
-          // `inert`: the single region above owns announcements, so the
-          // skeleton must not add an `aria-busy` region of its own.
-          <Skeleton
-            inert
-            data-testid="pr-checks-skeleton"
-            label="Loading CI checks"
-            className="flex flex-col gap-1.5 px-2 py-1.5"
-          >
-            {/* `immediate`: the Doherty gate already absorbed the anti-flicker delay. */}
-            <SkeletonBone immediate className="h-3 w-40 rounded-sm" />
-            <SkeletonBone immediate className="h-3 w-32 rounded-sm" />
-            <SkeletonBone immediate className="h-3 w-36 rounded-sm" />
-          </Skeleton>
-        ) : (
-          <>
-            {state.kind === "error" && (
-              <ChecksNotice testId="pr-checks-error" message="Couldn't load checks." />
-            )}
-            {state.kind === "no-pr" && (
-              <ChecksNotice
-                testId="pr-checks-missing"
-                message={`Pull request #${prNumber} wasn't found.`}
-              />
-            )}
-            {state.kind === "empty" && (
-              <ChecksNotice
-                testId="pr-checks-empty"
-                message={`No CI checks reported on pull request #${prNumber}.`}
-              />
-            )}
-            {state.kind === "loaded" && (
-              <ul
-                data-testid="pr-checks-list"
-                className="flex flex-col gap-0.5 max-h-64 overflow-y-auto"
-              >
-                {state.rows.map((row) => {
-                  const { Icon, toneClass } = row.outcome;
-                  const detailsUrl = row.detailsUrl;
-                  const outcomeText = describeOutcome(row);
-                  return (
-                    <li key={row.key} className="flex items-start gap-2 px-2 py-1.5 rounded-sm">
-                      <Icon
-                        className={cn("w-3.5 h-3.5 shrink-0 mt-px", toneClass)}
-                        aria-hidden="true"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="font-medium text-text-primary break-words">
-                          {row.name}
+    <>
+      {/* Outside `PopoverContent` on purpose: that subtree is lazily mounted, so
+          a region living inside it would first appear already carrying its
+          message — which is the announcement that does not land. Here it is
+          mounted empty for the whole life of the chip. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {open ? describeState(state, prNumber, showSkeleton, sendHint) : ""}
+      </p>
+      <Popover open={open} onOpenChange={handleOpenChange}>
+        <PopoverTrigger
+          type="button"
+          data-testid="pr-checks-trigger"
+          aria-label={triggerLabel}
+          {...{ [PR_CHECKS_OPEN_ATTR]: open ? "true" : undefined }}
+          className={cn("inline-flex items-center rounded-sm cursor-pointer", FOCUS_RING)}
+        >
+          {children}
+        </PopoverTrigger>
+        <PopoverContent
+          ref={contentRef}
+          align="start"
+          sideOffset={8}
+          aria-label={`CI checks for pull request #${prNumber}`}
+          data-testid="pr-checks-popover"
+          className="p-1 min-w-72 max-w-md text-xs"
+          onCloseAutoFocus={(event) => {
+            if (!suppressCloseFocusRef.current) return;
+            suppressCloseFocusRef.current = false;
+            event.preventDefault();
+          }}
+        >
+          {showSkeleton ? (
+            // `inert`: the single region above owns announcements, so the
+            // skeleton must not add an `aria-busy` region of its own.
+            <Skeleton
+              inert
+              data-testid="pr-checks-skeleton"
+              label="Loading CI checks"
+              className="flex flex-col gap-1.5 px-2 py-1.5"
+            >
+              {/* `immediate`: the Doherty gate already absorbed the anti-flicker delay. */}
+              <SkeletonBone immediate className="h-3 w-40 rounded-sm" />
+              <SkeletonBone immediate className="h-3 w-32 rounded-sm" />
+              <SkeletonBone immediate className="h-3 w-36 rounded-sm" />
+            </Skeleton>
+          ) : (
+            <>
+              {state.kind === "error" && (
+                <ChecksNotice testId="pr-checks-error" message="Couldn't load checks." />
+              )}
+              {state.kind === "no-pr" && (
+                <ChecksNotice
+                  testId="pr-checks-missing"
+                  message={`Pull request #${prNumber} wasn't found.`}
+                />
+              )}
+              {state.kind === "empty" && (
+                <ChecksNotice
+                  testId="pr-checks-empty"
+                  message={`No CI checks reported on pull request #${prNumber}.`}
+                />
+              )}
+              {state.kind === "loaded" && (
+                <ul
+                  data-testid="pr-checks-list"
+                  className="flex flex-col gap-0.5 max-h-64 overflow-y-auto"
+                >
+                  {state.rows.map((row) => {
+                    const { Icon, toneClass } = row.outcome;
+                    const detailsUrl = row.detailsUrl;
+                    const outcomeText = describeOutcome(row);
+                    return (
+                      <li key={row.key} className="flex items-start gap-2 px-2 py-1.5 rounded-sm">
+                        <Icon
+                          className={cn("w-3.5 h-3.5 shrink-0 mt-px", toneClass)}
+                          aria-hidden="true"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="font-medium text-text-primary break-words">
+                            {row.name}
+                          </span>
+                          <span className="block text-text-secondary">{outcomeText}</span>
                         </span>
-                        <span className="block text-text-secondary">{outcomeText}</span>
-                      </span>
-                      {detailsUrl && (
-                        <button
-                          type="button"
-                          onClick={() => onOpenExternal(detailsUrl)}
-                          // Matrix jobs repeat names, so the name alone leaves two
-                          // buttons identically labelled when a reader tabs the list
-                          // without hearing the rows between them.
-                          aria-label={`Open details for ${row.name} (${outcomeText})`}
-                          className={ROW_ACTION_CLASS}
-                        >
-                          <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                        </button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </>
-        )}
+                        {detailsUrl && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenExternal(detailsUrl)}
+                            // Matrix jobs repeat names, so the name alone leaves two
+                            // buttons identically labelled when a reader tabs the list
+                            // without hearing the rows between them.
+                            aria-label={`Open details for ${row.name} (${outcomeText})`}
+                            className={ROW_ACTION_CLASS}
+                          >
+                            <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
+          )}
 
-        {sendHint && (
-          <p data-testid="pr-checks-send-hint" className="px-2 pt-1.5 text-2xs text-text-secondary">
-            {sendHint}
-          </p>
-        )}
+          {sendHint && (
+            <p
+              data-testid="pr-checks-send-hint"
+              className="px-2 pt-1.5 text-2xs text-text-secondary"
+            >
+              {sendHint}
+            </p>
+          )}
 
-        {/* Mounted in every state on purpose. Re-reading used to unmount the
+          {/* Mounted in every state on purpose. Re-reading used to unmount the
             control that triggered it, which for a keyboard user dropped focus
             onto `document.body` inside an open popover. */}
-        <div className="flex items-center justify-between gap-2 px-2 pt-1.5 pb-0.5 mt-1 border-t border-divider">
-          <button
-            type="button"
-            data-testid="pr-checks-reload"
-            onClick={runFetch}
-            className={LINK_BUTTON_CLASS}
-          >
-            {reloadLabel}
-          </button>
-          {failingCount > 0 && (
+          <div className="flex items-center justify-between gap-2 px-2 pt-1.5 pb-0.5 mt-1 border-t border-divider">
             <button
               type="button"
-              data-testid="pr-checks-send"
-              onClick={handleSend}
-              className={FOOTER_BUTTON_CLASS}
+              data-testid="pr-checks-reload"
+              onClick={runFetch}
+              className={LINK_BUTTON_CLASS}
             >
-              <Send className="w-3 h-3" aria-hidden="true" />
-              Send to agent
+              {reloadLabel}
             </button>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+            {failingCount > 0 && (
+              <button
+                type="button"
+                data-testid="pr-checks-send"
+                onClick={handleSend}
+                className={FOOTER_BUTTON_CLASS}
+              >
+                <Send className="w-3 h-3" aria-hidden="true" />
+                Send to agent
+              </button>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </>
   );
 }
 

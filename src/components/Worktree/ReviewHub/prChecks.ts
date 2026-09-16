@@ -124,22 +124,18 @@ export function getCheckOutcomeVisual(check: ForgeCheckRun): {
 
 /**
  * A fork PR names its own jobs, so a check name is attacker-influenceable text
- * that lands in the DOM and — via the hand-off — in an agent's input. Strip the
+ * that lands in the DOM. Strip the
  * escape and control vocabulary first, then collapse the whitespace
  * `sanitizeErrorText` deliberately preserves (HT/LF/CR): a name carrying twenty
  * newlines is not dangerous, but it does turn one row into a wall.
  *
- * `$` and a backtick go too, and that one is not cosmetic. The hand-off is
- * delivered by the send-to-agent palette, which falls back to a raw
- * carriage-return-terminated write when the target pane is not in bracketed
- * paste mode (`sendSelectionToTarget`) — a shell then executes each line. The
- * name travels inside a double-quoted JSON string, and command substitution is
- * the only thing that still expands there, so removing its two introducers
- * removes the primitive. Losing a literal `$` from a job name is a trade worth
- * making.
+ * Printable characters survive verbatim, deliberately — this is what the row
+ * displays, and a job legitimately named "deploy ($PROD)" should read that way.
+ * The separate hazard of shell expansion belongs to the hand-off, the only
+ * place this text reaches a shell; see {@link composePrChecksAgentText}.
  */
 export function sanitizeCheckName(raw: string): string {
-  const collapsed = sanitizeErrorText(raw).replace(/[$`]/g, "").replace(/\s+/g, " ").trim();
+  const collapsed = sanitizeErrorText(raw).replace(/\s+/g, " ").trim();
   if (!collapsed) return "Unnamed check";
   return boundedErrorText(collapsed, CHECK_NAME_LIMIT);
 }
@@ -252,7 +248,7 @@ export function composePrChecksAgentText({
     })),
   };
 
-  return [
+  const text = [
     `Investigate the failing CI checks on pull request #${prNumber}.`,
     "",
     `Pull request: ${JSON.stringify(safeDetailsUrl(prUrl) ?? null)}`,
@@ -262,8 +258,26 @@ export function composePrChecksAgentText({
     "",
     JSON.stringify(payload, null, 2),
     "",
-    // No backticks in this prose, deliberately. The same raw-write fallback that
-    // makes a check name dangerous would expand our own command example too.
     "Logs are not included — fetch them yourself (on GitHub, gh run view --log-failed), and check the results still match the PR's current head. Do not commit, push, merge, or rerun CI unless I ask.",
   ].join("\n");
+
+  return stripShellExpansion(text);
+}
+
+/**
+ * The delivery transport forces this, not caution. `sendSelectionToTarget` in
+ * the send-to-agent palette falls back to a raw carriage-return-terminated
+ * write whenever the chosen pane is not in bracketed-paste mode, and a shell on
+ * the other end then executes every line. Inside the double-quoted JSON strings
+ * this text is built from, three introducers still expand: `$` (command,
+ * parameter and arithmetic substitution), a backtick (the older command
+ * substitution), and `!` (history expansion, in an interactive bash or zsh).
+ *
+ * Applied to the whole composed string rather than field by field on purpose.
+ * Check names, the per-check details URLs, the pull request URL, the worktree
+ * path and this function's own prose all end up on those lines, and a per-field
+ * guard is one forgotten field away from being no guard at all.
+ */
+function stripShellExpansion(text: string): string {
+  return text.replace(/[$`!]/g, "");
 }

