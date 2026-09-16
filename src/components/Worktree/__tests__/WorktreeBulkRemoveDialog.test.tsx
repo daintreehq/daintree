@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type React from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, act, fireEvent, renderHook } from "@testing-library/react";
 
@@ -93,6 +94,7 @@ function hookValue(over: Partial<UseWorktreeBulkRemoveReturn> = {}): UseWorktree
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews: targets.some(isBulkRemoveRetryable),
+    isRetryingPreviews: false,
     consentKey: `1:${isPreviewPending ? "pending" : "settled"}`,
     typedNameTarget: eligibleCount === 1 ? "1 worktree" : `${eligibleCount} worktrees`,
     canConfirm: !isPreviewPending && eligibleCount > 0,
@@ -105,9 +107,19 @@ function hookValue(over: Partial<UseWorktreeBulkRemoveReturn> = {}): UseWorktree
   };
 }
 
+let rerenderDialogFn: ((ui: React.ReactElement) => void) | null = null;
+
 function renderDialog(over: Partial<UseWorktreeBulkRemoveReturn> = {}) {
   const value = hookValue(over);
-  render(<WorktreeBulkRemoveDialog bulkRemove={value} />);
+  const { rerender } = render(<WorktreeBulkRemoveDialog bulkRemove={value} />);
+  rerenderDialogFn = rerender;
+  return value;
+}
+
+/** Re-render the same mounted dialog with a new hook snapshot. */
+function rerenderDialog(over: Partial<UseWorktreeBulkRemoveReturn> = {}) {
+  const value = hookValue(over);
+  rerenderDialogFn!(<WorktreeBulkRemoveDialog bulkRemove={value} />);
   return value;
 }
 
@@ -158,6 +170,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  rerenderDialogFn = null;
 });
 
 describe("WorktreeBulkRemoveDialog — the preview is the consent (#12416)", () => {
@@ -196,6 +209,11 @@ describe("WorktreeBulkRemoveDialog — the preview is the consent (#12416)", () 
     renderDialog({ targets: [target("a")] });
 
     const row = document.querySelector('[data-testid="bulk-remove-target"]')!;
+    // The warning CONTAINER, not just its text: dropping the empty-risks guard
+    // leaves a bare alert icon behind, which every text-based assertion here
+    // would happily pass.
+    expect(document.querySelector('[data-testid="bulk-remove-risks"]')).toBeNull();
+    expect(row.querySelector("svg.text-status-warning")).toBeNull();
     expect(document.querySelector('[data-testid="bulk-remove-file-list"]')).toBeNull();
     expect(document.querySelector('[data-testid="bulk-remove-excluded"]')).toBeNull();
     expect(document.querySelector('[role="status"]')).toBeNull();
@@ -499,6 +517,33 @@ describe("WorktreeBulkRemoveDialog — activation", () => {
     typeTheCount("1 worktree");
     act(() => confirmButton()!.click());
     expect(value.handleConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Retry mounted through its own re-run so focus is never stranded", () => {
+    // Clicking Retry drops every row back to pending, which clears
+    // `hasRetryablePreviews`. Unmounting the button under the user's own click
+    // drops focus onto document.body inside an open dialog.
+    const value = renderDialog({
+      targets: [target("a", { status: { state: "failed", submodules: null } })],
+    });
+    const retry = document.querySelector(
+      '[data-testid="bulk-remove-retry-previews"]'
+    ) as HTMLButtonElement;
+    act(() => retry.click());
+    expect(value.handleRetryPreviews).toHaveBeenCalled();
+
+    // What the hook reports mid-retry: everything back to pending, nothing
+    // retryable any more, and `isRetryingPreviews` carrying the reason.
+    rerenderDialog({
+      targets: [target("a", { status: { state: "pending" } })],
+      isPreviewPending: true,
+      isRetryingPreviews: true,
+    });
+    const afterRetry = document.querySelector(
+      '[data-testid="bulk-remove-retry-previews"]'
+    ) as HTMLButtonElement | null;
+    expect(afterRetry, "Retry must survive its own click").not.toBeNull();
+    expect(afterRetry!.disabled).toBe(true);
   });
 
   it("disables Retry while the batch is executing", () => {

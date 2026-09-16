@@ -463,6 +463,31 @@ describe("useWorktreeBulkRemove — fail-closed exclusions", () => {
     expect(hook.result.current.canConfirm).toBe(true);
   });
 
+  it("reports a retry as in flight until its generation settles", async () => {
+    // The dialog keeps its Retry button mounted off this flag; deriving it from
+    // `hasRetryablePreviews` alone would unmount the button mid-click, because
+    // a retry sends every row back to pending.
+    const gate = deferFreshChanges();
+    const { hook } = setup(["a"], [wt("a")]);
+
+    act(() => hook.result.current.handleRemoveClick());
+    expect(hook.result.current.isRetryingPreviews).toBe(false);
+    act(() => {
+      gate.resolve("a", fresh("a"));
+    });
+    await flush();
+
+    act(() => hook.result.current.handleRetryPreviews());
+    expect(hook.result.current.isRetryingPreviews).toBe(true);
+    expect(hook.result.current.hasRetryablePreviews).toBe(false);
+
+    act(() => {
+      gate.resolve("a", fresh("a"), 1);
+    });
+    await flush();
+    expect(hook.result.current.isRetryingPreviews).toBe(false);
+  });
+
   it("drops an in-flight generation when Retry starts a new one mid-fetch", async () => {
     const gate = deferFreshChanges();
     const { hook } = setup(["a"], [wt("a")]);
@@ -486,20 +511,36 @@ describe("useWorktreeBulkRemove — fail-closed exclusions", () => {
     expect(hook.result.current.eligibleCount).toBe(1);
   });
 
-  it("never writes back after unmount", async () => {
+  it("stops spending port requests on a generation whose dialog unmounted", async () => {
+    // Observable, not just "it didn't warn": the preview queue runs at
+    // concurrency 3, so with four targets the fourth is still queued at unmount
+    // and its task can check the generation BEFORE paying for two port
+    // requests. Asserting `logError` was silent would have passed even with
+    // every guard deleted.
     const gate = deferFreshChanges();
-    const { hook } = setup(["a"], [wt("a")]);
+    const ids = ["a", "b", "c", "d"];
+    const { hook } = setup(
+      ids,
+      ids.map((id) => wt(id))
+    );
 
     act(() => hook.result.current.handleRemoveClick());
-    hook.unmount();
+    await flush();
+    // Three in flight, one queued behind them.
+    expect(worktreeClientMock.getFreshChanges).toHaveBeenCalledTimes(3);
 
-    // Resolving into an unmounted hook must not raise an act() warning or an
-    // update-on-unmounted error; the generation bump in cleanup is what stops it.
+    hook.unmount();
     act(() => {
       gate.resolve("a", fresh("a"));
+      gate.resolve("b", fresh("b"));
+      gate.resolve("c", fresh("c"));
     });
     await flush();
-    expect(logErrorMock).not.toHaveBeenCalled();
+
+    // The queued fourth started after a slot freed, saw its generation was
+    // abandoned, and returned without calling the host.
+    expect(worktreeClientMock.getFreshChanges).toHaveBeenCalledTimes(3);
+    expect(worktreeClientMock.getFreshChanges.mock.calls.map((c) => c[0])).not.toContain("d");
   });
 });
 

@@ -2,7 +2,6 @@ import { AlertTriangle, GitBranch, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
 import {
   buildSubmoduleCommitRows,
@@ -75,12 +74,15 @@ function FileRows({ rows, label }: { rows: WorktreeChangeRow[]; label: string })
 /** The evidence body for one snapshotted target, keyed on its preview state. */
 function TargetBody({ target }: { target: BulkRemoveTarget }) {
   const status = target.status;
-  // Per row, not per batch: rows settle independently, so a batch-wide floor
-  // would hold a skeleton over evidence that had already arrived. Keeps a row
-  // that resolves a frame after onset from flashing its placeholder.
-  const showSkeleton = useSkeletonDisplayFloor(status.state === "pending");
 
-  if (status.state === "pending" || showSkeleton) {
+  // Deliberately NO `useSkeletonDisplayFloor` here. A minimum-dwell floor holds
+  // the placeholder up after the preview has landed, while `canConfirm` flips
+  // the moment the last row settles — so the primary goes live over a row still
+  // showing a skeleton, which is the "consent without evidence" this whole
+  // surface exists to close. The flash a floor guards against is already
+  // covered: `SkeletonBone`'s pulse carries a 400ms delay, so a fast preview
+  // never renders a visibly animating bone in the first place.
+  if (status.state === "pending") {
     return (
       <Skeleton label="Checking for uncommitted work" className="mt-1">
         <SkeletonBone className="h-3 w-40" />
@@ -155,7 +157,10 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
 
   return (
     <div className="mt-1">
-      <div className="flex items-start gap-1.5 text-xs text-status-warning">
+      <div
+        className="flex items-start gap-1.5 text-xs text-status-warning"
+        data-testid="bulk-remove-risks"
+      >
         <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
         <span>{risks.join(" · ")}</span>
       </div>
@@ -190,6 +195,7 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews,
+    isRetryingPreviews,
     consentKey,
   } = bulkRemove;
 
@@ -305,16 +311,20 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
       )}
       {/* Sibling to the rows' own `<Skeleton>` wrappers, never inside one:
           their `aria-busy="true"` silences live-region updates in its subtree.
-          Cancel is the honest recovery for a stalled batch — there is nothing
-          to retry until the requests come back. */}
+          No Cancel of its own: the footer already carries one that is always
+          present, and a second one here vanished out from under the user's
+          focus the moment the previews settled. */}
       {isPreviewPending && (
         <SkeletonHint
           firstThreshold={PREVIEW_HINT_THRESHOLD_MS}
-          onCancel={bulkRemove.handleCancel}
           data-testid="bulk-remove-preview-hint"
         />
       )}
-      {hasRetryablePreviews && (
+      {/* `isRetryingPreviews` keeps this mounted through its own re-run: a retry
+          drops every row to pending, clearing `hasRetryablePreviews`, and
+          unmounting the button under the user's click strands focus on
+          `document.body` inside an open dialog. */}
+      {(hasRetryablePreviews || isRetryingPreviews) && (
         <div className="flex items-center justify-between gap-2 text-xs text-text-secondary">
           <span>Some worktrees couldn&apos;t be checked and were excluded</span>
           <Button
@@ -323,7 +333,7 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
             onClick={bulkRemove.handleRetryPreviews}
             // The handler refuses mid-run anyway; leaving the button live would
             // report an affordance that silently does nothing.
-            disabled={bulkRemove.isExecuting}
+            disabled={bulkRemove.isExecuting || isPreviewPending}
             data-testid="bulk-remove-retry-previews"
           >
             Retry
@@ -332,7 +342,11 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
       )}
       <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs">
         <Trash2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-        <span>This is irreversible. Type the count to confirm.</span>
+        <span>
+          {eligibleCount > 0
+            ? "This is irreversible. Type the count to confirm."
+            : "Nothing here can be removed. Close this and check the excluded worktrees."}
+        </span>
       </div>
     </ConfirmDialog>
   );

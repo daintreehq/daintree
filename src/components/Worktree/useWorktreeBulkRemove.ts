@@ -159,6 +159,15 @@ export interface UseWorktreeBulkRemoveReturn {
   isPreviewPending: boolean;
   /** True when at least one target is excluded by something a retry could clear. */
   hasRetryablePreviews: boolean;
+  /**
+   * True from the moment Retry is pressed until that generation settles.
+   *
+   * Owned here rather than by the dialog because a retry drops every row back
+   * to pending, which clears {@link hasRetryablePreviews} — so a surface
+   * deriving "a retry is running" from its own state would have to race the
+   * hook's own `isPreviewPending` update to get it right.
+   */
+  isRetryingPreviews: boolean;
   /** Changes once when previews settle, so typed consent can't predate them. */
   consentKey: string;
   typedNameTarget: string;
@@ -279,6 +288,7 @@ export function useWorktreeBulkRemove({
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isPreviewPending, setIsPreviewPending] = useState(false);
+  const [isRetryingPreviews, setIsRetryingPreviews] = useState(false);
 
   // Snapshot the live derivation when the user clicks Remove. Reading
   // back through `useMemo(() => derive(...), [worktreeMap, selectedIds])`
@@ -336,6 +346,7 @@ export function useWorktreeBulkRemove({
     void Promise.allSettled(settled).then(() => {
       if (!mountedRef.current || previewSessionRef.current !== session) return;
       setIsPreviewPending(false);
+      setIsRetryingPreviews(false);
     });
   }, []);
 
@@ -384,6 +395,7 @@ export function useWorktreeBulkRemove({
     if (isExecutingRef.current) return;
     const targets = targetsRef.current;
     if (targets.length === 0) return;
+    setIsRetryingPreviews(true);
     openWithPreviews(
       targets.map((t) => ({ ...t, status: { state: "pending" } as const })),
       excludedMainRef.current
@@ -400,6 +412,7 @@ export function useWorktreeBulkRemove({
     setDisplayTargets([]);
     setDisplayExcludedMain(0);
     setIsPreviewPending(false);
+    setIsRetryingPreviews(false);
   }, []);
 
   const handleCancel = useCallback(() => {
@@ -589,6 +602,7 @@ export function useWorktreeBulkRemove({
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews,
+    isRetryingPreviews,
     // Flips exactly once per generation, when the previews settle, so a count
     // typed against the skeleton does not carry into the evidence that
     // replaced it.
