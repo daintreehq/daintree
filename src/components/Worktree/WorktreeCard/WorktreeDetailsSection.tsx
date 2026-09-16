@@ -754,7 +754,16 @@ export function WorktreeDeleteErrorBanner({
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex flex-col gap-0.5">
           <span className="font-medium text-status-error">Couldn't delete worktree</span>
-          <span className="break-words text-text-secondary">{message}</span>
+          {/* Git stderr is multi-line and the lines after the first are the
+              ones that say how to recover, so the breaks have to survive. The
+              height cap keeps an unbounded message from pushing Retry and
+              Dismiss off a compact card — it scrolls, nothing is cut. */}
+          <span
+            tabIndex={0}
+            className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-text-secondary select-text"
+          >
+            {message}
+          </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onRetry && (

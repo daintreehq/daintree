@@ -528,6 +528,27 @@ describe("worktree error banners (issue #12087)", () => {
     expect(screen.getByRole("alert").textContent).toContain("disk on fire");
     expect(screen.queryByRole("button")).toBeNull();
   });
+
+  // #12418. The host stopped cutting git's stderr at the first newline, so the
+  // banner now receives multi-line text. The later lines are the ones that name
+  // the worktree still holding the branch, so they have to reach the DOM whole
+  // — and the actions have to stay reachable underneath them.
+  it("renders a multi-line delete error without dropping or merging its lines", () => {
+    const message =
+      "Worktree removed. Couldn't delete branch 'feature/x': error: Cannot delete branch 'feature/x' checked out at '/other/tree'\nhint: remove that worktree first";
+    const onRetry = vi.fn();
+    const onDismiss = vi.fn();
+    render(<WorktreeDeleteErrorBanner message={message} onRetry={onRetry} onDismiss={onDismiss} />);
+
+    // Read `textContent` directly: Testing Library's matchers normalise
+    // whitespace, which would collapse the newline this test exists to prove.
+    const text = screen.getByTestId("worktree-delete-error-banner").textContent ?? "";
+    expect(text).toContain(message);
+    expect(text).toContain("\nhint: remove that worktree first");
+
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss" })).not.toBeNull();
+  });
 });
 
 describe("WorktreeDetailsSection — repository command approval", () => {
