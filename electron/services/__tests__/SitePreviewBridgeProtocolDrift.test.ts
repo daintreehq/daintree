@@ -30,8 +30,18 @@ function readPluginProtocol(): string {
   return fs.readFileSync(PLUGIN_PROTOCOL, "utf8");
 }
 
+/**
+ * The page runtime carries its own copy of the ceiling: it is serialised with
+ * `toString()` and injected into the page, so it cannot import one. A runtime
+ * that believed the ceiling was larger would send envelopes the host drops whole.
+ */
+const GUEST_RUNTIME = path.resolve(
+  HERE,
+  "../../../plugins/builtin/sveltekit-builder/guest/runtime.ts"
+);
+
 function readNumericConstant(source: string, name: string): number {
-  const match = new RegExp(`export const ${name} = ([^;]+);`).exec(source);
+  const match = new RegExp(`(?:export )?const ${name} = ([^;]+);`).exec(source);
   if (!match) throw new Error(`${name} not found in ${PLUGIN_PROTOCOL}`);
   // The plugin writes MAX_GUEST_MESSAGE_BYTES as an expression (`256 * 1024`),
   // so evaluate the arithmetic rather than requiring a literal on either side.
@@ -60,6 +70,11 @@ describe("site preview guest protocol", () => {
     const source = readPluginProtocol();
     expect(readNumericConstant(source, "GUEST_PROTOCOL_VERSION")).toBe(GUEST_PROTOCOL_VERSION);
     expect(readNumericConstant(source, "MAX_GUEST_MESSAGE_BYTES")).toBe(MAX_GUEST_MESSAGE_BYTES);
+  });
+
+  it("agrees with the page runtime's own copy of the message ceiling", () => {
+    const runtime = fs.readFileSync(GUEST_RUNTIME, "utf8");
+    expect(readNumericConstant(runtime, "MAX_MESSAGE_BYTES")).toBe(MAX_GUEST_MESSAGE_BYTES);
   });
 
   it("agrees with the plugin on the set of guest event types", () => {

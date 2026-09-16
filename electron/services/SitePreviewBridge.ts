@@ -161,6 +161,13 @@ interface Binding {
   queue: Promise<void>;
   /** True while a reinstall is queued; further navigations fold into it. */
   reinstallQueued: boolean;
+  /**
+   * The epoch the live runtime was installed for, or null before the first
+   * install. Two installs for one epoch both start the prelude's sequence at 0,
+   * so the second one's messages are rejected as replays and the inspector goes
+   * silent; this is what lets a redundant install be skipped instead.
+   */
+  installedEpoch: number | null;
 }
 
 function defaultListGuests(): GuestDescriptor[] {
@@ -358,6 +365,7 @@ export class SitePreviewBridge {
       detached: false,
       queue: Promise.resolve(),
       reinstallQueued: false,
+      installedEpoch: null,
     };
 
     this.bindings.set(binding.sessionId, binding);
@@ -622,6 +630,9 @@ export class SitePreviewBridge {
       }
     }
     if (binding.detached) return;
+    // Sent after the reinstall, so the new runtime's own `documentReady` for this
+    // epoch can reach a consumer *before* this. Consumers must key state on the
+    // epoch carried by each event, not on the order these two arrive in.
     this.deps.push({
       kind: "epoch-advanced",
       sessionId: binding.sessionId,
@@ -643,6 +654,13 @@ export class SitePreviewBridge {
     // in the queue; installing then leaves a runtime in the guest that nothing
     // owns or removes.
     if (binding.detached || this.closed) return;
+    // A navigation can queue a reinstall while the bind's own install is still
+    // awaiting CDP; by the time both run they read the same epoch. Installing
+    // twice for one epoch restarts the prelude's sequence at 0 and the host then
+    // drops every message from the second runtime as a replay.
+    if (binding.installedEpoch === binding.documentEpoch && binding.scriptIdentifier !== null) {
+      return;
+    }
     ensureAttached(wc);
 
     // `Page.enable` first. Without it `Page.addScriptToEvaluateOnNewDocument`
@@ -675,12 +693,16 @@ export class SitePreviewBridge {
     }
 
     const installId = ++installCounter;
+    // Read once: both can change across the awaits below, and the source bakes
+    // in whatever was read here.
+    const epoch = binding.documentEpoch;
+    const installedMode = binding.mode;
     const source = buildGuestRuntimeSource({
       sessionId: binding.sessionId,
       installId,
-      documentEpoch: binding.documentEpoch,
+      documentEpoch: epoch,
       bindingName: binding.bindingName,
-      mode: binding.mode,
+      mode: installedMode,
       runtimeSource: binding.runtimeSource,
     });
 
@@ -715,6 +737,18 @@ export class SitePreviewBridge {
         code: "INTERNAL",
         message: "The site preview runtime threw while initialising in the guest",
         context: { panelId: binding.panelId, detail: evaluated.exceptionDetails.text },
+      });
+    }
+    binding.installedEpoch = epoch;
+
+    // `setMode` runs outside this queue, so a switch made while the install was
+    // awaiting CDP poked a runtime that did not exist yet, and the source above
+    // baked in the old mode. Left alone, the host reports Browse while the page
+    // is still intercepting clicks.
+    if (binding.mode !== installedMode && !binding.detached && !this.closed) {
+      await this.send(wc, "Runtime.evaluate", {
+        expression: buildModeUpdateSource(binding.mode),
+        timeout: GUEST_EVALUATE_TIMEOUT_MS,
       });
     }
   }
