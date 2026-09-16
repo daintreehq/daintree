@@ -29,7 +29,8 @@ import { IdentitySkeleton } from "./IdentitySkeleton.js";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_SKELETON_TAKEOVER_MS } from "@/lib/animationUtils";
 import { scopesFor } from "./agentTask.js";
-import { DETACH_COPY, middleTruncate, relativeTo } from "./copy.js";
+import { DETACH_COPY, relativeTo } from "./copy.js";
+import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
 
 const MODE_OPTIONS = [
@@ -257,7 +258,7 @@ function StripStatus({
               className="ml-2 min-w-0 shrink truncate font-mono text-3xs text-text-secondary"
               title={location}
             >
-              {middleTruncate(location, 38)}
+              {middleTruncatePath(location, 38)}
             </span>
           ) : null}
         </>
@@ -492,7 +493,9 @@ function WorkspaceStatus({
                   ))}
                 </ul>
               )}
-              {" Classes you type are still written exactly as typed."}
+              {editing.length === 0
+                ? " Classes you type are still written exactly as typed."
+                : " Class names can't be checked for this project."}
             </InspectorNotice>
           ) : null}
         </>

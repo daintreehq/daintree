@@ -68,7 +68,7 @@ export function InspectorDisclosure({
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={() => onOpenChange(!open)}
-          className="-ml-1 flex min-w-0 flex-1 items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-left text-2xs font-medium tracking-[0.04em] text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+          className="-ml-1 flex min-w-0 flex-1 items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-left text-2xs font-medium tracking-wide text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
         >
           <ChevronRight
             aria-hidden="true"
@@ -96,7 +96,7 @@ export function InspectorDisclosure({
 export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
   return (
     <div className="flex h-7 shrink-0 items-center justify-between gap-2">
-      <h3 className="min-w-0 truncate text-2xs font-medium uppercase tracking-[0.04em] text-text-secondary">
+      <h3 className="min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-text-secondary">
         {title}
       </h3>
       {action}

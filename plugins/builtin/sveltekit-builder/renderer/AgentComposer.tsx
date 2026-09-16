@@ -355,7 +355,7 @@ export function AgentComposer({
       <div className="flex h-7 shrink-0 items-center justify-between gap-2">
         <h2
           id={`${inputId}-heading`}
-          className="flex items-center gap-1.5 text-2xs font-medium uppercase tracking-[0.04em] text-text-secondary"
+          className="flex items-center gap-1.5 text-2xs font-medium uppercase tracking-wide text-text-secondary"
         >
           <Sparkles className="h-3 w-3" aria-hidden="true" />
           Ask an agent
