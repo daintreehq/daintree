@@ -43,6 +43,15 @@ const devServerStartArgsSchema = z
 
 type DevServerStartArgs = z.infer<typeof devServerStartArgsSchema>;
 
+/**
+ * The created panel's id, so a caller can bind to the preview it just started
+ * rather than re-deriving it from the panel list. Null when the panel was
+ * rejected or removed during `addPanel`'s async tail.
+ */
+const devServerStartResultSchema = z
+  .object({ panelId: z.string().nullable() })
+  .describe("The dev preview panel that was opened");
+
 function readActiveWorktreePath(activeWorktreeId: string | undefined): string | undefined {
   if (!activeWorktreeId) return undefined;
   try {
@@ -69,6 +78,7 @@ export function registerDevServerActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: devServerStartArgsSchema,
+    resultSchema: devServerStartResultSchema,
     run: async (args: DevServerStartArgs, ctx: ActionContext) => {
       // Grid stays the default, so every caller that predates the dock
       // launcher keeps landing exactly where it did.
@@ -93,7 +103,9 @@ export function registerDevServerActions(
         throw new Error("No absolute project path is available for Dev Preview");
       }
 
-      await usePanelStore.getState().addPanel({
+      // Returned so a caller that just started a preview can bind to the exact
+      // panel it created instead of guessing from the panel list.
+      const panelId = await usePanelStore.getState().addPanel({
         kind: "dev-preview",
         title: "Dev Server",
         cwd,
@@ -104,6 +116,7 @@ export function registerDevServerActions(
         ...(location === "dock" && { activateDockOnCreate: args?.activateDockOnCreate === true }),
         devCommand: devServerCommand,
       });
+      return { panelId };
     },
   }));
 

@@ -96,6 +96,7 @@ import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRel
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
+import { buildSitePreviewPreloadBindings } from "./ipc/handlers/sitePreview.preload.js";
 import { buildWebviewEmulationPreloadBindings } from "./ipc/handlers/webviewEmulation.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
@@ -158,6 +159,7 @@ import type {
   DevPreviewStateChangedPayload,
   DevPreviewAllSessionsPayload,
 } from "../shared/types/ipc.js";
+import type { SitePreviewPushPayload } from "../shared/types/ipc/sitePreview.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { PaneWatchState } from "../shared/types/terminalWatch.js";
 import type {
@@ -2114,6 +2116,15 @@ function buildElectronApi(): ElectronAPI {
 
       onAllSessionsChanged: (callback: (payload: DevPreviewAllSessionsPayload) => void) =>
         _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
+    },
+
+    // Site Preview bridge API. No `evaluate` method by design — the guest
+    // runtime is supplied once at bind time and nothing else runs in the page.
+    sitePreview: {
+      ...buildSitePreviewPreloadBindings(_unwrappingInvoke),
+
+      onEvent: (callback: (payload: SitePreviewPushPayload) => void) =>
+        _typedOn(CHANNELS.SITE_PREVIEW_EVENT, callback),
     },
 
     // Git API

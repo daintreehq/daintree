@@ -77,6 +77,7 @@ import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.js";
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
+import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
 import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerResourceProfileHandlers } from "./handlers/resourceProfile.js";
@@ -219,6 +220,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWebviewHandlers(deps));
     register(() => registerWebviewNavigationHandlers(deps));
     register(() => registerWebviewCaptureHandlers(deps));
+    register(() => registerSitePreviewHandlers(deps));
     register(() => registerWebviewEmulationHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
     register(() => registerResourceProfileHandlers(deps));
