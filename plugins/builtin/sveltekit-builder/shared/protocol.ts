@@ -41,6 +41,10 @@ import {
 export const PLUGIN_ID = "daintree.sveltekit-builder";
 export const INSPECTOR_PANEL_ID = "inspector";
 export const INSPECTOR_VIEW_ID = "inspector";
+/** The runtime panel kind id — also the built-in view's registration slot. */
+export const INSPECTOR_PANEL_KIND = `${PLUGIN_ID}.${INSPECTOR_PANEL_ID}`;
+/** Declared in `contributes.commands`; bound by main on first dispatch. */
+export const OPEN_INSPECTOR_ACTION_ID = "open-inspector";
 
 /**
  * Bumped whenever a guest-visible shape changes. The host refuses envelopes
