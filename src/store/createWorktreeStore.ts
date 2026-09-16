@@ -1694,10 +1694,12 @@ async function runDeleteAsync(
     // path (card already gone, toast only) and the pre-IPC failures (dev-preview
     // stop, terminal close) land in `daintree.log` too — not just the failures
     // that still have a card to draw an error on.
+    // No explicit `errorType`: this catch also sees terminal-close, dev-preview
+    // and connectivity failures, which are not git failures. `classifyError`
+    // reads the structured props and lands each on its own category.
     logErrorWithContext(err, {
       operation: "delete_worktree",
       component: "createWorktreeStore",
-      errorType: "git",
       details: {
         worktreeId,
         mutationId,

@@ -867,9 +867,11 @@ describe("WorkspaceService.deleteWorktree", () => {
 
       expect(logErrorMock).toHaveBeenCalledTimes(1);
       const [, loggedError, context] = logErrorMock.mock.calls[0]!;
-      // The thrown wrapper, so `cause` still carries git's own error.
+      // The thrown wrapper, so the user-facing sentence is what gets logged...
       expect((loggedError as Error).message).toContain("was kept because");
-      expect((loggedError as Error).cause).toBeDefined();
+      // ...while `cause` still carries git's own stderr. Asserted on the text
+      // rather than just `toBeDefined()`, which an empty object would satisfy.
+      expect(((loggedError as Error).cause as Error).message).toContain("is not fully merged");
       expect(context).toMatchObject({
         requestId: "req-logged",
         worktreeId: "/test/worktree",

@@ -317,9 +317,10 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
     await flushPromises();
 
-    const recorded = store.getState().deleteErrors.get("wt-1")!;
-    expect(recorded).toContain("hint: remove that worktree first");
-    expect(recorded.split("\n")).toHaveLength(2);
+    // Exact equality, not `toContain`: a substring check would still pass if the
+    // renderer replaced the first line, which is the half of the message the
+    // host fix exists to preserve.
+    expect(store.getState().deleteErrors.get("wt-1")).toBe(stderr);
   });
 
   // #12418. Before this, a delete failure existed only on the card — dismiss it
@@ -327,7 +328,8 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
   // to. Asserted on both routing paths because the log call sits ahead of the
   // split: the partial-success path returns early and would miss a later one.
   it("logs a delete failure that still has a card to report on", async () => {
-    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("git error: unmerged paths"));
+    const rejection = new Error("git error: unmerged paths");
+    worktreeClientDeleteMock.mockRejectedValueOnce(rejection);
 
     const store = createWorktreeStore();
     store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
@@ -338,15 +340,24 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
 
     expect(logErrorWithContextMock).toHaveBeenCalledTimes(1);
     const [loggedError, context] = logErrorWithContextMock.mock.calls[0]!;
-    expect((loggedError as Error).message).toContain("unmerged paths");
+    // The original error object, not a re-wrap — `classifyError` reads its
+    // structured props, so identity is what makes the category right.
+    expect(loggedError).toBe(rejection);
     expect(context).toMatchObject({
       operation: "delete_worktree",
       component: "createWorktreeStore",
-      errorType: "git",
     });
+    // No `errorType`: deliberately delegated to `classifyError`, because this
+    // catch also sees terminal and dev-preview failures that are not git.
+    expect((context as { errorType?: string }).errorType).toBeUndefined();
+    // The mutationId is what ties this record to the host's own log line for
+    // the same failure; without it the two records cannot be correlated.
+    const sentMutationId = worktreeClientDeleteMock.mock.calls[0]![1].mutationId;
+    expect(sentMutationId).toBeDefined();
     expect((context as { details: Record<string, unknown> }).details).toMatchObject({
       worktreeId: "wt-1",
       deleteBranch: true,
+      mutationId: sentMutationId,
     });
   });
 
@@ -368,15 +379,20 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     // `worktree-removed` lands before the branch step fails, so the card the
     // error would have gone on is already cleared.
     store.getState().applyRemove("wt-1", nextV());
-    rejectIpc(new Error("Worktree removed. Couldn't delete branch 'feature/x': locked ref"));
+    const rejection = new Error("Worktree removed. Couldn't delete branch 'feature/x': locked ref");
+    rejectIpc(rejection);
     await flushPromises();
     await flushPromises();
 
     expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
     expect(logErrorWithContextMock).toHaveBeenCalledTimes(1);
-    expect(logErrorWithContextMock.mock.calls[0]![1]).toMatchObject({
+    const [loggedError, context] = logErrorWithContextMock.mock.calls[0]!;
+    expect(loggedError).toBe(rejection);
+    const sentMutationId = worktreeClientDeleteMock.mock.calls[0]![1].mutationId;
+    expect(context).toMatchObject({
       operation: "delete_worktree",
       component: "createWorktreeStore",
+      details: expect.objectContaining({ worktreeId: "wt-1", mutationId: sentMutationId }),
     });
   });
 
